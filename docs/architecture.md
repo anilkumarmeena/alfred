@@ -614,3 +614,382 @@ How-tos JARVIS follows for workflows the user repeats, in Claude Code's own skil
 
 ---
 
+## 7. Background tasks
+
+Some requests take minutes, not seconds: changing code, digging through a codebase, research across many sources. JARVIS hands these to the **task runner**, carries on talking, and speaks up when each one finishes or needs an answer. Several run at once.
+
+```mermaid
+flowchart LR
+    You(["You"]) --> Brain["Voice brain<br/>task_start / list / reply / stop"]
+    Brain -- "Unix socket" --> Runner["Task runner<br/>queue, MAX_TASKS at once"]
+    Runner --> T1["Task 1: code_change<br/>project folder, uncommitted"]
+    Runner --> T2["Task 2: code_question<br/>reads the live checkout"]
+    Runner --> T3["Task 3: research<br/>web + read-only tools"]
+    Runner -- "events" --> Agent["Voice agent<br/>speaks at the next pause"]
+    Runner -- "done / question / failed" --> Notif["Mac notification"]
+    Agent --> You
+
+    classDef person fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    classDef local fill:#ecfdf5,stroke:#059669,color:#064e3b
+    class You person
+    class Brain,Runner,T1,T2,T3,Agent,Notif local
+```
+
+> [!NOTE]
+> **Why a separate service:** a voice session's job process ends when you hang up, and anything running inside it would die too. The runner is always on, so a task started from the phone keeps going after you put the phone away.
+
+**In this section:** [Kinds of task](#kinds-of-task) · [Command tasks](#command-tasks) · [New projects](#new-projects) · [A task's life](#a-tasks-life) · [Nudges](#nudges) · [Runs, merges and discards](#runs-merges-and-discards) · [In place](#in-place-the-default) · [Updates](#how-updates-reach-you) · [Suggested data edits](#suggested-data-edits) · [Permissions](#permissions) · [Commands on the Mac](#commands-on-the-mac-itself) · [Approvals](#approvals) · [Remembered approvals](#remembered-approvals) · [Answering through the assistant](#answering-through-the-assistant) · [Subagents](#subagents) · [Finishing with a report](#finishing-only-with-a-report) · [Checking it's finished](#checking-its-finished-the-goal-loop) · [The project's Claude Code setup](#the-projects-own-claude-code-setup)
+
+### Kinds of task
+
+| Kind | Works in | Can | Can't |
+|---|---|---|---|
+| `code_change` | The project's own folder, on whatever is checked out (in place, see below). For projects set to worktrees (in_place false), a fresh git worktree in `data/worktrees/`, on branch `jarvis/<id>-<title>`, made from the project's current commit | Read, edit and search files in the folder; read your other projects and JARVIS's voice session logs; run commands in the sandbox (build, test, install dependencies); run commands on the Mac itself with `host_run` and `start_job` (signed Xcode builds, `devicectl`, Homebrew), risky ones only after your yes | Edit files outside that folder and the cache folder; read secrets; change JARVIS's own files; commit or switch branches |
+| `code_question` | The project's live checkout | Read and search files, in it and in your other projects and JARVIS's voice session logs; run single read-only git commands (`log`, `show`, `diff`, `blame`, ...) | Edit anything; read secrets; run other commands |
+| `research` | A scratch folder | Web search and fetch; read mail, calendar, Google Chat, Sheets and Docs, GitHub and GitLab | Change anything or contact anyone |
+
+**More access, when the request needs it** (`jarvis/tasks/access.py`). A kind is only the default toolbox. When you explicitly ask for something beyond it, JARVIS grants it in `task_start`'s `access`, or later in `task_reply`'s:
+
+| Access | Gives | Default for |
+|---|---|---|
+| `artifacts` | The Artifact tool (with `CLAUDE_CODE_ARTIFACT=1`) to publish pages from the task's own folder to claude.ai, and `Write` there | code_change, research (unless `JARVIS_TASK_ARTIFACTS=0`, which turns it off for every task) |
+| `shell` | Sandboxed `Bash`, reaching any host, writing only the task's own folder and the cache folder; never a code_question's checkout | code_change |
+| `mac` | `host_run` and the job tools, starting in the task's own folder, risky commands still after your yes; a code_question's checkout is treated as in-place work | code_change |
+| `projects` | `Edit` and `Write` in your other projects, never secrets or JARVIS's own files | none |
+| `accounts` | The read-only mail, calendar, Chat, Sheets, Docs, GitHub and GitLab tools | research |
+
+A code_question or research task keeps what it makes in `data/tasks/<id>/`. A task that finds it lacks something you asked for calls `request_access` instead of giving up: it waits, with a question like "may it also publish pages to claude.ai with the Artifact tool?", and `task_list` shows `access_requested`. JARVIS grants it with `task_reply` when it plainly follows from your request, and otherwise asks you. Either way the task carries on in the same session, rebuilt with the added tools. A running task granted more gets a message saying so, and is resumed with it once its turn ends. Secrets, JARVIS's own data files and the approval of risky commands stay as they are whatever is granted.
+
+### Command tasks
+
+A fourth kind, `command` (`database.COMMAND`, `jarvis/tasks/command_jobs.py`), is a shell command run with **no model** and **no task slot** while it works: the voice shell's `start_job`, an audio file being made, and each run of a scheduled command. It's a row in `tasks` like any task, so `task_list`, `task_detail`, `task_log`, `task_stop`, the control panel's Tasks page (and the phone, which shows that page) and the task events reach it, and it's kept as long as tasks are. `Runner.start_command` checks the folder (a full path, a folder, no secrets), makes the task (the command is its `instruction`, its `project` the registered project whose folder holds the command's, never JARVIS's own data or secrets: `command_jobs.project_of`), and starts the command with `command_jobs.Runs`, a `host.Jobs` in `data/commands/` numbered as its task is: `/bin/zsh -lc` in its own session, outside any sandbox, with `.env`'s keys taken out of its environment, its output in `<id>.log` and its exit status in `<id>.exit`. How it runs and how it went is kept with the task as JSON (its `command` column: `folder`, `timeout_minutes`, `log_file`, `summarize`, `auto_fix`, `report`, `attempt`, `started`, and once over `outcome`, `code`, `ended`, `said`, `summary`, `fix_task`, and for a rerun `after`). Task views add the end of its output (`command_jobs.view`). It never counts as stalled.
+
+**Looking after it.** Every 2 seconds (`COMMAND_POLL`) `Runner.check_commands` reads each running command task from its files (`Runs.how`): still running (its latest output line becomes its `activity`), `done` or `failed` with its exit code, `stopped`, or `lost` (no exit status: killed, or the Mac restarted). One past `timeout_minutes` is stopped (SIGTERM, then SIGKILL) and counts as `timeout`. An ended one is handled in the background (`ending`), so a model call never holds up the loop. A runner restart leaves command tasks running; the next look picks them up.
+
+**Its end** (`_command_ended`):
+
+- **Stopped** (`Runner.halt` → `stop_command`, from `stop_job`, `task_stop` or the panel): said as stopped; nothing more.
+- **Success** (`_command_done`): `command_jobs.summarize`, one `sdk.ask` call to `JARVIS_COMMAND_SUMMARY_MODEL` (Haiku) with the command and the last 6,000 characters of output, gives the sentence or two said ("Task 12, the launch render, is done, in 25 minutes. …"). A job that `report`s (an audio file) says its last line instead; with `summarize` off, Claude's usage limit out, or the call failing, it says how long it took with its last three lines.
+- **Failure** (`_command_failed`): `command_jobs.triage`, one call to `JARVIS_COMMAND_TRIAGE_MODEL` (Sonnet) with the command, folder, how it ended and the last 8,000 characters of output fenced as data, replies in JSON (`sdk.ask_json`, checked against `command_jobs.TRIAGE_SCHEMA`): `said` (what failed and why, to say), `action` and, for ASK, `needs`. The model decides; there's no phrase matching:
+  - `FIX`, an ordinary failure: `Runner.start` makes a `code_change` task in the project, "Fix <title>", with `fixes` naming the command task (and `job` for a scheduled run), whose brief (`command_jobs.fix_prompt`) gives the command, folder, how it ended, the log's path and its last 15,000 characters. It fixes what it safely can, doesn't run the whole command itself, and ends its summary saying whether the command should now succeed. The failure is said in a live session but not pushed (`alert=False`).
+  - `ASK`, a fix that would touch secrets, deploy or push, delete data, change system settings, or is otherwise for the user to decide: the command task waits with the question "… Fixing it would mean …. Shall I start a task to fix it?", announced and pushed as any task's question. `task_reply` (or Fix it in the panel) is the yes: the fix starts with the user's words in its brief. `task_stop` (or Leave it) is the no: it ends failed. It takes no other messages.
+  - `REPORT`: nothing to fix; the failure is said.
+
+  A fix is possible only with `auto_fix` (`start_job`'s `fix`, a command job's `auto_fix`), a project, attempt 1 (`FIX_ATTEMPTS`), and for a scheduled run a job still live; otherwise the model is told so and only explains (an answer it gives anyway is read as REPORT). With no model reply (usage limit out, the call failing), a failure that may be fixed goes to a fix, and any other is said with its last lines.
+- **After a fix** (`Runner._fixed`, from the fix task's end): its summary is kept, and `command_jobs.wants_rerun` puts it to one short call to `JARVIS_VERDICT_MODEL` (Haiku), whose JSON reply, `{"rerun": true}` or `false`, says whether it should run again (a call that fails or gives no usable JSON is a no). On a yes, unless the fix is on a worktree branch, the job has ended or moved on, the command runs again as a new command task, attempt 2, with `after` saying what failed and what was fixed; the fix task ends quietly (only a bell entry), and the rerun's own end says it all: "Task 14, the produce run, ran again after a fix, and worked, in 3 minutes. It had failed before (task 12): …. Task 13 fixed it: …. This time: …". A failed rerun is only reported, so it can't loop. On a no, the fix task's summary is said as usual. Risky steps in a fix wait for the user's yes as in any task.
+
+`POST /tasks/ID/rerun` (`client.rerun`, the panel's Run again, `runner rerun ID`) runs an ended command task's command again as a new task.
+
+### Projects
+
+Projects are listed by spoken name in the `projects` table of `data/tasks.db` (`jarvis/tasks/projects.py`), in the order added: each with its folder (kept as `~/...` under the home folder), aliases for names Whisper mishears (a JSON list), a line about what it is, and whether its code tasks work in place. Every call reads the table afresh, so a change applies at once.
+
+- **By voice:** `projects_list` and `project_register` (below). Tasks suggest `project_register` and `project_update` (see [Suggested data edits](#suggested-data-edits)).
+- **From a terminal:** `uv run python -m jarvis.tasks.projects` lists them, and `add`, `set NAME [--path P] [--aliases "a, b"] [--about T] [--in-place | --worktrees]` and `remove NAME` change them. `set` keeps the name (tasks are kept under it), wants a folder that exists, and refuses worktrees for a folder without git history or in place for JARVIS's own repo; `remove` leaves the folder alone.
+
+### New projects
+
+`project_register` adds one by voice. **It checks everything first:**
+
+- **The folder** resolves inside the home folder (`projects.ALLOWED_ROOT`) and isn't the home folder itself, `~/Library`, a hidden folder, inside JARVIS's `data/` or `secrets/`, a file, inside another git repo, or already registered (compared after resolving `~`, symlinks and trailing slashes).
+- **The name and aliases** don't clash with any existing name or alias under the same loose matching that `find` uses.
+
+**Only then** does it make the folder (`JARVIS_NEW_PROJECTS_DIR/<name>` by default; unset, the folder JARVIS's checkout is in, `config.projects_home`) and add a row to the end of the list. The checks and the row are one transaction that holds the database's write lock, so two registrations at once can't both pass them; if the row can't be added, a folder it made is removed again.
+
+**Git is left alone:**
+
+- A folder without git history is registered in place, whatever was asked, since worktrees need commits.
+- An existing repo gets what was asked, in place unless told otherwise, except JARVIS's own repo, which is always registered with in_place false.
+
+**`project_git_init`**, when the first version has settled, puts it under git: `git init`, a default `.gitignore` if there's none (`node_modules`, `.env`, `venv` and the like), and a first commit of the files `.gitignore` lets through. It refuses a project that already has commits, sits inside another repo, or has a task running.
+
+### A task's life
+
+| Status | Meaning |
+|---|---|
+| `queued` | Waiting for one of the `MAX_TASKS` slots (default 3) |
+| `running` | A Claude Code session is working. `activity` says what it's doing right now. `task_reply` nudges it (see below) |
+| `waiting` | It asked a question (`ask_user`) and holds no slot or process until you answer with `task_reply`; or it waits for your go-ahead on a risky command (see [Approvals](#approvals)) |
+| `done` / `failed` | Finished. A code_change's work stays uncommitted in the folder, or, for a worktree task, is committed to its branch, either way |
+| `stopped` | Stopped by you, or by a runner restart that didn't resume it ([Running 24/7](#11-running-247)). `task_reply` carries it on |
+| `discarded` | Its work thrown away unmerged with `task_discard`, after a spoken yes. It can't carry on or be merged |
+
+**How its end is said** (`jarvis/tasks/announce.py`): the runner gathers the facts (how it ended and what it reported, what the [goal check](#checking-its-finished-the-goal-loop) found still missing or waiting on you, a to-do it ticked off, the edits it suggests) and one short call to `JARVIS_ANNOUNCE_MODEL` (Haiku; `prompts/task_announcement.md`) words them as a sentence or two: what came of it, then what, if anything, you need to decide ("It'd also like to tick off your connection tools to-do."), naming the task by what it's about, never by number, without file names or JARVIS's internals, and saying each thing once. The model decides the wording; nothing matches words. Words a scheduled run or a command's fix already has are said first as they are. With the call off (`JARVIS_ANNOUNCE=off`), failing, over `JARVIS_ANNOUNCE_SECONDS` (30) or the usage limit reached, the same facts go in fixed words ("Your task, the build, is done. ..."). The same text is the task's `spoken`, its push and its notification. The facts stay structured on the task for the tools, and the voice brain is told, unsaid, which task it was and each pending edit by number (`announce.context`); the conversation log keeps only what was said.
+
+### Nudges
+
+`task_reply` also works on a running or queued task, to steer it without stopping it ("also check X", "skip Y"). The message is queued on the task (the `nudges` column, so a runner restart keeps it) and logged.
+
+| When the task is | It gets the message |
+|---|---|
+| **Running** | At its next safe point: a `PostToolUse` hook in `jarvis/tasks/reporting.py` adds every waiting message, oldest first, to the result of the session's next tool call, and the runner writes "nudge received: ..." to the progress log. If the session ends its turn before another tool call, the waiting messages go to it as one more prompt in the same run, so it acts on them before it finishes. |
+| **Wrapping up** | A message that arrives while the runner is already wrapping up starts a follow-up run instead of the "done" announcement. |
+| **Queued** | Added to its instruction when it starts. |
+| **Stopped, failed or asking a question** | Kept: they go with your next reply or answer, and the stop or failure announcement says the message wasn't delivered. |
+
+### Runs, merges and discards
+
+- **Each run** is a separate CLI process that resumes the task's Claude session, so answers and follow-ups ("also add a test for that") keep everything the task did before.
+- **Committing (worktree tasks):** when a worktree code_change run ends, the runner commits the worktree to the task's branch (skipping caches such as `__pycache__` and `node_modules`), and records the diff stat against the base commit. **Nothing is ever pushed, and nothing is merged until you say so:** the branch is in your repo for you to review.
+- **Merging:** when you ask for it, `task_merge` (`POST /tasks/<id>/merge`) merges it with `--no-ff` into whatever branch the project's own folder has checked out, then removes the task's worktree and deletes its branch (`git branch -d`).
+  - It refuses while the task is still active, while the worktree holds uncommitted changes, or while the project's folder has uncommitted changes to tracked files.
+  - A merge that conflicts is aborted, leaving the folder and the branch as they were.
+  - A branch that's already merged some other way is only cleaned up.
+- **Discarding:** `task_discard` (`POST /tasks/<id>/discard`) removes its worktree, uncommitted changes and all, deletes its branch unmerged (`git branch -D`, and only a `jarvis/<id>-` branch) and marks it `discarded`.
+  - It refuses while the task is queued, running or waiting (stop it first) and when the branch is already merged, since deleting it then undoes nothing.
+  - An in-place task's changes are mixed in with yours in the project's folder, so discarding one leaves the folder untouched and says its changes are there to undo by hand.
+
+### In place (the default)
+
+Unless its entry in the project list has in_place false, a project skips the worktree.
+
+> [!IMPORTANT]
+> The exception is JARVIS's own repo (`projects.is_jarvis`, the folder the code runs from): it always gets a worktree and branch per task, whatever its entry says, since editing it in place would change the code that runs the task.
+
+- **Where it runs:** its code_change tasks run with the project's own folder as their working directory, on the branch that's checked out, and the runner commits nothing, so the changes wait uncommitted for you to review.
+- **Your work is saved first:** before each run, the runner saves any uncommitted work already in the folder with `git stash create` under `refs/jarvis/task-<id>-<time>` (the files, the index and the stash list are left alone). The session is told to keep that work and is refused git commands that commit, push, reset, check out, stash, clean or touch branches.
+- **One at a time:** only one in-place task runs per project at a time; a second one queues, and its `activity` says which task it's waiting for.
+- **What changed:** `changes` reads "uncommitted: ..." and counts what changed since the task began, plus untracked files in the folder; `branch` is the checked-out branch, not one the task made.
+- **Folders without git:** a folder that isn't a git repo has nothing to save or diff. The runner snapshots every file's modification time and size before the run (skipping `.git`, `node_modules`, virtualenvs and caches), and `changes` lists the files created, modified or deleted, with no branch. A repo with no commits yet has nothing to save either, and its changes are measured against git's empty tree. Only in-place tasks work in such folders; a worktree task on one is refused with a spoken reason.
+
+### How updates reach you
+
+- **In a voice session:** the agent subscribes to the runner's event stream. When a task is done, asks a question or fails, it waits until neither of you is talking, says it ("Task two, retry logic, is done. ..."), and tells the brain what it said, so "what did it change?" makes sense.
+- **Not in a session:** a Mac notification, and the next session's greeting says how many updates are waiting. With push on (the default), also a push to each phone that tapped Enable notifications ("Task 2 has a question"); tapping it opens the app on that task. See [Push to the phone](#push-to-the-phone).
+- **On request:** "what's going on?" leads to `task_list`; "tell me about task two" leads to `task_detail`, with the summary and progress log; "what is task two doing?" leads to `task_log` (`GET /tasks/<id>/log`), the latest lines (12 unless asked, at most 40) of its log with every step included: each command, file read or edit and search as `step` lines (a run of the same step logged once), subagents starting and finishing, progress, questions and replies, each with how long ago.
+- **Progress milestones** (`report_progress`) are kept in the log and aren't spoken, so you're only interrupted for results and questions.
+- **On screen, in the control panel:** the page's panel (see [The control panel](#the-control-panel)) follows the same event stream and shows every task as it runs.
+
+### The control panel
+
+Beside the voice screen, the web page has a panel with five sections: **Tasks**, **To-dos**, **Projects**, **History** and **Settings**. On a desktop (900 px and wider) it's a column on the right, hidden and shown with `\`; on a phone it's a sheet that slides up from a row of buttons along the bottom.
+
+| Piece | Where | What it does |
+|---|---|---|
+| Actions | `jarvis/panel.py`, on `POST /api/panel/<action>` | Each takes the request's JSON and returns what the page shows. Task actions go through the runner client; to-dos, projects, memory, "about you", Google accounts and push devices change directly. |
+| Live updates | `POST /api/events` | The runner's event stream and new bell entries, relayed as JSON lines with a ping every 25 s, after a hello that names the web app's build being served. The page reconnects with a growing pause (0.5 s up to 5 s) when it drops or goes 60 s without a word, and at once when it comes back on screen or online; a hello naming a newer build reloads it. |
+| The bell | `jarvis/state/activity.py`, the `activity` table | What JARVIS did lately, kept 7 days and shared by every device. The voice brain's PostToolUse hook (`jarvis/brain/cli.py`) adds each tool call that changed something once it has run: JARVIS's tools registered with `changes` (AI Armory's write tools, which aren't `read_only`, plus to-dos, memory and projects), worded by their `said` or their result, and MCP servers' write tools. The runner adds tasks starting, finishing, failing, asking, merged and discarded, requests for a yes and their answers, and heartbeat alerts. Reads and searches are left out. `/api/events` sends new rows as they come (checked every 2 s), and each device keeps its own unread mark. Entries older than a week go now and then. |
+| Page state | `web/src/state/panel.ts`, `history.ts` | Signals for each section, the approval card, the activity list and the toast; History's days, open day and search. |
+| Views | `web/src/components/panel/` | The sections, the dock and sheet, the approval card, the activity list and ⌘K. |
+
+- **Scheduled jobs** head Tasks, one compact row each: name, kind (reminder, scheduled task or watch), next run and status, with Pause or Resume and Cancel (`schedule_pause`, `schedule_resume`, `schedule_cancel`, straight on the `schedules` table). A row opens the job: when it runs, what it says or watches for, its latest result and, for jobs that start tasks, its last 10 runs (`schedule`, through the runner's `GET /tasks?job=ID`, silent ones included), each opening as its task, and a task job's notepad and whether it speaks only on changes. Tasks a job started are tagged with its name in the list. There's no form: jobs are set by voice only.
+- **Do not disturb** lives only in Settings → Preferences: a switch that holds until it's turned off (`hold_on`, `hold_off`), and 1 hour or until a time, which also change the end while it's on. The page reads the state with `hold_status`; the `tasks` action's answer carries it too (`hold`), keeping the Settings list's Preferences line current. When scheduled runs are waiting for Claude's usage limit to reset, a note above the jobs says so (`usage`, from the same answer).
+- **Requests for a yes** pop up as a card over everything (Y, N or Esc on a desktop). Answers go to the runner as `via: "panel"`, which needs no push nonce because the web server has already checked the passcode. "Later" tucks the card into Tasks' *Waiting for you*. Beside Deny and Approve once (`components/panel/Answer.tsx`), **For this task** remembers it for the task's session, and **Always…** first shows what the rule would cover, this exact command or any of its kind (the request's `remember`, worked out by the runner), and saves only from the button under that. A request whose kind always asks says so instead.
+- **Approvals** (in Settings) lists the remembered approvals: what each covers, whether it's for a session or always, how it was made and from which command, and how often it has been used, each with **Withdraw** (`approval_rules`, `approval_rule_forget`, straight on the `approval_rules` table).
+- **Memory** (in Settings) lists the User and Environment sections apart, each with how full it is, and adds a fact to whichever is picked; the panel keeps to the same limits as JARVIS, so a section that's full refuses the fact until something in it is edited or forgotten. "About you" is a separate setting, read when the services start.
+- **Tasks** shows each task's live log, its suggested edits, and Reply, Stop, Retry, Merge and Discard. "Task 6" in JARVIS's lines, and a tapped notification about a task, open it there.
+- **History** reads the full conversation log, `data/conversations/`, through `jarvis/state/history.py`: the days, newest first, 30 at a time with how many exchanges each holds, its first and last times and the latest thing said (`conversations`, `before` for older pages); one day's exchanges, newest first, each as who spoke, what they said, the commands their words approved and JARVIS's reply or that it was cut off, plus JARVIS's between-turn updates, with the days either side to step back through (`conversation`); and a search for exchanges holding every given word, across all days, at most 100 (`conversation_search`). It only reads; editing or deleting the log stays by hand on the Mac. Each install is one person's, with its own `data/` and passcode, so History is only ever that person's.
+- **Logins and keys** (`jarvis/core/logins.py`, `jarvis/core/credentials.py`): each person who may connect has a login, a name and a passcode of their own, kept only as a salted scrypt hash in `secrets/logins.json` (mode 600, out of tasks' and commands' reach). The passcode alone says whose login it is (the JARVIS app sends nothing else), so no two logins may share one; a passcode checked once is remembered in memory, under a key of the web process's own, so later requests cost no scrypt. JARVIS's own keys (the LiveKit API key and secret, the APNs key ID, the Google OAuth client) are kept encrypted in the vault and entered here, write-only, never by voice; logs name which changed, never what to. Until the vault has one, its `.env` variable stands in (the Google client's file, for it), and the web service, as it starts, and `make setup` move each into the vault and out of `.env`; the shared `JARVIS_PASSCODE` becomes the user's login the same way, so devices already using it keep working. With no login at all, `JARVIS_PASSCODE` is checked as it is, and a vault that won't open leaves `.env`'s keys in use, so neither locks anyone out. A new LiveKit key rewrites `secrets/livekit.yaml`; every key takes effect once the services restart.
+- **Read only on purpose:** the panel shows MCP servers and whether their keys are set, never the keys. It can't add servers, change a project's folder or sign in a Google account. Anyone with a login can reach the page, and those would let them run commands on the Mac or read the vault, so they stay on the Mac's command line.
+
+### Suggested data edits
+
+Tasks can't write JARVIS's own data (the project list and the to-do list in `data/tasks.db`, `data/memory.md`): their sandbox keeps writes to their own folder. When their work calls for a change there, they call `propose_data_edit` instead of leaving you edits to make by hand.
+
+| Edit | What it does |
+|---|---|
+| `project_register`, `todo_add`, `todo_done`, `remember`, `forget` | The voice tools' own operations. Most edits are these. `remember` must name its section, `user` or `environment`; one for a section that's full by then fails when applied, its result listing the section's facts. |
+| `project_update` | Changes a listed project's folder, aliases (the whole list), about or in place, as `projects.update` does; what it leaves out stays as it was. |
+| `edit` | Replaces one exact piece of text that appears exactly once in `memory.md`, for anything else there. One that would push a section over its limit, or make a line over 400 characters, is refused (`memory.check_text`). |
+
+`.env` and other secrets are out of reach, since tasks can't read them.
+
+1. **Checked as it's made.** The runner checks each suggestion (`jarvis.tasks.data_edits.check`), so the task hears straight away what to fix, and keeps it on the task, numbered, in the `edits` column with a one-line reason and a status: pending, applied, dismissed or failed.
+2. **Riskier ones are marked `needs_yes`:** deleting memory lines, any `project_update`, an `edit` that removes or rewrites lines, and anything from a research task, which reads mail and web pages that could be steering it.
+3. **Scanned for hidden instructions** (`jarvis.safety.scan`): every text field and the reason lose their invisible characters, and one that reads like instructions to the assistant (overriding its rules, approving without asking, keeping things from you, sending data away, faking a system message) or hides text in Unicode is kept `flagged`, with what was found. A flagged edit is always `needs_yes`, so JARVIS puts it to you word for word instead of applying it; the task's log and the bell say so.
+4. **Announced.** When the task finishes, its announcement mentions them in plain words ("It'd also like to tick off your connection tools to-do"), and the brain is told each pending one by number.
+5. **Applied.** Following `task_edits`' description, JARVIS applies routine ones itself with `task_edits` (`POST /tasks/<id>/edits`) and says so in a sentence, asks first about the rest, and dismisses what you turn down.
+
+`task_list` shows each task's pending edits and `task_detail` all of them, with what applying them did. From a terminal: `uv run python -m jarvis.tasks.runner edits 3 apply 1 2`.
+
+### Permissions
+
+Task sessions load no user or project settings, since those could hold allow rules that skip JARVIS's checks. (A project's own agents, skills and CLAUDE.md still load: see [The project's own Claude Code setup](#the-projects-own-claude-code-setup).)
+
+**The file gate.** Every file tool call the CLI doesn't allow by itself goes to `TaskGate` (`jarvis/tasks/gate.py`), which:
+
+- **allows reads** inside the task's folders, the folders in `JARVIS_TASK_READ_DIRS` (the user's projects folder, which `make setup` asks for, so files no longer need copying in) and JARVIS's voice session logs (the CLI's transcripts for `data/shell/`, in `secrets/claude/projects/`);
+- **allows edits** inside the worktree;
+- **denies** everything else.
+
+**Secrets are hidden throughout.**
+
+- The gate refuses to read `.env` and `.env.*` files, keys (`*.pem`, `*.key`, `id_rsa`, ...), credential and token files, and anything in a `secrets` folder, JARVIS's Claude config or `~/.ssh`-style folders.
+- The same list goes to the CLI as Read deny rules (`gate._secret_rules`), which cover `Grep`, `Glob` and the sandbox's own reads too. JARVIS's `secrets/` is hidden entry by entry around the session logs, since a deny rule can't make exceptions.
+- The CLI gets none of `.env`'s values: they're blanked in its environment, so no command it runs can read them.
+
+**The sandbox.** code_change shell commands run in Claude Code's macOS sandbox.
+
+- **Writes** are limited to the worktree and `data/task-cache/`, where Go, npm, uv and pip caches and Python bytecode are redirected.
+- **Network** access is open to every host (`worker.OPEN_NETWORK`, `allowedDomains: ["*"]`), through the sandbox's proxy, so tools that ignore `HTTPS_PROXY` can't connect. The sandbox may also look up macOS's network-settings service (configd), without which uv and other Rust tools crash on start.
+- A `Bash` command that asks to leave the sandbox is denied.
+
+### Commands on the Mac itself
+
+What the sandbox can't do (signing with the keychain's identities, `xcrun devicectl` installing onto the iPhone, Homebrew) goes through a `host` MCP server that the runner serves for code_change tasks (`host_tools._host_server`):
+
+| Tool | What it does |
+|---|---|
+| `host_run` | Runs one command and returns its output (the start and end of it past 30,000 characters) and its exit code, for up to 10 minutes. It names what a command left running ("still running from this command: 4242 (Google Chrome)"), so the task can stop it by pid. |
+| `start_job`, `job_status`, `job_wait` | Run longer ones as jobs (`host.Jobs`, in `data/tasks/jobs/`, each marked with its task), which keep going on their own. `job_wait` returns when one ends or after at most 10 minutes. The task can read or grep a job's whole log. |
+
+**The Seatbelt profile.** Commands run under `/bin/zsh -lc` inside `sandbox-exec` with `host.profile()`, a Seatbelt profile that allows by default and denies only three things, whatever a command or a script it wrote tries:
+
+1. **Reading secrets:** JARVIS's `secrets/` except the voice session logs, `.env`, the home folder's logins and keychains, and `.env` files, keys and credential files anywhere under the home folder (`.pem` certificate bundles in packages excepted).
+2. **Writing JARVIS's own files:** everything in its folder but the task worktrees, `data/task-cache/`, `data/tasks/` and git's objects, and never `.git/hooks` or `.git/config`; also shell start-up files, `~/.gitconfig` and `~/Library/LaunchAgents`.
+3. **Connecting to the runner's socket.**
+
+**Approved installs outside the profile.** Homebrew (and MacPorts) run builds and post-install scripts in a `sandbox-exec` profile of their own, and macOS won't start one sandbox inside another (`sandbox_apply: Operation not permitted`). So a line that is only such an install (`commands.own_sandbox`: `brew install`, `upgrade`, `uninstall` and the like, run by its bare name, with nothing else in the line but `cd` and a `head` or `tail` of its output, no variables before it, no substitutions and no redirects but `2>&1`) runs without the profile, as the voice shell's jobs and scheduled commands do. It's always risky, so it only runs after your yes (or a rule or order of yours), and still without JARVIS's keys; anything else in the line keeps it inside the profile.
+
+**Environment.** Commands' environment leaves out `.env`'s keys and anything named like a token, secret or password (`host.task_env`). It keeps the SSH agent (`SSH_AUTH_SOCK`), so an approved `git push` or `ssh` signs through it. The key files in `~/.ssh` stay unreadable: only `known_hosts`, `known_hosts2` and `config` there can be read, since ssh needs them to check the host.
+
+**The host gate.** `host_run` and `start_job` meet `host_tools._host_gate` first. The folder must be the task's own or inside it, and then:
+
+| Command | Outcome |
+|---|---|
+| Names a secret, the runner's socket or `/api/approvals`; uses `sudo`; reads the keychain's passwords (`commands.refused`); for in-place tasks, the git commands the sandbox already refuses them | **Refused**, even with a yes |
+| Ordinary | **Runs** |
+| Risky (`commands.risky`, as on the voice side, which also flags `devicectl` uninstalling, terminating or rebooting and `security` beyond listing signing identities) | **Waits for your go-ahead** (see [Approvals](#approvals)) |
+| The task's own things (`commands.Own`, below) | **Runs without asking** |
+
+The task's own things are:
+
+- **Deleting its own files:** `rm`, `rmdir`, `unlink` and `find -delete` whose every path is spelled out and resolves, symlinks and all, strictly inside the task's folder or its own temp folder (`data/task-cache/tmp/task-<id>`, which its host commands get as `TMPDIR`), never into a `.git`, or is a folder the same command just made with `mktemp`.
+- **Stopping its own processes:** `kill` of a pid this command started (`$!`, `%1`) or one in a session the task's host commands or jobs ran in (`host.in_sessions`, which checks the session leader's start time so a reused pid doesn't count).
+
+Anything that can't be proven so is asked about as before: a glob outside the last part of a path or one that could match `.git`, a `$VARIABLE`, `~user`, a `cd` to somewhere unknown, the folder itself or a parent of it, `xargs`, `ln` or `mv` in the same line, an alias or function, `pkill` and `killall`.
+
+- `make host-check` runs the profile's own checks on this Mac.
+- Stopping a task stops its jobs; otherwise they outlive the run, and each one's end goes in the task's log.
+
+### Approvals
+
+A risky host command is refused with "JARVIS has asked them (request 12)", and the task carries on with anything else or ends its turn.
+
+**The request.** The runner keeps it in `tasks.db` (the `approvals` table): the exact command, tool and folder of each thing asked for within 5 seconds of the first, so one answer covers them all, and its state. The reason and program always come from parsing the command (`commands.describe`), never from the task's wording.
+
+**How it's announced:**
+
+- **Voice:** an `approval` event, which the voice session asks about at the next pause, woken by the event itself ("Task 5, the iPhone build, wants to run a command that installs software (brew install). Okay to go ahead?"), never while the voice shell has its own question open.
+- **Mac:** a Mac notification.
+- **Phone:** a push titled "Task 5 needs your go-ahead" with the command itself as its text and the `JARVIS_APPROVAL` category, for the app's Approve and Deny buttons, carrying a one-time nonce (`secrets.token_urlsafe(32)`) of which only the SHA-256 is kept.
+
+A run that ends with a request pending leaves the task `waiting`, quietly (it was announced already), with the question "may it run a command that ...?", which the heartbeat reminds you of once. What a waiting task waits for is kept in its `wait_kind`, set as it starts waiting: `approval` (only its requests), `access` (what it asked for with `request_access`) or `question` (its own question, or a command task's offer to fix a failure). The runner and the control panel go by it, never by the question's wording: an answer to a request resumes an `approval` wait at once, and goes with the reply to any other. Tasks already waiting from before it was kept get one as the runner starts.
+
+**Ways to answer:**
+
+| Channel | How |
+|---|---|
+| **Voice** | Your very next words after the question, checked with `commands.yes_scope` and `refuses` before the brain sees them. They take "mm-hmm", "I'm sure", "yes, let's proceed", "yeah, all three accepted", "yeah, let's close the hidden Chrome, that's fine" or "uh-uh", but never a lone "thank you" or "bye", and may say how far the yes goes ("yes, for this session", "always"). One question covers all a task has waiting ("Task 6 wants to run a command that ... and a command that .... One yes covers them all."), and the answer goes for every request of that task still waiting (`whole_task`), so a task is never asked about twice. Each request is asked aloud at most once per call, so anything else leaves it to the app's buttons, `task_list` and a later "approve it", and the next call's greeting may ask it once more. |
+| **Telling the assistant later** | See [Answering through the assistant](#answering-through-the-assistant). |
+| **The control panel** | The card's or Tasks' buttons, on the Mac or in the phone app's web view: Deny, Approve once, For this task, Always…. |
+| **The app's push** | `POST /api/approvals/<id>` on the web app with the nonce; wrong nonces count towards the passcode lockout. Its Approve and Deny buttons answer once. |
+| **A terminal** | `uv run python -m jarvis.tasks.runner approve 12` (optionally `session` or `always`, then `exact` or `kind`), `deny 12`, `approvals` |
+
+**What happens next:**
+
+- **The first answer wins;** a later one hears "already answered" or "no longer needed", and the push with the buttons is replaced.
+- **The task hears it** at its next tool call if it's running, with the reply to its question if it's waiting on one of its own, and otherwise is resumed with it: "the user approved request 12 by voice. Run exactly this, once, with host_run, in <folder>: brew install xcodegen", or "declined ... Don't run it or a variant of it".
+- **A yes lasts the run it resumes:** that identical command may run then, and again in that run (a retry isn't asked about twice); afterwards the yes is spent.
+- **Your own order goes with the task** (`Runner._order`): when your words in a turn order something risky ("merge and push", "restart now", `commands.ordered`, as for the voice shell) and the brain sends that task a reply or starts it (`task_reply`, `task_start`), the voice process sends your words along, from the conversation's `heard` (`jarvis.state.conversation`), never the model's. The runner keeps them with the task (`orders`) until it finishes, and at most 12 hours: a command they order runs without asking (`Reporter.cleared`, logged with your words), and a request still waiting that they order is approved (`via: "order"`) instead of being withdrawn and asked about again.
+- **Lapsing:** requests lapse after `JARVIS_TASK_APPROVAL_HOURS` (default 12), and the task is told to end with the command for you to run yourself.
+- **Withdrawal:** once nothing waits on a request it's withdrawn (`cancelled`) and never asked again: when the task finishes, fails, is stopped or discarded, or your reply sends it off on a new run, whose prompt then says the request was withdrawn and to run the command again if it still needs it.
+- **Restarts:** requests survive runner restarts, nonce and all.
+
+### Remembered approvals
+
+A yes to a risky command, a task's or the voice shell's own, can go further than once (`jarvis/safety/remembered.py`, the `approval_rules` table in `data/tasks.db`):
+
+| Answer | What it keeps |
+|---|---|
+| **Just this once** (the default) | Nothing: that exact command runs in the run it resumes, as above. |
+| **For this session** | A rule for the rest of the task that asked (its Claude session, through all its runs), or of the conversation for the voice shell. Gone when the task is discarded or the conversation ends, and after 12 hours whatever happens. Kept at once, and said ("For the rest of it, “npm install” exactly won't need asking"). |
+| **Always** | A rule for background tasks and the voice shell alike, in any folder, until withdrawn. Never kept unseen: by voice JARVIS first says what it would cover and asks "Save that rule?" (the conversation's `offer`), and only your very next words, a clear yes, save it; anything else drops it. In the panel the rule is shown above its button. |
+
+**What a rule covers.** Each risky piece of a command line (`commands.risky_pieces`) is matched on its program and subcommand (`brew install`), its kind of risk, and either its exact words (**exact**, the default: options and arguments as they were, a process number standing for any) or any words at all (**kind**: "always, any brew install", "always for this kind of command", or the panel's choice). Wrappers don't matter (`cd x && `, `env`, `VAR=1`, a full path to the program, a pipe into `tail`), but a command runs under rules only if every risky piece in it has one: `brew install ffmpeg && git push` still asks. Words the shell could turn into something else (`$VAR`, globs, `$(...)`) can only be remembered as the kind. Rules are made from the command itself, by the process that checked it (the task's gate keeps each request's `remember` with its commands), never from a model's words.
+
+**What always asks, every time, whatever the answer.** Only installing or removing software, stopping processes, changing permissions and changing the iPhone or a simulator can be remembered (`remembered.REMEMBERABLE`). Everything else risky always asks: deleting files (a task deletes in its own folders without asking already, where the command proves it), git that discards work, `git push` and force-push, sending data off the Mac, writes on GitHub or GitLab, changing system settings, running as root, writing a dotfile, code the check can't see into (`sh -c`, `osascript`, ...), and anything touching secrets or credentials. A yes "always" to one of those approves it once and says why it went no further. "Asks every time" means it's never remembered: your explicit order in the same turn ("merge and push", "delete the build folder") is that time's yes for the matching command, as above.
+
+**Who can make one.** Only you: your words straight after JARVIS's question, the panel's buttons, your own words to the brain (`task_approve`, which reads how far from the conversation's `heard` (`jarvis.state.conversation`), never from the model), or a terminal on the Mac. A rule made through the runner (`Runner.remember`) needs a request you already approved, and approves any other request still waiting that it covers (`via: "rule"`); the runner checks that each minute too, for rules the voice shell keeps itself. Every command run under a rule is logged with the rule's number, and each rule counts its uses.
+
+**Seeing and withdrawing them.** Settings › Approvals in the control panel, or by voice: "what do you always allow?" (`approval_rules`), "stop allowing brew installs" (`approval_rule_forget`).
+
+### Answering through the assistant
+
+Later in the conversation you can tell the brain to answer a request ("approve it", "let it close the hidden Chrome", "no, don't let it delete that"), and it passes that on with `task_approve(id, approve, request)`.
+
+- **What the brain sees:** `task_list` and `task_detail` show each announced request under `waiting_for_approval`, with its exact commands and what each does (`commands.describe`), so the brain can say what it will do when asked.
+- **The persona's rule:** use `task_approve` only when your own words in this turn say so explicitly, and ask first when it's unclear which request you mean or several are waiting.
+
+**That's also enforced in code**, whatever the model is talked into:
+
+1. The brain records your words as each turn starts (the conversation's `heard`, in `jarvis.state.conversation`, set in `brain.Notes.turn`, which no tool result, email, web page or task output can reach).
+2. `task_approve` answers only if they plainly tell it to approve (`commands.tells_approve`: an "approve", "allow", "let it", "go ahead" or "yes", in at most 20 words, with no question, "no", "not", "if", "but" or "wait") or to deny (`commands.tells_deny`), or order just what the request's commands do (`commands.ordered`: "push it", "restart now").
+3. Each utterance answers one task's requests at most, so "approve it" can't also approve the next one to come. A yes goes for every announced request that task has waiting (`whole_task`); an order, for the requests whose every command it orders; a no, for one request, the task's only one or the one named by `request`.
+4. The runner then checks, for `via: assistant`, that the request is that task's, was announced, and still holds exactly the commands the brain was shown, and writes an audit entry to the task's log: `request 12 approved through the assistant, on the user's words: "let it close the hidden Chrome"`.
+5. How far the yes goes is read from the same words (`commands.said_scope`): "approve it, for this session" keeps a session rule, and "approve it, and always allow that" ends `say` with what the rule would cover and "Save that rule?", which the voice agent answers from your next words itself. The brain has no way to widen a plain "approve it".
+
+The task hears "the user approved request 12 by telling JARVIS", and the answer is otherwise like any other: the first one wins, and it covers only those requests' commands, for the run it resumes.
+
+### Subagents
+
+A task session can hand side jobs to subagents through the `Agent` tool (reported as `Task` by the bundled CLI), several at once, so its own context stays on the main job and cheaper models do the legwork:
+
+| Subagent | Tasks | Tools | Model (setting) |
+|---|---|---|---|
+| `code-searcher` | code_change, code_question | `Read`, `Glob`, `Grep` | `claude-haiku-4-5` (`JARVIS_TASK_SEARCH_MODEL`) |
+| `test-runner` | code_change | `Read`, `Glob`, `Grep`, `Bash` | `claude-sonnet-5` (`JARVIS_TASK_HELPER_MODEL`) |
+| `web-researcher` | research | `WebSearch`, `WebFetch` | `claude-sonnet-5` (`JARVIS_TASK_HELPER_MODEL`) |
+
+- **Where they're defined:** in `jarvis/tasks/subagents.py`, passed as the SDK's `agents` option, alongside the project's own ([below](#the-projects-own-claude-code-setup)).
+- **Same walls:** their tool calls go through the same `TaskGate`, sandbox and read-only git rule as the session's own, and the gate refuses any `Edit`, `Write` or `NotebookEdit` from JARVIS's helpers, so they only report back. The test runner's shell is the task's sandboxed one; it's told to install what tests need but never to change source or test files.
+- **No built-ins:** Claude Code's built-in subagents, which inherit every tool, are denied (`sdk.BUILTIN_AGENTS_DENIED`), and the gate starts no subagent the task doesn't define.
+- **No progress reports or questions:** subagents get no `report_progress` or `ask_user`, and nudges wait for the session's own next tool call (the `PostToolUse` hook skips calls that carry a subagent's `agent_id`).
+- **In the log:** the progress log gets a `subagent` entry when each starts ("code searcher started: find the retry logic") and ends ("finished" or "failed"; for one run in the background, when its task notification arrives). Those entries aren't broadcast, so nothing is spoken, and while one works the task's `activity` reads, say, "code searcher: reading app.py".
+- **Counting:** `MAX_TASKS` counts tasks, not subagents, and each subagent's cost is in its task's.
+
+### Finishing only with a report
+
+The CLI sends subagents to the background by default, and a session's turn can end ("I'll wait for the test runner") while they're still running. So `worker.run` doesn't stop at the first result:
+
+- **Waiting:** while any subagent is still in the background (its tool result said it launched, and no task notification or terminal task update has ended it), it keeps reading.
+- **Waking:** when the last one ends, the CLI usually wakes the session with their reports; if no new turn starts within 30 seconds (`WAKE_GRACE`), the run wakes it itself with a prompt to check the reports and finish.
+- **Giving up:** a task whose subagents are still running after an hour (`SUBAGENT_WAIT`), or whose session ends under them, fails saying which were running.
+- **Empty reports:** a final result with no text gets one prompt to write the summary; if it's still empty, the task fails with "it ended without a final report". A session that ends without any result fails with "the session ended before its final report".
+- **Questions:** a task that asked a question waits for its subagents too, so their reports are in the session it resumes, but isn't woken.
+
+### Checking it's finished (the goal loop)
+
+A task saying it's done isn't taken on trust. When a run ends with a result, `Runner._check_goal` has `jarvis/tasks/goal.py` check it against what it was asked before anything is announced:
+
+- **The check:** one short call to `JARVIS_GOAL_MODEL` (unset, the tasks' own model, `JARVIS_TASK_MODEL`; low effort), with no tools and one turn. It reads the instruction (the `start` entry), your later replies and nudges, the task's summary, and the evidence: for a code_change, `changes`, the files and the diff against its base (secrets left out by pathspec, clipped to 12,000 characters), plus the milestones, subagents, jobs and the build, test and lint steps in its log. Everything it reads is fenced off as data.
+- **The verdict** is the reply's JSON (`sdk.ask_json`, checked against `goal.SCHEMA`): its `verdict`, `complete`, `incomplete` (something the task can do itself is missing or unverified, such as tests never run, or a question left unanswered) or `blocked` (what's left needs you: a decision, credentials, an approval, or a tool it can't get, such as full Xcode), with `said`, one sentence on it, and for `incomplete`, `to_finish`, the list sent back.
+- **Sent back:** `INCOMPLETE` resumes the task's own session with "JARVIS checked your result ... Still to do: ...", as a follow-up would, so it keeps its context. Nothing is announced in between. It goes back at most `JARVIS_GOAL_ROUNDS` times (2) per request: the count starts afresh at each reply of yours. The last round tells it to end saying plainly what's done and what isn't. A message you send while it's being checked goes with what to finish.
+- **Reported:** `COMPLETE`, `BLOCKED`, and `INCOMPLETE` once the rounds are used up (or, if `JARVIS_GOAL_MAX_COST` is set, the task has cost that many dollars; by default there's no limit), are announced once, the usual way. The announcement says plainly what's still missing, or what it needs you for, as JARVIS's own view.
+- **Not checked:** runs that stopped, failed, asked a question or wait for a go-ahead (they're reported as before), a watch's checks, and scheduled runs kept silent with nothing new to report (`scheduler.read`, made before the check, so one call serves both). Stopping a task while it's being checked (`activity` reads "checking its result against what it was asked") stops it as usual.
+- **The to-do list:** a task started for one of your to-do items (`task_start`'s `todo`, kept in the task's `todo` column) has that item put to the check (`<todo>`), which gives its word on it in the reply's `todos`: `{"id": n, "done": true}`, or `"done": false` with `left`, the item reworded to what's still to do. Once the final result is in, `Runner._settle_todos` keeps what that calls for as the task's suggested edits (`goal.todo_changes`): a finished item is ticked off at once (and the announcement says so), a part done becomes a `todo_reword` put to you, and an unchecked result (the check off or failing) puts ticking it off to you. A task you asked for without one has your open items put to the check instead (`<open_todos>`, at most 40; not scheduled runs or fixes), and any it finds wholly finished is a tick-off put to you. Those put to you are mentioned with its other suggested edits. The model judges what matches; nothing is matched on words. The task itself is told JARVIS settles its item, so it doesn't suggest that too.
+- **In the log:** every check is a `goal` entry ("checked, round 1 of 2: incomplete, so it was sent back to finish: ...", "checked: complete: ..."), so `task_detail` and `task_log` show them, and its cost is added to the task's.
+- **Guards:** `JARVIS_GOAL_LOOP=off` turns it off; at most `JARVIS_GOAL_DAILY_CHECKS` checks (100) in any 24 hours across all tasks; a check that fails or gives no verdict (a reply that isn't JSON matching the schema) lets the result through as it is, logged as "couldn't check the result".
+
+### The project's own Claude Code setup
+
+code_change and code_question tasks load the project's CLAUDE.md, its subagents (`.claude/agents/`), its skills (`.claude/skills/`) and its slash commands (`.claude/commands/`), from the folder the task works in (its worktree, or the project's own folder). So a workflow like video-agent's `scout-ideas`, which starts the project's `scout`, `claim-checker` and `evaluator` agents, runs as it does in Claude Code, with no need for `claude -p` (which can't log in from a task anyway: its login is in the keychain). Research tasks have no project, so they load none.
+
+`jarvis.tasks.project_claude` does it **without the project's settings files**, which stay unread (`setting_sources=[]`): their allow rules would skip the gate, their `sandbox`, `additionalDirectories` and `env` would widen the sandbox or point the CLI's login elsewhere, and their hooks and helpers (`apiKeyHelper` and the like) run outside the sandbox with the runner's rights. Claude Code's lockdown switches (`allowManagedPermissionRulesOnly` and the rest) count only in managed settings, so settings can't be loaded and then tamed. Instead:
+
+| Part | How it's loaded |
+|---|---|
+| **CLAUDE.md** | The project folder is also an additional directory, and `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` has the CLI read its CLAUDE.md there. |
+| **Subagents** | Read into `AgentDefinition`s under their own names, keeping description, prompt, `tools`, `disallowedTools`, `model`, `skills`, `maxTurns` and `effort`, and dropping `hooks`, `mcpServers` and `permissionMode`, as Claude Code does for plugin agents. JARVIS's helpers win a name clash. Unlike JARVIS's helpers, the project's own subagents may edit files, within the same folders as the task itself; the gate tells them apart by the `agent_type` its `PreToolUse` hook reports. |
+| **Skills and slash commands** | A plugin made for each run in `data/tasks/<id>/claude-plugin/`, just a `plugin.json` and links to the project's `skills` and `commands` folders, so the CLI names them after the project: `video-agent:scout-ideas`. Only those are enabled (the `skills` option, each allowed as `Skill(name)`, with the `Skill` tool); the CLI's bundled skills stay off. |
+
+**Scanned for hidden instructions first** (`jarvis.safety.scan`, `source="instructions"`). The CLAUDE.md files (`CLAUDE.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md`), `AGENTS.md`, each subagent, every markdown file of each skill, and each command are scanned before the session starts. Since these are meant to instruct the assistant, only plain attacks count there (overriding its earlier rules, turning safety checks off, keeping things from you, sending secrets somewhere, asking for its system prompt), plus bidirectional controls, Unicode tag characters and other hidden text. One that's flagged is left out: a CLAUDE.md by not loading any (no additional directory, no `CLAUDE_MD` switch), a subagent by skipping it, a skill or command by linking the rest into the plugin one by one. The task's brief lists what was left out and why, to be mentioned in its summary, and the runner tells you (`Reporter.flag`: the task's log, the bell and a Mac notification). The project's own files are never changed. Checked against 1,014 CLAUDE.md, AGENTS.md, skill, agent and command files on this Mac, Hermes's 228 skills among them: two were flagged, a jailbreak skill and one quoting "ignore previous instructions".
+
+**Project hooks don't run**, wherever they're declared: settings aren't loaded, agents lose theirs, and the session's `disableAllHooks` turns off those in skills and commands. That switch leaves the SDK's own callback hooks running, which carry the gate and the nudges.
+
+**No allow rule gets past the gate.** A skill's or command's `allowed-tools` still becomes an allow rule, which would let a call through without reaching `can_use_tool`. So `TaskGate.hook`, a `PreToolUse` hook, runs the gate's checks first for every agent, file, gated Bash and host call, and denies what the gate would. A host command decided there isn't put to the user again when `can_use_tool` sees it.
+
+**Checked against the real CLI.** The session's brief lists what was loaded. A task in video-agent reports `scout`, `claim-checker` and `evaluator` among its agents, `video-agent:scout-ideas` among its skills, video-agent's CLAUDE.md as project memory, and no settings source or hook but JARVIS's.
+
+---
+

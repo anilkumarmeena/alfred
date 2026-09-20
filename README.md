@@ -289,6 +289,56 @@ Your name, time zone, voice, speed, speech gate, speaker check, task limit and w
 
 ---
 
+## Background tasks
+
+Ask for anything that takes a while and JARVIS starts a background task. You can keep talking, and start more. JARVIS says when each one is done or has a question, and you answer out loud.
+
+| Say | What happens |
+|---|---|
+| "add retry logic to event backend" · "how does auth work in atlas?" · "find out what changed in LiveKit 1.9" | Starts a background task. |
+| "What is task 12 doing?" | Its latest steps: commands, files, subagents and progress. |
+| "merge task 12" | Once you say yes, merges the branch into whatever the project's folder has checked out, then deletes the branch and its worktree. |
+| "throw away task 12" | Once you say yes, discards it unmerged (an in-place task's changes stay in the folder for you to undo). |
+| "start a new project called astro agent" | Makes the folder (in your projects folder, `JARVIS_NEW_PROJECTS_DIR`, unless you name another) and adds it to the list as an in-place project, without git. |
+| "set up git for astro agent" | Puts it under git, once the first version has settled. |
+
+**Where code changes go**
+
+- **In place (the default):** changes are made directly in the project's own folder and left uncommitted for you to review, one task at a time per project.
+- **In a worktree:** projects set to worktrees (`uv run python -m jarvis.tasks.projects set NAME --worktrees`) get a separate worktree instead, with each task's changes on a `jarvis/<id>-...` branch in the project's repo, committed but never pushed.
+- **JARVIS's own repo** always works the worktree way, whatever its entry says.
+
+**What tasks can and can't see**
+
+- Code tasks can also **read, but not change**, your other projects (the folders in `JARVIS_TASK_READ_DIRS`) and JARVIS's own voice session logs, so nothing needs copying in. Secrets stay hidden from them.
+- They load the project's own **Claude Code setup**: its CLAUDE.md, subagents, skills and slash commands (as `video-agent:scout-ideas`), but not its settings or hooks, so JARVIS's permissions and sandbox still hold.
+- Tasks **can't change JARVIS's own data** (the project list, your to-do list, memory), so they suggest edits instead. JARVIS makes the small ones itself when the task finishes, like adding a to-do or a project, and tells you; it asks before bigger ones, like deleting memory or changing a project's settings.
+
+See [docs/architecture.md](docs/architecture.md#7-background-tasks) for how it works and what tasks can and can't do.
+
+**From a terminal**
+
+```sh
+make tasks                                                          # list them
+uv run python -m jarvis.tasks.runner show|log|reply|stop|merge|discard|rerun ID   # rerun: a command task's command again
+uv run python -m jarvis.tasks.runner edits ID apply|dismiss N...    # a task's suggested edits
+```
+
+### To-do list
+
+To-dos live in a `todos` table in `data/tasks.db`, not in memory.
+
+| Say | What happens |
+|---|---|
+| "Add build an iPhone app to my list" | Puts it on the list. |
+| "What's on my list?" | Reads it back as a checklist, open items first. |
+| "Tick off the iPhone app" | Marks it done. |
+| "Start a task on the iPhone app from my list" | A background task linked to that item: once its work is checked finished, JARVIS ticks the item off and says so, or, if only part is done, offers to reword it to what's left. |
+
+A task you start without naming an item is checked against your open items as it finishes too: one it clearly finishes is offered for ticking off, never ticked unasked. See [the goal loop](docs/architecture.md#checking-its-finished-the-goal-loop).
+
+---
+
 ## Adding a tool
 
 1. Add a function with `@tool(name, description, properties, required)` in `jarvis/tools/`.
