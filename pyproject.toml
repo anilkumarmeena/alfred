@@ -1,0 +1,58 @@
+[project]
+name = "jarvis"
+version = "0.1.0"
+description = "Personal voice assistant"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = [
+    "ai-armory[google,mac]",
+    "claude-agent-sdk>=0.2.160",
+    "cryptography>=46.0",
+    "httpx[http2]>=0.28.1",
+    "kokoro-onnx>=0.6.1",
+    "livekit-agents[silero,turn-detector]~=1.8",
+    "mlx-whisper>=0.4.3",
+    "onnxruntime>=1.20",
+    "openpyxl>=3.1",
+    "playwright>=1.49",
+    "pypdfium2>=4.30",
+    "python-dotenv>=1.2.3",
+    "pywebpush>=2.5.0",
+]
+
+# The Google tools (Gmail, Calendar, Chat, Docs, Sheets) and the Mac tools come from AI Armory, pinned to a commit on
+# GitHub; moving the pin and editing it alongside: README, "Editing AI Armory alongside"
+[tool.uv.sources]
+ai-armory = { git = "https://github.com/anilkumarmeena/ai-armory.git", rev = "ad542332a55ae71024e673b55ea5f7d40720ce2b" }
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+
+# Type checking (make check). Basic mode, every rule an error, except those below: warnings, which make check
+# doesn't show. They're where the code knows better than its types: rows from tasks.db and JSON it has just checked
+# are `dict | None` or `.get()` values to pyright, and some libraries' stubs are looser or stricter than they run.
+# Run `uv run --with pyright pyright` to see them; once a rule's are fixed, drop it from here.
+[tool.pyright]
+include = ["jarvis"]
+typeCheckingMode = "basic"
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
+reportOptionalSubscript = "warning"
+reportOptionalMemberAccess = "warning"
+reportOptionalCall = "warning"
+reportOptionalOperand = "warning"
+reportOptionalIterable = "warning"
+reportArgumentType = "warning"
+reportReturnType = "warning"
+reportAssignmentType = "warning"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+# Collection looks at every entry in the project folder, and a task's sandbox fails it on the .env files it hides
+addopts = "--ignore=.env --ignore=.env.example"

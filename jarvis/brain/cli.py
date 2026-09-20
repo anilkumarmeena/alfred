@@ -1,0 +1,358 @@
+"""The brain on the local `claude` CLI, through the Claude Agent SDK.
+
+Uses the CLI's own login under CLAUDE_CONFIG_DIR, separate from the user's everyday
+Claude Code login. One CLI process stays open per voice session, so only the first
+turn pays the start-up cost. Claude Code's own abilities (file editing, settings,
+its own skills, other MCP servers) are switched off; JARVIS's tools, web search/fetch, a
+sandboxed shell and long jobs (see jarvis.safety.shell), JARVIS's own web browser when it's on
+(jarvis.integrations.browser), and the enabled MCP servers such as GitHub
+and GitLab (jarvis.integrations.mcp_servers, writes gated by jarvis.safety.mcp_gate, their tools loaded on demand with
+the CLI's ToolSearch: jarvis.brain.sdk.on_demand) are available, plus a read-only lookup
+subagent on a cheap model, which does the brain's file reading so its replies stay quick, and the skills
+switched on in data/skills (jarvis.skills.home), as a plugin made for the session.
+
+Photos the user sends from the page go to Claude with their next turn, spoken or typed, as image content blocks
+(jarvis.state.pictures); screen_look shows it the Mac's screen when the user asks (jarvis.tools.screen).
+
+Talking over JARVIS normally stops its reply. While a shell command is running, though, the
+reply is left to finish unheard, so the command isn't cut off; the next turn waits for it.
+"""
+
+import asyncio
+import json
+import logging
+import warnings
+from collections.abc import AsyncIterator
+
+from claude_agent_sdk import (
+    AgentDefinition,
+    AssistantMessage,
+    CanUseToolShadowedWarning,
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    ClaudeSDKError,
+    HookMatcher,
+    RateLimitEvent,
+    ResultMessage,
+    StreamEvent,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
+)
+
+from jarvis import prompts, tools
+from jarvis.brain import usage
+from jarvis.brain.persona import Notes, system_prompt
+from jarvis.brain.sdk import BUILTIN_AGENTS_DENIED, LimitWatch, jarvis_server, sdk_options
+from jarvis.core import profile
+from jarvis.core.config import (
+    CLI_MODEL,
+    CONNECTION_WAIT,
+    EFFORT,
+    INJECTION_VOICE_SECONDS,
+    LOOKUP_MODEL,
+    MAX_TOOL_ROUNDS,
+    NEW_PROJECTS_DIR,
+    ROOT,
+    browser_on,
+)
+from jarvis.integrations import mcp_servers
+from jarvis.safety import consent, mcp_gate, remembered, shell
+from jarvis.skills import home as skills
+from jarvis.state import activity, conversation, memory, pictures
+from jarvis.tools import browser, connections, screen, skills as skill_tools
+from jarvis.voice import timing
+
+log = logging.getLogger("jarvis.brain.cli")
+JARVIS_TOOLS = "mcp__jarvis__"  # how the CLI names JARVIS's own tools (sdk.jarvis_server)
+# Web and JARVIS tools, job_status and stop_job (which stops only jobs: command tasks), and MCP servers' reads, are
+# allowed outright, on purpose; only Bash the sandbox won't run by itself, start_job, the Google tools' sends and
+# deletes, MCP servers' writes, subagents and their file reads meet the gate.
+warnings.filterwarnings("ignore", category=CanUseToolShadowedWarning)
+
+ALLOWED_BUILTINS = ["WebSearch", "WebFetch"]
+INTERRUPT_SECONDS = 15  # for an interrupted reply to end; past it the CLI restarts
+
+
+
+def lookup() -> AgentDefinition:
+    """A quick read-only helper on a cheap model, so a file or code lookup doesn't slow the spoken reply; told where
+    the profile's data is."""
+    data = profile.current().data
+    return AgentDefinition(
+        description="Fast read-only lookup in files on the Mac: finds a file, a setting, a version, a function or a "
+                    "line and answers in a sentence or two. Tell it which folder to look in; with none it searches "
+                    "JARVIS's own folder, and it knows where JARVIS keeps its data. It can't run commands or change "
+                    "anything.",
+        prompt=prompts.load("lookup_agent", user_name=profile.name(), root=ROOT,
+                            data_dir=data.relative_to(ROOT) if data.is_relative_to(ROOT) else data,
+                            new_projects_dir=NEW_PROJECTS_DIR),
+        tools=shell.FILE_READS,
+        model=LOOKUP_MODEL,
+        maxTurns=15,
+    )
+
+
+AGENTS = ("lookup",)  # the voice brain's subagents, by name
+
+LOOKUP_PROMPT = "\n\n" + prompts.load("voice_lookups")
+
+
+def _result_text(response) -> str:
+    """A tool call's result, as text: MCP results come as a list of content blocks, or a dict holding one."""
+    if isinstance(response, dict):
+        response = response.get("content", response.get("text", ""))
+    if isinstance(response, list):
+        return "\n".join(b.get("text", "") for b in response if isinstance(b, dict))
+    return response if isinstance(response, str) else ""
+
+
+def _bell_hook(gate: mcp_gate.Gate) -> list[HookMatcher]:
+    """After each tool call that ran, a note for the control panel's bell (jarvis.state.activity) if it changed
+    something: JARVIS's own tools registered with `changes`, and MCP servers' writes. A write the gate holds for a
+    yes never runs, so it isn't noted until it does."""
+
+    async def noted(data: dict, _tool_use_id, _ctx) -> dict:
+        name, args, response = data["tool_name"], data.get("tool_input") or {}, data.get("tool_response")
+        if isinstance(response, dict) and (response.get("is_error") or response.get("isError")):
+            return {}
+        if said := gate.change(name, args):
+            await asyncio.to_thread(activity.add, said)
+        elif name.startswith(JARVIS_TOOLS) and (t := tools.get(name.removeprefix(JARVIS_TOOLS))) and t.changes:
+            await asyncio.to_thread(activity.tool_ran, t.name, args, _result_text(response), t.said)
+        return {}
+
+    return [HookMatcher(hooks=[noted])]
+
+
+def _options(gate: mcp_gate.Gate, jobs: shell.Jobs) -> ClaudeAgentOptions:
+    server, allowed = jarvis_server()
+    # Read as the session starts, so a change needs no restart. A slow call doesn't hold up the reply: after
+    # CONNECTION_WAIT seconds it carries on in the background (jarvis.integrations.mcp_relay)
+    mcp = mcp_servers.session(mcp_servers.for_voice(), wait=CONNECTION_WAIT)
+    gate.use(mcp.servers)
+    shell.scratch_dir().mkdir(parents=True, exist_ok=True)
+    # The skills switched on, as a plugin of this session's own, read as it starts (jarvis.skills.home)
+    plugin = skills.voice_plugin()
+    found = skills.plugin(plugin)
+    return sdk_options(
+        env=shell.BASH_ENV | mcp_servers.session_env(),
+        cwd=str(shell.scratch_dir()),
+        system_prompt=system_prompt(shell.prompt() + LOOKUP_PROMPT + screen.prompt()
+                                    + (browser.prompt() if browser_on() else "")
+                                    + mcp_servers.prompt(mcp.servers) + connections.prompt()
+                                    + skill_tools.prompt(found)),
+        model=usage.available(CLI_MODEL),  # a lighter one while Opus's own weekly limit is used up
+        effort=EFFORT,
+        # the file reads are for the lookup subagent
+        tools=ALLOWED_BUILTINS + ["Bash", "Agent"] + shell.FILE_READS + (["Skill"] if found else []),
+        skills=[skills.qualified(s) for s in found],  # each allowed as Skill(name); no other skill is offered
+        plugins=[{"type": "local", "path": str(plugin)}] if found else [],
+        mcp_servers={"jarvis": server, "shell": shell.job_server(jobs)} | mcp.configs,
+        # sandboxed Bash is allowed by the sandbox itself
+        allowed_tools=ALLOWED_BUILTINS + allowed + [shell.JOB_STATUS, shell.STOP_JOB] + mcp.allowed,
+        disallowed_tools=BUILTIN_AGENTS_DENIED + mcp.blocked,
+        agents={"lookup": lookup()},
+        permission_mode="default",
+        # Everything else: Bash outside the sandbox and start_job, where risky commands need a yes, the Google tools'
+        # sends and deletes and MCP servers' writes, which always do (draft_gate, mcp_gate), and subagents and their
+        # reads
+        can_use_tool=gate,
+        hooks={"PostToolUse": _bell_hook(gate)},
+        screen_seconds=INJECTION_VOICE_SECONDS,  # a spoken reply waits for each check of a tool's result
+        sandbox=shell.SANDBOX,
+        settings=json.dumps(json.loads(shell.SETTINGS) | skills.FLAGS),  # no skill's hooks or !`commands` run
+        max_turns=MAX_TOOL_ROUNDS,
+        include_partial_messages=True,
+        stderr=lambda line: log.debug("claude: %s", line),
+    )
+
+
+def _photos(n: int) -> str:
+    return "a photo" if n == 1 else f"{n} photos"
+
+
+class CliBrain(Notes):
+    def __init__(self) -> None:
+        super().__init__()
+        self.client: ClaudeSDKClient | None = None
+        self._lock = asyncio.Lock()
+        self._drain: asyncio.Task | None = None  # reads the last reply to its end after the user spoke over it
+        self._holding = False  # whether that reply is running a command, which is left to finish
+        self._running: dict[str, str] = {}  # tool calls under way in the current reply: id to tool name
+        self._unheard: list[str] = []  # what that reply said after the user spoke over it
+        self._cut: str = ""  # what the user asked for when they spoke over the work on it, for the next turn
+        self.limits = LimitWatch("voice")
+        self.shell = mcp_gate.Gate(agents=AGENTS)
+        self.jobs = shell.Jobs()  # command tasks in the runner, said as they end like any task's update
+        self.next_model: str | None = None  # a lighter model for the next turn alone (jarvis.brain.route)
+        self._main = self._model = ""  # the session's own model, and the one answering now
+
+    async def start(self) -> None:
+        async with self._lock:
+            if self.client is None:
+                options = _options(self.shell, self.jobs)
+                client = ClaudeSDKClient(options)
+                await client.connect()
+                self.client = client
+                self._main = self._model = options.model
+
+    async def _use_model(self) -> None:
+        """Answer this turn on next_model if one was picked, else on the session's own; the same session either way,
+        so the history stays in one place."""
+        wanted, self.next_model = (usage.available(self.next_model) if self.next_model else self._main), None
+        if wanted != self._model:
+            await self.client.set_model(wanted)
+            self._model = wanted
+        if wanted != self._main:
+            timing.note("model", wanted)
+
+    async def close(self) -> None:
+        if self.client is not None:
+            client, self.client = self.client, None
+            await client.disconnect()
+
+    async def end(self) -> None:
+        """The conversation is over: the CLI stops, and so does the browser if it opened one (its logins stay). What
+        the user allowed "for this session" goes with it."""
+        await self.close()
+        await browser.browser_close()
+        await consent.close()  # a session started for a yes-or-no check that never came
+        await asyncio.to_thread(remembered.end_session, self.shell.session)
+
+    def question_open(self) -> bool:
+        return self.shell.question_open()
+
+    async def _interrupt(self) -> None:
+        """Stop the in-flight reply and read up to its result so the next turn starts clean."""
+        try:
+            await self.client.interrupt()
+            async with asyncio.timeout(INTERRUPT_SECONDS):
+                async for _ in self.client.receive_response():
+                    pass
+        except Exception:
+            log.exception("interrupt failed; restarting the CLI")
+            await self.close()
+
+    async def _finish(self) -> None:
+        """Read a reply the user spoke over to its end without stopping it, so the command it's running
+        finishes. What it says is kept for the next turn, since nobody heard it."""
+        try:
+            async for msg in self.client.receive_response():
+                self._track(msg)
+                if isinstance(msg, StreamEvent) and msg.parent_tool_use_id is None:
+                    delta = msg.event.get("delta", {}) if msg.event.get("type") == "content_block_delta" else {}
+                    if delta.get("type") == "text_delta":
+                        self._unheard.append(delta["text"])
+        except Exception:
+            log.exception("finishing the last reply failed; restarting the CLI")
+            await self.close()
+        finally:
+            self._running.clear()
+
+    def _track(self, msg) -> None:
+        """Keeps count of the tool calls under way."""
+        if isinstance(msg, AssistantMessage) and msg.parent_tool_use_id is None:
+            self._running |= {b.id: b.name for b in msg.content if isinstance(b, ToolUseBlock)}
+        elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
+            for b in msg.content:
+                if isinstance(b, ToolResultBlock):
+                    self._running.pop(b.tool_use_id, None)
+
+    def _prompt(self, text: str, agreed: list[str], photos: int = 0) -> str:
+        prompt = self.turn(text)
+        if photos:
+            prompt += f"\n[{profile.name()} sent {_photos(photos)} with this, attached.]"
+        if unheard := "".join(self._unheard).strip():
+            prompt += (f"\n[{profile.name()} spoke while your last command was running, so they didn't hear the rest of that "
+                       f"reply: \"{unheard}\"]")
+        self._unheard.clear()
+        if self._cut:
+            prompt += (f"\n[They spoke while you were still working on \"{self._cut}\", so that work stopped. If it's "
+                       f"still wanted and will take more than a moment, hand it to background_lookup now, so you can "
+                       f"answer them meanwhile.]")
+            self._cut = ""
+        if agreed:
+            prompt += "\n" + self.shell.agreed_hint(agreed)
+        return prompt
+
+    @staticmethod
+    def _message(prompt: str, photos: list):
+        """What goes to the CLI: the prompt as it is, or with photos the user sent, one message of image content
+        blocks followed by the prompt's text."""
+        if not photos:
+            return prompt
+        content = [pictures.block(p) for p in photos] + [{"type": "text", "text": prompt}]
+
+        async def message():
+            yield {"type": "user", "message": {"role": "user", "content": content}, "parent_tool_use_id": None}
+
+        return message()
+
+    async def respond(self, text: str) -> AsyncIterator[str]:
+        """Stream the spoken reply to one user utterance."""
+        if self._drain is not None:
+            if self._holding and not self._drain.done():
+                yield shell.HOLD + " "
+            # Shielded: a turn that's itself talked over mustn't stop the command.
+            await asyncio.shield(self._drain)
+            self._drain = None
+        self._running.clear()
+        spoken: list[str] = []
+        finished = interrupted = False
+        # A reply to a question open: the word lists, or failing them a short model call on these words alone
+        agreed = self.shell.new_turn(text, await self.shell.judge(text))
+        approved = self.shell.described(agreed)  # now, while a draft agreed to is still there to describe
+        photos: list = []
+        try:
+            try:
+                photos = await asyncio.to_thread(pictures.take)  # sent from the page since the last turn
+            except OSError:
+                log.exception("couldn't take the photos sent")
+            await self.start()
+            await self._use_model()
+            await self.client.query(self._message(self._prompt(text, agreed, len(photos)), photos))
+            timing.mark("sent")
+            async for msg in self.client.receive_response():
+                self._track(msg)
+                if isinstance(msg, StreamEvent) and msg.parent_tool_use_id is None:
+                    event = msg.event
+                    if event.get("type") == "content_block_delta" and event["delta"].get("type") == "text_delta":
+                        spoken.append(event["delta"]["text"])
+                        yield event["delta"]["text"]
+                    elif event.get("type") == "message_start" and spoken and not spoken[-1].endswith((" ", "\n")):
+                        spoken.append(" ")  # a new model turn after a tool call
+                        yield " "
+                    elif event.get("type") == "content_block_start" and event["content_block"].get("type") == "tool_use":
+                        timing.tool("".join(spoken), event["content_block"].get("name", ""))
+                elif isinstance(msg, RateLimitEvent):
+                    self.limits.saw(msg)
+                elif isinstance(msg, ResultMessage):
+                    finished = True
+                    timing.mark("done")
+                    if question := self.shell.question("".join(spoken)):
+                        spoken.append(question)
+                        yield question
+                    if msg.is_error:
+                        log.error("turn failed: %s %s", msg.subtype, msg.result)
+                        if not spoken:
+                            limit = self.limits.describe(msg.result)
+                            yield "Sorry, that didn't work. " + (f"I've hit {limit}." if limit else "Something went wrong on my end.")
+        except (asyncio.CancelledError, GeneratorExit):
+            interrupted = True  # the user spoke again, so the reply was cut off: logged as such, not as a blank one
+            if not finished and self.client is not None:
+                self._holding = "Bash" in self._running.values()
+                if self._holding:
+                    log.info("spoken over while a command runs; letting it finish")
+                elif self._running:  # stopped mid-work: the next turn may hand it to the background
+                    self._cut = " ".join(text.split())[:300]
+                self._drain = asyncio.create_task(self._finish() if self._holding else self._interrupt())
+            raise
+        except ClaudeSDKError:
+            log.exception("Claude CLI failed")
+            await self.close()
+            yield " I can't reach Claude right now."
+        finally:
+            conversation.current().heard.replied("".join(spoken))
+            said = f"{text} [sent {_photos(len(photos))}]" if photos else text
+            memory.log_exchange(said, "".join(spoken), approved, interrupted=interrupted)

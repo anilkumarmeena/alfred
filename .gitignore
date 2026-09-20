@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+secrets/
+data/
+logs/
+models/
+web/node_modules/
+web/dist/
+.env
+# onnxruntime's telemetry SDK writes its session here, in whatever folder imports it, if turned on (jarvis/__init__.py)
+:memory:.ses

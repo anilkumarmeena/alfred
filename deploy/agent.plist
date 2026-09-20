@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- JARVIS voice agent. caffeinate keeps the Mac awake while it runs. ProcessType Interactive gives it, and the speech process it starts, the scheduling of an app in use, ahead of background tasks. PATH carries node, for the GitLab server (npx). Installed by make services-install (jarvis.setup_local), which fills in the label and the folders. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>${LABEL}</string>
+    <key>WorkingDirectory</key><string>${ROOT}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-i</string>
+        <string>-s</string>
+        <string>${ROOT}/.venv/bin/python</string>
+        <string>-m</string>
+        <string>jarvis.voice.agent</string>
+        <string>start</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict><key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:${NODE}/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ThrottleInterval</key><integer>10</integer>
+    <key>ProcessType</key><string>Interactive</string>
+    <key>StandardOutPath</key><string>${ROOT}/logs/agent.log</string>
+    <key>StandardErrorPath</key><string>${ROOT}/logs/agent.log</string>
+</dict>
+</plist>
