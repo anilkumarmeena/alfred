@@ -339,6 +339,39 @@ A task you start without naming an item is checked against your open items as it
 
 ---
 
+## Heartbeat
+
+JARVIS doesn't only answer when spoken to. Every 15 minutes the task runner checks for these, unless you've switched one off:
+
+| Source | Flags |
+|---|---|
+| Calendar | Meetings starting in the next 30 minutes |
+| Gmail | New unread mail that Gmail marks important (or what your own Gmail search finds) |
+| GitHub | Pull requests waiting for your review, and GitHub mentions, assignments and security alerts |
+| Google Chat | Unread DMs and @mentions, where Chat is set up. The notification says only who wrote and where ("New Chat message from Alice Carter."), never what, since it shows on the lock screen; the voice adds the first few words. |
+| Tasks | Background tasks still waiting for your answer, or cut off by a restart |
+| Claude usage | JARVIS getting close to, or out of, its Claude plan's five-hour or weekly limit: once per limit window |
+| Sign-ins | A Google account signed out, the `gh` CLI signed out, or the GitHub or GitLab token stopped working or expiring within a week: once, and again only if it's fixed and then breaks again |
+
+**Choosing what it checks.** The control panel's **Settings → Heartbeat** switches each source on or off, and changes its settings: how many minutes ahead a meeting is flagged, and the Gmail search new mail is flagged from. It can also add another Gmail search, with a title of its own ("Invoices": `from:billing@acme.example`), whose new mail is flagged as it arrives. Or say it: "stop flagging GitHub", "flag mail from my bank too". A skill can add a source the same way. Changes apply from the next check; nothing to restart.
+
+**How you hear about it**
+
+- Anything new becomes a **Mac notification**, and a **phone notification** if you've turned those on ([below](#iphone-notifications)).
+- If you're in a voice session, JARVIS also **says it at the next pause** ("Heads up. Standup starts in 10 minutes.").
+
+**Rules**
+
+- **Nothing is flagged twice.**
+- **Quiet hours:** nothing is checked in quiet hours (11 PM to 8 AM by default); what arrives overnight is flagged at the first check after.
+- **Do not disturb:** nothing is checked while it's on either (see [Scheduler](#scheduler)).
+- **No backlog:** the first check only records the mail, GitHub and Chat items already there.
+- **Read-only:** the heartbeat never sends, creates, starts or runs anything.
+
+`make heartbeat` does a dry run: it prints what would be flagged right now, without notifying anyone or recording anything. Each check writes one line to `logs/tasks.log`. Settings are in the [settings table](#heartbeat-settings); details in [docs/architecture.md](docs/architecture.md#8-heartbeat).
+
+---
+
 ## Adding a tool
 
 1. Add a function with `@tool(name, description, properties, required)` in `jarvis/tools/`.
@@ -347,4 +380,14 @@ A task you start without naming an item is checked against your open items as it
 Tools may be sync or async; sync ones run in a thread.
 
 ---
+
+## Tests
+
+| Command | What it runs |
+|---|---|
+| `make test` | The unit tests in `tests/` (pytest is fetched on the fly by `uv run --with pytest`). The web app's tests (`web/tests/`, vitest) run as part of it, and are skipped if its packages aren't installed (`make web-install`). |
+| `npm test` (in `web/`) | The web app's tests alone. |
+| `make check` | Also typechecks the web app. |
+| `make host-check` | The walls around tasks' commands on the Mac, for real: secrets (SSH key files included), JARVIS's files and the runner's socket blocked; PyPI, the task cache, the SSH agent (GitHub over SSH) and code-signing identities reachable. |
+| `make artifact-check` | Publishes a tiny claude.ai artifact on JARVIS's login, the way tasks do, and prints the link (a little usage). `FILE=page.html` publishes that page instead. It also runs from a task's worktree, on the main checkout's `.venv` and login (`JARVIS_PYTHON=...` picks another Python). |
 

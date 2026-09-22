@@ -993,3 +993,288 @@ code_change and code_question tasks load the project's CLAUDE.md, its subagents 
 
 ---
 
+## 8. Heartbeat
+
+Without a heartbeat, JARVIS speaks only when spoken to. With it (`jarvis/tasks/heartbeat.py`), JARVIS wakes on a timer and flags what's new. It runs inside the task runner, because that's the process that's always on and already has a way to reach you: the same Mac notifications, and the same event stream the voice agent speaks from.
+
+```mermaid
+flowchart LR
+    Timer(["Every 15 minutes"]) --> Quiet{"Quiet hours or<br/>do not disturb?"}
+    Quiet -- Yes --> Skip["Skip: nothing checked"]
+    Quiet -- No --> Sources["Calendar · Gmail ·<br/>GitHub · Chat · tasks ·<br/>usage · sign-ins<br/>(read-only)"]
+    Sources --> Seen{"Flagged before?<br/>data/heartbeat.json"}
+    Seen -- Yes --> Drop["Ignored"]
+    Seen -- No --> Triage["Optional: short<br/>model triage"]
+    Triage --> Notif["Mac notification"]
+    Triage --> Push["Phone push<br/>(unless JARVIS_PUSH=off)"]
+    Triage --> Agent["Voice agent<br/>says it at the next pause"]
+
+    classDef local fill:#ecfdf5,stroke:#059669,color:#064e3b
+    classDef stop fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    class Timer,Sources,Seen,Triage,Notif,Push,Agent local
+    class Skip,Drop stop
+```
+
+**What one check looks at.** The sources run in parallel, with a 60-second limit each:
+
+| Source | Uses | Flags |
+|---|---|---|
+| `calendar` | `calendar_events`, per connected account | Timed events starting within its minutes ahead (`JARVIS_HEARTBEAT_EVENT_MINUTES`, default 30, unless set in the panel). All-day events are skipped. |
+| `email` | `gmail_search` for its Gmail search (`is:unread is:important newer_than:1d` unless set in the panel), per connected account | Each new message: "New email from Alice Shaw: Contract renewal." |
+| `github` | `heartbeat.github_overview`, through the logged-in `gh` CLI | PRs waiting for your review; notifications for mentions, team mentions, assignments and security alerts. Other notifications (subscriptions, CI) are left out. |
+| `tasks` | The runner's task store, and its stall check (`Runner.stalls`) | A question left unanswered for a whole check interval, runs cut off by a runner restart, and running tasks that seem stuck ([Stalled tasks](#stalled-tasks)). The runner already announces done, failed and question updates as they happen, so those aren't repeated. |
+| `usage` | `data/usage.json` ([Usage limits](#cli-brain-details)) | A Claude usage window getting close ("JARVIS has used 91% of Claude's five-hour limit; it resets at 3 PM.") or used up, keyed by window and reset time, so once per window. |
+| `signins` | `jarvis/integrations/signins.py` | A connection that has stopped working or will soon: each configured Google account (no token file, or its refresh token refused: revoked, a password change, or a 7-day token from an OAuth app in testing), the `gh` CLI's login (`gh auth status`), and the GitHub and GitLab MCP servers' tokens when those servers are on (`GET /user`, 401 and the `github-authentication-token-expiration` header; `GET personal_access_tokens/self`, 401, `active` and `expires_at`), warned `JARVIS_SIGNIN_WARN_DAYS` (7) before a token's end. Google gives no end date for a sign-in, so that's said once it stops working, within the hour its access token lasts. Not reaching a service says nothing: being offline isn't a sign-in problem. The text says what to run to fix it, never a token or what the service said. |
+
+**Which sources, per user.** Those above are the built-in kinds in a registry, `heartbeat.KINDS`: each with a title (the push's), a line on what it flags, its settings (each with a default and a check of what it can take), whether it's on unless switched off, whether its first answer is only recorded, and whether it can run here at all (Chat: only where an account has it). The user's choices are kept under `heartbeat_sources` in the settings table (`jarvis.state.settings`), as JSON by source id, and only where they differ from a kind's defaults, so an install where nothing was changed checks exactly the list above. With per-user profiles, that's each person's own settings table. The runner reads them afresh at every check (`heartbeat.sources_on`), so a change applies from the next one, without a restart. They're changed in the control panel's **Heartbeat** page (`heartbeat_sources`, `heartbeat_source_save`, `heartbeat_source_add`, `heartbeat_source_remove` in `jarvis/panel.py`) or by voice (`heartbeat_sources`, `heartbeat_source_change`, `heartbeat_source_add`, `heartbeat_source_remove` in `jarvis/tools/heartbeat.py`). A kind marked `more` (email) can be added again with a title and settings of its own: another Gmail search, flagged item by item as it arrives, which the user asks for, or a skill says to add (the voice tool records which). An added source's id is `kind:slug` (`email:invoices`), it's on until switched off, its first answer only records what's there, and only added ones can be removed; the built-ins are switched off instead. At most 10 are added.
+
+**What gets through.**
+
+- **Nothing twice.** Every alert has a stable key (event and start time, message id, PR URL, task and status). Keys already flagged are kept in `data/heartbeat.json` for 30 days, so restarts don't repeat anything.
+- **No backlog.** The first time mail or GitHub answers, what's already there is only recorded. Meetings and tasks are flagged from the first check.
+- **Ongoing problems once.** A sign-in alert is `ongoing`: `data/heartbeat.json` keeps the source's ongoing keys, and once the source answers without one (fixed), its key is forgotten, so the same problem coming back later is flagged again. A source that fails to answer doesn't count as fixed.
+- **Quiet hours.** `JARVIS_HEARTBEAT_QUIET_HOURS` (default `23:00-08:00`, in your time zone) skips the check entirely. Nothing is recorded, so mail and PRs that came in overnight are flagged at the first check after.
+- **Do not disturb** (`jarvis/tasks/hold.py`, below) skips the check the same way while it's on.
+- **At most five alerts per check.** The rest wait for the next one.
+- **Optional triage.** With `JARVIS_HEARTBEAT_TRIAGE=on`, new mail and GitHub notifications (the "soft" alerts) go to one short call to `JARVIS_HEARTBEAT_MODEL`, which keeps only what's worth an interruption. Meetings, review requests and tasks always get through. The call has no tools at all, and its reply is read only as JSON matching `heartbeat.TRIAGE_SCHEMA`: the numbers kept, each with whether it's urgent. What it drops counts as flagged. If the call fails, or its reply isn't such JSON, everything is kept.
+
+**How it reaches you.** Each alert is a Mac notification titled "JARVIS · calendar" (or email, github, tasks) and, with push on (the default), a push to the phone titled "Calendar" (or Mail, GitHub, Tasks). Pushes follow the same rules as the Mac notification: never twice, never in quiet hours, never for what triage dropped. The check also sends one `heartbeat` event on the runner's stream. A voice session speaks it at the next pause ("Heads up. Standup starts in 10 minutes.") and tells the brain, like a task update, so "who's in it?" makes sense. Tasks mentioned this way are marked as heard.
+
+**Failures.** A source that fails or times out is logged as failed and skipped, and the rest of the check carries on. A connection that keeps a source failing (a signed-out Google account, `gh` logged out) is what the `signins` source says, once. With no Google account connected, the calendar and mail sources just find nothing. One broken account doesn't hide the other. A failed notification is logged and the check still finishes.
+
+**Read-only.** The heartbeat calls only read tools (`calendar_events`, `gmail_search`, the task store), its own read-only `gh` queries (`github_overview`), and the sign-in checks, which read tokens to test them (refreshing a Google access token is saved, as every Google tool does). It never sends email, creates events, starts or answers tasks, or runs commands. A test checks that its code names none of the tools that could.
+
+**Logs.** One line per check in `logs/tasks.log`, such as `heartbeat: calendar 1, email 0, github failed, tasks 0; 1 new, 1 flagged`. Only counts are logged, never the alert text. A failure logs only the exception's type, since error messages can carry tokens.
+
+**Try it:** `make heartbeat` runs one check and prints what it would flag, as if nothing had been flagged before. It doesn't notify, and doesn't touch `data/heartbeat.json`.
+
+### Stalled tasks
+
+A task can hang without failing: a tool call that never returns, a session that stops talking. The stall watchdog (`jarvis/tasks/stall.py`) notices. The worker hands every message from a task's session to the runner (`Reporter.alive`: each message, tool call and result, and subagents' progress), which keeps when each running task last showed a sign of life in memory (`stall.Pulse`; a restart stops or resumes running tasks anyway). With its log lines and its updates in `tasks.db`, that's its progress. A `running` task with none for `JARVIS_TASK_STALL_MINUTES` (default 15; `0` is off) is stalled, unless its quiet is one it's meant to have:
+
+- a request to run a risky command, waiting for your yes, or a question or `request_access` asked mid-turn;
+- Claude's usage limit: the run saw a `rejected` rate-limit event, until its reset, or a window is used up for every model;
+- a command still within its own time limit (plus two minutes): `Bash` (its `timeout`, 2 minutes unless given, at most 10), `host_run` and `job_wait` (their `minutes`, at most 10);
+- a long job it started with `start_job`, still running.
+
+Queued and waiting tasks never count. The runner's task views (`GET /tasks`, `/tasks/ID`, `/tasks/ID/log`) carry `stalled` (`{minutes, since}`, or null), so `task_list`, `task_detail` and `task_log` say it may be stuck and to offer a nudge (`task_reply`) or a stop (`task_stop`), and the control panel marks the task "seems stuck" with a note above its reply box. The heartbeat's `tasks` source flags it as an `ongoing` alert keyed by task: said once ("Task 12, retry logic, seems stuck: no progress for 20 minutes. Nudge it or stop it?"), as a Mac notification, a push that opens the task, and a `heartbeat` event the voice speaks, asking whether to nudge it or stop it; again only if it moves on and then stalls afresh. It's flagged at the first check after it stalls, so within `JARVIS_HEARTBEAT_MINUTES`, and not in quiet hours or do not disturb. Nothing stops a task on its own.
+
+### Scheduler
+
+The heartbeat flags what turns up; the scheduler (`jarvis/tasks/scheduler.py`) does what the user asked for at a time. It runs beside the heartbeat in the task runner, with the heartbeat's ways of reaching the user (`notify`, the `heartbeat` event the voice agent speaks, `push`), so a result is a Mac notification, a phone notification, and spoken in a live session. The voice tools `schedule_add`, `schedule_list`, `schedule_change` and `schedule_cancel` (`jarvis/tools/schedules.py`) keep jobs in the `schedules` table of `data/tasks.db` (`jarvis/tasks/schedules.py`), each process opening it for a moment per call, like the to-do list; the runner needn't be up to schedule something.
+
+| Kind | When due |
+|---|---|
+| `reminder` | Says its text: "JARVIS · Reminder" on the Mac, a push titled "Reminder", and "Reminder: ..." aloud. |
+| `task` | `Runner.start` with its instruction, wrapped in a brief that says it's a scheduled run. Every run is delivered, a quiet brief too, unless the job is `only_changes`, which the voice agent sets when scheduling it if the user wants to hear only when there's something to tell ("only tell me if a build failed"); no wording of the instruction is matched. Only an `only_changes` job's brief is told that saying there's nothing new keeps it silent, and only its runs are read for that: `scheduler.read` puts the summary (its notepad left out) to one short call to `JARVIS_VERDICT_MODEL` (Haiku), whose JSON reply, `{"nothing_new": true}` or `false`, decides; a call that fails or gives no usable JSON delivers the run. Its end is announced under the job's title ("Morning brief: ...", pushed with that title); a silent one is finished quietly and hidden. |
+| `watch` | One check of whether its text has happened, by a probe: `task` starts a hidden research or code_question task whose summary's first line says what it found, and `scheduler.read` puts that summary to one short call to `JARVIS_VERDICT_MODEL`, whose JSON reply, `{"met": true}` or `false`, is the verdict (a call that fails or gives no usable JSON counts as not yet, logged); `url` fetches the page with `httpx` (at most 2 MB; met on a non-error answer showing `expect`, if given; not answering is "not yet"); `gmail` runs a Gmail search on every account (met by mail dated after the watch began); `chat` reads Chat's unread DMs and @mentions (met by a message from the person not there at the first check, which is kept as the baseline). Not yet is silent; met is said once, with the summary's first line, and ends the watch; three failed checks in a row are said once; passing `until` (24 hours unless given, 7 days at most) is said once. |
+| `command` | Starts its command as a command task (`Runner.start_command`), and that's all: see [Scheduled commands](#scheduled-commands) below. |
+
+**Timing.** A job runs once (`next_run`), at a time of day on days of the week (`at`, `days`), or every `every` minutes; `until` ends a repeating one. Times are in the profile's time zone (`jarvis.core.profile`). Every 30 seconds the scheduler reads the due jobs: nothing is held in memory between ticks, and a probe's check is the only thing running in the runner for it. Before running, a job's `next_run` moves on, so a crash mid-run can't repeat it. Watches wait out the heartbeat's quiet hours, staying due, so the first tick after runs them; reminders and tasks keep their times.
+
+**Missed runs.** After a restart or sleep, the due jobs are read like any other tick. A one-off runs once, a reminder saying "It was due at 17:00". A job on days of the week runs once if the latest of its missed times was within `CATCH_UP_HOURS` (2), else it's skipped, said in its `last_result`; either way its next time is the first after now, so missed days never become a burst of runs. An every-N-minutes job, and a watch, runs once and carries on from now. A run whose previous one is still active (queued, running or waiting for an answer) is skipped; a watch's check waits for it instead. A job that can't start (its project gone) waits for its next time, and the first such failure in a row is said.
+
+**Scheduled runs as tasks.** `tasks.job` names the job a task ran for, and `tasks.hidden` keeps a watch's checks, and silent runs, out of `task_list`, the unseen list, the heartbeat's task source and the bell; a check that finds it, or needs an answer, shows up like any task. When a run ends the runner asks `Scheduler.ended` how to say it (a `Verdict`), unless it's waiting for an answer or an approval, or a message to it wasn't delivered, which go the usual way. Scheduled runs and checks use `JARVIS_SCHEDULE_MODEL` at `JARVIS_SCHEDULE_EFFORT` (Sonnet, medium), except `code_change`, which keeps the task model. Their risky host commands wait for approval like any task's ([Approvals](#approvals)). A restart cuts a running check off without a word (it runs again when next due); a scheduled task cut off is flagged as usual. Hidden runs are forgotten after 3 days, with their `data/tasks/<id>` folders and Claude sessions; finished jobs after 30. At most 30 jobs are live at once, and 5 watches checked by tasks, to keep memory and cost down.
+
+**Job memory.** A scheduled task's brief (`scheduler.task_prompt`) hands it the job's notepad from its last run, asks it to say what's new since then, and to end its summary with a `NOTEPAD:` line of at most 100 words: what it found, with the names, ids or figures that tell items apart. `Scheduler.ended` takes that line off (`split_notepad`), keeps it in `schedules.notepad` as `{"at", "text"}` (at most 1,500 characters), and gives the runner the summary without it to keep (`Verdict.summary`). A run with no notepad line leaves the last one. A job made with `only_changes` is told to say there's nothing new, in its first line, unless there's something new to tell since the notepad's run, and a run whose headline repeats the last word for word is kept quiet too. `schedule_list` and the panel's job view show the notepad.
+
+**Retries and failures.** A scheduled task's run that fails (`Scheduler._failed`) on a passing error (`TRANSIENT`: overloaded, 5xx, timeouts, connection and network errors, the CLI dying or ending the session early) runs again after 5, 15 and then 30 minutes (`RETRY_MINUTES`, counted in `schedules.retries`, or at its next run if that's sooner; a one-off comes back for it), each quietly, with the reason in `last_result`. One that hit Claude's usage limit runs again when the limit resets, when that's known; a limit of only its model's is retried like a passing error, and the next try gets a lighter model. Once out of retries, or on any other error, the failure is said the usual way, and `schedules.failing` keeps its kind (`passing`, `limit` or `error`), so the same kind again is quiet until a run succeeds and clears it. A watch's check that hit the usage limit isn't counted as a failed check.
+
+#### Scheduled commands
+
+A `command` job (`schedules.text` is the command, `folder` where it runs, `project` the project holding that folder) starts each run as a [command task](#command-tasks): `Runner.start_command` with the job's id, project, `timeout_minutes`, `log_file`, `summarize` and `auto_fix`, and the job's `last_task` set to it. From there the runner looks after it, as it does a `start_job`'s, and its pushes go under the job's title. The job's `run` column keeps its latest run as JSON (`{"task", "started", "attempt"}`, and once it's over `ended`, `outcome`, `code`, `summary`, `fix_task`: `Runner._settle_run`, only while that task is still the job's `last_task`), and `last_result` says how it went in a sentence.
+
+- **Overlap.** A command job whose last task is queued or running (its command, or the task fixing it, which becomes `last_task` while it works, then the rerun) is busy: its next time is skipped, as for a scheduled task. A run waiting for the user's yes to fix it holds nothing back.
+- **Its own log.** A command that writes its output to a file of its own names it in `log_file`, a path or glob inside its folder (never absolute, never `..`, never a secret's name); the newest match written since the run began is read beside `<n>.log` (`Runs.output`), for the summary, the triage and the fix task.
+- **Made only as the shell would run it.** `schedule_add` and `schedule_change` are registered with `shell=True`, so `sdk.jarvis_server` leaves them out of `allowed_tools` and every call meets `ShellGate`. There, `schedules.command_called` returns the command a call would keep, put as `cd <folder> && <command>` (`command_line`), or None for a call that keeps none (any other kind, or a change that leaves a command job's command and folder alone), which goes straight through. The command is then weighed exactly as a `start_job`: one naming a secret or reading other processes' environments is refused, a risky one waits for the spoken yes (or the user's own order, or a remembered rule), and the identical call goes through after it. Background tasks have no schedule tools, so a command job can come only from the user's own conversation.
+- **Seeing and stopping a run.** `schedule_list` shows a command job's command, folder and settings, and its latest run (with its task), or, while one is under way, since when and the end of its output. The control panel's view of the job lists its runs and the tasks fixing them. `job_status` lists the runs with the start_job jobs, each with its `scheduled_job` id, and `stop_job` stops one by `scheduled_job` or by title, as does `task_stop` or Stop in the panel; it's recorded as stopped and nothing more is said. Cancelling the job leaves a run under way going.
+
+**Usage holds.** Before a run that needs a model (a task, or a watch checked by one), the scheduler asks `usage.hold_until`: while a window is used up for every model, or `JARVIS_USAGE_HOLD` (0.9) of the five-hour window is used, the job's `next_run` moves to the reset, noted in `last_result`, and it runs once then; reminders and checks without a model carry on. Since the hold moves `next_run`, a daily job held past its time isn't counted as missed.
+
+**Do not disturb** (`jarvis/tasks/hold.py`). "Pause all" with an optional end: `{"since", "until", "ended"}` under `hold` in the settings table, so the voice tools (`schedule_hold`), the panel (`hold_on`, `hold_off`) and the runner share it; it lasts at most 7 days, or until resumed. While it's on, `Scheduler.tick` runs nothing (jobs stay due, and lapsing watches wait), `Heartbeat.beat` checks nothing, and `Runner._finish` sends no Mac notification or push (the update is still said in a live session and stays unheard for the next one's greeting; requests for a yes still go out, since a task waits on them). When it ends, at `until` or on resume, the first tick runs what's due once: a reminder says when it was due, and a job on days of the week whose time fell inside the hold isn't skipped as missed (`hold.covered`, which remembers the last hold once it's over). Quiet hours stay as they were.
+
+`JARVIS_SCHEDULER=off` stops the scheduler without losing jobs.
+
+### Learning review
+
+The brain saves what you ask it to remember, and lasting facts it notices, while you talk. The learning review (`jarvis/tasks/learning.py`) catches the rest afterwards, once per conversation, so you needn't say "remember" every time. Like the heartbeat it runs inside the task runner, which is always on and outlives the voice session.
+
+| Step | What happens |
+|---|---|
+| **Finding a conversation** | Every 60 seconds it reads `data/conversations/` from where it last stopped, kept in `data/learning.json` as a day's file and a byte offset. The first time, it only marks the end of the log, so older days aren't reviewed as a backlog. |
+| **Deciding it's over** | When the voice session ends, the agent's shutdown callback posts `POST /learn` to the runner (`client.session_ended`). The review runs 60 seconds later, unless something has been logged since, as when a dropped call reconnects; then it waits for the quiet instead. Without a hang-up, `JARVIS_LEARNING_QUIET_MINUTES` (10) with nothing logged also counts as over. |
+| **Skipping small talk** | Fewer than 12 of the user's own words since the last review (a time check, announcements alone) are marked read without a call. |
+| **One call** | `LEARNING_MODEL` (`JARVIS_LEARNING_MODEL`, Haiku 4.5 by default) gets the new exchanges (the latest 30,000 characters at most) and long-term memory, each section with how full it is and its lines numbered. The call has no tools, and the reply is read only as JSON: up to 5 suggestions to `remember` a fact in a section, `update` or `forget` a numbered line, or `todo_add`. The prompt says only the user's own words count, that what JARVIS read out from mail, Chat, web pages and tool results is untrusted data, and that things to do go on the to-do list, never in memory. |
+| **Never twice** | The mark moves past the exchanges before anything is saved. A failed call is tried again after 15 minutes, and after 3 failures those exchanges are passed over. |
+| **Kept as a task's edits** | `Runner.learned` keeps the suggestions on a hidden task of kind `review`, through `propose` and `data_edits.check` like any task's [suggested edits](#suggested-data-edits): numbered lines become an exact-text `edit` (dated today) or a `forget`; ones that duplicate memory, or that `check` refuses, are left out, in the task's log. |
+| **Applied** | Routine edits (saving a fact) are applied at once through `Runner.edits`, the path `task_edits` takes, each with a bell entry ("Learned from our conversation: ..."). A section that's full fails its edit quietly. Rewrites, deletions and the review's to-dos are `needs_yes`, and so is anything the scan for hidden instructions flags, which is never applied unasked. |
+| **Said** | With nothing pending, the task ends quietly and stays hidden: nothing is said. Otherwise it ends unhidden and unseen: a live session hears "Task 12, learning review, suggests 2 edits to my memory or to-dos from our last conversation" with each edit noted for the brain, which asks; with no session, the next greeting counts it among the waiting updates. No Mac notification or push. |
+
+A review task can't be replied to; its edits are answered with `task_edits`. Hidden ones are forgotten after 3 days with the scheduler's hidden runs. `JARVIS_LEARNING=off` turns the review off.
+
+### Push to the phone
+
+Standard Web Push (`jarvis/notify/push.py`, with `pywebpush`), which iOS 16.4+ supports for web apps added to the Home Screen and served over HTTPS, plus APNs for the native app (below). No third-party notification service.
+
+1. The page registers `web/public/sw.js` (served at `/sw.js`, so its scope is the whole app). Tapping **Enable notifications** asks for permission, subscribes with JARVIS's VAPID public key (`GET /api/push/key`), and posts the subscription with the passcode to `POST /api/push/subscribe`.
+2. The web app keeps subscriptions in `data/push_subscriptions.json` (mode 600), one per device, at most 10. Only endpoints on Apple's, Google's, Mozilla's and Microsoft's push services are accepted, so the runner never posts anywhere else.
+3. The runner calls `send_push(title, body, url, tag)`: for heartbeat alerts, and for tasks that are done, failed or have a question. Each push is encrypted to the device and signed with the VAPID private key in `secrets/vapid_private.pem` (mode 600), made on first use. A 404 or 410 from the push service means the device has gone, so its subscription is dropped; other failures are logged with the push service's host only.
+4. The service worker shows the notification. Its `tag` (`task-3`, or a hash of the alert's key) makes a newer notification about the same task replace the older one. iOS web notifications have no action buttons, so tapping one opens the app at `/?task=3` or `/?alert=calendar`, and the page shows a card with the notification's text and a button to talk to JARVIS about it. If the app is already open, it's brought forward without a reload, so a live session carries on.
+
+The native JARVIS app (jarvis-app) has no Web Push in its web view, so it registers with APNs and posts its device token, environment (`development` for Xcode builds, `production` for TestFlight and the App Store) and bundle id to `POST /api/push/native`. `jarvis/notify/apns.py` keeps these in `data/push_devices.json` (mode 600), and `send_push` sends to them alongside the Web Push subscriptions, over HTTP/2 with an ES256 provider token signed by `secrets/apns_key.p8` (its key ID in the vault, the team in `JARVIS_APNS_TEAM_ID`). A 410, `BadDeviceToken`, `Unregistered` or `DeviceTokenNotForTopic` drops the device; tokens never reach the log.
+
+In the iPhone app the Notifications switch (Settings → Notifications) shows what iOS says, through the plugin's `checkPermissions` (`appNotifications` in `web/src/lib/native.ts`), checked again when the page comes back on screen. Turning it on asks iOS through the plugin (a dialog only the first time); builds with `registerNotifications` hand the token over straight away, older ones at the next session start. Once refused, only iOS Settings can allow them again, and apps can't turn their own off, so those taps offer **Open Settings**: the plugin's `openSettings` where the build has it, else a navigation to `app-settings:`, which Capacitor passes to iOS. The switch's messages go in the toast, which sits above the panel. What the app needs for `registerNotifications` and `openSettings` is in [jarvis-app-notifications.md](jarvis-app-notifications.md).
+
+A task's request to run a risky command (see [Approvals](#approvals)) goes out the same way, tagged `approval-<id>`, with `alert.subtitle` saying why it's risky, `aps.category` `JARVIS_APPROVAL` and an `approval` object (`id`, `task`, `nonce`, `expires`) beside `url`, so the app's buttons can answer it through `POST /api/approvals/<id>` without the passcode. It isn't marked time-sensitive, so Focus holds it back like any other.
+
+Push is on unless `JARVIS_PUSH=off`, and nothing reaches a device that hasn't subscribed. Task pushes, like the Mac notifications, ignore the heartbeat's quiet hours.
+
+---
+
+## 9. Security model
+
+Every request has to pass a series of checks before JARVIS acts on it:
+
+```mermaid
+flowchart TD
+    R(["A device tries to reach JARVIS"]) --> Q1{"On your tailnet,<br/>or on this Mac?"}
+    Q1 -- No --> X1["Can't reach the page or signalling:<br/>both bind to 127.0.0.1"]
+    Q1 -- Yes --> Q2{"A login's own<br/>passcode?"}
+    Q2 -- No --> X2["Rejected. More than 10 misses<br/>in 5 minutes locks the endpoint."]
+    Q2 -- Yes --> T["Gets a 12-hour token<br/>for one room"]
+    T --> Q3{"Is the tool on<br/>the allow-list?"}
+    Q3 -- No --> X3["Denied, no prompt.<br/>Risky shell commands only after a yes."]
+    Q3 -- Yes --> Q4{"Does it reach other people<br/>or can't be undone?"}
+    Q4 -- Yes --> C["JARVIS asks you to confirm.<br/>Email is draft-only."]
+    Q4 -- No --> OK(["Runs"])
+    C --> OK
+
+    classDef stop fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    classDef go fill:#ecfdf5,stroke:#059669,color:#064e3b
+    class X1,X2,X3 stop
+    class T,OK,C go
+```
+
+| Threat | How it's handled |
+|---|---|
+| Someone on the internet reaching JARVIS | Nothing listens on a public interface. LiveKit signalling and the web app bind to 127.0.0.1. The phone reaches them only through Tailscale Serve, which only your own tailnet devices can use. |
+| Someone on the tailnet, or on this Mac, connecting | Tokens are issued only for a login's passcode (each person's own, 6 or more characters), checked against its salted scrypt hash. More than 10 wrong passcodes in 5 minutes locks the endpoint. Tokens expire after 12 hours and are valid for a single room. |
+| Voice-driven damage ("delete my files", "run this command") | The CLI brain has no file or edit tools, and anything off the allow-list is denied. Its sandboxed shell writes only to `data/shell/`, with no network and no view of secrets. Ordinary commands outside the sandbox (builds, renders, commits) run without asking, but anything that deletes, pushes, installs, kills, changes the system, sends data off the Mac or hides its real command needs a clear spoken yes, after which only the exact command that was asked about runs, once. Anything touching secrets is refused outright. Mac tools pass arguments as argv only. Code changes run only inside background tasks, which are limited as described in [Background tasks](#7-background-tasks). |
+| An email or web page steering JARVIS into running a command | Inside the sandbox it can do no harm: no writes outside `data/shell/`, no network, no secrets. Outside it, ordinary commands run without a yes, but they can't send data anywhere without looking risky (uploads, `ssh`, `scp`) and can't name a secret; a risky one doesn't run without your yes to JARVIS's question, and only the command already fixed when it asked can run. The command isn't read aloud (by choice, to keep approvals short), so check the agent log if a request seems odd; the persona also never runs commands that an email, web page or tool result asks for. |
+| An email or web page steering JARVIS into starting a task | The persona starts tasks only on the user's own request, and code changes need a spoken yes. A code change stays in the sandbox's one folder, uncommitted in the project's folder or committed to its own branch in a worktree, and is never pushed. In-place sessions are refused git commands that commit, reset, check out or stash. |
+| A task running something harmful on the Mac | Its host commands can't read secrets, write JARVIS's files or reach the runner, by the Seatbelt profile, whatever runs; they get none of JARVIS's keys; risky ones need your yes to a question built from the command itself, and only that exact command then runs, in the run it resumes, unless a rule you made covers it ([Remembered approvals](#remembered-approvals)) or your own words, sent with the task, order just that ("merge and push"). The task has no way to approve, make a rule or give an order, and a yes by voice counts only straight after JARVIS's own question, or when your own words in a later turn plainly tell the assistant to approve that task's requests, or order what they do (`task_approve`), one task per utterance. What's left: an ordinary command has open network access, so a script the task wrote could send non-secret files (project code, say) off the Mac. It can also use the SSH agent, which is there for approved pushes, to reach a host over SSH without a yes, though it can never read a key. Tasks are told never to act on instructions found in content, and every host command is logged in full. |
+| Someone answering a task's request | From the phone, only with the nonce in that request's push, used once, whose hash alone is stored; wrong ones count towards the passcode lockout. By voice, only as the next words after JARVIS asked. Otherwise only over the runner's socket. |
+| A remembered approval letting something harmful through | Only kinds that can't send data off the Mac, push, delete, change system settings or reach secrets can be remembered at all (`remembered.REMEMBERABLE`); the rest ask every time. A rule is built from the command itself and covers only its program and kind, and by default its exact words; every risky piece of a command must be covered, so a remembered install can't carry a push or an upload along. An "always" is said or shown before it's kept and needs your own next words or the panel's button; nothing a task, email, web page or tool result says can make one. Rules are listed in Settings › Approvals and by voice, each command run under one is logged with its number, and withdrawing is one tap or one sentence. What's left: an "always" for the kind (any `npm install`, say) trusts whatever packages a task later picks, so the exact command is the default. |
+| Hidden instructions kept, or loaded, as JARVIS's own context | Everything written to memory, the to-do list and the project list loses its invisible characters (zero-width, bidirectional controls, Unicode tag characters, variation selectors). Tasks' and the learning review's suggested edits that read like instructions to the assistant are flagged and wait for your yes, word for word; the brain's own saves of such text are refused, for it to tell you (you can still add it yourself in the panel). Code tasks scan a project's CLAUDE.md, AGENTS.md, subagents, skills and commands, leave out any that look tampered with, and tell you. The scanner (`jarvis.safety.scan`) is pattern-based, so a reworded attack can get past it; it backs up, and doesn't replace, the rules above that keep content from acting on its own. |
+| A skill from elsewhere doing harm | Installing, approving scripts and switching on all need a spoken yes (or the panel's confirmed approval); nothing from outside is switched on by itself, and the learning review only suggests. Frontmatter that grants tools or adds hooks is stripped, hooks and inline commands are off, links are refused, a skill whose scripts changed after approval is skipped, and the scripts run under the same sandbox and risky-command yes as any command. The script review's model call has no tools and reads the files as untrusted data, and the fixed-pattern scan is read out whatever the model says. |
+| Something in a conversation steering the learning review into memory | The review's call has no tools, and its reply is read only as JSON suggestions, checked like any task's edits. Its prompt counts only the user's own words as evidence and names what JARVIS read out from mail, Chat and the web as untrusted. Only additions are applied without a yes, each shown in the bell; rewrites, deletions and to-dos wait for the user. |
+| A task steered into changing JARVIS's memory or project list | Tasks can only suggest data edits; the voice brain applies them. Everything a research task suggests is marked `needs_yes`, as are deletions, rewrites and project-setting changes from any task, and `task_edits`' description and the persona have JARVIS apply edits only when they follow from what you asked the task for. |
+| The heartbeat acting on its own | It only reads. Mail and GitHub text reaches Claude only in the optional triage call, which has no tools and whose reply is read only as JSON numbers and flags. Once spoken, an alert is passed to the brain as something JARVIS said. The persona's rules still apply: tasks start only on your own request. |
+| Push notifications | Subscribing needs the passcode, and wrong passcodes count towards the same lockout. Only known push services are accepted as endpoints. Pushes go through Apple's (or the browser's) push service, encrypted end to end to the device, so the service sees only the device's address and when. The VAPID private key and the subscriptions stay in git-ignored files, mode 600, and are never logged. |
+| Something else on the Mac driving the task runner | The runner's API is a Unix socket with mode 600, not a TCP port, so web pages in a browser can't reach it. Only processes running as you can, and tasks' host commands can't. |
+| Sending things on your behalf | Email is draft-only. Invites and other outward actions need spoken confirmation, as the persona requires. |
+| An MCP server's token or the vault's key leaking, or a server changing things without you | Tokens are AES-256-GCM in `data/tasks.db` (`secrets`), each bound to its name and key id, under `JARVIS_MASTER_KEY`, which JARVIS's processes take out of their environment as config loads (`config.MASTER_KEY`) and the CLI sessions get blanked, along with any `GITHUB_PERSONAL_ACCESS_TOKEN` or `GITLAB_PERSONAL_ACCESS_TOKEN` in the environment. Only `jarvis.integrations.mcp_launch` decrypts, one server's secrets into that server's own environment. Shell commands that read other processes' environments (`ps eww`, `ps -E`, `/proc/<pid>/environ`, `procargs`, `launchctl procinfo`, a debugger attaching) are refused even with a yes, in the voice shell and in tasks, and tasks' host profile won't run the setuid `/bin/ps` at all: on macOS only it can read another process's environment, since the kernel shows a process only its own. Writes wait for your yes to a description built from the call itself, and only that exact call goes through, once; unlisted tools are refused and blocked ones never offered. |
+| Malformed tool input | Every tool input is checked against its schema before the tool runs. |
+| Credential leakage | Google tokens, JARVIS's Claude login and the LiveKit config (which holds the API secret) live in git-ignored `secrets/`, and the config file is mode 600. The LiveKit keys, the APNs key ID and the Google OAuth client are encrypted in the vault; logins are hashes in `secrets/logins.json`. `.env` holds the vault's master key (and, only on a first setup, the keys and passcode until JARVIS moves them), so keep it out of commits. |
+| Work and personal data mixing | Each Google account is labelled, with a note on what it's for, and anything written without naming one goes to the default; your "about you" text can say what to keep apart. JARVIS uses its own Claude login, separate from your Claude Code. |
+
+---
+
+## 10. Processes, ports and files
+
+**Ports**
+
+| Port | Bound to | Used by |
+|---|---|---|
+| 7880/tcp | 127.0.0.1 | LiveKit signalling (WebSocket), proxied on `/rtc` by Tailscale Serve |
+| 7881/tcp | All interfaces | LiveKit ICE over TCP (fallback) |
+| 7882/udp | Each network interface's address (LAN, and the Tailscale IP once installed); advertised at the Tailscale IP | LiveKit media |
+| 8787/tcp | 127.0.0.1 | Web app and token endpoint, proxied on `/` by Tailscale Serve |
+| 8081/tcp | All interfaces | LiveKit Agents worker health endpoint (`start` mode) |
+
+**Files and folders**
+
+| Path | Contents | In git? |
+|---|---|---|
+| `.env` | Settings, the vault's master key | Should not be |
+| `secrets/` | `livekit.yaml`, `logins.json` (hashed passcodes), `google-*.json`, `claude/` (JARVIS's CLI login), `vapid_private.pem` (signs pushes) | No |
+| `models/` | Kokoro models and voices (the 8-bit model 92 MB, the 32-bit one 326 MB, voices 28 MB), and the DeepFilterNet 3 noise filter (16 MB). Whisper (4-bit, about 0.5 GB) lives in the Hugging Face cache (`~/.cache/huggingface`). | No |
+| `data/` | `memory.md`, `vocabulary.md`, `recent.md`, `conversations/` (the full daily log); `tasks.db` (tasks, the project list, the to-do list and remembered approvals); for tasks: `runner.sock`, `worktrees/`, `task-cache/`, `commands/` (command tasks' records and output: [Command tasks](#command-tasks)); `heartbeat.json` (what the heartbeat has flagged); `usage.json` (what Claude last said of the usage limits); `learning.json` (how far the learning review has read); `push_subscriptions.json` (devices to push to); `pictures/` (photos sent and screenshots, pruned after days or hours: [Pictures](#pictures)); `transcripts/` (transcripts of recordings, kept 30 days: [Recordings](#recordings)) | No |
+| `logs/` | `livekit.log`, `agent.log`, `web.log`, `tasks.log`, `transcribe.log` | No |
+
+**Memory use:** Whisper and Kokoro load once, in the shared speech process, whatever the number of calls. Each job process (one per call, and one warm spare so a call connects at once) holds only Silero, the noise filter and the brain code, about 300 MB; before, each loaded its own models, about 2.5 GB, which made an 8 GB Mac swap. `JARVIS_VOICE_IDLE_PROCESSES=0` keeps no spare, and a call then waits a few seconds for its process to start.
+
+The shared speech process keeps no more memory than it's using: about 0.9 GB (Whisper's 0.45 GB, Kokoro, the turn detector). Left alone it reached 2.3 GB, from three caches:
+
+| What kept memory | Fix | Setting |
+|---|---|---|
+| MLX keeps Whisper's freed GPU buffers for reuse: about 0.7 GB after one clip | Capped at 256 MB; no slower in a benchmark (64 MB: about 25 ms slower a clip) | `JARVIS_MLX_CACHE_MB` |
+| Kokoro's ONNX Runtime arena grows to fit the longest sentence yet and never shrinks: about 1 GB after a 20-second sentence | Arena off; synthesis as fast | `JARVIS_TTS_MEMORY_ARENA` |
+| macOS's malloc caches large freed blocks, still counted against the process, so without the arena Kokoro's buffers stayed anyway | `MallocLargeCache=0` in the environment of the worker's child processes, set before it starts them; Kokoro then stays near 100 MB | `JARVIS_VOICE_MALLOC_LARGE_CACHE` |
+
+Sizes are footprints, what Activity Monitor's Memory column shows, which include the GPU memory MLX holds; `ps`'s resident size misses most of it. The worker's main process logs a `voice memory` line in `logs/agent.log` 90 s after starting and then every `JARVIS_VOICE_MEMORY_LOG_MINUTES` (default 10), with each process's footprint (`jarvis/voice/ram.py`); at debug level each job process logs one after every reply, and the speech process MLX's memory after every clip. `uv run python -m jarvis.voice.ram` prints the running agent's processes.
+
+---
+
+## 11. Running 24/7
+
+- **Install:** `make services-install` fills each service's label and this Mac's folders into the four plists from `deploy/` (`${LABEL}` the label, `${ROOT}` the project, `${HOME}` the home folder, `${NODE}` the folder of the `node` on PATH), writes them to `~/Library/LaunchAgents` as `<label>.plist` and loads them.
+- **Labels:** `com.jarvis.<name>` for `livekit`, `agent`, `web` and `tasks` (`config.service_label`; `JARVIS_SERVICE_PREFIX` changes the `com.jarvis`). `make status`, `services-start` and `services-stop` get them from `jarvis.setup_local`, always in the main checkout, so a task's worktree never installs a copy of its own.
+- **Moving labels:** a plist in `~/Library/LaunchAgents` named like one of the services (`<anything>.agent` and so on) under another label, whose log is in this checkout's `logs/`, is stale: an older install's (`com.<name>.jarvis.*`, before labels were configurable) or the prefix since changed. `services-stop` unloads those too, and `services-start` and `services-install` unload them, remove their plists and install the current ones, so `make services-restart` moves a running install over. Another checkout's services, logging elsewhere, are never touched.
+- **Restarts:** they start at login and restart if they exit (`KeepAlive`, with a 10-second throttle).
+- **The task runner's clean shutdown:** on launchd's SIGTERM (or Ctrl-C) `Runner.shutdown` stops the heartbeat, scheduler and learning review, starts nothing new (the API refuses changes with a 503), and notes each task queued or running as `interrupted`: when, the `host_run` commands it was running on the Mac right then, if any (`worker.ON_MAC`), and what it was launched with. It stops their sessions, waiting up to 10 seconds, and says nothing. On the next start (`Runner._after_restart`) up to `JARVIS_RESUME_TASKS` (default 3; `0` none) of them carry on by themselves, running ones first: a running one in its own session, told JARVIS restarted and to check what its last step left behind first, and a queued one launched again as it was. Every kind resumes alike (code changes, code questions, research), whatever access it was granted. A running one whose runner died without a clean shutdown (a crash, a kill, or a runner older than this shutdown) carries on in its session too, unless it died again before logging anything since it was last resumed, which would be a restart loop. One cut off mid-command on the Mac (what the command did is unknown), waiting for a go-ahead or an answer, a watch's check, any past the limit, and a queued one left by an unclean stop (what it was launched with is unknown) stop as before: "JARVIS restarted while it was running. Reply to carry on." Each one's log says why it wasn't resumed. Long jobs (`start_job`) and command tasks keep running across the restart either way.
+- **Priority:** the voice comes first. The agent's plist sets `ProcessType Interactive`, and the task runner's `Nice 10` and `LowPriorityIO`, which the tasks it starts inherit, so a busy task can't slow speech into pauses between sentences. (`ProcessType Background` would be stronger, but it keeps tasks on the efficiency cores.) Changes to these take `make services-install`.
+- **Sleep:** the agent runs under `caffeinate -i -s`, which keeps the Mac awake while it's on the charger. With the lid closed the Mac still sleeps unless `sudo pmset -a disablesleep 1` is set (`make awake`; `make sleep-normal` undoes it).
+- **Finding the CLI:** the `claude` CLI is found on `PATH`, which the plists set to include `~/.local/bin`. Override it with `JARVIS_CLAUDE_CLI`.
+
+---
+
+## 12. Known limitations
+
+- **iPhone:**
+  - **Locking:** Safari stops the audio when the phone locks, so keep the app open while you're talking.
+  - **Backgrounding:** the Home Screen app also loses the mic whenever it goes to the background (a Safari tab keeps listening). On return the page shows *Mic paused*, gets the mic back itself (`web/src/lib/mic.ts`, `micGuard`), and reconnects if the session dropped, keeping your mute choice.
+  - **Taking a photo in the app:** the native JARVIS app (jarvis-app) doesn't yet declare camera use (`NSCameraUsageDescription` in its `Info.plist`), so pick photos from the library there; iOS may close the app if "Take Photo" is chosen. Safari can take one.
+  - **No wake word:** iOS doesn't allow an always-listening wake word, or access to SMS and the call log. You start JARVIS with a tap, the Action Button or Siri.
+  - **Earphone presses:** while the page is on screen, a press on the AirPods stem mutes or unmutes, with a short tone.
+    - With the mic live, iOS handles the press as a mic mute (its own tone) rather than play/pause, and Safari reports it as a Media Session `togglemicrophone` action whose `isActivating` says which way it went, and as the mic track muting; the page follows that state rather than toggling.
+    - Where Safari doesn't pass the press on, the only sign is the mic going digitally silent, which the page listens for on a copy of the mic track it never mutes.
+    - Wired earphones iOS treats as media keys arrive as play, pause or stop through a near-silent looping `<audio>`.
+    - The page traces what it makes of each press to `logs/web.log` (`/api/log`).
+    - In the background the loop is unloaded and the handlers cleared, so no Now Playing controls show. Desktops don't get this, so their media keys stay with the music player.
+- **No live captions while you speak:** speech recognition runs in batch mode, so your words appear once you've finished.
+- **Noisy rooms:** LiveKit's own noise cancellation and adaptive interruption detection are LiveKit Cloud-only, so JARVIS runs DeepFilterNet 3 locally instead (`jarvis/voice/denoise.py`). Barge-in still relies on VAD, so a room loud enough to get through the filter can still cause false interruptions, unless the user has a voiceprint: then only their voice interrupts (`jarvis/voice/barge_in.py`). The filter's model is a community single-file streaming export of the official weights (grazder's torchDF), downloaded from a mirror pinned by commit and hash. The terminal console mode isn't filtered.
+- **The brain:** tied to the plan's usage caps. JARVIS knows how close it is only from what the CLI reports with each call ([Usage limits](#cli-brain-details)), not the exact figures Claude Code's `/usage` shows.
+- **One user:** the worker is sized for a single speaker and one active session at a time.
+- **Background tasks:** they share JARVIS's Claude login and its usage limits with the voice brain, so a busy afternoon of tasks can leave JARVIS rate-limited. A worktree task (a project set to worktrees) starts from a fresh worktree without gitignored files such as `.env`, so tests that need secrets won't run. A task's worktree and branch stay until it's merged with `task_merge` or thrown away with `task_discard`. A task can't be given new instructions while it's running: stop it, or reply once it finishes.
+
+---
+
+## 13. Extending
+
+- **A new tool:** add an `@tool` function under `jarvis/tools/`, and import its module at the bottom of `jarvis/tools/__init__.py`. The brain picks it up automatically.
+- **Another voice:** pick it in Settings → Preferences, with the speed; it applies from the next call. (`JARVIS_TTS_VOICE` and `JARVIS_TTS_SPEED` in `.env` win over it.) `JARVIS_TTS_MODEL` picks the Kokoro model file: the full 32-bit `kokoro-v1.0.onnx` by default, or the 8-bit `kokoro-v1.0.int8.onnx`, about 230 MB smaller but 30–60% slower.
+- **Another way in** (for example Telegram, or push alerts): reuse `make_brain()`. The brain doesn't depend on voice, so any channel that can pass text in and show or play text out will work.
+- **A new heartbeat source:** write an async function that takes the current time and returns a list of `heartbeat.Alert`, using read-only tools only, and register its kind with `heartbeat.register(heartbeat.Kind(name, title, about, make, settings))`, where `make(settings, context)` returns that function set up from the user's settings (`context` has the runner's task store and stall check). Give each alert a key that stays the same for the same item. From then on the control panel lists it, with its settings, and each user switches it on or off; `on=False` leaves it off until they do, and `more=True` lets them add more of it, each with its own settings.
+- **Planned next:** push alerts to the iPhone, a tasks page in the web app (diffs, answers, "push this branch"), a proactive morning briefing, and a wake word on the Mac.
+
+---
+
+## 14. Glossary
+
+| Term | Meaning |
+|---|---|
+| **LiveKit** | Open-source server for real-time audio and video. Here, it carries audio between your device and the voice agent. |
+| **LiveKit Agents** | LiveKit's Python framework for voice bots. `jarvis/voice/agent.py` is built on it. |
+| **WebRTC** | The browser standard for real-time audio. The page uses it to stream your mic to LiveKit. |
+| **Signalling** | The small control connection (WebSocket) used to set up a WebRTC call. The audio itself travels separately over UDP. |
+| **Tailscale / tailnet** | A private encrypted network between your own devices. Your tailnet is the set of devices on your account. |
+| **Tailscale Serve** | Tailscale's feature that exposes a local port over HTTPS to your tailnet only. |
+| **VAD** | Voice activity detection: spotting when someone is speaking. |
+| **Turn detector** | A small model that uses the words so far to decide whether you've finished speaking or only paused. |
+| **STT / TTS** | Speech-to-text (Whisper here) and text-to-speech (Kokoro here). |
+| **MLX** | Apple's machine-learning framework, which runs Whisper on the Mac's GPU. |
+| **MCP** | Model Context Protocol, the standard way to give Claude tools. JARVIS serves its tools from an in-process MCP server. |
+| **launchd / plist** | macOS's service manager, and the config files that tell it what to run. |
+| **Barge-in** | Talking over JARVIS to interrupt it. |
+| **Git worktree** | A second working folder for the same repository, checked out on its own branch, so a task can change code without touching your checkout. |
