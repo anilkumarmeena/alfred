@@ -372,6 +372,47 @@ JARVIS doesn't only answer when spoken to. Every 15 minutes the task runner chec
 
 ---
 
+## iPhone notifications
+
+With push on, heartbeat alerts and task updates (done, failed, has a question) reach the iPhone even when JARVIS isn't open.
+
+| | |
+|---|---|
+| **How** | Standard Web Push for the home-screen web app (iOS 16.4 or later), and APNs for the native JARVIS app ([below](#native-jarvis-app)). No third-party service. |
+| **Tapping one** | Opens JARVIS on that task or alert, with a button to talk about it. iOS web notifications have no reply buttons, so you answer by voice. |
+| **Heartbeat pushes** | Keep the heartbeat's rules: never twice, nothing in quiet hours. |
+| **Task pushes** | Arrive whenever the task finishes, like the Mac notifications. |
+
+> [!NOTE]
+> iOS only allows push for a web app served over HTTPS and opened from the Home Screen. The web app itself listens on plain HTTP at 127.0.0.1:8787; HTTPS comes from Tailscale Serve, which gives the Mac a `https://<mac-name>.<tailnet>.ts.net` address with a real certificate, reachable only by your own devices. If you've done [step 5 of Setup](#5-iphone-via-tailscale), that's already in place.
+
+### Turning it on
+
+1. Push is on by default (`JARVIS_PUSH=off` turns it off). `uv sync` (for `pywebpush`) and `make services-restart`. The first start makes JARVIS's VAPID key pair in `secrets/vapid_private.pem`.
+2. If the phone can't reach JARVIS over HTTPS yet: `make tailscale-serve` (the same as step 5 of Setup), and check the address with `tailscale serve status`.
+3. On the iPhone, open `https://<mac-name>.<tailnet>.ts.net` in Safari and enter the passcode.
+4. Tap Share, then **Add to Home Screen**. If JARVIS is already on your Home Screen from before, remove it and add it again, so the new manifest and service worker are picked up.
+5. Open JARVIS from the new icon (not from Safari), enter the passcode again (the Home Screen app keeps its own storage), and tap **Enable notifications**, then Allow.
+
+- The bell at the top turns notifications off on that device, or back on. Each device subscribes separately.
+- **Settings → Notifications → JARVIS** on the iPhone controls banners, sounds and Focus.
+- If pushes stop with a `BadJwtToken` error in `logs/tasks.log`, Apple refused the contact address: add a Google account (its address is used), or set `JARVIS_PUSH_CONTACT` to `mailto:` and your own address.
+
+### Native JARVIS app
+
+The native JARVIS app (jarvis-app) can't use Web Push, so it registers with Apple's push service (APNs) itself when a voice session starts and posts its device token to `POST /api/push/native`. Tokens are kept in `data/push_devices.json`, and every push then goes to the app as well.
+
+On the Mac, with push on (the default):
+
+1. Create an APNs auth key at developer.apple.com (Certificates, IDs & Profiles → Keys → +, tick Apple Push Notifications service, environment Sandbox & Production).
+2. Save it as `secrets/apns_key.p8` (`chmod 600`).
+3. Enter its Key ID in the control panel (Settings → Logins and keys), and put your Team ID in `JARVIS_APNS_TEAM_ID` in `.env`.
+4. Run `uv sync` (for `httpx[http2]`) and `make services-restart`.
+
+`logs/web.log` says `app push token saved for iphone` when the app registers; failed sends are in `logs/tasks.log` as `APNs push to iphone … failed`.
+
+---
+
 ## Adding a tool
 
 1. Add a function with `@tool(name, description, properties, required)` in `jarvis/tools/`.
