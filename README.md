@@ -372,6 +372,20 @@ JARVIS doesn't only answer when spoken to. Every 15 minutes the task runner chec
 
 ---
 
+## Earphones and switching apps (iPhone)
+
+- **Stem press to mute:** during a session, while JARVIS is on screen, pressing the AirPods (or wired earphone) button mutes or unmutes the mic, with a falling tone for muted and a rising one for listening.
+  - The mute button on screen follows along. If iOS muted the mic itself, the page says *Press the earphone button to unmute*.
+  - Each press is traced to `logs/web.log` (lines starting `iphone:`), for when it doesn't behave.
+  - With the app in the background there are no Now Playing controls and the button is left to other apps.
+  - It works on phones and tablets only, so a Mac's media keys still control music.
+- **Coming back to the app:** iOS takes the mic away from the Home Screen app whenever it goes to the background, so it can't listen then (a Safari tab can).
+  - When you return, JARVIS shows **Mic paused**, gets the mic back and carries on, muted if you'd muted.
+  - If the session dropped while you were away, it reconnects on its own.
+  - If iOS won't hand the mic back straight away, the page says *Tap the core to turn the mic back on*.
+
+---
+
 ## iPhone notifications
 
 With push on, heartbeat alerts and task updates (done, failed, has a question) reach the iPhone even when JARVIS isn't open.
