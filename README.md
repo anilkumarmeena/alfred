@@ -436,6 +436,28 @@ Tools may be sync or async; sync ones run in a thread.
 
 ---
 
+## Web app
+
+`web/` is a Vite app in TypeScript with Preact and signals:
+
+| Path | What it holds |
+|---|---|
+| `src/main.tsx` | Boot: renders the page, wires the keys (Space, M, C, Esc) and the page lifecycle. |
+| `src/components/` | One file per part of the screen: `Header`, `Stage` (the core, readout, pills, passcode card, notification card), `Transcript`, `Controls` (with `Composer`, the message box). |
+| `src/state/` | `store.ts`: the page's state as signals, mirrored onto `body[data-*]` for the stylesheet. `session.ts`: the LiveKit session. `push.ts`: notifications. `transcript.ts`: the captions. |
+| `src/lib/` | No UI: `mic.ts` (earphone controls, mic recovery), `markdown.ts` (Markdown to safe HTML for the panel, with marked and DOMPurify), `reactor.ts` (the core's canvas), `retry.ts` (the pauses between reconnects), `build.ts` (reloading into a newer build), `audio.ts`, `trace.ts`, `wake.ts`, `storage.ts`. |
+| `public/` | Copied as is: `sw.js`, the manifest and icons. |
+| `tests/` | vitest tests. |
+
+- **Building:** `make web-build` builds it into `web/dist`, which `jarvis.server` serves: the page at `/`, the service worker at `/sw.js`, and everything else under `/static/`. `make web`, `make services-install` and `make services-restart` build it first, so a pulled change shows up after a restart. A running `jarvis.server` picks up a rebuild without one.
+- **After a restart or rebuild:** an open page needs no reload or tap. If the voice session drops (JARVIS restarting, the network), the page says *Reconnecting* and tries again by itself: after half a second, then a little longer each time up to every 5 seconds, for as long as it's open, and at once when it comes back on screen or online (`web/src/lib/retry.ts`). It comes back as it was, the mic open or muted, keeping the transcript and any message typed meanwhile; if the browser won't give the mic back without a tap, it comes back muted and says so. A room the agent never joins (made while the agent was still starting) is swapped for a fresh one after 15 seconds. End stops it trying; so does an agent that keeps leaving straight after joining. The panel's event stream reconnects the same way. Each build carries an id (`<meta name="jarvis-build">`, from `vite.config.ts`); `jarvis.server` says which it serves in `/api/events`' hello and `/api/token`'s reply, and a page running an older one reloads, between sessions or as a dropped one comes back, then reconnects (`web/src/lib/build.ts`).
+- **Typing instead of talking:** the message box above the controls sends a question as text. It goes to the agent on LiveKit's `lk.chat` topic, which LiveKit Agents feeds to the brain like a spoken turn, interrupting JARVIS if it's talking; the answer is spoken and captioned as usual. Typing with no session running starts one muted, so it works without the mic, and the message waits until the agent is listening.
+- **Speaker off (a meeting, a crowd, a call):** the speaker button beside Mute (or **S**) makes JARVIS reply only in the transcript, which then shows even with captions hidden. It's silent, not just quiet: the page sets its `jarvis.speaker` participant attribute to `off`, and the agent turns its audio output off (`jarvis/voice/quiet.py`), so LiveKit runs no text-to-speech at all and sends the reply's text straight to the captions; the page mutes its player too, so a reply already being spoken stops at once, and the mute tone goes quiet. The choice stays on the device and travels in `/api/token`'s request, so a session started with it off is silent from the greeting on. Before a session, Mute likewise says how the next one starts, so nothing is heard from its first moment; both can be changed at any time. In the iPhone app a phone call turns both off by itself and, when it ends, the page offers to turn them back on.
+- **Markdown in the panel:** task summaries and questions, to-dos, memory facts and the activity list show their Markdown rendered (`components/panel/Markdown.tsx`); "About you" is edited with Write and Preview tabs. The text can come from an email or a web page a task read, so raw HTML in it shows as text, DOMPurify keeps only plain formatting tags, links go out only over http(s) or mailto and open in a new tab, and images show as links rather than load.
+- **Hot reload:** run `make web` (or the services) for the API, and `make web-dev` alongside it. http://localhost:5173 serves the page from `web/src` and passes `/api` calls on to port 8787.
+
+---
+
 ## Tests
 
 | Command | What it runs |
