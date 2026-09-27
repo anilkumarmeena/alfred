@@ -339,6 +339,36 @@ A task you start without naming an item is checked against your open items as it
 
 ---
 
+## Shell commands and long jobs
+
+JARVIS runs everyday commands itself: checks, builds, tests, renders, git commits.
+
+**Only risky ones wait for your yes:** deleting files, pushing, installing or removing software, stopping or killing processes, changing system settings, or sending data off the Mac. JARVIS asks just "Okay to go ahead?". Answer now or within five minutes, even after talking about something else:
+
+| Your answer | Counts as |
+|---|---|
+| "yes", "go ahead", "sure", "mm-hmm", "that's fine", "I'm sure", "keep going", "do it", "yeah, let's close it", "it is allowed" and the like | **Yes**: the command runs |
+| "no", "don't", "uh-uh", "I'd rather not", "cancel", "never mind" | **No**: the question is dropped |
+| A lone "thank you" or "bye" | **Neither**: not a yes |
+
+**Long jobs.** Anything that takes more than a minute, like a video render, JARVIS says up front will take a while and starts as a job of its own (`start_job`). Each job is a **command task**: a background task of its own kind, listed with every other task (`task_list`, the control panel's Tasks page, the phone), with the same Stop button, notifications and output, and kept as long as tasks are. No model runs while it works, however many hours that is, and it takes no task slot. It keeps running while you talk, after you hang up, and while the task runner restarts. Ask "how's the render going?" to hear how far it's got; "stop the render" stops it (`stop_job`, or `task_stop`). Audio files being made, and each run of a [scheduled command](#scheduler), are command tasks too.
+
+When it ends, only then does a model wake:
+
+- **Success:** one short call (Haiku; `JARVIS_COMMAND_SUMMARY_MODEL`) reads the end of its output and says what it did in a sentence or two, aloud in a live session and as a Mac and phone notification.
+- **Failure** (an exit code other than 0, its time limit, or being killed): one short call (Sonnet; `JARVIS_COMMAND_TRIAGE_MODEL`) reads the end of its output, says what failed and why, and decides what happens next, whatever the command:
+  - **An ordinary failure** (a bug, a failing test, a missing dependency or file, a wrong setting) in a project is fixed on its own: a code_change task in that project starts at once with the command, its folder, how it ended and its output (you hear that in a live session, without a push). When it says the fix should work, the command runs once more as a command task of its own, which then tells you what failed, what was fixed and how the rerun went. A rerun that fails again is only reported, so it can't loop.
+  - **Anything critical**, where the fix would touch secrets, deploy or push, delete data or change system settings, waits for you: the job's task asks "Shall I start a task to fix it?" Say yes (or tap Fix it in the control panel) and the fix starts with your words; say no (or Leave it) and it stays as it failed.
+  - **Nothing to fix** (the network down, a login only you can renew, a check whose failing is its answer) is just said.
+
+  Risky steps inside a fix still wait for your yes as in any task. A job outside any project (the scratch folder, say), or started with fixing off ("…and don't fix it if it fails"), is only explained. With Claude's usage limit out, a success is said with its last lines and a failure in a project goes to a fix, as no model can judge it.
+
+Commands run in their folder through a login shell, outside the sandbox, with JARVIS's own keys left out of their environment; their output is kept in `data/commands/<task>.log`.
+
+Details in [docs/architecture.md](docs/architecture.md#cli-brain-details).
+
+---
+
 ## Heartbeat
 
 JARVIS doesn't only answer when spoken to. Every 15 minutes the task runner checks for these, unless you've switched one off:
