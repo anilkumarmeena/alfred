@@ -369,6 +369,53 @@ Details in [docs/architecture.md](docs/architecture.md#cli-brain-details).
 
 ---
 
+## Google Chat
+
+On the accounts marked for Chat (`--chat`), JARVIS reads Google Chat and can reply. Chat needs a Workspace account; personal Gmail has no Chat API.
+
+| Say | What happens |
+|---|---|
+| "anything on Chat?" | What's unread: DMs first, then spaces where you were @mentioned, with who said what. |
+| "summarise my DM with Alice" · "what's new in Platform Dev?" | Reads one conversation. |
+| "find the Chat message about the player fix" | Searches. |
+| "mark the alert spaces as read" | Clears the unread state of those spaces straight away, with no yes needed: it changes only your own read state, and Chat can mark them unread again. |
+| "reply to Alice that I'll join at four" | Drafts it, then reads the exact text aloud with who it goes to: "To Alice Carter: I'll join at four. Shall I send it?" |
+
+**Sending**
+
+- JARVIS sends only after a clear yes, the same yes as for risky shell commands, within five minutes. For a space it says how many people are in it.
+- Asking for different wording makes a new draft, read out again.
+- You can write to someone you've never messaged, by name or email. The draft is read out as "To Dana Reyes, in a new direct message: …", and the DM is started only when it's sent after your yes.
+  - That needs one more permission, to start new Chat conversations. An account signed in before it says to sign it in again (`make google-login LABEL=work`, say), and meanwhile JARVIS can still write to anyone it has a DM with.
+
+**Finding people**
+
+- People are found by name, loosely since names come through speech recognition, from the Workspace directory and from who you've chatted with. If several fit ("Sam"), JARVIS asks which.
+- DMs and senders are named from the directory, or from the names on their messages when the directory can't say. Names are kept in memory for a day.
+
+**Limits and safety**
+
+- Chat marks whole spaces read, not single threads. With Chat blocked there's nothing to mark (JARVIS can mark the notification emails read instead).
+- Sending only after a yes is **enforced in code**, not left to the model. Background tasks and the heartbeat can read Chat but never send.
+- Chat messages JARVIS reads go to Claude, as work email does.
+
+### One-time set-up
+
+In the Google Cloud project that owns JARVIS's OAuth client:
+
+1. **Enable the Google Chat API and the People API** (APIs & Services → Library). People is how JARVIS names who said what.
+2. **Configure the Chat app.** On the Google Chat API's **Configuration** page, give the app a name (JARVIS), an avatar URL and a one-line description. Leave "Build this Chat app as a Workspace add-on" unticked (that can't be undone). JARVIS never receives Chat events, so the interactive features can stay off.
+3. **Sign the account in for Chat.** Mark the Workspace account for Chat (`--chat` when adding it, or `uv run python -m jarvis.integrations.accounts set work --chat`), then run `make google-login LABEL=work`, sign in with that account and allow the Chat permissions. Run it again after an update adds one, such as marking spaces read.
+
+The script then checks Chat and says what to fix if it doesn't work: the Chat app not configured, an API left off, or Chat turned off by the Workspace. `make chat-check` runs that check again on its own.
+
+> [!WARNING]
+> **If the Workspace blocks Chat,** Google shows "Access blocked" (`admin_policy_enforced`). Close the tab: the script offers to try again without reading messages (JARVIS can then still say which spaces have something unread), then without Chat. The old sign-in stays in place until one of them works.
+>
+> With Chat blocked, "anything on Chat?" reads Chat's notification emails through Gmail instead, so turn those on in Chat's settings. They cover only DMs and mentions, once Chat thinks you're away.
+
+---
+
 ## Heartbeat
 
 JARVIS doesn't only answer when spoken to. Every 15 minutes the task runner checks for these, unless you've switched one off:
@@ -399,6 +446,26 @@ JARVIS doesn't only answer when spoken to. Every 15 minutes the task runner chec
 - **Read-only:** the heartbeat never sends, creates, starts or runs anything.
 
 `make heartbeat` does a dry run: it prints what would be flagged right now, without notifying anyone or recording anything. Each check writes one line to `logs/tasks.log`. Settings are in the [settings table](#heartbeat-settings); details in [docs/architecture.md](docs/architecture.md#8-heartbeat).
+
+---
+
+## Noise filter
+
+Your mic goes through [DeepFilterNet 3](https://github.com/Rikorose/DeepFilterNet) on the Mac before anything listens to it, whichever device you talk from (iPhone app, Safari, Mac browser).
+
+| | |
+|---|---|
+| **Hooks in** | LiveKit's frame-processor hook on the room's mic input, so the VAD, barge-in and Whisper all hear the filtered audio |
+| **Runs on** | ONNX Runtime, one CPU core |
+| **Cost** | About 1.4 ms per 10 ms of audio |
+| **Added delay** | About 40 ms |
+| **Model** | `models/deepfilternet3-streaming.onnx`, 16 MB, downloaded by `make models` and checked against its hash |
+| **If it's missing** | The agent log says so and JARVIS uses the original audio |
+| **Not filtered** | Terminal console mode (`make console`) |
+
+- **Attenuation limit:** by default the filter takes at most 18 dB off any sound (`JARVIS_DENOISE_ATTEN_DB`), so speech it mistakes for noise stays audible to Whisper. On synthetic tests with no limit, word errors in loud white noise went from 4% to 14%; with the limit, the filtered audio was never worse than the original.
+- **Comparing Whisper with and without it:** set `JARVIS_DENOISE=vad` and restart the agent (`make services-restart`). The VAD still hears the filtered audio, so turn-taking and barge-in behave the same, but each utterance Whisper gets is the original audio of the same stretch. `JARVIS_DENOISE=off` turns the filter off altogether.
+- **Checking it's working:** the agent log (`logs/agent.log`) says which mode is on when the agent starts. When a call ends it logs how long the filter took per frame, and it warns if a frame ever takes longer than real time.
 
 ---
 
