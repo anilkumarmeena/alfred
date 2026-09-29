@@ -469,6 +469,68 @@ Your mic goes through [DeepFilterNet 3](https://github.com/Rikorose/DeepFilterNe
 
 ---
 
+## Speech gate
+
+On near-silent or noise-only clips, Whisper makes up words, most often a lone "Thank you." The noise filter doesn't stop that: it cleans the audio but doesn't decide whether anyone spoke.
+
+The speech gate (`jarvis/voice/speech_gate.py`) does, **mostly from the audio**. The words only count against a clip when the whole transcript is one of Whisper's known phantoms ("Thank you.", "You", "Bye.", "like", "Mm-hmm."): those must be said clearly to get through. A real "yes", "no", "okay", "sure" or "go ahead" is never on that list, so it is held to the audio checks alone. A clip is dropped when any of these holds (each threshold is a setting, in `.env`):
+
+| Check | Setting (default) | Holds when |
+|---|---|---|
+| **No speech** | `JARVIS_SPEECH_GATE_MIN_SPEECH_SECONDS` (0.1) | Silero VAD, run again over the clip, finds less than this many seconds of speech. Real one-word replies measure about 0.5 s; noise, 0. |
+| **Too short** | `JARVIS_SPEECH_GATE_MIN_SECONDS` (0.3) | The whole clip is shorter than this. The VAD pads every utterance by about a second, so real speech never is. |
+| **Too quiet** | `JARVIS_SPEECH_GATE_MIN_DBFS` (-55) | Its loudest 100 ms is quieter than this, in dBFS (0 is full scale; near-silence is about -65). |
+| **Whisper hears nothing** | `JARVIS_SPEECH_GATE_NO_SPEECH` (0.8), `JARVIS_SPEECH_GATE_WEAK_SPEECH_SECONDS` (0.25) | Whisper's no-speech probability is at least 0.8 and the VAD found under 0.25 s of speech. Whisper's signal only counts alongside weak VAD evidence, never on its own. In practice large-v3-turbo (16- or 4-bit) reports 0.0 on every clip, phantoms included, so this rarely fires. |
+| **Faint** | `JARVIS_SPEECH_GATE_FAINT_SPEECH_SECONDS` (0.25), `JARVIS_SPEECH_GATE_FAINT_DBFS` (-28), `JARVIS_SPEECH_GATE_FAINT_MAX_SECONDS` (1.4) | All three at once: the VAD found under 0.25 s of speech, the loudest 100 ms is quieter than -28 dBFS, and the clip is under 1.4 s long (the session's VAD heard under about 0.3 s of speech too; see below). It catches the phantoms with just over 0.1 s of speech in them. Real short replies are louder, or have more speech, or are longer: of 877 logged clips, the only ones it would have dropped were 9 phantom "Thank you"s, "You"s and a "Please". Without the length condition it would have dropped a quiet "Okay." and "Cut." too. |
+| **Phantom phrase** | `JARVIS_SPEECH_GATE_PHANTOM_DBFS` (-22), `JARVIS_SPEECH_GATE_PHANTOM_SPEECH_SECONDS` (0.6), `JARVIS_SPEECH_GATE_PHANTOMS` | The whole transcript, lowercased and without punctuation, is a known phantom ("thank you", "thanks for watching", "you", "bye", "so", "like", "oh", "mm hmm", ...; the list is `PHANTOMS` in `speech_gate.py`, and a comma-separated `JARVIS_SPEECH_GATE_PHANTOMS` replaces it), and its loudest 100 ms is under -22 dBFS, or the VAD found under 0.6 s of speech, or Whisper is unsure of it (below). On 5 October this caught 19 lone "Thank you."s the audio checks above had let through, plus "like", "Mm-hmm.", "Bye-bye." and "So", and no real reply: the user's own short replies measure -8 to -24 dBFS, while the phantoms were mostly -25 to -46 dBFS with 0.2 to 0.5 s of "speech" (often the tail of JARVIS's own voice). |
+| **Whisper unsure** | `JARVIS_SPEECH_GATE_MIN_LOGPROB` (-1.0), `JARVIS_SPEECH_GATE_UNSURE_SPEECH_SECONDS` (0.5) | Whisper's average log-probability for the text is under -1.0 (its own retry threshold: every retry at a higher temperature failed too, so the words are a random guess, like "Nngo!" or "asses") and the VAD found under 0.5 s of speech. Longer mumbled speech still gets through, garbled or not. |
+| **No words** | | The transcript has no letters or digits in it: ",", "...", "♪". |
+| **Repetitive** | `JARVIS_SPEECH_GATE_MAX_COMPRESSION` (2.4) | The transcript's gzip compression ratio is over 2.4 (Whisper's own threshold): a phrase looping, "Thank you. Thank you. Thank you. ...". |
+
+Whisper's average log-probability is no help on its own: the phantom "Thank you."s scored -0.35 to -1.0, just like real "Yes."s and "Okay."s (-0.5 to -0.85). That's why it only counts for the phantom phrases and for clips with little speech.
+
+Fewer phantoms reach the gate at all since the session's VAD needs 0.2 s of unbroken speech to start an utterance (`JARVIS_VAD_MIN_SPEECH`; LiveKit's default 0.05 s let a three-window click through, see below). Barge-in is unaffected: it still needs 0.5 s of speech, counted from the first window, and if a clip that interrupted JARVIS is then dropped, LiveKit resumes the reply after 2 s. Once you have a voiceprint, only your voice interrupts JARVIS at all ([Speaker check](#speaker-check)).
+
+### Watching first
+
+With `JARVIS_SPEECH_GATE=shadow` it drops nothing, so a day of real calls can be reviewed before trusting new thresholds.
+
+- Each clip it would drop goes in `logs/agent.log` as a `speech gate would drop (shadow)` line, with its length, loudness (whole-clip RMS and loudest 100 ms), VAD speech time and ratio, Whisper's no-speech probability and average log-probability, and the transcript.
+- `make speech-gate` starts with a count of the drops by reason, to see which check is doing the work.
+- Every clip, kept or not, also goes in `logs/speech-gate.jsonl` with the same measurements, so real speech can be compared with the would-be drops.
+
+### Reviewing a day of calls
+
+`make speech-gate` (or `uv run python -m jarvis.voice.speech_gate`) lists the last 24 hours' clips the gate would drop (`uv run python -m jarvis.voice.speech_gate 72` for three days). If a real reply shows up there, loosen the threshold that caught it (the reasons are in brackets).
+
+### Listening to the clips
+
+- **What's saved:** in shadow mode each clip the gate judges, kept or not, is also saved as the audio Whisper heard (16 kHz mono WAV), in `logs/speech-gate-audio/`, named by the time it was heard (`20260929-143012-345.wav`).
+- **Finding one:** its line in `logs/speech-gate.jsonl` has the file's path under `audio`, and `make speech-gate` and the agent log's would-drop lines show it too, so `afplay` on a suspected phantom plays exactly what Whisper got.
+- **How many:** only the newest `JARVIS_SPEECH_GATE_AUDIO_KEEP` files (300 by default; a short clip is about 40 KB) are kept; older ones are deleted as new ones arrive.
+- **Switching it:** `JARVIS_SPEECH_GATE_SAVE_AUDIO=off` stops the saving, and `on` keeps it going in enforce mode, where it's off by default.
+- **Short clips:** with it off, the short clips the gate lets through are still saved (`JARVIS_SPEECH_GATE_SAVE_SHORT`, on by default): those under `JARVIS_SPEECH_GATE_SHORT_SECONDS` (2) long, or with under `JARVIS_SPEECH_GATE_SHORT_SPEECH_SECONDS` (0.5) of speech, so a phantom that slips past can be heard. The clips it drops aren't saved. They count towards the same newest-300 limit.
+- Saving never changes what the gate keeps or drops.
+
+### Why phantoms are about 1.17 s long
+
+That's close to the shortest clip the session's VAD (Silero, LiveKit's defaults) ever hands Whisper:
+
+| Part | Length |
+|---|---|
+| Audio kept from before speech starts | 0.5 s |
+| A sound it calls speech for three 32 ms windows (a click, a breath, a rustle); speech counts from two windows (`min_speech_duration` 0.05 s) | 0.096 s |
+| The utterance ends after 18 windows below its threshold (`min_silence_duration` 0.55 s) | 0.576 s |
+| **Total, nearly all of it background** | **1.172 s** |
+
+Every clip length is 1.076 s plus a whole number of 32 ms windows; 1.14 s is the minimum. With `JARVIS_VAD_MIN_SPEECH` at 0.2 s, an utterance needs seven unbroken windows (0.224 s) to start, so the shortest clip is now about 1.3 s and a lone click makes none.
+
+### Switching it on
+
+It's on by default (`enforce`): dropped clips are logged as `speech gate dropped`, and the brain never hears them. Settings → Preferences → Phantom filter switches it from the next call: **Only log** goes back to shadow mode, **Off** turns the checks off altogether (or `JARVIS_SPEECH_GATE` in `.env`, which wins). The agent log says which mode is on when the agent starts.
+
+---
+
 ## Earphones and switching apps (iPhone)
 
 - **Stem press to mute:** during a session, while JARVIS is on screen, pressing the AirPods (or wired earphone) button mutes or unmutes the mic, with a falling tone for muted and a rising one for listening.
