@@ -1,0 +1,385 @@
+"""Tests for the Google accounts, the accounts table in data/tasks.db, and their command (jarvis.integrations.accounts), and how
+the Google tools, from AI Armory, are given them: any label, the default for what's made without naming one, "all"
+searches that survive a broken account, and JARVIS's sign-ins. Run with: make test"""
+
+import asyncio
+import json
+import os
+import sqlite3
+import subprocess
+import sys
+import threading
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from ai_armory.toolsets.google import chat, common
+
+from conftest import use_profile
+from jarvis import tools
+from jarvis.core import config, profile
+from jarvis.integrations import accounts
+from jarvis.integrations.accounts import Account, Accounts
+from jarvis.state import settings
+from jarvis.tools import google
+
+ROOT = config.ROOT
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    """A database, secrets folder and heartbeat file of the test's own."""
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    use_profile(monkeypatch, tmp_path)  # its sign-ins in tmp_path/secrets
+    return SimpleNamespace(dir=tmp_path, secrets=secrets, db=tmp_path / "tasks.db")
+
+
+def two() -> Accounts:
+    return Accounts([Account("work", "me@acme.example", "for work", chat=True),
+                     Account("personal", "me@mail.example", "their own")], "work")
+
+
+def store(found: Accounts) -> None:
+    with accounts.change() as kept:
+        kept.accounts, kept.default = list(found.accounts), found.default
+
+
+def run(*argv: str) -> int:
+    return accounts.main(list(argv))
+
+
+def rows(home) -> list[tuple]:
+    return sqlite3.connect(home.db).execute("select label, position, is_default from accounts order by position").fetchall()
+
+
+# ── The table ───────────────────────────────────────────────────
+
+def test_the_table_keeps_everything_in_order_with_one_default(home):
+    tricky = Accounts([Account("side-project", "a@b.example", 'Says "hi" \\ née', chat=True), Account("x_2"),
+                       Account("a")], "x_2")
+    store(tricky)
+    assert accounts.load() == tricky
+    assert rows(home) == [("side-project", 0, 0), ("x_2", 1, 1), ("a", 2, 0)]
+    with pytest.raises(sqlite3.IntegrityError):  # the database itself holds out against a second default
+        sqlite3.connect(home.db).execute("update accounts set is_default = 1 where label = 'a'")
+
+
+def test_a_database_that_cant_be_opened_means_no_accounts_rather_than_a_crash(home, monkeypatch, caplog):
+    use_profile(monkeypatch, home.dir, db=home.dir)  # a folder, not a database
+    assert accounts.load() == Accounts()
+    assert "can't read the Google accounts" in caplog.text
+
+
+def test_changes_from_several_processes_at_once_all_land(home):
+    store(Accounts([Account("base")], "base"))
+
+    def add(n: int) -> None:
+        with accounts.change() as found:
+            found.add(Account(f"a{n}"))
+
+    threads = [threading.Thread(target=add, args=(n,)) for n in range(8)]  # a connection each, as processes have
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(accounts.load().labels) == ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "base"]
+
+
+def test_a_change_that_fails_changes_nothing(home):
+    store(two())
+    with pytest.raises(ValueError):
+        with accounts.change() as found:
+            found.remove("personal")
+            found.add(Account("work"))  # taken
+    assert accounts.load() == two()
+
+
+# ── A fresh install ─────────────────────────────────────────────
+
+def test_two_processes_starting_at_once_make_the_table_once(home):
+    errors = []
+
+    def start() -> None:
+        try:
+            accounts.load()
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=start) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == [] and rows(home) == []
+
+
+def test_a_fresh_install_has_no_accounts_and_stays_that_way(home):
+    (home.secrets / "google-work.json").write_text("{}")  # nor is a sign-in: only the command adds accounts
+    assert accounts.load() == Accounts()
+    assert accounts.show(Accounts()).startswith("No Google accounts yet. Add one with")
+
+
+def test_a_fresh_install_starts_without_google_tools_or_a_crash(home):
+    """In a process of its own, since the tools' account lists are fixed when they're imported. Its database is
+    made here, empty, so it brings in nothing from this machine's data/."""
+    assert accounts.load() == Accounts()
+    settings.about()  # makes the settings table too
+    env = os.environ | {"JARVIS_DB_FILE": str(home.db)}
+    code = ("from ai_armory.toolsets.google import current\n"
+            "from jarvis import tools\n"
+            "from jarvis.brain import persona\n"
+            "from jarvis.tasks import heartbeat\n"
+            "names = {t.name for t in tools.all_tools()}\n"
+            "print(sorted(n for n in names if n.split('_')[0] in ('gmail', 'calendar', 'chat', 'docs', 'sheets')))\n"
+            "print(repr(current().default_label), 'chat' in heartbeat.sources_on(None), 'task_start' in names)\n"
+            "print('No Google account is set up yet' in persona.persona())\n")
+    done = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == ["[]", "'' False True", "True"]
+
+
+def test_one_account_alone_gets_every_tool_and_everything_by_default(home):
+    """In a process of its own, as above, with only the work account: no other label offered, writes go to it, and
+    the prompt's line names it alone, with nothing on a default."""
+    only = Accounts([Account("work", "me@acme.example", "for work", chat=True)], "work")
+    store(only)
+    settings.about()
+    env = os.environ | {"JARVIS_DB_FILE": str(home.db)}
+    code = ("from jarvis import tools\n"
+            "from jarvis.tools import google\n"
+            "found = [t for t in tools.all_tools() if t.armory and 'account' in t.properties]\n"
+            "print(len(found) >= 25, sorted({tuple(t.properties['account']['enum']) for t in found}))\n"
+            "print(sorted({t.properties['account'].get('default') for t in found}), google.CHAT_LABELS)\n")
+    done = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == ["True [('work',), ('work', 'all')]", "['all', 'work'] ['work']"]
+    assert accounts.describe(only) == (
+        'Their Google accounts, by the label the tools take as account: "work" (me@acme.example): for work.')
+
+
+def test_the_command_runs_as_a_module(home):
+    store(two())
+    done = subprocess.run([sys.executable, "-m", "jarvis.integrations.accounts"], cwd=ROOT, capture_output=True, text=True,
+                          timeout=60, env=os.environ | {"JARVIS_DB_FILE": str(home.db)})
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines()[0].split() == ["work", "me@acme.example", "[default,", "Google", "Chat,", "not",
+                                                    "signed", "in]", "for", "work"]
+
+
+# ── Names, and what the prompt says ─────────────────────────────
+
+def test_an_account_can_be_named_by_its_email_or_in_other_capitals():
+    found = two()
+    assert found.resolve("Personal") == "personal" and found.resolve(" ME@ACME.example ") == "work"
+    assert found.resolve("nobody") == "nobody"  # left for the tool's check to refuse
+
+
+def test_the_prompt_describes_the_accounts():
+    assert accounts.describe(two()) == (
+        'Their Google accounts, by the label the tools take as account: "work" (me@acme.example): for work; '
+        '"personal" (me@mail.example): their own. Whatever is made or changed without naming an account goes to '
+        '"work"; searches cover every account unless the user names one.')
+    assert accounts.describe(Accounts([Account("home")], "home")) == (
+        'Their Google accounts, by the label the tools take as account: "home".')
+    assert accounts.describe(Accounts()).startswith("No Google account is set up yet")
+
+
+# ── Adding, removing, renaming ──────────────────────────────────
+
+def test_adding_checks_the_label_and_email_and_the_first_is_the_default():
+    found = Accounts()
+    found.add(Account("home", "a@b.example"))
+    assert found.default == "home"
+    found.add(Account("job"), default=True)
+    assert found.default == "job"
+    for bad, why in ((Account("home"), "already a home account"), (Account("Job 2"), "can't be a label"),
+                     (Account("all"), "'all' can't be a label"), (Account("other", "A@B.example"), "already the home")):
+        with pytest.raises(ValueError, match=why):
+            found.add(bad)
+    assert found.labels == ["home", "job"]
+
+
+def test_the_command_adds_lists_changes_and_removes(home, capsys, monkeypatch):
+    assert run("add", "home", "--email", "me@mail.example", "--note", "their own", "--no-login") == 0
+    assert run("add", "job", "--chat", "--default", "--no-login") == 0
+    (home.secrets / "google-job.json").write_text("{}")
+    capsys.readouterr()
+    run("list")
+    assert capsys.readouterr().out.splitlines() == [
+        "  home  me@mail.example  [not signed in]  their own",
+        "  job   (email unknown)  [default, Google Chat, signed in]"]
+
+    assert run("set", "job", "--email", "me@acme.example", "--note", "for work", "--no-chat") == 0
+    assert run("default", "home") == 0
+    assert accounts.load() == Accounts([Account("home", "me@mail.example", "their own"),
+                                        Account("job", "me@acme.example", "for work")], "home")
+    assert "make services-restart" in capsys.readouterr().out
+
+    monkeypatch.setattr("builtins.input", lambda question: "n")
+    assert run("remove", "job") == 1 and (home.secrets / "google-job.json").exists()
+    monkeypatch.setattr("builtins.input", lambda question: "yes")
+    assert run("remove", "home") == 0
+    assert run("remove", "job", "--yes") == 0
+    assert not (home.secrets / "google-job.json").exists() and accounts.load() == Accounts()
+    for argv in (("remove", "nobody", "--yes"), ("set", "nobody", "--note", "x"), ("set", "nobody"),
+                 ("add", "Bad Label", "--no-login")):
+        with pytest.raises(SystemExit):
+            run(*argv)
+    assert rows(home) == []
+
+
+def test_removing_the_default_makes_the_next_one_the_default():
+    found = two()
+    found.remove("work")
+    assert found.default == "personal"
+    found.remove("personal")
+    assert found.default == ""
+
+
+def test_rename_moves_the_sign_in_the_chat_state_and_the_heartbeats_history(home, capsys):
+    store(two())
+    (home.secrets / "google-work.json").write_text('{"token": "w"}')
+    (home.secrets / "google-work-chat.json").write_text('{"status": "ok"}')
+    seen = {"email:work:m1": 1.0, "calendar:work:2026-10-04T10:00:00+05:30:Standup": 2.0, "chat:work:spaces/A/m": 3.0,
+            "email:workshop:m2": 4.0, "email:personal:m3": 5.0, "github:work:1": 6.0, "task:7:done:1": 7.0}
+    (home.dir / "heartbeat.json").write_text(json.dumps({"started": ["email"], "seen": seen}))
+
+    assert run("rename", "work", "job") == 0
+    assert (home.secrets / "google-job.json").read_text() == '{"token": "w"}'
+    assert (home.secrets / "google-job-chat.json").exists() and not (home.secrets / "google-work.json").exists()
+    state = json.loads((home.dir / "heartbeat.json").read_text())
+    assert state["started"] == ["email"] and state["seen"] == {
+        "email:job:m1": 1.0, "calendar:job:2026-10-04T10:00:00+05:30:Standup": 2.0, "chat:job:spaces/A/m": 3.0,
+        "email:workshop:m2": 4.0, "email:personal:m3": 5.0, "github:work:1": 6.0, "task:7:done:1": 7.0}
+    found = accounts.load()
+    assert found.labels == ["job", "personal"] and found.default == "job" and found.get("job").chat
+    assert "moving google-job.json, google-job-chat.json, the heartbeat's history" in capsys.readouterr().out
+
+
+def test_rename_changes_nothing_if_the_new_label_has_files_already(home):
+    store(two())
+    (home.secrets / "google-work.json").write_text("w")
+    (home.secrets / "google-job.json").write_text("an old one")
+    with pytest.raises(SystemExit, match="google-job.json is already there"):
+        run("rename", "work", "job")
+    assert (home.secrets / "google-work.json").read_text() == "w" and accounts.load() == two()
+    for new in ("personal", "Job"):
+        with pytest.raises(SystemExit):
+            run("rename", "work", new)
+
+
+def test_signing_in_fills_in_the_email_or_says_if_it_differs(home, monkeypatch, capsys):
+    store(Accounts([Account("home"), Account("job", "me@acme.example")], "home"))
+    monkeypatch.setattr(config, "GOOGLE_CLIENT_SECRET", "client.json")
+    signed_in = []
+    monkeypatch.setattr(accounts, "_connect", lambda label, secret: signed_in.append((label, secret)) or 0)
+    monkeypatch.setattr(accounts, "_signed_in_email", lambda label: "me@mail.example")
+    assert run("login", "home") == 0
+    assert accounts.load().get("home").email == "me@mail.example"
+    assert run("login", "job") == 0
+    assert "signed in as me@mail.example, but its email says me@acme.example" in capsys.readouterr().out
+    assert accounts.load().get("job").email == "me@acme.example"
+    assert signed_in == [("home", "client.json"), ("job", "client.json")]
+
+    monkeypatch.setattr(accounts, "_connect", lambda label, secret: 1)  # the sign-in was refused: nothing changes
+    assert run("login", "job") == 1
+    monkeypatch.setattr(config, "GOOGLE_CLIENT_SECRET", "")
+    assert run("login", "job") == 1 and "set GOOGLE_CLIENT_SECRET" in capsys.readouterr().out
+
+
+def test_the_database_isnt_locked_while_google_answers(home, monkeypatch):
+    store(Accounts([Account("home")], "home"))
+
+    def lookup(label):  # another process changes the accounts while the sign-in's email is looked up
+        with accounts.change() as found:
+            found.add(Account("other"))
+        return "me@mail.example"
+
+    monkeypatch.setattr(accounts, "_signed_in_email", lookup)
+    assert accounts._keep_email("home") == "The home account is me@mail.example."
+    assert accounts.load() == Accounts([Account("home", "me@mail.example"), Account("other")], "home")
+
+
+# ── The tools ───────────────────────────────────────────────────
+
+def test_every_google_tool_takes_any_account_and_none_needs_one():
+    found = [t for t in tools.all_tools() if t.armory and "account" in t.properties]
+    assert len(found) >= 25
+    for t in found:
+        spec = t.properties["account"]
+        assert spec["enum"] in (google.LABELS, [*google.LABELS, "all"]) and google.LABELS == ["work", "personal"]
+        assert spec["default"] == ("all" if "all" in spec["enum"] else "work") and "account" not in t.required, t.name
+    image = next(t for t in found if t.name == "docs_insert_image").properties["upload_account"]
+    assert image["enum"] == google.LABELS
+
+
+class Chain:
+    """A Google API client that answers every call with itself, and records the account it was built for."""
+
+    def __init__(self, label: str, built: list) -> None:
+        built.append(label)
+
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+def test_a_write_without_an_account_goes_to_the_default_and_any_named_one_is_used(monkeypatch):
+    built = []
+    monkeypatch.setattr(common, "service", lambda label, api, version, needs=None: Chain(label, built))
+    draft ={"to": "a@b.example", "subject": "Hi", "body": "Hello"}
+    for account, label in ((None, "work"), ("personal", "personal"), ("Personal", "personal"),
+                           ("me@mail.example", "personal"), ("ME@ACME.EXAMPLE", "work")):
+        content, is_error = asyncio.run(tools.run("gmail_create_draft", draft | ({"account": account} if account else {})))
+        assert not is_error and content == f"Draft to a@b.example saved in the {label} account's Drafts.", account
+    assert built == ["work", "personal", "personal", "personal", "work"]
+    content, is_error = asyncio.run(tools.run("gmail_create_draft", draft | {"account": "nobody"}))
+    assert is_error and "field 'account' must be one of ['work', 'personal']" in content and len(built) == 5
+
+
+class Calendar:
+    def __init__(self, items: list[dict]) -> None:
+        self.items = items
+
+    def events(self):
+        return self
+
+    def list(self, **kwargs):
+        return self
+
+    def execute(self):
+        return {"items": self.items}
+
+
+def event(title: str, start: str) -> dict:
+    return {"id": "e1", "summary": title, "start": {"dateTime": start}, "end": {"dateTime": start}}
+
+
+def test_all_covers_every_account_and_a_broken_one_is_noted(monkeypatch):
+    def service(label, api, version, needs=None):
+        if label == "personal":
+            raise RuntimeError(common.not_connected(label))
+        return Calendar([event(f"{label} sync", "2026-10-04T14:00:00+05:30")])
+
+    monkeypatch.setattr(common, "service", service)
+    assert asyncio.run(tools.run("calendar_events", {})) == (json.dumps({
+        "events": [{"account": "work", "id": "e1", "title": "work sync", "start": "2026-10-04T14:00:00+05:30",
+                    "end": "2026-10-04T14:00:00+05:30", "location": None, "meet": None, "attendees": 0}],
+        "notes": ["Left out the personal account: The personal Google account is not signed in yet. Sign it in "
+                  "with: uv run python -m jarvis.integrations.accounts login personal"]}), False)
+    content, is_error = asyncio.run(tools.run("calendar_events", {"account": "me@mail.example"}))
+    assert is_error and content.endswith("Sign it in with: uv run python -m jarvis.integrations.accounts login personal")
+
+
+def test_the_tools_use_jarvis_sign_ins_and_its_command_to_sign_in_again():
+    secrets = profile.current().secrets
+    assert common.token_path("work") == secrets / "google-work.json"
+    assert chat.state_path("work") == secrets / "google-work-chat.json"  # as jarvis.integrations.accounts moves them
+    assert common.sign_in_again("work", common.GMAIL_MODIFY) == (
+        "The work Google account's sign-in doesn't let these tools change mail. Sign it in again with: "
+        "uv run python -m jarvis.integrations.accounts login work")
+
+
+def test_the_heartbeat_reads_only_signed_in_accounts(monkeypatch):
+    monkeypatch.setattr(common, "token_path", lambda label: Path("/") if label == "personal" else Path("/nowhere"))
+    assert common.connected() == ["personal"] and common.accounts_for("all") == ["work", "personal"]
