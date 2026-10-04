@@ -1,0 +1,123 @@
+"""Tests for how JARVIS gets its Google tools from AI Armory (jarvis.tools.google): the tools and their names, the
+settings it hands over (accounts, sign-ins, time zone, its own wording), which tools wait for the user's yes, and the
+sign-in command (jarvis.integrations.accounts). The tools themselves are tested in AI Armory. Run with: make test"""
+
+import asyncio
+
+import pytest
+from ai_armory.toolsets.google import GoogleSettings, auth, current
+
+from conftest import use_profile
+from jarvis import tools
+from jarvis.brain import cli
+from jarvis.core import config, profile
+from jarvis.integrations import accounts
+from jarvis.safety import draft_gate
+from jarvis.safety.commands import JARVIS_SECRETS
+from jarvis.tasks import worker
+from jarvis.tools import google
+
+TOOLS = {
+    "gmail": {"gmail_search", "gmail_read", "gmail_create_draft", "gmail_modify", "gmail_draft_send",
+              "gmail_draft_reply", "gmail_send"},
+    "calendar": {"calendar_events", "calendar_event", "calendar_free_time", "calendar_create_event",
+                 "calendar_draft_invite", "calendar_send_invite", "calendar_update_event", "calendar_draft_update",
+                 "calendar_send_update", "calendar_draft_respond", "calendar_send_response", "calendar_draft_delete",
+                 "calendar_delete_event"},
+    "chat": {"chat_unread", "chat_spaces", "chat_read", "chat_search", "chat_mark_read", "chat_draft", "chat_send"},
+    "docs": {"docs_search", "docs_read", "docs_beautify", "docs_format", "docs_replace_text", "docs_insert",
+             "docs_insert_image", "docs_draft_delete", "docs_delete"},
+    "sheets": {"sheets_search", "sheets_read", "sheets_write", "sheets_append", "sheets_add_tab", "sheets_format",
+               "sheets_draft_delete_tab", "sheets_delete_tab"},
+    "slides": {"slides_search", "slides_read"},
+    "drive": {"drive_search"},
+}
+GATED = {"gmail_send", "chat_send", "calendar_send_invite", "calendar_send_update", "calendar_send_response",
+         "calendar_delete_event", "docs_delete", "sheets_delete_tab"}
+# JARVIS's own, reading and transcribing attachments (jarvis.tools.files)
+OWN = {"gmail_attachments", "gmail_attachment_read", "gmail_attachment_transcribe"}
+
+
+def google_tools() -> dict[str, tools.Tool]:
+    return {t.name: t for t in tools.all_tools() if t.armory and t.name.startswith(tuple(TOOLS))}
+
+
+def test_every_google_tool_comes_from_ai_armory_under_its_own_name():
+    assert set(google_tools()) == set().union(*TOOLS.values())
+    assert not any(n.startswith(tuple(TOOLS)) for n, t in {t.name: t for t in tools.all_tools()}.items()
+                   if not t.armory and n not in OWN)  # no copy of JARVIS's own is left
+
+
+def test_only_sends_and_deletes_wait_for_a_yes_and_email_is_sent_only_that_way():
+    assert {n for n, t in google_tools().items() if t.gated} == GATED
+    for name in GATED:  # each takes only a draft's id, so what's done is what was read out
+        assert list(google_tools()[name].properties) == ["draft_id"]
+    assert TOOLS["gmail"] & GATED == {"gmail_send"}  # what sends email
+    assert set(draft_gate.DRAFTED_BY) == GATED  # each says how to draft it again
+    assert draft_gate.SENDS == GATED - {"calendar_delete_event", "docs_delete", "sheets_delete_tab"}
+
+
+def test_the_settings_are_jarvis_accounts_sign_ins_and_wording():
+    s = current()
+    assert isinstance(s, GoogleSettings) and s == google.settings(accounts.load())
+    assert [(a.label, a.email, a.description, a.chat) for a in s.accounts] == [
+        ("work", "me@acme.example", "for work", True), ("personal", "me@mail.example", "their own", False)]
+    assert s.default_label == "work" and s.chat_labels == google.CHAT_LABELS == ["work"]
+    assert s.token_dir == profile.current().secrets and s.timezone == profile.current().timezone and s.user_name == profile.name()
+    assert s.sign_in("work") == "uv run python -m jarvis.integrations.accounts login work"
+    assert s.image_folder == "JARVIS doc images" and s.draft_minutes == 2 * config.APPROVAL_MINUTES
+    assert s.host_approval  # a send or delete goes through only for a draft the gate approved
+    assert {str(p) for p in JARVIS_SECRETS} <= set(s.blocked_paths)
+
+
+def test_the_cli_brain_gets_every_google_tool_but_sends_and_deletes_only_through_its_gate():
+    brain = cli.CliBrain()
+    opts = cli._options(brain.shell, brain.jobs)
+    for name in set().union(*TOOLS.values()) - GATED:
+        assert f"mcp__jarvis__{name}" in opts.allowed_tools, name
+    assert not {f"mcp__jarvis__{n}" for n in GATED} & set(opts.allowed_tools)  # so every call reaches the gate
+    others = {"mcp__jarvis__skill_confirm", "mcp__jarvis__connection_confirm"}  # skills' and connections'
+    assert draft_gate.gated() - others == {f"mcp__jarvis__{n}" for n in GATED}
+    assert isinstance(brain.shell, draft_gate.DraftGate) and opts.can_use_tool is brain.shell
+
+
+def test_the_brain_gets_ai_armorys_own_schemas():
+    assert tools.input_schema(google_tools()["gmail_search"]) == google_tools()["gmail_search"].armory.input_schema
+
+
+def test_research_tasks_only_read():
+    assert set(worker.READ_ONLY_TOOLS) <= set(t.name for t in tools.all_tools())
+    reads = {"calendar_events", "calendar_event", "calendar_free_time", "gmail_search", "gmail_read",
+             "sheets_search", "sheets_read", "docs_search", "docs_read", "slides_search", "slides_read",
+             "drive_search", "chat_unread", "chat_spaces", "chat_read", "chat_search"}
+    assert reads <= set(worker.READ_ONLY_TOOLS)
+    assert all(google_tools()[n].armory.read_only for n in worker.READ_ONLY_TOOLS if n in google_tools())
+    assert not {n for n in worker.READ_ONLY_TOOLS if "draft" in n or n in GATED or n == "chat_mark_read"}
+
+
+def test_bad_input_is_refused_before_anything_runs():
+    content, is_error = asyncio.run(tools.run("gmail_read", {"message_id": 3}))
+    assert is_error and "field 'message_id' must be string" in content
+    content, is_error = asyncio.run(tools.run("gmail_read", ["not", "an", "object"]))
+    assert is_error and "input must be an object" in content
+
+
+# ── Signing in ──────────────────────────────────────────────────
+
+def test_signing_in_hands_ai_armory_the_accounts_as_they_are_now(monkeypatch, tmp_path):
+    use_profile(monkeypatch, tmp_path)
+    with accounts.change() as found:
+        found.add(accounts.Account("home", note="my own", chat=True))
+    asked = []
+    monkeypatch.setattr(auth, "connect", lambda label, secret: asked.append((label, secret, current().labels)) or 0)
+    try:
+        assert accounts._connect("home", "client.json") == 0
+        assert asked == [("home", "client.json", ["home"])]
+        assert auth.attempts("home")[0][0] == "with Google Chat"
+    finally:
+        accounts._google(google.ACCOUNTS)  # back to the accounts the tools were set up with
+
+
+def test_checking_chat_on_an_account_without_it_says_how_to_turn_it_on():
+    with pytest.raises(SystemExit, match="uv run python -m jarvis.integrations.accounts set personal --chat"):
+        accounts._check_chat("personal")
