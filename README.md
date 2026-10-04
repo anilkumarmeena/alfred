@@ -466,6 +466,70 @@ The script then checks Chat and says what to fix if it doesn't work: the Chat ap
 
 ---
 
+## MCP servers and secrets
+
+Connections are JARVIS's list of MCP servers, the `mcp_servers` and `mcp_tools` tables of `data/tasks.db`. Each is a local program (stdio), or an HTTP endpoint, with or without a key in a header or a sign-in. It records where it came from (registry or web page), whether it's verified, its version, and whether you've agreed how its tools are sorted.
+
+**Each tool is listed with its access:**
+
+| Access | Behaviour |
+|---|---|
+| `read`, `own` | Run straight away. `own` changes only your own inbox, like marking a notification done. |
+| `write` | Waits for your yes, with a phrase that says what it does (its own title, or one written by hand like `comment on {owner}/{repo}, saying {body}`), read out with the call's arguments. |
+| `blocked` | Never offered. |
+| *not listed* | Refused. |
+
+**Who gets which servers:**
+
+| Who | Gets |
+|---|---|
+| The voice brain | Every enabled server whose tools are sorted and that has its keys or sign-in |
+| Background research tasks | Those marked for research (every connection made by voice is), started read-only where they can be, with only their reads |
+| Code tasks | None |
+
+Their tools load on demand: a conversation or task starts with just their names, and the model loads a connection's tools with Claude Code's tool search when a request needs them, so adding connections doesn't make every reply slower or costlier (`JARVIS_TOOL_SEARCH`). Which tools run straight away, wait for your yes or are refused doesn't change.
+
+Each one runs behind a small relay of JARVIS's (`jarvis/integrations/mcp_relay.py`), whatever MCP features the server has:
+
+- **Lookups side by side.** Its reading tools are marked read-only, as you sorted them, so several lookups in one step run at once rather than one after another. JARVIS's own reading tools (your calendar, mail searches, task and to-do lists, files) are marked the same way.
+- **Long-running calls.** A tool the server runs as an MCP task is started as one and followed until its result is in, with its progress.
+- **Slow calls don't hold up the conversation.** A call still running after `JARVIS_CONNECTION_WAIT` seconds (20) carries on in the background as a task: JARVIS says it's under way, and tells you how it went when it ends, even if you've hung up by then. It's in the task list, and "stop that" stops it.
+
+Changes apply from the next conversation or task, with no restart. On the Mac, the same by hand:
+
+```sh
+make servers                                             # list them, with what's missing
+uv run python -m jarvis.integrations.mcp_registry notion # what the registry has
+make servers ARGS="add acme --label Acme --command npx --arg=-y --arg @acme/mcp@1.2.0 --secret-env ACME_TOKEN=acme.token"
+make servers ARGS="add docs --label Docs --url https://mcp.docs.example/mcp --secret-env KEY=docs.key --header 'Authorization=Bearer {KEY}'"
+make servers ARGS="test acme"                            # start it and see which tools it offers, and what their markings say
+make servers ARGS="tools acme --sort --block wipe"       # sort them by their own markings (or --read ... --write 'post=post to {channel}')
+make servers ARGS="set-secret acme"                      # typed in hidden, or from stdin; never on the command line
+make servers ARGS="disable acme"                         # or enable, remove, set NAME --env K=V, clear-secret
+```
+
+Package runners such as `npx` and `uvx` must name a pinned version. Settings and headers that look like credentials are refused outside `--secret-env` and the vault.
+
+
+### Secrets
+
+- **Storage:** tokens are kept encrypted in the `secrets` table of `data/tasks.db` with AES-256-GCM, under `JARVIS_MASTER_KEY`, 32 random bytes in `.env`.
+- **Who decrypts:** only `python -m jarvis.integrations.mcp_launch`, which the Claude CLI runs to start each server, decrypts that server's secrets, into the server's own environment. The CLI's command line names just the server, and the CLI, its shell commands and background tasks never get the key or a token.
+- **No peeking:** shell commands that would read other processes' environments (`ps eww`, `/proc/<pid>/environ`) are refused, even with a yes.
+
+```sh
+make vault                      # the key's id and the secrets' names, never a value
+make vault ARGS=init            # make the key and put it in .env (setup and set-secret do this when needed)
+make vault ARGS=rotate          # a new key, everything re-encrypted; the old one stays after it in .env
+make vault ARGS="reencrypt --drop-old"   # then drop the old key
+make vault ARGS="reset --yes"   # a lost key: forget every secret and start again
+```
+
+> [!CAUTION]
+> The key and `data/tasks.db` together open every secret, so keep them apart: whoever has a copy of `.env` shouldn't also have the database.
+
+---
+
 ## Heartbeat
 
 JARVIS doesn't only answer when spoken to. Every 15 minutes the task runner checks for these, unless you've switched one off:
