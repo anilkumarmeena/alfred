@@ -289,6 +289,56 @@ Your name, time zone, voice, speed, speech gate, speaker check, task limit and w
 
 ---
 
+## Google accounts
+
+The Google accounts JARVIS uses are kept in the `accounts` table of `data/tasks.db`. Each has:
+
+| Field | Meaning |
+|---|---|
+| **Label** | What you and JARVIS call it, and what names its sign-in, `secrets/google-<label>.json` |
+| **Email** | The account's address |
+| **Note** | Optional: what it's for, which JARVIS is told |
+| **Chat** | Whether it's a Workspace account with [Google Chat](#google-chat) |
+| **Default** | Exactly one account is the default |
+
+How JARVIS picks an account:
+
+- **Searches and overviews** ("any new email?", "what's on today?") cover every account unless you name one. If one fails (signed out, its access withdrawn), the others still answer and JARVIS says which was left out.
+- **Anything made or changed** without naming an account, such as a draft, an event or a sheet or doc edit, goes to the default.
+- An account can be named by its label or its email.
+
+One command manages them (`make accounts ARGS="..."` does the same):
+
+```sh
+uv run python -m jarvis.integrations.accounts                              # list them
+uv run python -m jarvis.integrations.accounts add home --note "my own"     # add one, then sign it in (--chat, --default, --no-login)
+uv run python -m jarvis.integrations.accounts login home                   # sign it in again, e.g. for new permissions
+uv run python -m jarvis.integrations.accounts rename home family           # moves its sign-in and the heartbeat's history too
+uv run python -m jarvis.integrations.accounts remove family                # and deletes its sign-in
+uv run python -m jarvis.integrations.accounts default work
+uv run python -m jarvis.integrations.accounts set work --email me@acme.example --note "for work" --chat
+```
+
+> [!IMPORTANT]
+> Restart the services after a change (`make services-restart`), since the tools' lists of accounts are fixed when they start. With no accounts, JARVIS runs without the Google tools.
+
+---
+
+## About you
+
+"About you" is what JARVIS knows about you, in your own words, one point per line: your job, your own projects, what to keep apart when reporting. It goes into JARVIS's prompt under "About" your name, followed by your Google accounts. It's a setting in `data/tasks.db`; change it in the app (Settings → About you, with your name and time zone), or with:
+
+```sh
+uv run python -m jarvis.state.settings about                        # show it (or: make about)
+uv run python -m jarvis.state.settings about --set "Works at Acme."  # replace it; a newline starts another point
+uv run python -m jarvis.state.settings about --from me.txt          # replace it with a file's text (- for stdin)
+uv run python -m jarvis.state.settings about --clear
+```
+
+Then restart the services.
+
+---
+
 ## Background tasks
 
 Ask for anything that takes a while and JARVIS starts a background task. You can keep talking, and start more. JARVIS says when each one is done or has a question, and you answer out loud.
