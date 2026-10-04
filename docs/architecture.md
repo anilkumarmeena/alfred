@@ -11,6 +11,27 @@ JARVIS is a personal voice assistant. It runs around the clock on one MacBook (A
 
 For setup commands, see the [README](../README.md) and `make help`. Unfamiliar terms are explained in the [glossary](#14-glossary).
 
+## Contents
+
+| # | Section | Read it to learn |
+|---|---|---|
+| 1 | [The big picture](#1-the-big-picture) | The four parts: ears, brain, hands, voice |
+| 2 | [How the pieces connect](#2-how-the-pieces-connect) | Devices, services and outside APIs, and how a phone connects |
+| 3 | [Components](#3-components) | Every service and module, and what it does |
+| 4 | [One spoken turn](#4-one-spoken-turn) | What happens between your words and JARVIS's reply, and how fast |
+| 5 | [The brain](#5-the-brain) | The CLI brain, the shell, approvals, the persona |
+| 6 | [Tools](#6-tools) | Every tool, what it reaches and what waits for a yes |
+| 7 | [Background tasks](#7-background-tasks) | The task runner: kinds, life cycle, sandbox, approvals, subagents |
+| 8 | [Heartbeat](#8-heartbeat) | The 15-minute check, the scheduler, and push to the phone |
+| 9 | [Security model](#9-security-model) | Each threat and how it's handled |
+| 10 | [Processes, ports and files](#10-processes-ports-and-files) | What listens where, and what lives in which folder |
+| 11 | [Running 24/7](#11-running-247) | launchd, restarts and sleep |
+| 12 | [Known limitations](#12-known-limitations) | What doesn't work, or works with caveats |
+| 13 | [Extending](#13-extending) | Adding tools, voices, channels and heartbeat sources |
+| 14 | [Glossary](#14-glossary) | LiveKit, VAD, MCP and the other terms |
+
+---
+
 ## 1. The big picture
 
 JARVIS works like a person in a conversation: it listens, thinks, maybe does something, and answers.

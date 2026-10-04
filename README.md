@@ -12,6 +12,112 @@ Talk to it from the Mac or the iPhone. Everything runs locally except Claude its
 
 ---
 
+## At a glance
+
+| | |
+|---|---|
+| **Hears** | Whisper large-v3-turbo, quantized to 4 bits, through MLX on the Apple GPU: speech → text |
+| **Knows you've finished** | The v1-mini turn detector and Silero VAD, a fast model when they're unsure, and each speaker's own pace |
+| **Thinks** | The local `claude` CLI, with JARVIS's tools |
+| **Speaks** | Kokoro, voice `bm_george`: text → speech |
+| **Reach it from** | The iPhone (Safari, over Tailscale), a browser on the Mac (`localhost:8787`), or the Mac's terminal (console mode) |
+| **Does** | Gmail, Calendar, Sheets, Docs, Slides, Drive and Google Chat · GitHub, GitLab and any tool you connect from the MCP registry · Mac control · reading documents and transcribing recordings · text read into audio files · memory and to-dos · background code and research tasks · a heartbeat that flags what's new |
+
+```mermaid
+flowchart LR
+    subgraph Devices["Your devices"]
+        iPhone["iPhone<br/>Safari, over Tailscale"]
+        Browser["Mac browser<br/>localhost:8787"]
+        Term["Mac terminal<br/>console mode"]
+    end
+
+    LK["LiveKit server<br/>(on this Mac)"]
+
+    subgraph Agent["agent.py"]
+        Turn["Turn detector v1-mini<br/>+ Silero VAD<br/><i>when you've finished</i>"]
+        STT["Whisper large-v3-turbo (4-bit)<br/>MLX, Apple GPU<br/><i>speech → text</i>"]
+        Brain["Brain: local claude CLI<br/>+ JARVIS tools<br/><i>thinking</i>"]
+        TTS["Kokoro (bm_george)<br/><i>text → speech</i>"]
+    end
+
+    iPhone --> LK
+    Browser --> LK
+    Term --> Turn
+    LK <--> Turn
+    Turn --> STT --> Brain --> TTS
+    TTS --> LK
+
+    classDef client fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    classDef local fill:#ecfdf5,stroke:#059669,color:#064e3b
+    class iPhone,Browser,Term client
+    class LK,Turn,STT,Brain,TTS local
+```
+
+> [!TIP]
+> How it fits together, the flow of one spoken turn and the security model are in **[docs/architecture.md](docs/architecture.md)**. Everyday commands: **`make help`**.
+
+**Contents:** [Code map](#code-map) · [Setup](#setup) · [Everyday commands](#everyday-commands) · [Settings](#settings-env) · [Google accounts](#google-accounts) · [About you](#about-you) · [Background tasks](#background-tasks) · [Shell commands](#shell-commands-and-long-jobs) · [Web browser](#web-browser) · [Pictures](#pictures) · [Audio files](#audio-files) · [Google Chat](#google-chat) · [Connections and GitHub](#connections-new-tools) · [MCP servers and secrets](#mcp-servers-and-secrets) · [Heartbeat](#heartbeat) · [Scheduler](#scheduler) · [Noise filter](#noise-filter) · [Speech gate](#speech-gate) · [Speaker check](#speaker-check) · [Earphones](#earphones-and-switching-apps-iphone) · [iPhone notifications](#iphone-notifications) · [Adding a tool](#adding-a-tool) · [Web app](#web-app) · [Tests](#tests)
+
+---
+
+## Code map
+
+One folder per part:
+
+```
+jarvis/
+├── voice/          the voice agent (agent.py), Whisper and Kokoro, noise filter, speech gate, speaker check
+├── brain/          Claude behind the voice: persona, CLI brain
+├── prompts/        the long prompts as markdown (the persona, the task brief, the reviews and checks), and their loader
+├── tools/          what the brain can call: Google, Mac, memory, to-dos, background tasks
+├── tasks/          the task runner, its worker and client, projects, heartbeat
+├── safety/         command rules, the Mac sandbox, approvals (and remembered ones), the shell, the gates, the scan
+│                   for hidden instructions
+├── integrations/   Google accounts, MCP servers (GitHub, GitLab, ...), the web browser
+├── notify/         Web Push and APNs to the phone
+├── state/          memory, settings, the to-do list, voiceprints
+├── core/           config, the database, the vault, small helpers
+├── server.py       web app and token endpoint
+└── setup_local.py  local setup and the launchd services
+web/                the phone web app (Vite + Preact), served by jarvis/server.py
+tests/  docs/  deploy/
+```
+
+| Path | What it is |
+|---|---|
+| `jarvis/voice/agent.py`, `jarvis/voice/session.py` | **Voice pipeline.** Hands each finished utterance to the brain and speaks the reply. Each call is one `VoiceSession`, which owns its parts (brain, floor, announcements, tasks' requests, timing, lookups), routes each turn (a yes to a rule offered or a task's request, else the brain) and puts tasks' requests to the user as they arrive; `agent.py` is LiveKit's side of it. |
+| `jarvis/voice/turn.py`, `jarvis/brain/quick.py` | **When you've finished:** the turn detector, with a fast model on a warm session deciding when it's unsure, and each speaker's own pace; what the brain is told about how a turn was heard (unsure words, a thought carried on, keeping it plain). |
+| `jarvis/brain/side.py`, `jarvis/tools/side.py` | **Background lookups:** slow reading (several searches, a long document) the brain hands to a short read-only side job, announced when it's done, so the conversation carries on. |
+| `jarvis/voice/timing.py` | **Turn timing:** each voice turn's stages, from you stopping to JARVIS speaking, one line each in `logs/voice-turns.jsonl`; `make voice-timing` sums them up. |
+| `jarvis/voice/speech.py` | **On-device speech:** Whisper in, Kokoro out. |
+| `jarvis/voice/speech_gate.py` | Keeps Whisper's phantom transcripts of near-silence (a lone "Thank you.") from the brain, judged on the audio and Whisper's confidence; known phantom phrases must be said clearly. See [Speech gate](#speech-gate). |
+| `jarvis/voice/speaker.py`, `jarvis/state/voiceprints.py` | **Speaker check:** once you've enrolled your voice, speech that isn't yours (a TV, people nearby) never reaches the brain, and JARVIS stays silent; while JARVIS talks, only your voice interrupts it (`jarvis/voice/barge_in.py`). An on-device speaker model; your voiceprint is kept in `data/tasks.db`. See [Speaker check](#speaker-check). |
+| `jarvis/voice/audio_file.py`, `jarvis/tools/audio.py` | **Audio files:** text, a document or a summary read into an m4a, mp3 or WAV in Kokoro's voice, as a background job apart from the live voice. See [Audio files](#audio-files). |
+| `jarvis/voice/denoise.py` | **Noise filter** on your mic: DeepFilterNet 3 through ONNX Runtime, before the VAD and Whisper hear it. See [Noise filter](#noise-filter). |
+| `jarvis/brain/cli.py` | **The brain:** the local `claude` CLI through the Claude Agent SDK, on its own login. JARVIS's tools, web search/fetch and a sandboxed shell (`jarvis/safety/shell.py`); no file edits. The Agent SDK set-up it shares with background tasks is in `jarvis/brain/sdk.py`, with `ask_json`, the one way a short model call gives a verdict: JSON checked against a schema, never keywords picked out of its words. |
+| `jarvis/brain/persona.py` | Persona and system prompt: the persona's text is `jarvis/prompts/persona.md`, filled in with the user's name and "about you". |
+| `jarvis/prompts/` | The long prompts as markdown, one file each, with `{{name}}` placeholders that `prompts.load(name, ...)` fills in: the persona, the lookup subagent's, the task brief, the goal check, the learning review, the heartbeat's triage and the skill review. |
+| `jarvis/tools/` | Memory, background tasks, Mac control (notifications, apps and links, Apple Shortcuts, volume) and the Google tools: Gmail (including sending and replying in the thread after a yes), Calendar (including moving, answering and cancelling events, and free time), Google Sheets, Google Docs (read, format, beautify, edit, add images), Google Slides (read, with speaker notes), Drive search and Google Chat. The Mac and Google tools come from [AI Armory](https://github.com/anilkumarmeena/ai-armory) (a git dependency pinned to a commit in `pyproject.toml`; see [Editing AI Armory alongside](#editing-ai-armory-alongside)), registered in `jarvis/tools/mac.py` and set up with JARVIS's accounts in `jarvis/tools/google.py`. Their sends and deletes wait for your spoken yes (`jarvis/safety/draft_gate.py`). |
+| `jarvis/integrations/browser.py`, `jarvis/tools/browser.py` | JARVIS's own web browser: Chrome through Playwright on a profile of its own, read-only for now, with local addresses refused and page content fenced as untrusted. See [Web browser](#web-browser). |
+| `jarvis/integrations/mcp_servers.py`, `jarvis/integrations/mcp_launch.py`, `jarvis/integrations/mcp_bridge.py`, `jarvis/integrations/mcp_relay.py`, `jarvis/safety/mcp_gate.py` | The MCP servers plugged into Claude (GitHub, GitLab, Notion, ...): their list and its command, the launcher that starts each with its secrets (bridging HTTP ones), the relay it keeps between Claude and the server (reads side by side, MCP's long-running tasks, slow calls moved to the background), and the gate that holds their writes for your yes. See [MCP servers and secrets](#mcp-servers-and-secrets). |
+| `jarvis/tools/connections.py`, `jarvis/integrations/mcp_registry.py`, `jarvis/integrations/mcp_oauth.py`, `web/src/components/panel/Connections.tsx` | **Connections:** finding new tools in the official MCP registry (or the web, unverified), connecting, updating and removing them after your yes, sorting their tools from their own markings, signing in through JARVIS's browser, and the control panel page where keys are pasted. See [Connections](#connections-new-tools). |
+| `jarvis/core/vault.py` | Secrets encrypted in the database under `JARVIS_MASTER_KEY`. |
+| `jarvis/tasks/runner.py` | **Task runner:** background tasks in parallel (code changes in the project's folder or on their own branch, code questions, research). Its parts beside it: approvals (`approvals.py`), command and connection tasks (`command_tasks.py`), git (`git_ops.py`), suggested edits (`task_edits.py`), events and announcing (`events.py`) and the HTTP API (`api.py`). Each run in `jarvis/tasks/worker.py`, with its brief (`briefs.py`), its tools and nudges (`reporting.py`), its tools on the Mac (`host_tools.py`), its gate (`gate.py`) and its subagents (`subagents.py`). Storage in `jarvis/core/database.py`. |
+| `jarvis/tasks/heartbeat.py` | Runs inside the task runner: every 15 minutes it checks calendar, mail, GitHub, Google Chat and tasks, and flags anything new. |
+| `jarvis/tasks/learning.py` | **Learning review**, beside the heartbeat: once a conversation is over, one short model call reads it and saves lasting facts to memory. See [Learning review](#learning-review). |
+| `jarvis/tasks/connection_jobs.py` | **Connection tasks:** a connection's call still running after `JARVIS_CONNECTION_WAIT` in a conversation, carried on in the background by its relay as a task of its own kind, said when it ends. See [MCP servers and secrets](#mcp-servers-and-secrets). |
+| `jarvis/tasks/command_jobs.py` | **Command tasks:** long shell jobs (`start_job`, audio files, scheduled commands' runs) as background tasks of their own kind, run with no model; a success summed up, a failure read by a model that decides whether a task fixes it. See [Long jobs](#shell-commands-and-long-jobs). |
+| `jarvis/tasks/scheduler.py`, `jarvis/tasks/schedules.py` | **Scheduler**, beside the heartbeat: reminders, scheduled background tasks, "watch this for me" loops and shell commands run on a schedule, set by voice (`jarvis/tools/schedules.py`) and kept in `tasks.db`. See [Scheduler](#scheduler). |
+| `jarvis/server.py`, `web/` | **Phone web app** (installable, with a service worker for notifications) and passcode-protected token endpoint. `web/` is a Vite + TypeScript + Preact app that `jarvis/server.py` serves from its build, `web/dist`. `web/src/lib/mic.ts`: earphone mute and mic recovery. |
+| `jarvis/notify/push.py` | Web Push to the phone: VAPID key, device subscriptions, `send_push`. |
+| `jarvis/notify/apns.py` | The same pushes in the native JARVIS iPhone app (jarvis-app), through Apple's APNs: device tokens and sending. |
+| `jarvis/setup_local.py` | Generates keys, passcode and LiveKit config; installs the services. |
+| `deploy/*.plist` | launchd services: LiveKit server, agent, web app, task runner. |
+| `data/` | `memory.md` (long-term facts, under `## User` and `## Environment`, at most 2,000 and 3,000 characters), `vocabulary.md` (names and words speech recognition should expect, with what it has misheard them as), `recent.md` (recent exchanges), and `conversations/` (every conversation, one file a day), plain markdown you can edit. `tasks.db` holds task state, the projects tasks can work on and your to-do list; worktrees live here too. |
+| `secrets/`, `models/` | Tokens, JARVIS's Claude login and LiveKit config; downloaded Kokoro and DeepFilterNet models. **Git-ignored.** |
+
+---
+
 ## Setup
 
 | Step | What you get |
@@ -143,6 +249,28 @@ This installs and starts the four launchd services, labelled `com.jarvis.livekit
 | Keep the Mac awake on the charger | Nothing: `caffeinate` does it |
 | Keep it running with the lid closed | `make awake` (`sudo pmset -a disablesleep 1`) |
 | Restore normal sleep | `make sleep-normal` |
+
+---
+
+## Everyday commands
+
+The full list is `make help`. The ones you'll use most:
+
+| Command | What it does |
+|---|---|
+| `make console` | Talk to JARVIS in this terminal through the Mac's mic (no server needed) |
+| `make dev` | Run LiveKit, the web app, the agent and the task runner together (Ctrl-C stops all) |
+| `make services-install` | Install and start the four launchd services |
+| `make services-restart` | Rebuild the web app and restart the services, e.g. after editing `.env` |
+| `make status` · `make logs` | Whether each service is running · follow all service logs |
+| `make tasks` | List recent background tasks |
+| `make heartbeat` | Dry-run one heartbeat check |
+| `make speech-gate` | The last day's clips the speech gate would drop, or dropped, and why |
+| `make voice-timing` | The last day's voice turns, stage by stage: how long from you stopping to JARVIS's first words, and where that time goes ([details](docs/architecture.md#how-fast-it-is-measured-on-this-mac)) |
+| `make voiceprint` | Your voiceprint for the [speaker check](#speaker-check); `ARGS=enroll` records 30 s from the Mac's mic, `test`, `remove`, `log` (the last day's verdicts) |
+| `make accounts` · `make about` · `make servers` · `make vault` | Google accounts · "about you" · MCP servers · encrypted secrets |
+| `make google-login LABEL=work` | Sign a Google account in, or in again for new permissions |
+| `make test` · `make check` | Unit tests · byte-compile and import every module |
 
 ---
 
