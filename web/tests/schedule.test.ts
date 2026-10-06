@@ -1,0 +1,201 @@
+// @vitest-environment jsdom
+// Tests for the panel's scheduled jobs: src/lib/schedule.ts, and the Scheduled section and a job's view in Tasks
+// (src/components/panel/Tasks.tsx). Run with: make test (or npm test in web/)
+import assert from "node:assert/strict";
+import { h, render } from "preact";
+import { act } from "preact/test-utils";
+import { afterEach, beforeAll, beforeEach, test } from "vitest";
+import { at, jobItem, jobOf, kindLabel, nextRun, type Schedule, type ScheduleDetail } from "../src/lib/schedule";
+
+// Tue 6 Oct 2026, 09:15 local
+const NOW = new Date(2026, 9, 6, 9, 15).getTime();
+const ts = (d: Date) => d.getTime() / 1000;
+
+// ── The helpers ─────────────────────────────────────────────────
+
+test("when a job runs next is said as near as it is", () => {
+  assert.equal(at(ts(new Date(2026, 9, 6, 9, 0)), NOW), "now");
+  assert.equal(at(ts(new Date(2026, 9, 6, 17, 0)), NOW), "17:00");
+  assert.equal(at(ts(new Date(2026, 9, 7, 9, 0)), NOW), "tomorrow 09:00");
+  assert.equal(at(ts(new Date(2026, 9, 9, 9, 0)), NOW), "Fri 09:00");
+  assert.equal(at(ts(new Date(2026, 9, 20, 8, 30)), NOW), "20 Oct 08:30");
+  assert.equal(nextRun({ status: "active", next_run: ts(new Date(2026, 9, 6, 17, 0)) }, NOW), "next 17:00");
+  assert.equal(nextRun({ status: "paused", next_run: ts(new Date(2026, 9, 6, 17, 0)) }, NOW), "paused");
+  assert.equal(nextRun({ status: "active", next_run: null }, NOW), "no run to come");
+});
+
+test("kinds and items", () => {
+  assert.deepEqual(["reminder", "task", "watch"].map(kindLabel), ["Reminder", "Scheduled task", "Watch"]);
+  assert.equal(jobOf(jobItem(12)), 12);
+  assert.equal(jobOf("12"), null);  // a task's item
+  assert.equal(jobOf(null), null);
+});
+
+// ── The Tasks page ──────────────────────────────────────────────
+
+const JOB: Schedule = {
+  id: 3, kind: "task", title: "Morning brief", text: "Give me a **morning brief**.", status: "active",
+  next_run: ts(new Date(Date.now() + 3600_000)), last_run: null, until: null, runs: 2,
+  last_result: "Two meetings and **one** urgent email.", task_kind: "research", project: null,
+  when: "every weekday at 09:00", check: "", only_changes: 0, notepad: null, folder: null,
+};
+const WATCH: Schedule = { ...JOB, id: 4, kind: "watch", title: "Deploy live", status: "paused", task_kind: null, check: "JARVIS checks the page: https://app.example" };
+
+let calls: { action: string; body: any }[] = [];
+let answers: Record<string, unknown> = {};
+let ui: typeof import("../src/components/panel/Tasks");
+let state: typeof import("../src/state/panel");
+
+beforeAll(async () => {
+  // What the panel's module needs from a browser that jsdom lacks
+  (globalThis as any).matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+  (globalThis as any).confirm = () => true;
+  Element.prototype.scrollIntoView = () => {};
+  globalThis.fetch = (async (url: string, init: any) => {
+    const action = String(url).split("/").pop()!, body = JSON.parse(init?.body ?? "{}");
+    calls.push({ action, body });
+    return new Response(JSON.stringify({ result: answers[action] ?? null }), { status: 200 });
+  }) as any;
+  state = await import("../src/state/panel");
+  ui = await import("../src/components/panel/Tasks");
+});
+
+let box: HTMLElement;
+afterEach(() => { render(null, box); });  // what one test drew doesn't follow the signals into the next
+beforeEach(() => {
+  calls = [];
+  answers = {};
+  box = document.createElement("div");
+  document.body.replaceChildren(box);
+  state.schedules.value = [JOB, WATCH];
+  state.tasks.value = [{
+    id: 21, kind: "research", title: "Morning brief", project: null, status: "done", created: 1, updated: 2,
+    activity: null, question: null, spoken: null, changes: null, error: null, cost: 0, seen: 1, in_place: 0,
+    branch: null, worktree: false, requests_only: false, pending_edits: 0, job: 3, job_title: "Morning brief",
+  }, {
+    id: 22, kind: "research", title: "Look something up", project: null, status: "done", created: 1, updated: 2,
+    activity: null, question: null, spoken: null, changes: null, error: null, cost: 0, seen: 1, in_place: 0,
+    branch: null, worktree: false, requests_only: false, pending_edits: 0, job: null, job_title: null,
+  }];
+  state.item.value = null;
+  state.quiet.value = null;
+  state.runnerDown.value = "";
+});
+
+const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+test("the Scheduled section comes first, a row per job with its kind, next run and status", async () => {
+  await act(() => { render(h(ui.TaskList, {}), box); });
+  assert.equal(box.querySelector(".grp")?.textContent, "Scheduled");
+  const rows = [...box.querySelectorAll(".sched")];
+  assert.deepEqual(rows.map((r) => r.querySelector(".title")?.textContent), ["Morning brief", "Deploy live"]);
+  assert.match(rows[0]!.querySelector(".meta")!.textContent!, /^Scheduled task · next /);
+  assert.equal(rows[1]!.querySelector(".meta")!.textContent, "Watch · paused");
+  assert.deepEqual(rows.map((r) => r.querySelector(".tag")?.textContent), ["active", "paused"]);
+  assert.deepEqual(rows.map((r) => [...r.querySelectorAll("button.btn")].map((b) => b.textContent)),
+    [["Pause", "Cancel"], ["Resume", "Cancel"]]);
+  assert.ok(rows[1]!.classList.contains("paused"));
+});
+
+test("with nothing scheduled it says how to schedule something, and there's no form", async () => {
+  state.schedules.value = [];
+  await act(() => { render(h(ui.TaskList, {}), box); });
+  assert.match(box.querySelector(".empty")!.textContent!, /Nothing scheduled\. Ask JARVIS/);
+  assert.equal(box.querySelector(".scheds"), null);
+  assert.equal(box.querySelector("form, input, textarea"), null);  // jobs are set by voice only
+});
+
+test("tasks a job started are tagged with its name in the task list", async () => {
+  await act(() => { render(h(ui.TaskList, {}), box); });
+  const cards = [...box.querySelectorAll("button.task")];
+  assert.equal(cards.length, 2);
+  assert.equal(cards[0]!.querySelector(".tag.job")?.textContent, "Morning brief");
+  assert.equal(cards[1]!.querySelector(".tag.job"), null);
+});
+
+test("pause, resume and cancel ask the Mac and show the list it sends back", async () => {
+  await act(() => { render(h(ui.TaskList, {}), box); });
+  answers.schedule_pause = [{ ...JOB, status: "paused" }, WATCH];
+  await act(() => { (box.querySelector(".sched button.btn") as HTMLButtonElement).click(); });
+  await flush();
+  assert.deepEqual(calls.map((c) => [c.action, c.body.id]), [["schedule_pause", 3]]);
+  assert.equal(box.querySelector(".sched .meta")!.textContent, "Scheduled task · paused");
+
+  answers.schedule_cancel = [{ ...JOB, status: "paused" }];
+  await act(() => { (box.querySelectorAll(".sched")[1]!.querySelector("button.danger") as HTMLButtonElement).click(); });
+  await flush();
+  assert.deepEqual(calls.at(-1)!.action, "schedule_cancel");
+  assert.deepEqual([...box.querySelectorAll(".sched .title")].map((t) => t.textContent), ["Morning brief"]);
+});
+
+test("a job opens to its runs and results, Markdown rendered", async () => {
+  const detail: ScheduleDetail = {
+    ...JOB, recent: [
+      { id: 21, status: "done", created: 100, updated: 160, hidden: false, result: "Two meetings and **one** urgent email." },
+      { id: 19, status: "done", created: 50, updated: 70, hidden: true, result: "nothing to report." },
+      { id: 17, status: "failed", created: 20, updated: 30, hidden: true, result: "couldn't check" },
+    ], runs_problem: "",
+  };
+  answers.schedule = detail;
+  await act(() => { render(h(ui.TaskList, {}), box); });
+  await act(() => { (box.querySelector(".sched .open") as HTMLButtonElement).click(); });
+  assert.equal(state.item.value, "job-3");
+  assert.equal(state.section.value, "tasks");
+
+  await act(() => { render(h(ui.ScheduleView, { id: 3 }), box); });
+  await flush();
+  assert.equal(box.querySelector(".big")?.textContent, "Morning brief");
+  assert.equal(box.querySelector(".summary strong")?.textContent, "morning brief");  // its instruction, rendered
+  const runs = [...box.querySelectorAll("button.task.run")];
+  assert.equal(runs.length, 3);
+  assert.equal(runs[0]!.querySelector(".meta strong")?.textContent, "one");
+  assert.deepEqual(runs.map((r) => r.querySelector(".tag")?.textContent), ["done", "nothing new", "failed"]);
+  await act(() => { (runs[0] as HTMLButtonElement).click(); });
+  assert.equal(state.item.value, "21");  // a run opens as its task
+});
+
+test("a task job's view shows its notepad for the next run, and when it speaks", async () => {
+  answers.schedule = { ...JOB, only_changes: 1, notepad: { at: 100, text: "PRs seen: 12, 14." }, recent: [], runs_problem: "" };
+  state.item.value = "job-3";
+  await act(() => { render(h(ui.ScheduleView, { id: 3 }), box); });
+  await flush();
+  const labels = [...box.querySelectorAll(".lbl")].map((l) => l.textContent);
+  assert.ok(labels.some((l) => l?.startsWith("Notepad for the next run")));
+  assert.match(box.textContent!, /PRs seen: 12, 14\./);
+  assert.match(box.textContent!, /only when there's something new/);
+});
+
+const USAGE = { said: "Claude hasn't reported anything.", waiting: "" };
+
+test("do not disturb lives in Preferences only, not above the jobs", async () => {
+  state.quiet.value = { hold: { since: 1, until: 3601, said: "on until 10:15" }, usage: USAGE };
+  await act(() => { render(h(ui.TaskList, {}), box); });
+  assert.doesNotMatch(box.textContent!, /Do not disturb/);
+  assert.equal(box.querySelector(".holdbar"), null);
+});
+
+test("do not disturb is turned on in Preferences, for an hour, and off with its switch", async () => {
+  const { SettingsPage } = await import("../src/components/panel/Settings");
+  state.quiet.value = { hold: null, usage: USAGE };
+  await act(() => { render(h(SettingsPage, { page: "prefs" }), box); });
+  const bar = box.querySelector(".holdbar")!;
+  assert.deepEqual([...bar.querySelectorAll("button")].map((b) => b.textContent), ["1 hour", "Until then"]);
+  answers.hold_on = { hold: { since: 1, until: 3601, said: "on until 10:15" }, usage: USAGE };
+  await act(() => { (bar.querySelector("button") as HTMLButtonElement).click(); });
+  await flush();
+  assert.deepEqual(calls.map((c) => [c.action, c.body.minutes]), [["hold_on", 60]]);
+  const sw = box.querySelector('button.switch[aria-label="Do not disturb"]') as HTMLButtonElement;
+  assert.equal(sw.getAttribute("aria-checked"), "true");
+
+  answers.hold_off = { hold: null, usage: USAGE };
+  await act(() => { sw.click(); });
+  await flush();
+  assert.equal(calls.at(-1)!.action, "hold_off");
+  assert.equal(sw.getAttribute("aria-checked"), "false");
+});
+
+test("scheduled runs waiting for Claude's usage to reset are said above the jobs", async () => {
+  state.quiet.value = { hold: null, usage: { said: "The five-hour limit is used up.", waiting: "Scheduled tasks wait for its reset at 3 PM." } };
+  await act(() => { render(h(ui.TaskList, {}), box); });
+  assert.equal(box.querySelector(".grp + .note.amber")!.textContent, "The five-hour limit is used up. Scheduled tasks wait for its reset at 3 PM.");
+});

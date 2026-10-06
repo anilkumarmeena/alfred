@@ -691,6 +691,42 @@ JARVIS doesn't only answer when spoken to. Every 15 minutes the task runner chec
 
 ---
 
+## Scheduler
+
+Beside the heartbeat, the task runner runs what you schedule by voice, once or on a repeat. Jobs live in `data/tasks.db`, so they survive restarts.
+
+| Kind | Say | What happens |
+|---|---|---|
+| Reminder | "Remind me at five to call Priya", "every day at 10 PM remind me to take my tablets" | At the time: a Mac notification, a phone notification, and spoken if you're in a voice session |
+| Task | "Every weekday at nine, give me a morning brief" | A background task with that instruction, on a lighter model; its result reaches you like any task's, under the job's name. A run with nothing worth saying stays silent and out of the task list. Each run keeps a short **notepad** of what it found for the next one, so a brief can say what's new since yesterday; "only tell me if something's new" makes it stay silent unless something changed. |
+| Watch | "Tell me when the deploy is live", "tell me when Priya replies" | A check every few minutes until it has happened (then you hear once, and it stops) or the watch ends (24 hours unless said, a week at most; you hear that too) |
+| Command | "Run `scripts/report.sh weekly` in my reports project every Monday at seven" | The command itself, in that folder, with no model running while it works, however many hours that is. Each run is a command task in the task list. When it ends you hear how it went: a success summed up in a sentence, a failure explained and, as JARVIS decides, fixed by a task that runs it once more |
+
+A watch checks one of four ways. A **page** (answers without an error, showing some text if given: a version number), **Gmail** (mail matching a search arrives) and **Chat** (someone writes to you) need no model and next to no memory, every 5 to 10 minutes. Anything else is a **background task** that checks once and says what it found, read as met or not yet by one short Haiku call, every 15 minutes, at most five such watches at once.
+
+**Scheduled commands.** Each run of a command job is a [command task](#shell-commands-and-long-jobs), exactly as `start_job` starts one, tagged with the job's name in the task list: in its folder (a project's, or one you give), with no model and no task slot while it works, so it can run for hours. A run still going when the next is due holds that one back (one waiting for your yes to fix it doesn't), and `timeout_minutes`, if you give one, stops a run that goes on too long. Its end is said as any command task's is, under the job's name, with `summarize` and `auto_fix` (on whenever it belongs to a project) deciding whether a success is summed up and whether a failure may be fixed.
+
+If the command writes its output to a log of its own rather than the screen, give it as `log_file` (a pattern such as `logs/*-produce.log`; the newest written during the run is read). Making a command job, or changing its command or folder, goes through the same checks as JARVIS's own shell: a command touching secrets is refused, and a risky one waits for your yes. Only you can make one, by voice; tasks can't, and nothing an email or a web page says can. `schedule_list` shows each command's latest run (its task, how it ended, how long it took, its summary, the task fixing it) or, while one runs, how far it has got; `job_status` lists it with the running jobs, and "stop the produce run" stops it (`stop_job`, or `task_stop`) without touching its schedule. Cancelling the job leaves a run under way going.
+
+"What's scheduled?", "move the morning brief to half past eight", "pause it", "cancel the deploy watch" work too (`schedule_list`, `schedule_change`, `schedule_cancel`). The control panel's Tasks page lists the jobs at the top, with their next run, and pauses, resumes or cancels them; tapping one shows its recent runs and its notepad. Its scheduled runs are tagged with the job's name in the task list.
+
+**Do not disturb.** "Hold alerts till three, I'm presenting", "pause everything for an hour" and "I'm back" (`schedule_hold`), or the switch in Settings → Preferences. While it's on, no reminder, scheduled task or watch runs, the heartbeat checks nothing, and finished tasks send no notifications (they're still said in a live session; requests for a yes still come through). When it ends, held reminders are said with when they were due, each held job runs once, and the heartbeat flags what turned up. The nightly quiet hours stay as they are.
+
+**Claude usage.** "How much usage do I have left?" (`usage_left`) says what Claude last reported of the five-hour and weekly limits. Scheduled tasks and task-checked watches wait for the reset while a limit is used up, or the five-hour one is 90% used, and run once after it; while only Opus's (or Sonnet's) own weekly limit is out, JARVIS uses the next lighter model instead. The heartbeat warns once per limit window.
+
+**Rules**
+
+- **Missed runs don't pile up.** If JARVIS wasn't running (or the Mac was asleep), a missed reminder or one-off task runs once when it's back, saying how late it is. A daily or weekday job runs once if its latest missed time was within 2 hours, otherwise it waits for its next time. A job that repeats every so many minutes, and a watch, runs once, straight away.
+- **No overlaps:** a run whose previous one is still going is skipped.
+- **Retries:** a scheduled task that fails on a network or passing error (Claude overloaded, a dropped connection) is tried again after 5, 15 and then 30 minutes before you hear it failed. A failure is said once, not every run, until a run succeeds again.
+- **Quiet hours:** watches aren't checked in the heartbeat's quiet hours; reminders and scheduled tasks keep the times you gave.
+- **Risky steps wait for your yes**, as in any background task: a scheduled run is one.
+- **Tidy:** silent runs are forgotten after 3 days, finished jobs after 30.
+
+Settings are in the [settings table](#heartbeat-settings); details in [docs/architecture.md](docs/architecture.md#scheduler).
+
+---
+
 ## Noise filter
 
 Your mic goes through [DeepFilterNet 3](https://github.com/Rikorose/DeepFilterNet) on the Mac before anything listens to it, whichever device you talk from (iPhone app, Safari, Mac browser).
