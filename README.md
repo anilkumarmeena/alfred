@@ -547,6 +547,26 @@ Details in [docs/architecture.md](docs/architecture.md#cli-brain-details).
 
 ---
 
+## Web browser
+
+JARVIS has its own Chrome, driven by [Playwright](https://playwright.dev/python/), for pages that need your logins or JavaScript ("what's on my Jira board?", "read me the top story on that site"). It runs on a profile of its own in `data/browser/profile`, never your everyday Chrome profile, so you log in to sites there once, yourself, and the logins stay; two-factor codes stay with you. That folder is kept as secret as `secrets/`: sandboxed commands and tasks can't read its cookies.
+
+For now it only reads: `browser_open`, `browser_read` (the page's text, or its accessibility outline), `browser_links`, `browser_screenshot` (to `data/browser/screenshots`), `browser_back` and `browser_close`. Nothing is clicked, typed or submitted. It's the voice brain's alone; background tasks don't get it.
+
+- **Page content is untrusted.** What a page says comes back fenced as web content, and the tools' descriptions and JARVIS's prompt say never to follow instructions found on a page.
+- **Only the web.** `http` and `https` only, and never this Mac or its network: localhost, private, link-local, Tailscale and `.local` addresses are refused, `file:` and the like too. Every connection the browser makes (redirects, frames, images, scripts) goes through a small proxy of JARVIS's own, which looks each name up itself and refuses any that lead to a local address.
+- **Captchas and bot checks** are reported, never worked around: JARVIS says the page is blocked, and you deal with it in the window.
+- **One window per conversation.** It opens on first use and closes when the conversation ends (or with `browser_close`). Two conversations at once can't share the profile, so the second is told it's in use.
+
+Set-up, once, on the Mac:
+
+```bash
+uv sync                                  # installs the playwright package
+uv run playwright install chromium       # the fallback, used when Google Chrome isn't installed
+```
+
+Then ask JARVIS to open a site you use, and log in to it in the window that opens. Settings → Preferences turns it off, or hides the window (`JARVIS_BROWSER`, `JARVIS_BROWSER_WINDOW`).
+
 ## Google Chat
 
 On the accounts marked for Chat (`--chat`), JARVIS reads Google Chat and can reply. Chat needs a Workspace account; personal Gmail has no Chat API.
