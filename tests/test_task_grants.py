@@ -1,0 +1,303 @@
+"""Tests for access granted to background tasks beyond their kind's (jarvis.tasks.access): at the start, on a reply,
+and when a task asks for it with request_access. Run with: make test"""
+
+import asyncio
+import json
+
+import pytest
+from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+from test_in_place import NullReporter, env, worker_task  # noqa: F401  (env is a fixture)
+from test_nudges import fake_run, settle
+from test_task_access import call, denied_paths, mac  # noqa: F401  (mac is a fixture)
+
+from jarvis import tools
+from jarvis.brain import persona
+from jarvis.core import profile
+from jarvis.tasks import access, briefs, client, gate, reporting, runner, worker
+from jarvis.tasks.worker import Outcome
+from jarvis.tools import tasks as task_tools
+
+
+@pytest.fixture
+def box(mac, monkeypatch):
+    """The mac fixture's folders, with JARVIS's own repo and data in its projects folder, and a code_question's
+    project, video."""
+    jarvis = mac["projects"] / "jarvis"
+    monkeypatch.setattr(worker, "DATA_DIR", jarvis / "data")
+    monkeypatch.setattr(gate, "ROOT", jarvis)
+    monkeypatch.setattr(briefs, "ROOT", jarvis)
+    video = mac["projects"] / "video"
+    monkeypatch.setattr(worker.projects, "find", lambda name: type("P", (), {"path": video}))
+    return mac | {"jarvis": jarvis, "video": video, "own": jarvis / "data" / "tasks" / "9"}
+
+
+def granted(*names: str) -> dict:
+    return {"grants": json.dumps(list(names))}
+
+
+def question(*names: str) -> dict:
+    return worker_task(kind="code_question", project="video", worktree=None, **granted(*names))
+
+
+def allowed(decision) -> bool:
+    return isinstance(decision, PermissionResultAllow)
+
+
+# ── What a grant adds to a task's session ───────────────────────
+
+
+def test_a_plain_code_question_is_unchanged_but_can_ask(box):
+    opts = worker._options(question(), NullReporter())
+    assert "Write" not in opts.tools and "Artifact" not in opts.tools and "host" not in opts.mcp_servers
+    assert opts.sandbox["network"] == {"allowedDomains": []} and not opts.sandbox["autoAllowBashIfSandboxed"]
+    prompt = opts.system_prompt["append"]
+    assert "You can't edit anything" in prompt and "request_access" in prompt
+    assert all(f"{name} (" in prompt for name in access.GRANTS)
+    assert worker.REQUEST_ACCESS in opts.allowed_tools and worker.REQUEST_ACCESS in reporting.PAUSES
+
+
+def test_a_code_question_granted_artifacts_publishes_from_its_own_folder(box):
+    opts = worker._options(question("artifacts"), NullReporter())
+    assert opts.env["CLAUDE_CODE_ARTIFACT"] == "1" and {"Artifact", "Write"} <= set(opts.tools)
+    assert "Edit" not in opts.tools
+    page = str(box["own"] / "features.html")
+    assert allowed(call(opts, "Write", file_path=page)) and allowed(call(opts, "Artifact", file_path=page))
+    for tool in ("Write", "Artifact"):
+        assert not allowed(call(opts, tool, file_path=str(box["code"]))), tool  # its project stays as it is
+    prompt = opts.system_prompt["append"]
+    assert str(box["own"]) in prompt and "claude.ai/code/artifact" in prompt and "but not change them" in prompt
+    assert "artifacts (" not in prompt  # nothing left to ask for it
+
+
+def test_research_granted_shell_runs_sandboxed_commands_without_secrets(box):
+    opts = worker._options(worker_task(kind="research", project=None, **granted("shell")), NullReporter())
+    assert "Bash" in opts.tools and opts.sandbox["autoAllowBashIfSandboxed"]
+    assert opts.sandbox["network"]["allowedDomains"] == ["*"] and not opts.sandbox["allowUnsandboxedCommands"]
+    assert not allowed(call(opts, "Bash", command="ls", dangerouslyDisableSandbox=True))
+    rules = denied_paths(opts)
+    projects = str(box["projects"].resolve())
+    assert f"{projects}/**/.env" in rules and "~/.ssh/**" in rules
+    assert not allowed(call(opts, "Read", file_path=str(box["code"])))  # its file tools still read nothing
+    assert "Bash commands run in a sandbox" in opts.system_prompt
+
+
+def test_a_code_question_granted_shell_leaves_the_checkout_unwritten(box):
+    opts = worker._options(question("shell"), NullReporter())
+    assert opts.sandbox["autoAllowBashIfSandboxed"] and str(box["own"]) in opts.add_dirs
+    rules = json.loads(opts.settings)["permissions"]["deny"]
+    video = box["video"].resolve()
+    assert f"Edit(/{video})" in rules and f"Edit(/{video}/**)" in rules
+    assert "can't write there" in opts.system_prompt["append"]
+
+
+def test_a_code_question_on_jarvis_itself_can_still_write_its_own_folder(box, monkeypatch):
+    monkeypatch.setattr(worker.projects, "find", lambda name: type("P", (), {"path": box["jarvis"]}))
+    opts = worker._options(question("shell"), NullReporter())
+    rules = json.loads(opts.settings)["permissions"]["deny"]
+    edits = [r.removeprefix("Edit(/").removesuffix(")").removesuffix("/**") for r in rules if r.startswith("Edit(")]
+    own = box["own"].resolve()
+    assert not any(own.is_relative_to(e) for e in edits)
+    assert str((box["jarvis"] / "logs").resolve()) in edits
+
+
+def test_a_code_question_granted_mac_runs_host_commands_from_its_own_folder(box):
+    opts = worker._options(question("mac"), NullReporter())
+    assert "host" in opts.mcp_servers and worker.JOB_WAIT in opts.allowed_tools
+    assert allowed(call(opts, worker.HOST_RUN, command="ls"))
+    assert not allowed(call(opts, worker.HOST_RUN, command="ls", folder=str(box["video"])))
+    refused = call(opts, worker.HOST_RUN, command=f"git -C {box['video']} commit -m x")
+    assert not allowed(refused) and "own checkout" in refused.message  # as for in-place work
+    assert "host_run" in opts.system_prompt["append"]
+
+
+def test_projects_lets_a_task_edit_other_projects_but_never_secrets_or_jarvis(box):
+    plain = worker._options(worker_task(worktree=str(box["worktree"])), NullReporter())
+    assert not allowed(call(plain, "Write", file_path=str(box["code"])))
+    opts = worker._options(worker_task(worktree=str(box["worktree"]), **granted("projects")), NullReporter())
+    assert allowed(call(opts, "Edit", file_path=str(box["code"])))
+    assert allowed(call(opts, "Write", file_path=str(box["worktree"] / "new.py")))  # its own worktree, in JARVIS's data
+    for name in ("env_local", "key", "agent_log", "env"):
+        denied = call(opts, "Write", file_path=str(box[name]))
+        assert isinstance(denied, PermissionResultDeny) and "JARVIS's own files" in denied.message, name
+    assert "edit files in" in opts.system_prompt["append"]
+
+
+def test_research_granted_projects_reads_and_edits_them(box):
+    opts = worker._options(worker_task(kind="research", project=None, **granted("projects")), NullReporter())
+    assert {"Read", "Edit", "Write"} <= set(opts.tools)
+    assert allowed(call(opts, "Read", file_path=str(box["code"]))) and allowed(call(opts, "Edit", file_path=str(box["code"])))
+    assert not allowed(call(opts, "Read", file_path=str(box["env"])))
+    assert "You can't contact anyone, and change only what the access below allows" in opts.system_prompt
+
+
+def test_a_code_task_granted_accounts_reads_mail(box):
+    opts = worker._options(worker_task(worktree=str(box["worktree"]), **granted("accounts")), NullReporter())
+    assert "jarvis" in opts.mcp_servers
+    assert "You can read" in opts.system_prompt["append"] and "accounts (" not in opts.system_prompt["append"]
+
+
+def test_request_access_asks_the_runner_and_pauses(monkeypatch):
+    servers: dict = {}
+    monkeypatch.setattr(reporting, "create_sdk_mcp_server", lambda name, tools: servers.setdefault(name, tools))
+    asked = []
+
+    class Reporter(NullReporter):
+        def request_access(self, task_id, names, reason):
+            asked.append((task_id, names, reason))
+            if "mac" in names:
+                raise ValueError("this task has that access already, so use it")
+            return names
+
+    reporting._task_server(9, Reporter())
+    tool = next(t for t in servers["task"] if t.name == "request_access")
+    out = asyncio.run(tool.handler({"access": ["artifacts"], "reason": "To publish the list, as asked."}))
+    assert asked == [(9, ["artifacts"], "To publish the list, as asked.")]
+    assert "End your turn" in out["content"][0]["text"] and not out.get("is_error")
+    assert asyncio.run(tool.handler({"access": ["mac"], "reason": "x"}))["is_error"]
+
+
+# ── Granting, asking and upgrading through the runner ──────────
+
+
+def runs(*bodies):
+    """Bodies for fake_run that note the task each run saw."""
+    seen: list[dict] = []
+
+    def noting(body):
+        async def run(task, prompt, reporter) -> Outcome:
+            seen.append(dict(task))
+            return await body(task, prompt, reporter)
+        return run
+
+    return seen, [noting(b) for b in bodies]
+
+
+async def done(task, prompt, reporter) -> Outcome:
+    reporter.session(task["id"], "s1")
+    return Outcome("Did it.", "", 0.01)
+
+
+async def asks_for_artifacts(task, prompt, reporter) -> Outcome:
+    reporter.session(task["id"], "s1")
+    reporter.request_access(task["id"], ["artifacts"], "To publish the list, as you asked.")
+    return Outcome("Asked for access.", "", 0.01)
+
+
+def test_tasks_start_with_access_beyond_their_kind(env, monkeypatch):
+    seen, bodies = runs(done, done)
+    fake_run(monkeypatch, *bodies)
+
+    async def main():
+        r = runner.Runner()
+        first = r.start("code_question", "feature list", "List them", "video-agent", grants=["mac", "artifacts"])
+        second = r.start("code_change", "a fix", "Fix it", "video-agent", grants=["shell", "projects"])
+        with pytest.raises(ValueError, match="Unknown access"):
+            r.start("research", "x", "Look it up", grants=["root"])
+        await settle(r)
+        return r.store.get(first["id"]), r.store.get(second["id"])
+
+    first, second = asyncio.run(main())
+    assert access.granted(first) == ["artifacts", "mac"] and access.granted(second) == ["projects"]  # shell it has
+    assert {"artifacts", "mac"} <= access.has(seen[0]) and first["status"] == "done"
+    assert task_tools._brief(first)["access"] == ["artifacts", "mac"]
+
+
+def test_a_task_asks_for_access_and_carries_on_once_granted(env, monkeypatch):
+    seen, bodies = runs(asks_for_artifacts, done)
+    prompts = fake_run(monkeypatch, *bodies)
+
+    async def main():
+        r = runner.Runner()
+        task = r.start("code_question", "feature list", "List the features as a link", "video-agent")
+        await settle(r)
+        waiting = r.store.get(task["id"])
+        r.reply(task["id"], "Yes, go ahead.", ["artifacts"])
+        await settle(r)
+        with pytest.raises(ValueError, match="already"):
+            r.request_access(task["id"], ["artifacts"], "To publish it again.")
+        return waiting, r.store.get(task["id"])
+
+    waiting, after = asyncio.run(main())
+    assert waiting["status"] == "waiting"
+    assert waiting["question"] == "may it also publish pages to claude.ai with the Artifact tool? To publish the list, as you asked."
+    assert waiting["wait_kind"] == "access"
+    assert task_tools._brief(waiting)["access_requested"] == ["artifacts"]
+    assert "artifacts" in access.has(seen[1]) and seen[1]["session_id"] == "s1"  # the same session, with the tool
+    assert prompts[1].startswith(f"Answer from {profile.name()}: Yes, go ahead.") and "You now also have artifacts" in prompts[1]
+    assert after["status"] == "done" and not access.wanted(after) and "access_requested" not in task_tools._brief(after)
+    assert after["wait_kind"] is None
+
+
+def test_a_finished_task_is_upgraded_on_a_follow_up(env, monkeypatch):
+    seen, bodies = runs(done, done)
+    prompts = fake_run(monkeypatch, *bodies)
+
+    async def main():
+        r = runner.Runner()
+        task = r.start("code_question", "feature list", "List the features", "video-agent")
+        await settle(r)
+        monkeypatch.setattr(access, "TASK_ARTIFACTS", False)
+        with pytest.raises(ValueError, match="switched off"):
+            r.reply(task["id"], "Publish it", ["artifacts"])
+        monkeypatch.setattr(access, "TASK_ARTIFACTS", True)
+        r.reply(task["id"], "Now publish that as a link.", ["artifacts"])
+        await settle(r)
+        return r.store.get(task["id"]), r.store.history(task["id"])
+
+    after, history = asyncio.run(main())
+    assert len(seen) == 2 and "artifacts" not in access.has(seen[0]) and "artifacts" in access.has(seen[1])
+    assert prompts[1].startswith(f"Follow-up from {profile.name()}: Now publish that as a link.")
+    assert access.granted(after) == ["artifacts"] and after["status"] == "done"
+    assert any(e["kind"] == "access" and "granted artifacts" in e["text"] for e in history)
+
+
+def test_a_running_task_granted_more_carries_on_with_it_after_its_turn(env, monkeypatch):
+    gate = asyncio.Event()
+
+    async def works(task, prompt, reporter) -> Outcome:
+        reporter.session(task["id"], "s1")
+        await gate.wait()
+        return Outcome("Wrote the list; can't publish it.", "", 0.01)
+
+    seen, bodies = runs(works, done)
+    prompts = fake_run(monkeypatch, *bodies)
+
+    async def main():
+        r = runner.Runner()
+        task = r.start("code_question", "feature list", "List the features", "video-agent")
+        while not prompts:  # its run has begun
+            await asyncio.sleep(0.01)
+        r.reply(task["id"], "Publish it as a link too.", ["artifacts"])
+        nudge = r.store.get(task["id"])["nudges"]
+        gate.set()
+        await settle(r)
+        return nudge, r.store.get(task["id"])
+
+    nudge, after = asyncio.run(main())
+    assert "You now also have artifacts" in nudge and "next turn" in nudge
+    assert len(seen) == 2 and "artifacts" in access.has(seen[1])
+    assert "You now have artifacts" in prompts[1] and after["status"] == "done"
+
+
+# ── JARVIS's side ───────────────────────────────────────────────
+
+
+def test_jarvis_passes_access_on_and_knows_when_to_grant_it(monkeypatch):
+    sent = []
+
+    async def start(kind, title, instruction, project=None, access=None, order="", todo=""):
+        sent.append(("start", access))
+        return {"id": 1, "title": title, "kind": kind, "status": "queued", "updated": 0}
+
+    async def reply(task_id, message, access=None, order=""):
+        sent.append(("reply", access))
+        return {"id": task_id, "title": "x", "kind": "research", "status": "queued", "updated": 0}
+
+    monkeypatch.setattr(client, "start", start)
+    monkeypatch.setattr(client, "reply", reply)
+    asyncio.run(task_tools.task_start("code_question", "list", "List them", "video", ["artifacts"]))
+    asyncio.run(task_tools.task_reply(1, "Go ahead", ["artifacts"]))
+    assert sent == [("start", ["artifacts"]), ("reply", ["artifacts"])]
+    for name in ("task_start", "task_reply"):
+        assert tools.get(name).properties["access"]["items"]["enum"] == list(access.GRANTS)
+    assert "task_start's access" in persona.persona() and "access_requested" in persona.persona()
