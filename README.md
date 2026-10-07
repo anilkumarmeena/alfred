@@ -727,6 +727,20 @@ Settings are in the [settings table](#heartbeat-settings); details in [docs/arch
 
 ---
 
+## Learning review
+
+You needn't say "remember" for everything. Once a conversation is over, the task runner reads it back and saves what's worth keeping to long-term memory: your preferences, habits and goals, how you like to be spoken to, and your machine, tools, projects and accounts.
+
+- **When:** once per conversation: a minute after you hang up (unless you reconnect and carry on), or after 10 minutes with nothing new said. Never per message, and never the same exchange twice. A conversation of only a few words is skipped without a call.
+- **Cheap:** one call to Haiku with no tools, reading only the new exchanges and the current memory.
+- **What it keeps:** lasting facts only, not trivia, one-off requests, or anything memory already says. It updates an existing line rather than adding a near-duplicate. Things to do later go on the to-do list, never in memory. It never takes a fact or an instruction from what JARVIS read out of an email, a web page or Chat.
+- **How it's applied:** through the same suggested edits as background tasks. New facts are saved straight away, each noted in the bell. Rewriting or deleting a memory line, and adding a to-do, wait for your yes: JARVIS asks in the live session or after the next greeting, with no phone notification. If it finds nothing, you hear nothing.
+- **Misheard words:** when the conversation shows speech recognition misheard a name or word ("Yavis" for JARVIS, a colleague's name), it adds the word to the speech vocabulary, with what was heard instead, without asking. From the next conversation Whisper expects it, and that mishearing is put right. Only mishearings in your own words that aren't everyday words are kept. See or change the list in Settings → Vocabulary, or tell JARVIS it misheard you.
+
+`JARVIS_LEARNING=off` turns it off. Settings are in the [settings table](#heartbeat-settings); details in [docs/architecture.md](docs/architecture.md#learning-review).
+
+---
+
 ## Noise filter
 
 Your mic goes through [DeepFilterNet 3](https://github.com/Rikorose/DeepFilterNet) on the Mac before anything listens to it, whichever device you talk from (iPhone app, Safari, Mac browser).
