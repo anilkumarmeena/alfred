@@ -581,6 +581,16 @@ Then ask JARVIS to open a site you use, and log in to it in the window that open
 - **Long ones:** if it isn't done within 45 seconds, JARVIS says how long it has left and it carries on by itself; ask again and the transcript is there. The same recording isn't transcribed twice.
 - Transcripts are kept in `data/transcripts`, with a timestamp at least every 30 seconds, for 30 days. See [Recordings](docs/architecture.md#recordings).
 
+## Audio files
+
+Ask JARVIS to read something into a file to listen to later: "make me an audio file of that summary", "read invoice-notes.pdf into an mp3", "turn this morning's briefing into audio and send it to my phone".
+
+- **What it reads:** a summary or briefing JARVIS writes, text you dictate, or a document on the Mac by its path or name (PDF, Word, text, ...). For an email, a Google Doc or a web page, JARVIS reads it first and passes on its text. Markdown, links and code fences are read as plain speech.
+- **How:** in JARVIS's own voice (Kokoro, your voice and speed), in parts of a few sentences, joined with short pauses between sentences and longer ones between paragraphs. It runs as a [long job](#shell-commands-and-long-jobs) with its own Kokoro, at a lower priority and on a few cores, so it never holds up the live voice; one file at a time. On an 8 GB M2 it makes about a minute of audio a minute, and it reads up to about 12 hours of it in one file.
+- **Where it goes:** `~/Downloads` as `Title.m4a` (never over an existing file), unless you ask for mp3 or WAV or change `JARVIS_AUDIO_DIR`. JARVIS says up front how long the audio will be and roughly how long it takes, then says when it's done and where it went (a Mac notification too). Ask "how's the audio file going?" to hear how far it's got, or "stop the audio file" to cancel it.
+- **To the phone:** say so and, when it's done, a push says it's ready; tapping it opens JARVIS with a player, and a link that opens the file on its own to save it. The link works for a week (`data/shared_files.json`) and only for that file. Needs [iPhone notifications](#iphone-notifications) on.
+- mp3 needs `ffmpeg` or `lame` (`brew install ffmpeg`); m4a uses the Mac's own `afconvert`. Without an encoder the WAV is kept, and JARVIS says why.
+
 ## Google Chat
 
 On the accounts marked for Chat (`--chat`), JARVIS reads Google Chat and can reply. Chat needs a Workspace account; personal Gmail has no Chat API.
