@@ -574,6 +574,13 @@ Then ask JARVIS to open a site you use, and log in to it in the window that open
 - **Set-up, once:** macOS must let the voice agent record the screen. The first screenshot makes macOS ask, or adds the agent to System Settings → Privacy & Security → Screen Recording: turn it on there, then `make services-restart`. Without it, screenshots show only the desktop background, and JARVIS says so.
 - Photos are kept in `data/pictures/photos` for a week and screenshots in `data/pictures/screens` for a day, then deleted. See [Pictures](docs/architecture.md#pictures).
 
+## Recordings
+
+- **Transcribe one:** "what did they decide in standup.m4a?", "summarise the voice note Ana emailed me". JARVIS transcribes an audio or video file on the Mac (m4a, mp3, wav, mp4, mov and the like, found by its name in Downloads, Desktop or Documents) or one attached to an email, in any language Whisper knows, then answers from the transcript.
+- **On the Mac, nothing to install:** it uses the Whisper model JARVIS already hears with and the audio decoder LiveKit already brings. It runs about 13 times faster than the recording plays on an M2 (an hour's meeting in about 5 minutes), in a process of its own that holds about 1 GB only while it works, one recording at a time.
+- **Long ones:** if it isn't done within 45 seconds, JARVIS says how long it has left and it carries on by itself; ask again and the transcript is there. The same recording isn't transcribed twice.
+- Transcripts are kept in `data/transcripts`, with a timestamp at least every 30 seconds, for 30 days. See [Recordings](docs/architecture.md#recordings).
+
 ## Google Chat
 
 On the accounts marked for Chat (`--chat`), JARVIS reads Google Chat and can reply. Chat needs a Workspace account; personal Gmail has no Chat API.
