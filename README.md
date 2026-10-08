@@ -567,6 +567,13 @@ uv run playwright install chromium       # the fallback, used when Google Chrome
 
 Then ask JARVIS to open a site you use, and log in to it in the window that opens. Settings → Preferences turns it off, or hides the window (`JARVIS_BROWSER`, `JARVIS_BROWSER_WINDOW`).
 
+## Pictures
+
+- **Show JARVIS a photo:** tap the camera button in the message box, pick a photo, then type or say your question ("what's this plant?"). The photo goes to the Mac straight away, made smaller first, and comes with your next turn; tap its thumbnail to take it back. Sent with no words, JARVIS says what it shows.
+- **Look at the screen:** say "look at my screen" or "what's this error on my screen?" and JARVIS takes a silent screenshot of the Mac's main display. It only does this when you ask: the tool refuses unless your own words that turn are about the screen, or a yes to JARVIS asking to look.
+- **Set-up, once:** macOS must let the voice agent record the screen. The first screenshot makes macOS ask, or adds the agent to System Settings → Privacy & Security → Screen Recording: turn it on there, then `make services-restart`. Without it, screenshots show only the desktop background, and JARVIS says so.
+- Photos are kept in `data/pictures/photos` for a week and screenshots in `data/pictures/screens` for a day, then deleted. See [Pictures](docs/architecture.md#pictures).
+
 ## Google Chat
 
 On the accounts marked for Chat (`--chat`), JARVIS reads Google Chat and can reply. Chat needs a Workspace account; personal Gmail has no Chat API.
