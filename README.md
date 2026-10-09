@@ -867,6 +867,37 @@ It's on by default (`enforce`): dropped clips are logged as `speech gate dropped
 
 ---
 
+## Speaker check
+
+The speech gate stops phantoms, but real speech from someone else (a TV, a video, a colleague on a call) reaches the brain as if you'd said it, and JARVIS answers it ("Standing by."). Once you've enrolled your voice, the speaker check (`jarvis/voice/speaker.py`) drops that speech before the brain hears it, and JARVIS stays silent. Without a voiceprint, nothing changes.
+
+**How it works.** Your voiceprint is a speaker embedding from [WeSpeaker's ResNet34](https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM) (25 MB, ONNX, trained on VoxCeleb; `make models` downloads it), averaged over about 25 seconds of your speech, and kept in your own data (`data/tasks.db`, the `voiceprints` table): nothing about it is in the code. Each utterance's speech (Silero VAD's, without the silence around it, which says nothing about who spoke) is embedded the same way and compared with your voiceprint by cosine similarity, on the call's own CPU while Whisper transcribes on the GPU, so it adds no wait. It runs on the Mac, and only once you've enrolled (about 80 MB while a call uses it).
+
+**Enrolling**, in any of three ways; each replaces the voiceprint before it, so doing it again is how you re-enroll:
+
+- **By voice** (best): in a conversation, say "learn my voice". JARVIS asks you to talk for about thirty seconds, about anything, and your words go to the voiceprint instead of being answered; it says when it's done ("stop" or "cancel" stops it). It hears you through the very mic, connection and noise filter later calls use, from the Mac or the iPhone app alike.
+- **In the app:** Settings → Preferences → Voice ID → Enroll my voice, then read the text shown aloud for 30 seconds (hang up first: the conversation has the mic).
+- **On the Mac:** `make voiceprint ARGS=enroll`, then read the passage it prints.
+
+**What a clip needs.** A short utterance says less about who spoke, so it needs less, and less again while you're in a conversation, so a real "yes" isn't lost:
+
+| Case | Needs (defaults) | Settings |
+|---|---|---|
+| **Long**: 3 s of speech or more | 0.35 | `JARVIS_SPEAKER_THRESHOLD` (Settings → Preferences → How sure it must be), `JARVIS_SPEAKER_LONG_SECONDS` |
+| **Short**: 1 s or less | 0.25; sliding up to 0.35 between 1 and 3 s | `JARVIS_SPEAKER_SHORT_MARGIN`, `JARVIS_SPEAKER_SHORT_SECONDS` |
+| **In a conversation**: you were the last voice heard, in the last 30 s, or JARVIS finished speaking under 10 s ago, and nobody else has been heard since | 0.1 less again for short clips (0.15 at 1 s); under 0.4 s of speech goes through whatever it scores, as too short to tell | `JARVIS_SPEAKER_RELAX`, `JARVIS_SPEAKER_RECENT_SECONDS`, `JARVIS_SPEAKER_REPLY_SECONDS`, `JARVIS_SPEAKER_MIN_SECONDS` |
+| **This call**: once it has clearly heard you (3 s of speech scoring 0.45 or more), a second reference halfway between your voiceprint and how you sound in this call counts too, for clips over 1 s | | `JARVIS_SPEAKER_ADAPT`, `JARVIS_SPEAKER_ADAPT_MARGIN` |
+
+Once someone else has been heard (a clip over 1 s that isn't you), short clips lose the conversation's benefit until you're heard again or JARVIS speaks, so a TV's "okay" between sentences isn't taken for you. With Kokoro's voices standing in for people, an enrolled voice scored about 0.9 on a sentence and 0.3 to 0.75 on one-word replies, and other voices mostly under 0.25. Real mics and rooms score lower, which is why the defaults leave room; tune them on your own calls (below).
+
+**Switching it.** Settings → Preferences → Voice ID → Other voices, from the next conversation: **On** (default) drops them; **Only log** drops nothing and logs what it would drop; **Off** checks nothing (or `JARVIS_SPEAKER_CHECK` in `.env`, which wins). Forget removes the voiceprint. **Only log** also lets any voice interrupt JARVIS, as before, but logs what the barge-in check below would have done.
+
+**Interrupting JARVIS.** Talking over JARVIS cuts it off once the VAD has heard 0.5 s of speech, and the VAD hears anyone's. With a voiceprint and the check on, that speech is checked first (`jarvis/voice/barge_in.py`): while JARVIS is replying (thinking or speaking), LiveKit is told there's no speech yet until the check has heard that it's you, and only then cuts the reply off. It judges the VAD's speech windows from 0.5 s of speech, about 15 ms on the CPU, so your own barge-in comes about as fast as before; if that isn't enough to tell, it judges again every 0.25 s of speech more, on the latest second of it, until it matches or you stop. It needs what a clip as short needs outside a conversation (0.25 at 1 s and under): nothing is let off as too short. Someone else's speech never cuts JARVIS off, and the reply carries on. If the check misses you, your words still interrupt JARVIS once they're transcribed and the whole utterance passes the check, as before, only later. `JARVIS_SPEAKER_BARGE_IN=off` lets any voice interrupt again, while clips are still checked; the timings are in [its settings](#speaker-check-settings).
+
+**Reviewing.** Every clip it judges goes in `logs/speaker-check.jsonl` with its score, what it needed and its transcript; the ones not yours are also in `logs/agent.log` as `speaker check dropped` (or `would drop`). Every barge-in it judges goes there too, with `"kind": "barge-in"`: `interrupted` or `ignored` (`would interrupt`, `would ignore` while only logging), its best score and what it needed, how many checks, and `held`, how long it kept JARVIS talking past the point LiveKit would have cut it off; `logs/agent.log` has each as `barge-in interrupted` or `ignored`. `make voiceprint ARGS=log` lists the last day's, with the score range, and the barge-ins it ignored; `make voiceprint ARGS=test` records 5 seconds and says how alike they are. If your own replies show up there, pick Lenient, or lower `JARVIS_SPEAKER_SHORT_MARGIN` for short ones; if a TV still gets through, pick Strict. If the model fails, clips go through as if no voiceprint were enrolled, and the agent log says so once.
+
+---
+
 ## Earphones and switching apps (iPhone)
 
 - **Stem press to mute:** during a session, while JARVIS is on screen, pressing the AirPods (or wired earphone) button mutes or unmutes the mic, with a falling tone for muted and a rising one for listening.
