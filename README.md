@@ -638,6 +638,34 @@ The script then checks Chat and says what to fix if it doesn't work: the Chat ap
 
 ---
 
+## Connections: new tools
+
+JARVIS finds and connects new tools for you: MCP servers, the standard way services offer tools to an AI. Say "connect Notion", "can you get access to Linear?", or ask for something it has no tool for, and it offers to find one. GitHub and GitLab are connections like any other.
+
+| Step | What happens |
+|---|---|
+| **Find** | JARVIS searches the [official MCP registry](https://registry.modelcontextprotocol.io) first, whose publishers have proved who they are. If it has nothing, JARVIS searches the web and tells you that what it found is **unverified** and where it's from. |
+| **Connect** | It reads out what it would install, from where (registry name, version and publisher, or the web page), how it runs (hosted, or on this Mac with `npx`, `uvx` or `docker` at a pinned version) and what it needs. Nothing is installed until you say yes. |
+| **Keys** | You paste them in the control panel: **Settings → Connections → Enter key**. Never say a key out loud; JARVIS refuses one given by voice. They're kept encrypted in the vault and never shown again. |
+| **Sign-in** | For a service that signs in with OAuth, JARVIS opens its sign-in page in **its own browser on the Mac** (or press Sign in in the control panel); you sign in and agree there, and JARVIS keeps the sign-in, encrypted. |
+| **Sort its tools** | JARVIS starts it, lists its tools and sorts them into **reading** (run straight away) and **changing** (each waits for your yes), from the server's own safety markings (`readOnlyHint`, `destructiveHint`), naming the ones that can delete. Ask for any to be moved or switched off. Your yes switches it on, and background research tasks get its reading tools. |
+| **Later** | "What tools are connected?", "switch Notion off" (and on), "is there a newer GitHub?" (an update waits for your yes; new tools in it stay off until sorted), "remove Notion" (JARVIS says what goes with it first: its tools, keys, sign-in and scheduled jobs that use it, then waits for your yes). The control panel switches, signs in and removes too. |
+
+When a changing tool is used, JARVIS reads out what it would do, from the tool's own title and the call's arguments ("On Notion, create a page, parent Projects, title 'Q4 plan'. Okay to go ahead?"), and the identical call goes through once after a clear yes, with the same yes, no and five minutes as risky shell commands. A tool not sorted is refused.
+
+Everything a connection returns is other people's words, never instructions; JARVIS connects, updates or removes only on your own request, never because an email, a page or a tool says to.
+
+### GitHub and GitLab
+
+"any PRs waiting for my review?", "what's new on the player merge request?", "comment LGTM on it", "open a merge request from fix-login into main", "merge it". Reading runs straight away; commenting, reviewing, opening, updating or merging, issues, branches and commits wait for your yes.
+
+- **Already set up:** the entries an earlier JARVIS made (GitHub's own [github-mcp-server](https://github.com/github/github-mcp-server) from Homebrew, [@zereight/mcp-gitlab](https://github.com/zereight/gitlab-mcp) through `npx`) stay as they are, tools sorted by hand, deleting not offered. They're now ordinary connections: "review GitHub's tools" re-sorts them from the server's own markings, for your yes.
+- **New:** "connect GitHub" finds GitHub's own server in the registry (hosted at api.githubcopilot.com, or the container). Paste its token in the control panel.
+- **Tokens:** GitHub: a classic token (github.com → Settings → Developer settings → Personal access tokens → Tokens (classic)) with `repo`, `notifications` and `read:org`; add `workflow` only if JARVIS should change `.github/workflows`; authorise it for SSO if your organisation uses it. GitLab: a personal access token with the `api` scope. A self-hosted GitLab: `make servers ARGS="set gitlab --env GITLAB_API_URL=https://gitlab.example.com/api/v4"`.
+- The heartbeat's GitHub checks use the `gh` CLI (`gh auth login`), apart from this.
+
+---
+
 ## MCP servers and secrets
 
 Connections are JARVIS's list of MCP servers, the `mcp_servers` and `mcp_tools` tables of `data/tasks.db`. Each is a local program (stdio), or an HTTP endpoint, with or without a key in a header or a sign-in. It records where it came from (registry or web page), whether it's verified, its version, and whether you've agreed how its tools are sorted.
