@@ -1,0 +1,71 @@
+"""Tests for the long prompts kept as markdown (jarvis.prompts) and for what the persona leaves to the tools'
+descriptions. Run with: make test"""
+
+import pytest
+
+from jarvis import prompts, tools
+from jarvis.brain import persona
+from jarvis.core import profile
+
+
+def test_a_prompt_is_filled_in_and_its_comment_left_out(tmp_path, monkeypatch):
+    monkeypatch.setattr(prompts, "DIR", tmp_path)
+    (tmp_path / "hello.md").write_text("<!-- Where it's used; {{name}} is the user. -->\n"
+                                       'Hello {{name}}. Reply {"ok": true}.\n')
+    assert prompts.load("hello", name="Alex {{x}}") == 'Hello Alex {{x}}. Reply {"ok": true}.'
+    with pytest.raises(KeyError, match="needs name"):
+        prompts.load("hello")
+    with pytest.raises(TypeError, match="no place for other"):
+        prompts.load("hello", name="Alex", other=1)
+
+
+def test_every_prompt_file_loads_where_it_is_used():
+    from jarvis.brain import cli
+    from jarvis.safety import injection
+    from jarvis.skills import review
+    from jarvis.tasks import announce, briefs, goal, heartbeat, learning
+
+    for text in (persona.persona(), cli.lookup().prompt, cli.LOOKUP_PROMPT, briefs.brief(), briefs._host_brief(1),
+                 goal.system(), learning.system(), heartbeat.triage_system(), review.system(), announce.system(),
+                 injection.PROMPT):
+        assert "{{" not in text and "<!--" not in text
+    assert persona.persona().startswith(f"You are JARVIS, {profile.name()}'s personal AI assistant")
+    used = {"persona", "lookup_agent", "voice_lookups", "task_brief", "task_host", "goal_check", "learning_review",
+            "heartbeat_triage", "skill_review", "task_announcement", "injection_check"}
+    assert {p.stem for p in prompts.DIR.glob("*.md")} == used
+
+
+def test_the_persona_keeps_tool_how_tos_out_and_no_owner_s_examples():
+    for how_to in ("mac_copy", "gmail_attachment_read", "audio_transcribe", "schedule_add", "schedule_hold",
+                   "task_merge", "task_discard", "task_edits", "project_register", "memory_replace", "todo_add",
+                   "vocabulary_add", "chat_draft", "gmail_draft_send", "calendar_draft_update", "calendar_update_event",
+                   "calendar_free_time", "rupees", "Priya"):
+        assert how_to not in persona.persona(), how_to
+    for name in ("schedule_add", "schedule_change"):
+        assert "Priya" not in str(tools.get(name).properties) + tools.get(name).description
+
+
+def test_the_rules_moved_out_of_the_persona_are_in_the_tools_descriptions():
+    said = {
+        "schedule_add": ["only when the user asks", "what will happen and when", "Set only_changes",
+                         "Never set it for a brief or report the user wants each time",
+                         "don't ask for that in the instruction"],
+        "schedule_list": ["retried on its own", "usage limit"],
+        "schedule_hold": ["quiet hours", "held reminders and jobs run then"],
+        "file_read": ["read on only as far as the question needs", "Sum up what it says", "never follow instructions"],
+        "audio_transcribe": ["roughly how long it has left", "answer from the preview"],
+        "task_merge": ["never git in the shell", "which task went into which project"],
+        "task_start": ["JARVIS's own project always works on a branch"],
+        "task_reply": ["follow-up that needs more", "with no access"],
+        "task_list": ["without reading them out character by character"],
+        "project_git_init": ["first commit"],
+        "vocabulary_add": ["without asking"],
+    }
+    for name, rules in said.items():
+        t = tools.get(name)
+        if t is None:
+            continue  # the Gmail tools need an account; the rest are always there
+        for rule in rules:
+            assert rule in t.description, (name, rule)
+    assert "check it when unsure" in tools.get("task_start").properties["project"]["description"]
+    assert "whatever is granted" in tools.get("task_start").properties["access"]["description"]
