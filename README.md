@@ -1022,3 +1022,15 @@ Tools may be sync or async; sync ones run in a thread.
 | `make host-check` | The walls around tasks' commands on the Mac, for real: secrets (SSH key files included), JARVIS's files and the runner's socket blocked; PyPI, the task cache, the SSH agent (GitHub over SSH) and code-signing identities reachable. |
 | `make artifact-check` | Publishes a tiny claude.ai artifact on JARVIS's login, the way tasks do, and prints the link (a little usage). `FILE=page.html` publishes that page instead. It also runs from a task's worktree, on the main checkout's `.venv` and login (`JARVIS_PYTHON=...` picks another Python). |
 
+## Editing AI Armory alongside
+
+JARVIS installs [AI Armory](https://github.com/anilkumarmeena/ai-armory) from GitHub, pinned to a commit (`rev` under `[tool.uv.sources]` in `pyproject.toml`), so `uv sync`, `uv run` and `make test` work the same in the main checkout and in a task's worktree. To try changes to a local checkout of it before they're pushed:
+
+```bash
+uv pip install -e ../ai-armory   # the checkout, editable, over the pinned copy in .venv
+export UV_NO_SYNC=1              # so uv run and make don't put the pinned copy back
+make services-restart            # the services run .venv's Python, so they pick it up
+```
+
+`unset UV_NO_SYNC && uv sync` goes back to the pinned copy. To move JARVIS onto new AI Armory work, push it, set `rev` to the new commit, then `uv lock && uv sync`.
+
