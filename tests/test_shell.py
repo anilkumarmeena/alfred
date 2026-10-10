@@ -1,5 +1,4 @@
-"""Tests for the voice brain's shell: which commands need a spoken go-ahead, the go-ahead itself,
-long jobs and stopping them, and talking over a running command. Run with: make test"""
+"""Tests for the voice shell: which commands need a spoken yes, the yes itself, long jobs, talking over a command."""
 
 import asyncio
 
@@ -23,7 +22,7 @@ from jarvis.safety.shell import ShellGate, approves, refuses, risky
 from jarvis.state import memory
 from jarvis.tasks import client as task_client
 
-COMMAND = "rm -rf ~/Desktop/renders/old"  # risky: it deletes files
+COMMAND = "rm -rf ~/Desktop/renders/old"  # risky: deletes files
 
 
 # ── What counts as a yes ────────────────────────────────────────
@@ -38,11 +37,11 @@ COMMAND = "rm -rf ~/Desktop/renders/old"  # risky: it deletes files
         "Uh, yes sir.", "Okay Jarvis, go ahead.", "Yes, merge it.", "Yeah, run it.", "Alright.", "All right, go on.",
         "Absolutely.", "Of course.", "Perfect, thanks.", "Okay, thank you.", "Yes. Yes.", "Let's do it.",
         "Okay, go ahead and do it.", "Yeah that works.", "Affirmative.", "Okay…",
-        # the phrasings that used to fall through
+        # less common phrasings
         "Keep going.", "Yes, keep going.", "It is allowed.", "It's allowed.", "That's allowed, go ahead.",
         "Sure, do it.", "Yes, you can.", "You can do it.", "You have my permission.", "Permission granted.",
         "Go on then.", "Carry on.", "No problem.", "Yes, delete it.", "Yeah, kill it.", "Do it now.",
-        # the plain yeses heard on 2026-09-28 and 29 that weren't taken as one
+        # plain yeses heard in real calls
         "Start going.", "Yeah, let's close the hidden Chrome. That's fine.", "Mm-hmm", "I'm sure.",
         "Mm-hmm.", "Mhm.", "Uh-huh.", "Mm hmm, go ahead.", "Sure.", "Yeah, go ahead.", "Okay, do it.", "That's okay.",
         "Yes, I'm sure.", "It's fine.", "Get going.", "Fine by me.", "I'm okay with that.", "Yes, delete the old screenshots.",
@@ -169,7 +168,7 @@ def ask(gate: ShellGate, command: str = COMMAND, tool: str = "Bash"):
 
 
 def asked_last_turn(gate: ShellGate, reply: str, *commands: str) -> list[str]:
-    """A turn that asked about `commands` and got as far as the question, then the user's reply."""
+    """Ask about `commands` in a turn up to the question, then return what the user's `reply` releases."""
     gate.new_turn("clear out the old renders")
     for command in commands or (COMMAND,):
         assert isinstance(ask(gate, command), PermissionResultDeny)
@@ -189,11 +188,11 @@ def test_ordinary_commands_run_without_asking(command):
 def test_okay_runs_the_exact_command_asked_about():
     gate = ShellGate()
     assert asked_last_turn(gate, "Okay.") == [COMMAND]
-    assert isinstance(ask(gate, COMMAND + " ~/Desktop/renders/new"), PermissionResultDeny)  # not what was asked about
+    assert isinstance(ask(gate, COMMAND + " ~/Desktop/renders/new"), PermissionResultDeny)  # not the command asked about
     assert isinstance(ask(gate, COMMAND), PermissionResultAllow)
-    assert isinstance(ask(gate, COMMAND), PermissionResultAllow)  # again in that turn, say after a failure
+    assert isinstance(ask(gate, COMMAND), PermissionResultAllow)  # again in that turn, e.g. after a failure
     gate.new_turn("What's next?")
-    assert isinstance(ask(gate, COMMAND), PermissionResultDeny)  # a yes covers that turn's runs
+    assert isinstance(ask(gate, COMMAND), PermissionResultDeny)  # a yes covers only that turn
 
 
 def test_nothing_runs_without_a_yes():
@@ -264,7 +263,7 @@ def test_a_yes_stays_good_for_a_few_minutes():
 def test_an_interrupted_question_cant_be_answered():
     gate = ShellGate()
     gate.new_turn("clear out the old renders")
-    ask(gate)  # the turn is cut off before the question is put
+    ask(gate)  # turn cut off before the question is put
     gate.new_turn("Okay.")
     assert isinstance(ask(gate), PermissionResultDeny)
 
@@ -288,7 +287,7 @@ def test_secrets_are_refused_even_with_a_yes():
     command = "cat ~/.ssh/id_ed25519"
     gate.new_turn("show me my ssh key")
     assert "secrets" in ask(gate, command).message
-    assert gate.question("") == ""  # nothing to ask: no yes can make it run
+    assert gate.question("") == ""  # nothing to ask, so no yes can run it
     gate.new_turn("Yes.")
     assert isinstance(ask(gate, command), PermissionResultDeny)
     assert "secrets" in ask(gate, "cat ~/Desktop/projects/jarvis/.env").message
@@ -321,7 +320,7 @@ def test_the_question_isnt_asked_twice():
     gate = ShellGate()
     gate.new_turn("clear out the old renders")
     ask(gate)
-    ask(gate)  # the model trying again in the same turn
+    ask(gate)  # the model retries in the same turn
     assert gate.asked == [COMMAND]
     assert gate.question("Okay to go ahead?") == ""
     assert gate.question("") == "Okay to go ahead?"
@@ -342,7 +341,7 @@ def result() -> ResultMessage:
 
 
 class FakeClient:
-    """Stands in for ClaudeSDKClient: the model says `before`, tries `command` outside the sandbox, says `after`."""
+    """Fake ClaudeSDKClient: says `before`, tries `command` unsandboxed, says `after`."""
 
     def __init__(self, gate: ShellGate, before: str, after: str) -> None:
         self.gate, self.before, self.after = gate, before, after
@@ -402,17 +401,17 @@ def test_the_brain_offers_jobs_and_long_bash_timeouts():
     brain = cli.CliBrain()
     opts = cli._options(brain.shell, brain.jobs)
     assert set(opts.mcp_servers) == {"jarvis", "shell"}
-    assert shell.JOB_STATUS in opts.allowed_tools and shell.START_JOB not in opts.allowed_tools  # start_job meets the gate
-    assert shell.STOP_JOB in opts.allowed_tools  # it stops only start_job's own jobs, on the user's word
+    assert shell.JOB_STATUS in opts.allowed_tools and shell.START_JOB not in opts.allowed_tools  # start_job goes through the gate
+    assert shell.STOP_JOB in opts.allowed_tools  # stops only start_job's own jobs, on the user's word
     assert int(opts.env["BASH_DEFAULT_TIMEOUT_MS"]) >= 600000
-    assert opts.max_buffer_size >= 20 * 1024 * 1024  # not the SDK's 1 MB, which a big tool result can pass
+    assert opts.max_buffer_size >= 20 * 1024 * 1024  # the SDK's 1 MB default is too small for big tool results
 
 
 # ── Talking over a running command ──────────────────────────────
 
 
 class SlowCommandClient:
-    """The model starts a Bash command that runs until `done` is set, then reports on it."""
+    """Fake client: starts a Bash command that runs until `done` is set, then reports on it."""
 
     def __init__(self) -> None:
         self.done = asyncio.Event()
@@ -465,7 +464,7 @@ def test_speaking_over_a_running_command_lets_it_finish(monkeypatch):
         await talk_over(brain, client, "render the launch video")
         assert not client.interrupted
         reply = brain.respond("how long will it take?")
-        assert await reply.__anext__() == shell.HOLD + " "  # said straight away, while the command still runs
+        assert await reply.__anext__() == shell.HOLD + " "  # said at once, while the command still runs
         await asyncio.sleep(0.05)
         client.done.set()  # the render ends on its own
         rest = "".join([chunk async for chunk in reply])
@@ -533,7 +532,7 @@ def test_a_reply_cut_off_by_the_next_words_is_logged_as_interrupted(monkeypatch)
         async def receive_response(self):
             if self.turns == 1 and not self.interrupted:
                 self.running.set()
-                await asyncio.sleep(10)  # still thinking when the rest of the sentence comes
+                await asyncio.sleep(10)  # still thinking when the rest of the sentence arrives
             elif self.turns == 2:
                 yield text_event("Cell access it is.")
             yield result()
@@ -549,7 +548,7 @@ def test_a_reply_cut_off_by_the_next_words_is_logged_as_interrupted(monkeypatch)
 
 
 # ── Long jobs ───────────────────────────────────────────────────
-# Each a command task in the task runner: tests/test_command_jobs.py runs them, stops them and hears them end.
+# Command tasks in the runner; tests/test_command_jobs.py covers running, stopping and ending them.
 
 
 def test_the_job_tools_are_offered_together(monkeypatch):

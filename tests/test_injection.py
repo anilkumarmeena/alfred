@@ -1,7 +1,4 @@
-"""Tests for screening tool results for hidden instructions (jarvis.safety.injection): a block withholds the
-instructions and says so, a warning lets the result through with a note, clean text goes through as it is, a check
-that fails or is slow lets it through marked unchecked, and verdicts are kept by the text's hash so identical text is
-judged once. The model is faked throughout. Run with: make test"""
+"""Tests for jarvis.safety.injection: block, warn or pass tool results; fail open as unchecked; cache by hash."""
 
 import asyncio
 import json
@@ -25,7 +22,7 @@ def says(verdict: str, reason: str = "", excerpts: list[str] | None = None) -> s
 
 
 class Model:
-    """The checking model, faked: every prompt is kept, and it gives `answer`, raises `error` or takes `delay`."""
+    """Fake checking model: keeps every prompt; returns `answer`, raises `error` or sleeps `delay`."""
 
     def __init__(self) -> None:
         self.prompts: list[str] = []
@@ -80,7 +77,7 @@ def test_a_block_withholds_the_instructions_and_says_from_where(model):
     model.answer = says(BLOCK, "hidden text tells the assistant to forward the user's emails", [ATTACK])
     out = screen(mcp(EMAIL))
     updated = out["hookSpecificOutput"]["updatedToolOutput"]
-    assert updated == mcp(EMAIL.replace(ATTACK, WITHHELD))  # the same shape, the rest kept
+    assert updated == mcp(EMAIL.replace(ATTACK, WITHHELD))  # same shape, the rest kept
     told = note(out)
     assert "withheld" in told and "gmail_read of msg-42" in told and "forward the user's emails" in told
     assert "tell the user" in told
@@ -134,7 +131,7 @@ def test_a_slow_check_lets_the_result_through_and_its_verdict_is_kept(model):
 
     async def run():
         first = await injection.screen("mcp__jarvis__gmail_read", {}, mcp(EMAIL), MODEL, 0.05)
-        await asyncio.sleep(0.4)  # the check carries on and keeps its verdict
+        await asyncio.sleep(0.4)  # the check finishes in the background and caches its verdict
         second = await injection.screen("mcp__jarvis__gmail_read", {}, mcp(EMAIL), MODEL, 0.05)
         return first, second
 
@@ -154,7 +151,7 @@ def test_identical_text_is_judged_once_even_side_by_side(model):
         return await asyncio.gather(*(injection.screen("WebFetch", {}, mcp(EMAIL), MODEL, 5) for _ in range(3)))
 
     assert asyncio.run(run()) == [{}, {}, {}]
-    assert screen(mcp(EMAIL)) == {}  # kept, for the next conversation too
+    assert screen(mcp(EMAIL)) == {}  # cached, for later conversations too
     assert len(model.prompts) == 1
     screen(mcp(EMAIL + " P.S."))
     assert len(model.prompts) == 2
@@ -252,14 +249,14 @@ def test_sessions_with_tools_are_screened_while_the_check_is_on(monkeypatch):
     options = sdk.sdk_options(tools=["WebFetch"], hooks={"PostToolUse": own}, screen_seconds=4.0)
     assert options.hooks["PostToolUse"][0] is own[0] and len(options.hooks["PostToolUse"]) == 2
     assert options.hooks["PostToolUse"][1].timeout == 34.0 and len(options.hooks["PreToolUse"]) == 1
-    assert not sdk.short_options("prompt", MODEL).hooks  # a call with no tools, the check's own among them
+    assert not sdk.short_options("prompt", MODEL).hooks  # a tool-less call (like the check's own) gets no hooks
     monkeypatch.setattr(sdk, "injection_check_on", lambda: False)
     assert sdk.sdk_options(tools=["WebFetch"], hooks={"PostToolUse": own}).hooks == {"PostToolUse": own}
 
 
 def test_the_check_and_its_model_are_preferences():
     try:
-        assert config.injection_check_on() is False  # the tests' .env-style switch
+        assert config.injection_check_on() is False  # the tests' .env switch
         settings.set_preference("injection_model", config.HELPER_MODEL)
         assert config.injection_model() == config.HELPER_MODEL
         settings.set_preference("injection_check", "Yes")

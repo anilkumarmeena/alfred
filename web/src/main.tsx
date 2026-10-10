@@ -1,5 +1,4 @@
-// Boot: render the page, hand the session its <audio> elements, wire the keys and page lifecycle, then
-// ask for the passcode or wait for a tap.
+// Boot: render, init the session with its <audio> elements, wire keys and lifecycle, then prompt for a passcode.
 import { render } from "preact";
 import "./styles.css";
 import "./panel.css";

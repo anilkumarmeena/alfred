@@ -1,6 +1,4 @@
-"""Tests for the Google accounts, the accounts table in data/tasks.db, and their command (jarvis.integrations.accounts), and how
-the Google tools, from AI Armory, are given them: any label, the default for what's made without naming one, "all"
-searches that survive a broken account, and JARVIS's sign-ins. Run with: make test"""
+"""Tests for jarvis.integrations.accounts: the accounts table, its command, and Google tools' accounts and sign-ins."""
 
 import asyncio
 import json
@@ -28,10 +26,10 @@ ROOT = config.ROOT
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
-    """A database, secrets folder and heartbeat file of the test's own."""
+    """Isolated database, secrets folder and heartbeat file."""
     secrets = tmp_path / "secrets"
     secrets.mkdir()
-    use_profile(monkeypatch, tmp_path)  # its sign-ins in tmp_path/secrets
+    use_profile(monkeypatch, tmp_path)  # sign-ins land in tmp_path/secrets
     return SimpleNamespace(dir=tmp_path, secrets=secrets, db=tmp_path / "tasks.db")
 
 
@@ -61,7 +59,7 @@ def test_the_table_keeps_everything_in_order_with_one_default(home):
     store(tricky)
     assert accounts.load() == tricky
     assert rows(home) == [("side-project", 0, 0), ("x_2", 1, 1), ("a", 2, 0)]
-    with pytest.raises(sqlite3.IntegrityError):  # the database itself holds out against a second default
+    with pytest.raises(sqlite3.IntegrityError):  # the database itself rejects a second default
         sqlite3.connect(home.db).execute("update accounts set is_default = 1 where label = 'a'")
 
 
@@ -78,7 +76,7 @@ def test_changes_from_several_processes_at_once_all_land(home):
         with accounts.change() as found:
             found.add(Account(f"a{n}"))
 
-    threads = [threading.Thread(target=add, args=(n,)) for n in range(8)]  # a connection each, as processes have
+    threads = [threading.Thread(target=add, args=(n,)) for n in range(8)]  # a connection each, like processes
     for t in threads:
         t.start()
     for t in threads:
@@ -115,16 +113,15 @@ def test_two_processes_starting_at_once_make_the_table_once(home):
 
 
 def test_a_fresh_install_has_no_accounts_and_stays_that_way(home):
-    (home.secrets / "google-work.json").write_text("{}")  # nor is a sign-in: only the command adds accounts
+    (home.secrets / "google-work.json").write_text("{}")  # a sign-in alone adds no account; only the command does
     assert accounts.load() == Accounts()
     assert accounts.show(Accounts()).startswith("No Google accounts yet. Add one with")
 
 
 def test_a_fresh_install_starts_without_google_tools_or_a_crash(home):
-    """In a process of its own, since the tools' account lists are fixed when they're imported. Its database is
-    made here, empty, so it brings in nothing from this machine's data/."""
+    """Subprocess: tool account lists are fixed at import. Its empty DB keeps out this machine's data/."""
     assert accounts.load() == Accounts()
-    settings.about()  # makes the settings table too
+    settings.about()  # also creates the settings table
     env = os.environ | {"JARVIS_DB_FILE": str(home.db)}
     code = ("from ai_armory.toolsets.google import current\n"
             "from jarvis import tools\n"
@@ -140,8 +137,7 @@ def test_a_fresh_install_starts_without_google_tools_or_a_crash(home):
 
 
 def test_one_account_alone_gets_every_tool_and_everything_by_default(home):
-    """In a process of its own, as above, with only the work account: no other label offered, writes go to it, and
-    the prompt's line names it alone, with nothing on a default."""
+    """Subprocess, as above: no other label offered, writes go to it, the prompt names only it."""
     only = Accounts([Account("work", "me@acme.example", "for work", chat=True)], "work")
     store(only)
     settings.about()
@@ -172,7 +168,7 @@ def test_the_command_runs_as_a_module(home):
 def test_an_account_can_be_named_by_its_email_or_in_other_capitals():
     found = two()
     assert found.resolve("Personal") == "personal" and found.resolve(" ME@ACME.example ") == "work"
-    assert found.resolve("nobody") == "nobody"  # left for the tool's check to refuse
+    assert found.resolve("nobody") == "nobody"  # left for the tool to refuse
 
 
 def test_the_prompt_describes_the_accounts():
@@ -282,7 +278,7 @@ def test_signing_in_fills_in_the_email_or_says_if_it_differs(home, monkeypatch, 
     assert accounts.load().get("job").email == "me@acme.example"
     assert signed_in == [("home", "client.json"), ("job", "client.json")]
 
-    monkeypatch.setattr(accounts, "_connect", lambda label, secret: 1)  # the sign-in was refused: nothing changes
+    monkeypatch.setattr(accounts, "_connect", lambda label, secret: 1)  # sign-in refused: nothing changes
     assert run("login", "job") == 1
     monkeypatch.setattr(config, "GOOGLE_CLIENT_SECRET", "")
     assert run("login", "job") == 1 and "set GOOGLE_CLIENT_SECRET" in capsys.readouterr().out
@@ -291,7 +287,7 @@ def test_signing_in_fills_in_the_email_or_says_if_it_differs(home, monkeypatch, 
 def test_the_database_isnt_locked_while_google_answers(home, monkeypatch):
     store(Accounts([Account("home")], "home"))
 
-    def lookup(label):  # another process changes the accounts while the sign-in's email is looked up
+    def lookup(label):  # another process changes accounts during the email lookup
         with accounts.change() as found:
             found.add(Account("other"))
         return "me@mail.example"
@@ -315,7 +311,7 @@ def test_every_google_tool_takes_any_account_and_none_needs_one():
 
 
 class Chain:
-    """A Google API client that answers every call with itself, and records the account it was built for."""
+    """Fake Google API client: returns itself for every call and records its account."""
 
     def __init__(self, label: str, built: list) -> None:
         built.append(label)
@@ -374,7 +370,7 @@ def test_all_covers_every_account_and_a_broken_one_is_noted(monkeypatch):
 def test_the_tools_use_jarvis_sign_ins_and_its_command_to_sign_in_again():
     secrets = profile.current().secrets
     assert common.token_path("work") == secrets / "google-work.json"
-    assert chat.state_path("work") == secrets / "google-work-chat.json"  # as jarvis.integrations.accounts moves them
+    assert chat.state_path("work") == secrets / "google-work-chat.json"  # where the accounts command keeps it
     assert common.sign_in_again("work", common.GMAIL_MODIFY) == (
         "The work Google account's sign-in doesn't let these tools change mail. Sign it in again with: "
         "uv run python -m jarvis.integrations.accounts login work")

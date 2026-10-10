@@ -1,5 +1,4 @@
-"""The encrypted secrets (jarvis.core.vault): the master key, AES-256-GCM with the name and key id bound in, the check that
-catches a wrong key, rotation, and the key's place in .env. Run with: make test"""
+"""Tests for core.vault: master key, AES-256-GCM with name and key id bound, wrong-key check, rotation, .env."""
 
 import base64
 import stat
@@ -13,7 +12,7 @@ from jarvis.state import settings
 
 @pytest.fixture
 def key(monkeypatch, tmp_path):
-    """A fresh master key in the environment as config found it, an empty vault, and a scratch .env."""
+    """A fresh master key as config found it, an empty vault, and a scratch .env."""
     value = vault.new_key()
     monkeypatch.setattr(config, "MASTER_KEY", value)
     monkeypatch.setattr(vault, "ENV_FILE", tmp_path / "dotenv")  # not named .env: sandboxes hide those

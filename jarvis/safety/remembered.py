@@ -1,27 +1,11 @@
-"""Remembered approvals: standing answers to risky shell commands, so the user needn't say yes to the same thing every
-time. They cover background tasks' host commands (jarvis.tasks.worker) and the voice shell's own (jarvis.safety.shell).
+"""Remembered approvals: standing yeses for risky shell commands (task host commands and the voice shell).
 
-A yes to a risky command can go just this once (as before), for this session, or always:
+  session  rest of the asking task or conversation; ends with it, or after SESSION_HOURS
+  always   all tasks and the voice shell, any folder, until withdrawn (panel or approval_rule_forget)
 
-  session  for the rest of the task that asked (its Claude session, through every run of it), or of the conversation
-           when the voice shell asked. Gone when the task is discarded or the conversation ends, and after
-           SESSION_HOURS whatever happens.
-  always   for background tasks and the voice shell alike, in any folder, until the user withdraws it: in the control
-           panel's Settings, or by voice (approval_rules, approval_rule_forget).
-
-A rule covers one kind of risky piece of a command line (commands.risky_pieces), matched on the program and its
-subcommand ('brew install') and the kind of risk, and either the exact words that followed (`exact`: options and
-arguments as they were, a process number standing for any) or any at all (`kind`). A command runs under rules only if
-every risky piece in it has one; anything else in it still asks. What a rule would cover is always shown before an
-"always" is saved: read out, with the question to save it, or shown in the panel beside the button.
-
-Some commands are never remembered, whatever the answer, and ask every time: deleting files (a task deletes in its own
-folders without asking already), git that discards work, pushing, sending data off the Mac, changing system settings,
-code the check can't see into, anything touching secrets or credentials. Only REMEMBERABLE kinds can be.
-
-Only the user's own answers make a rule: their words straight after JARVIS's question, the panel's buttons, or their
-explicit words to the brain (task_approve). Nothing a task, an email or a web page says can, and nothing here takes
-a rule's text from a model: each is built from the command itself, by the process that checked it.
+A rule matches one risky piece (commands.risky_pieces) by program+subcommand and risk kind, plus either the exact
+words (`exact`; pids match any) or any words (`kind`). A command runs only if every risky piece has a rule. Only
+REMEMBERABLE kinds qualify. Rules come only from the user's own answers and are built from the command, never a model.
 """
 
 import json
@@ -38,22 +22,21 @@ log = logging.getLogger("jarvis.safety.remembered")
 SCOPES = ("session", "always")
 BREADTHS = ("exact", "kind")
 SESSION_HOURS = 12
-# The kinds of risk a rule can cover. Every other kind (deleting, discarding work, pushing, sending data off the Mac,
-# changing the system, running as root, code it can't see, credentials, ...) asks every time.
+# Risk kinds a rule may cover; every other kind always asks
 REMEMBERABLE = {"installs software", "stops a process", "changes permissions", "changes the iPhone", "changes a simulator"}
-_NUMBERED = {"stops a process"}  # process numbers change from run to run: an exact rule takes any number there
+_NUMBERED = {"stops a process"}  # pids vary per run: exact rules match any number
 ANY_NUMBER = "#"
-_NOT_LITERAL = re.compile(r"[$`*?\[\]{}\\\n]")  # a word the shell could make into something else
+_NOT_LITERAL = re.compile(r"[$`*?\[\]{}\\\n]")  # the shell could expand it
 
 _SCHEMA = """create table approval_rules (
     id integer primary key,
     scope text not null,        -- session or always
-    session text,               -- a session rule's: task:ID, or voice:ID for a conversation
-    program text not null,      -- the program and its subcommand: brew install
-    why text not null,          -- the kind of risk it covers: installs software
-    words text,                 -- JSON list: the exact command it covers ("#" any number), or null for any words
-    example text not null,      -- the command it was made from
-    via text not null,          -- how the user said so: voice, panel, assistant
+    session text,               -- task:ID or voice:ID, for session rules
+    program text not null,      -- e.g. brew install
+    why text not null,          -- risk kind, e.g. installs software
+    words text,                 -- JSON exact argv ("#" = any number), or null for any
+    example text not null,      -- source command
+    via text not null,          -- voice, panel or assistant
     created real not null,
     expires real,               -- session rules lapse
     uses integer not null default 0,
@@ -62,7 +45,7 @@ _SCHEMA = """create table approval_rules (
 
 
 class NotRememberable(ValueError):
-    """A command whose kind always asks."""
+    """The command's risk kind always asks."""
 
 
 def _db():
@@ -73,7 +56,7 @@ def _db():
 
 
 def _words(argv: list[str], why: str) -> list[str] | None:
-    """A risky piece's words as an exact rule keeps them, or None if one could be something else when it runs."""
+    """Words for an exact rule, or None if any could expand at run time."""
     words = [Path(argv[0].lstrip("\\")).name, *argv[1:]]
     if any(_NOT_LITERAL.search(w) for w in words):
         return None
@@ -81,9 +64,10 @@ def _words(argv: list[str], why: str) -> list[str] | None:
 
 
 def pieces(command: str, own: Own | None = None) -> dict:
-    """What a command offers to be remembered, checked by whoever decides it (a task's gate, the voice shell) and
-    kept with its request: each risky piece's program, kind and exact words, and `never`, why it can't be remembered
-    at all ('' if it can). A command that isn't risky has no pieces."""
+    """{"pieces": [{program, why, words}], "never": reason it can't be remembered, or ''}.
+
+    Stored with the request by whoever checked it. A safe command has no pieces.
+    """
     found = risky_pieces(command, own)
     if names_secret(command) or reads_environment(command):
         return {"pieces": [], "never": "anything touching secrets asks every time"}
@@ -95,8 +79,7 @@ def pieces(command: str, own: Own | None = None) -> dict:
 
 
 def candidates(offered: list[dict], breadth: str = "exact") -> list[dict]:
-    """The rules that would cover every command in `offered` (each one's pieces()), at that breadth. Raises
-    NotRememberable, saying why, if any of them can't be remembered."""
+    """Rules covering every command in `offered` (pieces() dicts) at `breadth`. Raises NotRememberable."""
     if breadth not in BREADTHS:
         raise ValueError(f"breadth must be one of {', '.join(BREADTHS)}.")
     rules: list[dict] = []
@@ -115,9 +98,7 @@ def candidates(offered: list[dict], breadth: str = "exact") -> list[dict]:
 
 
 def fitting(offered: list[dict], breadth: str) -> tuple[list[dict], str] | str:
-    """For a yes that said "session" or "always": the rules that would remember these commands (each one's pieces()),
-    and their breadth (any command of the kind, when the exact words can't be pinned down); or why they can't be
-    remembered."""
+    """(rules, breadth) for a session/always yes, falling back to 'kind'; or why they can't be remembered."""
     why = ""
     for b in dict.fromkeys([breadth, "kind"]):
         try:
@@ -128,8 +109,7 @@ def fitting(offered: list[dict], breadth: str) -> tuple[list[dict], str] | str:
 
 
 def offer(offered: list[dict]) -> dict:
-    """What the user can be offered for a request's commands: why they can't be remembered (`never`), else each
-    breadth's rules as said (`exact` empty when the words can't be pinned down)."""
+    """{"never", "exact", "kind"}: why not, or each breadth's rules in words (`exact` may be '')."""
     try:
         kind = candidates(offered, "kind")
     except NotRememberable as e:
@@ -149,7 +129,7 @@ def _shown(words: list[str]) -> str:
 
 
 def cover(rule: dict) -> str:
-    """What one rule lets through, in words: '“brew install ffmpeg” exactly (installs software)'."""
+    """One rule in words: '“brew install ffmpeg” exactly (installs software)'."""
     if rule["words"] is None:
         return f"any “{rule['program']}” command ({rule['why']})"
     return f"“{_shown(rule['words'])}” exactly ({rule['why']})"
@@ -160,7 +140,7 @@ def covers(rules: list[dict]) -> str:
 
 
 def who(rule: dict) -> str:
-    """Whose commands and for how long."""
+    """Whose commands a rule covers, and for how long."""
     if rule["scope"] == "always":
         return "for background tasks and JARVIS's own shell, in any folder, until withdrawn"
     if (rule.get("session") or "").startswith("task:"):
@@ -169,7 +149,7 @@ def who(rule: dict) -> str:
 
 
 def preview(rules: list[dict], scope: str = "always") -> str:
-    """What saving these rules would do, said before the user's yes."""
+    """Spoken preview of saving these rules."""
     whom = "background tasks and my own shell, in any folder" if scope == "always" else "the rest of this session"
     return f"From now on, {covers(rules)} would run without asking, for {whom}"
 
@@ -184,8 +164,7 @@ def _rule(row) -> dict:
 
 
 def save(rules: list[dict], scope: str, example: str, via: str, session: str | None = None) -> list[dict]:
-    """Keep rules (from candidates()), unless an identical one is kept already; returns them as kept. A session rule
-    names its session: task:ID or voice:ID."""
+    """Store rules (from candidates()), deduplicated; returns them as stored. Session rules need `session`."""
     if scope not in SCOPES:
         raise ValueError(f"scope must be one of {', '.join(SCOPES)}.")
     if scope == "session" and not session:
@@ -214,7 +193,7 @@ def _drop_lapsed(db) -> None:
 
 
 def rules(sessions: tuple[str, ...] | list[str] = ()) -> list[dict]:
-    """The rules in force for these sessions: every "always" one, and those sessions' own. Lapsed ones are dropped."""
+    """Rules in force: all "always" ones plus these sessions'. Prunes lapsed ones."""
     with _db() as db:
         _drop_lapsed(db)
         marks = ", ".join("?" * len(sessions))
@@ -223,14 +202,14 @@ def rules(sessions: tuple[str, ...] | list[str] = ()) -> list[dict]:
 
 
 def listed() -> list[dict]:
-    """Every rule in force, sessions' too, oldest first: what the control panel and approval_rules show."""
+    """Every rule in force, oldest first, for the panel and approval_rules."""
     with _db() as db:
         _drop_lapsed(db)
         return [_rule(r) for r in db.execute("select * from approval_rules order by id")]
 
 
 def forget(rule_id: int) -> dict:
-    """Withdraw a rule; returns it as it was. Raises ValueError if there's none by that number."""
+    """Delete a rule; returns it. Raises ValueError if unknown."""
     with _db() as db:
         row = db.execute("select * from approval_rules where id = ?", (int(rule_id),)).fetchone()
         if row is None:
@@ -242,7 +221,7 @@ def forget(rule_id: int) -> dict:
 
 
 def end_session(session: str) -> None:
-    """A conversation is over, or a task discarded: its session's rules go."""
+    """Drop a finished conversation's or discarded task's session rules."""
     with _db() as db:
         db.execute("delete from approval_rules where session = ?", (session,))
 
@@ -255,13 +234,11 @@ def _matches(rule: dict, piece: dict) -> bool:
         return False
     if rule["words"] is None:
         return True
-    return piece["words"] == rule["words"]  # a process number is ANY_NUMBER in both
+    return piece["words"] == rule["words"]  # pids are ANY_NUMBER in both
 
 
 def covering(offered: dict, sessions: tuple[str, ...] | list[str] = ()) -> list[dict] | None:
-    """The rules that let a command (its pieces()) run without asking: one for each of its risky pieces, from those
-    in force for these sessions. None if it can't run under rules: a piece has none, or its kind always asks. Each
-    rule used counts the use."""
+    """Rules covering every risky piece of a command (pieces()), or None. Records a use on each rule returned."""
     if not offered or offered.get("never") or not offered.get("pieces"):
         return None
     found = rules(sessions)
@@ -278,5 +255,5 @@ def covering(offered: dict, sessions: tuple[str, ...] | list[str] = ()) -> list[
 
 
 def told(rules_used: list[dict]) -> str:
-    """For a log: which rules a command ran under."""
+    """Log text: which rules a command ran under."""
     return "; ".join(f"rule {r['id']}, {r['covers']}" for r in rules_used)

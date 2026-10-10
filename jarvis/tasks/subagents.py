@@ -1,7 +1,10 @@
-"""A task's subagents (jarvis.tasks.worker): side jobs a session hands to helpers on cheaper models, through the Agent
-tool. A read-only code searcher for code tasks, a test runner for code_change, and a web researcher for research. Their
-tool calls meet the same gate and sandbox, and the gate refuses any edit from them. `Subagents` follows a run's: their
-starts and ends go in the task's log, and what they're doing shows as its activity.
+"""Task subagents: helpers on cheaper models, started through the Agent tool.
+
+  code_change    code-searcher (read-only), test-runner
+  code_question  code-searcher
+  other kinds    web-researcher
+Their tool calls pass the same gate and sandbox, which refuses any edit from them. `Subagents` logs starts and ends
+and labels their activity.
 """
 
 from dataclasses import replace
@@ -19,8 +22,8 @@ from jarvis.core import profile
 from jarvis.core.config import TASK_HELPER_MODEL, TASK_SEARCH_MODEL
 from jarvis.tasks.reporting import Reporter
 
-_AGENT_TOOLS = {"Agent", "Task"}  # the subagent tool, which the bundled CLI still calls by its old name, Task
-# {name} is filled in as a task starts (_agents)
+_AGENT_TOOLS = {"Agent", "Task"}  # the bundled CLI may still call it Task
+# {name} is filled in by _agents
 _HELPER_RULES = """You're a subagent of a JARVIS background task, working for the agent that briefed you; {name} doesn't see what you write.
 - Stick to what you were asked. Don't edit, create or delete the project's files: only the task's own agent changes things.
 - Reply with a short, factual report: what you found, with file_path:line references where they help, and anything that surprised you."""
@@ -65,21 +68,21 @@ and prefer recent, primary sources.
 
 
 def _agents(kind: str) -> dict[str, AgentDefinition]:
-    """The subagents a task of this kind may start, by name, told whom they work for."""
+    """Subagents available to a task of `kind`, by name, with the user's name filled in."""
     if kind == "code_change":
         found = {"code-searcher": SEARCHER, "test-runner": TESTER}
     elif kind == "code_question":
-        found = {"code-searcher": SEARCHER}  # its Bash is read-only git, so it has no tests to run
+        found = {"code-searcher": SEARCHER}  # its Bash is read-only git: no tests
     else:
         found = {"web-researcher": RESEARCHER}
     return {k: replace(a, prompt=a.prompt.replace("{name}", profile.name())) for k, a in found.items()}
 
 
-_LAUNCHED = "Async agent launched"  # how the Agent tool's result starts when it sent the subagent to the background
+_LAUNCHED = "Async agent launched"  # Agent tool result prefix for a backgrounded subagent
 
 
 def result_text(content) -> str:
-    """A tool result's content as plain text: a list of blocks has its text parts joined."""
+    """Tool result content as plain text (text blocks joined)."""
     if isinstance(content, list):
         return " ".join(str(c.get("text", "")) for c in content if isinstance(c, dict))
     return str(content or "")
@@ -90,19 +93,20 @@ def _launched(block: ToolResultBlock) -> bool:
 
 
 class Subagents:
-    """Follows a run's subagents: logs each one's start and end, and labels what it's doing. A subagent in the
-    background (asked for, or the CLI's default) is still running after its tool result, until a task notification
-    or a terminal task update says it's done: `waiting` lists those."""
+    """Track a run's subagents: log starts and ends, label their activity.
+
+    A background subagent outlives its tool result until a terminal task update arrives; `waiting` lists those.
+    """
 
     def __init__(self, task_id: int, reporter: Reporter) -> None:
         self.task_id, self.reporter = task_id, reporter
         self.running: dict[str, str] = {}  # Agent tool_use id -> "code searcher"
-        self.background: set[str] = set()  # ids of those whose tool result only says they launched
-        self.tasks: dict[str, str] = {}  # the CLI's task id -> the Agent tool_use id, for task updates
+        self.background: set[str] = set()  # launched in the background, not yet done
+        self.tasks: dict[str, str] = {}  # CLI task id -> Agent tool_use id
 
     @property
     def waiting(self) -> list[str]:
-        """Who's still running in the background."""
+        """Labels of subagents still running in the background."""
         return [self.running[i] for i in self.background if i in self.running]
 
     def task_started(self, msg: TaskStartedMessage) -> None:
@@ -124,14 +128,14 @@ class Subagents:
         self.reporter.subagent(self.task_id, f"{who} started{how}: {args.get('description') or 'no description'}")
 
     def label(self, parent_id: str | None, what: str) -> str:
-        """`what`, marked as a subagent's if one is doing it."""
+        """Prefix `what` with the subagent's label if `parent_id` is one."""
         who = self.running.get(parent_id or "")
         return f"{who}: {what}" if who else what
 
     def result(self, block: ToolResultBlock) -> None:
         if block.tool_use_id in self.running and not block.is_error and (block.tool_use_id in self.background or _launched(block)):
             self.background.add(block.tool_use_id)
-            return  # it launched; a task notification says when it's done
+            return  # launched; a task update will report the end
         self.ended(block.tool_use_id, bool(block.is_error))
 
     def ended(self, tool_use_id: str | None, failed: bool) -> None:

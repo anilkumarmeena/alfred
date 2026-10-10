@@ -1,6 +1,4 @@
-"""Tests for commands tasks run on the Mac itself: the Seatbelt profile around them, the environment they
-get, running with a time limit, and long jobs owned by a task. The profile itself is only checked as text
-here; `make host-check` runs it for real. Run with: make test"""
+"""Tests for host commands: Seatbelt profile (text only; `make host-check` runs it), env, time limits, task jobs."""
 
 import asyncio
 import json
@@ -49,9 +47,9 @@ def test_ssh_can_check_known_hosts_but_never_read_a_key():
     exempt = reads[reads.index("(require-not (require-any"):]
     for name in ("known_hosts", "known_hosts2", "config"):
         assert f'(literal "{home}/.ssh/{name}")' in exempt, name
-    assert f'(subpath "{home}/.ssh")' in reads  # everything else there, the keys included
-    assert "id_ed25519" not in exempt and exempt.count("(subpath") == 1  # the voice session logs, nothing else
-    assert f'(subpath "{home}/.ssh")' in rules("file-write*")  # nor can anything there be changed
+    assert f'(subpath "{home}/.ssh")' in reads  # the rest of ~/.ssh, keys included, stays unreadable
+    assert "id_ed25519" not in exempt and exempt.count("(subpath") == 1  # the only subpath exempt is the voice session logs
+    assert f'(subpath "{home}/.ssh")' in rules("file-write*")  # and nothing there is writable
 
 
 def test_pem_certificate_bundles_stay_readable_for_tls():
@@ -78,7 +76,7 @@ def test_paths_are_escaped_for_the_profile(tmp_path):
     odd = tmp_path / 'a "quoted" folder.x'
     odd.mkdir()
     profile = host.profile(home=odd)
-    assert r'a \"quoted\" folder.x' in profile  # in a string
+    assert r'a \"quoted\" folder.x' in profile  # escaped in a string
     assert r"a \"quoted\" folder\.x" not in profile  # a regex never has a quote in it
     assert re.search(r'regex #"\^[^"]*folder\\\.x/', profile)
 
@@ -101,11 +99,11 @@ def test_host_commands_get_none_of_jarvis_keys(monkeypatch):
     assert env["HOME_MADE"] == "ok" and "PATH" in env
     for gone in ("JARVIS_PASSCODE", "LIVEKIT_API_SECRET", "GITHUB_TOKEN", "SOME_PASSWORD", "OPENAI_API_KEY"):
         assert gone not in env, gone
-    assert "SSH_AUTH_SOCK" in host.scrubbed_env() and "JARVIS_PASSCODE" not in host.scrubbed_env()  # the voice side's
+    assert "SSH_AUTH_SOCK" in host.scrubbed_env() and "JARVIS_PASSCODE" not in host.scrubbed_env()  # the voice side keeps SSH_AUTH_SOCK, not secrets
 
 
 def test_host_commands_keep_the_ssh_agent(monkeypatch):
-    """So an approved git push works: the agent signs with the keys, which stay unreadable."""
+    """So an approved git push can sign with the keys, which stay unreadable."""
     monkeypatch.setattr(host, "dotenv_values", lambda path: {})
     monkeypatch.setenv("SSH_AUTH_SOCK", "/private/tmp/com.apple.launchd.x/Listeners")
     monkeypatch.setenv("GIT_AUTH_TOKEN", "t")
@@ -175,7 +173,7 @@ def test_a_task_follows_its_own_jobs(jobs, tmp_path):
 
 @pytest.mark.skipif(not os.path.exists("/bin/zsh"), reason="needs zsh")
 def test_a_job_under_zsh_records_how_it_ended(tmp_path):
-    """Jobs really run under zsh, where `status` is read-only: the wrapper must still write the exit file."""
+    """Under zsh `status` is read-only; the wrapper must still write the exit file."""
     jobs = host.Jobs(tmp_path / "jobs", shell=("/bin/zsh", "-c"), notify=False)
     jobs.poll = 0.02
 
@@ -198,7 +196,7 @@ def test_stopping_a_task_stops_its_jobs(jobs, tmp_path):
     async def main():
         jobs.launch("sleep 30", "a long build", tmp_path, task=5)
         stopped = jobs.stop_all(5), jobs.stop_all(6)
-        for _ in range(250):  # until its watcher sees it go
+        for _ in range(250):  # until its watcher sees it end
             if ended:
                 break
             await asyncio.sleep(0.02)

@@ -1,7 +1,7 @@
-"""The MCP registry (jarvis.integrations.mcp_registry), beyond tests/test_connections.py: the registry out of reach
-or without the server, a search of several words, the ways JARVIS can't run a server and why, and entries built from
-URLs, headers and arguments with settings and secrets in them. Every HTTP exchange is answered here.
-Run with: make test"""
+"""Tests for integrations.mcp_registry (beyond test_connections): outages, search, unrunnable servers, entries.
+
+All HTTP is answered locally.
+"""
 
 import asyncio
 

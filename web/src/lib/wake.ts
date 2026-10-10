@@ -1,5 +1,4 @@
-// Keeps the phone's screen on during a session. The browser drops the lock when the page hides, so
-// it's asked for again on return.
+// Keep the screen on during a session. The browser drops the lock when hidden, so it's re-requested on return.
 let wake: WakeLockSentinel | null = null;
 
 export async function keepAwake(on: boolean): Promise<void> {

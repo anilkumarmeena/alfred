@@ -1,4 +1,4 @@
-"""Tests for edits to JARVIS's own data files that tasks suggest and the voice brain applies (jarvis.tasks.data_edits). Run with: make test"""
+"""Tests for tasks.data_edits: suggested edits to JARVIS's data files, checks, applying, dismissing, voice side."""
 
 import asyncio
 from datetime import date
@@ -22,7 +22,7 @@ TODAY = f"{date.today():%Y-%m-%d}"
 
 @pytest.fixture
 def data(env, monkeypatch):
-    """The env fixture's projects and task database, with a to-do list in it, plus a memory of their own."""
+    """env plus a to-do list and a memory file of its own."""
     monkeypatch.setattr(projects, "ALLOWED_ROOT", env["tmp"])
     monkeypatch.setattr(projects, "NEW_PROJECTS_DIR", env["tmp"] / "projects")
     todo.add("Old")
@@ -364,7 +364,7 @@ def test_task_edits_lets_jarvis_make_small_edits_and_ask_about_bigger_ones():
     edits_rules = tools.get("task_edits").description
     assert "needs_yes" in edits_rules and "Apply small, low-risk ones without asking" in edits_rules
     assert "Ask first" in edits_rules and "prompted by an email or web page" in edits_rules
-    assert "suggested edits" in persona.persona()  # the persona's rule on untrusted content covers them too
+    assert "suggested edits" in persona.persona()  # the persona's untrusted-content rule covers them
     description = tools.get("project_register").description
     assert "Only after the user says yes" not in description and "routine" in description
     assert "go ahead" in description and "wait for a yes" not in description

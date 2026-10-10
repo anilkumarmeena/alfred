@@ -1,12 +1,10 @@
-// Markdown in the panel: shown rendered wherever it's read (lib/markdown.ts makes it safe), and written with a preview
-// wherever it's edited.
+// Panel Markdown: sanitised rendering (lib/markdown.ts) and an editor with preview.
 import { useMemo } from "preact/hooks";
 import { useSignal } from "@preact/signals";
 import { markdown, markdownInline } from "../../lib/markdown";
 import { Empty } from "./bits";
 
-// A document (a task's summary or question), or with `inline` one line of a row (a to-do, a memory fact). `links`
-// false for a line inside something that's clicked itself.
+// Block document, or with `inline` a single row line. `links` false inside clickable elements.
 export function Markdown({ text, inline = false, links = true, class: cls = "" }: {
   text: string; inline?: boolean; links?: boolean; class?: string;
 }) {
@@ -15,7 +13,7 @@ export function Markdown({ text, inline = false, links = true, class: cls = "" }
   return <Tag class={`md${inline ? " line" : ""}${cls ? ` ${cls}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-// A text box with Write and Preview above it
+// Textarea with Write/Preview tabs
 export function MarkdownEditor({ value, onInput, label, placeholder, rows = 7 }: {
   value: string; onInput: (text: string) => void; label: string; placeholder?: string; rows?: number;
 }) {

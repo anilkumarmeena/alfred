@@ -1,6 +1,4 @@
-"""Tests for JARVIS's skills (jarvis.skills): the skills folder and its table, the plugin each session gets, installing
-from GitHub or a zip with scripts kept off until reviewed and approved, the voice tools' draft-then-confirm flow, the
-learning review's skill suggestions, and the control panel's actions. Run with: make test"""
+"""Tests for jarvis.skills: folder and table, session plugin, installs with script review, voice flow, suggestions, panel."""
 
 import asyncio
 import io
@@ -45,7 +43,7 @@ Run scripts/extract.py on the file.
 
 @pytest.fixture
 def skills_home(tmp_path, monkeypatch):
-    """A skills folder of the test's own; rows left from other tests drop out, since their folders aren't in it."""
+    """Test-only skills folder; other tests' rows drop out since their folders aren't in it."""
     use_profile(monkeypatch, tmp_path)
     return tmp_path / "skills"
 
@@ -119,7 +117,7 @@ def test_frontmatter_that_could_skip_the_gate_is_taken_out(skills_home):
     meta, body = home.split(text)
     assert meta == {"name": "pdf", "description": "Pull text and tables out of PDFs. Use when asked to read a PDF.",
                     "license": "MIT"} and body == "Run scripts/extract.py on the file."
-    assert home.sanitize(text) == (text, [])  # nothing more to take out: left as it is
+    assert home.sanitize(text) == (text, [])  # already clean: unchanged
 
 
 def test_a_folder_put_there_by_hand_is_listed_off_and_one_taken_away_drops_out(skills_home):
@@ -398,8 +396,7 @@ def run(name: str, args: dict):
 
 
 def confirm(gate, draft_id: str, said: str = "make that a skill", yes: str = "Yes.") -> tuple[str, str]:
-    """A turn that called skill_confirm and was held for the question, then the user's answer; what JARVIS asked and
-    what skill_confirm then did."""
+    """Run a skill_confirm turn held for the question, then the answer; return what JARVIS asked and what it did."""
     gate.new_turn(said)
     assert isinstance(asyncio.run(gate("mcp__jarvis__skill_confirm", {"draft_id": draft_id}, None)), PermissionResultDeny)
     asked = gate.question("")

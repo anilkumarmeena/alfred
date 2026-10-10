@@ -1,9 +1,7 @@
-"""Background tasks, kept in the profile's database (jarvis.core.profile: the owner's is data/tasks.db) so they
-survive restarts of the runner.
+"""Task store and shared SQLite helpers for the profile's database (owner's: data/tasks.db).
 
-The same database holds other modules' tables (the to-do list, the project list, Google accounts, settings, secrets,
-MCP servers), each opened through table(), which first brings it to its latest version (migrate()). Every connection
-comes from connect(), to the database of the profile the code runs as.
+Other modules' tables (to-dos, projects, accounts, settings, secrets, MCP servers) live in the same file, opened via
+table(), which migrates them first. All connections come from connect(), scoped to the current profile.
 """
 
 import json
@@ -19,15 +17,14 @@ from pathlib import Path
 from jarvis.core import profile
 
 log = logging.getLogger("jarvis.core.database")
-KINDS = ("code_change", "code_question", "research")  # what a model works on
-COMMAND = "command"  # a shell command run with no model while it works (jarvis.tasks.command_jobs)
-CONNECTION = "connection"  # a call on a connection carried on in the background (jarvis.tasks.connection_jobs)
+KINDS = ("code_change", "code_question", "research")  # model-driven kinds
+COMMAND = "command"  # shell command, no model (jarvis.tasks.command_jobs)
+CONNECTION = "connection"  # backgrounded MCP call (jarvis.tasks.connection_jobs)
 ACTIVE = ("queued", "running", "waiting")
-# What a waiting task waits for (its wait_kind): the user's yes to its requests, access it asked for, or an answer
+# wait_kind values: approval of commands, requested access, or an answer
 WAIT_APPROVAL, WAIT_ACCESS, WAIT_QUESTION = "approval", "access", "question"
 _IN_ACTIVE = f"status in ({', '.join('?' * len(ACTIVE))})"
-# How long a statement waits for another connection's write to end (the runner, voice agent and web server share the
-# file) before it fails with "database is locked"
+# Seconds to wait on another process's write before "database is locked" (runner, voice and web share the file)
 BUSY_SECONDS = 10
 
 _TASKS = """
@@ -41,34 +38,31 @@ create table tasks (
     created real not null,
     updated real not null,
     session_id text,            -- Claude session, resumed for answers and follow-ups
-    worktree text,              -- code_change only, as are in_place, branch and base
-    in_place integer not null default 0,  -- 1: works uncommitted in the project's own folder, kept in worktree
-    branch text,                -- the task's branch; for in-place tasks, the branch checked out when it began
-    base text,                  -- commit the changes are measured against
-    activity text,              -- what it is doing right now
-    question text,              -- set while it waits for the user
-    wait_kind text,             -- what that question waits for: approval, access or question (WAIT_*)
-    nudges text,                -- JSON list of messages sent while queued or running, not yet delivered
-    edits text,                 -- JSON list of edits to JARVIS's data files the task suggested (jarvis.tasks.data_edits)
-    summary text,               -- the session's final message
-    spoken text,                -- the latest update, as JARVIS says it
-    changes text,               -- git shortstat of the branch against base
+    worktree text,              -- code_change only (as are in_place, branch, base)
+    in_place integer not null default 0,  -- 1: edits the project folder directly, uncommitted
+    branch text,                -- task branch; in-place: branch checked out at start
+    base text,                  -- commit changes are measured against
+    activity text,              -- current activity
+    question text,              -- set while waiting for the user
+    wait_kind text,             -- WAIT_* value
+    nudges text,                -- JSON list of undelivered messages
+    edits text,                 -- JSON list of suggested data-file edits (jarvis.tasks.data_edits)
+    summary text,               -- session's final message
+    spoken text,                -- latest spoken update
+    changes text,               -- git shortstat vs base
     error text,
     cost real not null default 0,
-    seen integer not null default 1, -- 0 until the user has heard the latest update
-    job integer,                -- the scheduled job (jarvis.tasks.schedules) it's a run of
-    hidden integer not null default 0, -- 1: a scheduled run with nothing to say, left out of the lists
-    grants text,                -- JSON list of access granted beyond its kind's (jarvis.tasks.access)
-    wants text,                 -- JSON list of access it asked for with request_access, not yet answered
-    orders text,                -- JSON list of {said, at}: the user's own words ordering what it may do unasked
-    command text,               -- command tasks: JSON of how it runs and how it went (jarvis.tasks.command_jobs)
-    fixes integer,              -- a task fixing a command task that failed: that task's id
-    todo integer,               -- the to-do item (jarvis.state.todo) it was started for, settled as it ends (jarvis.tasks.goal)
-    interrupted text            -- JSON {at, on_mac, prompt}: cut off by a shutdown while queued or running, to resume
+    seen integer not null default 1, -- 0 until the latest update is heard
+    job integer,                -- scheduled job this is a run of
+    hidden integer not null default 0, -- 1: silent scheduled run, omitted from lists
+    grants text,                -- JSON list of extra access (jarvis.tasks.access)
+    wants text,                 -- JSON list of unanswered access requests
+    orders text,                -- JSON list of {said, at}: user's standing orders
+    command text,               -- command tasks: JSON spec and outcome
+    fixes integer,              -- id of the failed command task this fixes
+    todo integer,               -- to-do item it serves, settled on finish
+    interrupted text            -- JSON {at, on_mac, prompt}: cut off by shutdown, to resume
 )"""
-# Columns added to tasks before versions were kept, for databases made before them
-_ADDED = {"job": "integer", "hidden": "integer not null default 0", "grants": "text", "wants": "text", "orders": "text",
-          "command": "text", "fixes": "integer", "todo": "integer", "wait_kind": "text", "interrupted": "text"}
 _LOG = """
 create table log (
     task integer not null,
@@ -77,7 +71,7 @@ create table log (
     text text not null
 )"""
 _LOG_MIGRATIONS = (
-    "create index if not exists log_task on log(task)",  # 2: a task's log is read on its own, and steps make it long
+    "create index if not exists log_task on log(task)",  # 2: per-task reads of a long log
 )
 _APPROVALS = """
 create table approvals (
@@ -85,13 +79,13 @@ create table approvals (
     task integer not null,
     created real not null,
     expires real not null,
-    commands text not null,     -- JSON list of {tool, command, folder, why}: risky host commands, all answered together
-    state text not null,        -- pending, approved, denied, expired, cancelled; spent once the run it was for ends
-    announced integer not null default 0,  -- 1 once the push and the voice agent have been told
-    nonce_hash text,            -- sha256 of the one-time nonce in its push, which answers it from the phone
+    commands text not null,     -- JSON list of {tool, command, folder, why}, answered together
+    state text not null,        -- pending, approved, denied, expired, cancelled; spent after its run
+    announced integer not null default 0,  -- 1 once push and voice were notified
+    nonce_hash text,            -- sha256 of the push's one-time answer nonce
     answered_at real,
-    via text,                   -- how it was answered: push, web, panel, voice, cli, assistant, rule, order
-    used text                   -- JSON list of the indexes of its commands that have run
+    via text,                   -- push, web, panel, voice, cli, assistant, rule, order
+    used text                   -- JSON list of indexes of commands already run
 )"""
 PENDING, APPROVED, DENIED, EXPIRED, CANCELLED, SPENT = "pending", "approved", "denied", "expired", "cancelled", "spent"
 _SHOWN = "not hidden"
@@ -100,22 +94,21 @@ _SHOWN = "not hidden"
 
 _VERSIONS = """
 create table if not exists schema_versions (
-    name text primary key,      -- a table, whose migrations are its own
-    version integer not null,   -- how many of them it has had
+    name text primary key,      -- table name
+    version integer not null,   -- migrations applied
     at real not null
 )"""
-Migration = str | Callable[[sqlite3.Connection], object]  # a statement, or a function of the connection
+Migration = str | Callable[[sqlite3.Connection], object]  # SQL statement or fn(connection)
 
 
 def connect(at: Path | None = None, **kwargs) -> sqlite3.Connection:
-    """A connection to the database (the current profile's, or the one `at`), as every part of JARVIS opens one: in
-    autocommit mode (transactions begun explicitly), rows by column name, waiting up to BUSY_SECONDS for another
-    connection's write (sqlite's busy_timeout), and in WAL mode, where reading and writing don't wait for each other,
-    with NORMAL sync, which skips an fsync per commit. `kwargs` go on to sqlite3.connect."""
+    """Open the current profile's DB (or `at`): autocommit, Row factory, BUSY_SECONDS timeout, WAL, synchronous=NORMAL.
+
+    Transactions must be begun explicitly. `kwargs` pass through to sqlite3.connect."""
     db = sqlite3.connect(at or profile.current().db, timeout=BUSY_SECONDS, isolation_level=None, **kwargs)
     try:
         db.row_factory = sqlite3.Row
-        db.execute("pragma journal_mode = wal")  # kept in the file, so a no-op once any connection has set it
+        db.execute("pragma journal_mode = wal")  # persistent; no-op after the first
         db.execute("pragma synchronous = normal")
     except sqlite3.Error:
         db.close()
@@ -128,35 +121,32 @@ def _has(db: sqlite3.Connection, name: str) -> bool:
 
 
 def _version(db: sqlite3.Connection, name: str) -> int:
-    """How many migrations the table `name` has had: 0 if it was made before versions were kept, or isn't there (made
-    afresh, then, should it have been dropped)."""
+    """Migrations applied to table `name`; 0 if it doesn't exist."""
     try:
         row = db.execute("select version from schema_versions where name = ? and exists"
                          " (select 1 from sqlite_master where name = ?)", (name, name)).fetchone()
-    except sqlite3.OperationalError:  # no table of versions yet
+    except sqlite3.OperationalError:  # no schema_versions yet
         return 0
     return row[0] if row else 0
 
 
-def migrate(db: sqlite3.Connection, name: str, schema: Sequence[str], added: dict[str, str] | None = None,
-            migrations: Sequence[Migration] = ()) -> bool:
-    """Bring the table `name` to its latest version, in one transaction. Version 1 makes it with `schema`'s statements
-    and gives it the columns in `added` (those added before versions were kept), so a table made before then, rows and
-    all, starts at version 1 too. `migrations` are versions 2 on, in order; each runs once, counted in
-    schema_versions. Neither schema, added nor a released migration ever changes: a change goes on the end of
-    `migrations`. A table a newer JARVIS has taken further is left as it is. Returns whether it made the table."""
+def migrate(db: sqlite3.Connection, name: str, schema: Sequence[str], migrations: Sequence[Migration] = ()) -> bool:
+    """Bring table `name` to its latest version in one transaction; returns whether it created the table.
+
+    Version 1 is `schema`; `migrations` are versions 2 on, each run once and counted in schema_versions. Released
+    schemas and migrations never change: append a new migration instead. A table a newer JARVIS migrated further is
+    left alone."""
     latest, made = 1 + len(migrations), False
     if _version(db, name) >= latest:
         return made
-    db.execute("begin immediate")  # so of two processes opening it at once, one migrates it, once
+    db.execute("begin immediate")  # serialise concurrent migrators
     try:
         db.execute(_VERSIONS)
         have = _version(db, name)
         if not have:
             if made := not _has(db, name):
-                for statement in schema:  # not executescript, which would commit the lock away
+                for statement in schema:  # not executescript: it would commit and drop the lock
                     db.execute(statement)
-            add_columns(db, name, added or {})
             have = 1
         for step in migrations[have - 1:]:
             step(db) if callable(step) else db.execute(step)
@@ -170,27 +160,18 @@ def migrate(db: sqlite3.Connection, name: str, schema: Sequence[str], added: dic
 
 
 @contextmanager
-def table(name: str, *schema: str, added: dict[str, str] | None = None, migrations: Sequence[Migration] = (),
+def table(name: str, *schema: str, migrations: Sequence[Migration] = (),
           made: Callable[[], object] | None = None, at: Path | None = None) -> Iterator[sqlite3.Connection]:
-    """The database (the current profile's, or the one `at`), with the table `name` at its latest version (migrate()),
-    and `made()` run if that made it; closed after."""
+    """Yield a connection with table `name` migrated; call `made()` if it was just created. Closed on exit."""
     db = connect(at)
     try:
-        if migrate(db, name, schema, added, migrations) and made:
-            made()  # after the commit, so it can use connections of its own
+        if migrate(db, name, schema, migrations) and made:
+            made()  # after commit, so it may open its own connections
         yield db
     finally:
         if db.in_transaction:
             db.execute("rollback")
         db.close()
-
-
-def add_columns(db: sqlite3.Connection, name: str, columns: dict[str, str]) -> None:
-    """Add the columns (name: type) that the table `name`, made before them, lacks."""
-    have = {r[1] for r in db.execute(f"pragma table_info({name})")}
-    for column, kind in columns.items():
-        if column not in have:
-            db.execute(f"alter table {name} add column {column} {kind}")
 
 
 def minutes_since_update(task: dict) -> int:
@@ -203,13 +184,12 @@ def nudges(task: dict) -> list[str]:
 
 
 def edits(task: dict) -> list[dict]:
-    """The data-file edits the task suggested, numbered from 1, each with its status."""
+    """Suggested data-file edits, numbered from 1, each with a status."""
     return json.loads(task.get("edits") or "[]")
 
 
 def same_command(a: dict, b: dict) -> bool:
-    """Whether two host commands are the same request: tool, text and folder. Why it's risky can change as the
-    processes it names come and go, so it doesn't count."""
+    """Same tool, command and folder. `why` is ignored: it varies with the running processes."""
     return all(a.get(k) == b.get(k) for k in ("tool", "command", "folder"))
 
 
@@ -221,38 +201,35 @@ def _approval(row: sqlite3.Row) -> dict:
 
 class Store:
     def __init__(self) -> None:
-        self._file = profile.current().db  # the profile's it was made for, also when write_steps runs on a thread
+        self._file = profile.current().db  # pinned so write_steps on another thread uses it
         self._db = connect(self._file)
-        migrate(self._db, "tasks", [_TASKS], _ADDED)
+        migrate(self._db, "tasks", [_TASKS])
         migrate(self._db, "log", [_LOG], migrations=_LOG_MIGRATIONS)
         migrate(self._db, "approvals", [_APPROVALS])
-        # Tool calls, too many to write one by one on the runner's event loop: (task, at, activity, logged), kept
-        # here till write_steps(). A deque, as it's filled on the loop and emptied on a thread of write_steps' own.
+        # Buffered tool calls (task, at, activity, logged) for write_steps(). Deque: filled on the event loop, drained
+        # on another thread.
         self._steps: deque[tuple[int, float, str, bool]] = deque()
-        self._shown: dict[int, str] = {}  # each task's activity as last set here, so a step repeated isn't logged
+        self._shown: dict[int, str] = {}  # last activity per task, to skip repeats
         self._writing = threading.Lock()
-        self._writer: sqlite3.Connection | None = None  # write_steps' own, as it may run on any thread
+        self._writer: sqlite3.Connection | None = None  # write_steps may run on any thread
 
     @property
     def db(self) -> sqlite3.Connection:
-        """The connection, once the steps kept in memory are written, so what's read or written next comes after
-        them."""
+        """The connection, after flushing buffered steps so later reads/writes see them."""
         self.write_steps()
         return self._db
 
     def step(self, task_id: int, text: str) -> None:
-        """A tool call the task made, its activity now: logged as a step unless it repeats the one before. Kept in
-        memory, with no database call, till write_steps() (which the runner calls every so often, off its event loop)
-        or the store's next use."""
+        """Buffer a tool call as the task's activity (logged unless a repeat). No DB call; flushed by write_steps()."""
         self._steps.append((task_id, time.time(), text, self._shown.get(task_id) != text))
         self._shown[task_id] = text
 
     def write_steps(self) -> None:
-        """Write the steps kept in memory in one transaction: each logged one in the log, and each task's latest as its
-        activity. Steps that can't be written (the database stayed locked, say) are logged here and dropped: they
-        only say what a task was doing."""
+        """Flush buffered steps in one transaction: log rows plus each task's latest activity.
+
+        On failure (e.g. locked DB) the steps are dropped with a warning; they are informational only."""
         with self._writing:
-            steps = [self._steps.popleft() for _ in range(len(self._steps))]  # any added meanwhile wait for the next
+            steps = [self._steps.popleft() for _ in range(len(self._steps))]  # later appends wait for the next flush
             if not steps:
                 return
             latest = {task: (text, at) for task, at, text, _ in steps}
@@ -290,7 +267,7 @@ class Store:
         if "activity" in fields:
             self._shown[task_id] = fields["activity"]
         fields["updated"] = time.time()
-        columns = ", ".join(f"{k} = ?" for k in fields)  # keys come from code, never from input
+        columns = ", ".join(f"{k} = ?" for k in fields)  # keys come from code, never input
         self.db.execute(f"update tasks set {columns} where id = ?", (*fields.values(), task_id))
 
     def update(self, task_id: int, **fields) -> dict:
@@ -303,20 +280,20 @@ class Store:
         return self.update(task_id, nudges=json.dumps([*nudges(self.get(task_id)), text]))
 
     def take_nudges(self, task_id: int) -> list[str]:
-        """The messages waiting for the task, oldest first, which then stop waiting."""
+        """Pop the task's pending messages, oldest first."""
         if waiting := nudges(self.get(task_id)):
             self.set(task_id, nudges=None)
         return waiting
 
     def add_edit(self, task_id: int, edit: dict) -> dict:
-        """Keep an edit the task suggested, pending, under the next number; returns it as kept."""
+        """Append a pending suggested edit with the next number; return it."""
         kept = edits(self.get(task_id))
         kept.append(edit := {"n": len(kept) + 1, **edit, "status": "pending"})
         self.set(task_id, edits=json.dumps(kept, ensure_ascii=False))
         return edit
 
     def set_edits(self, task_id: int, changed: list[dict]) -> dict:
-        """Replace the task's edits with `changed` (all of them, updated); returns the task."""
+        """Replace the task's full edit list; return the task."""
         return self.update(task_id, edits=json.dumps(changed, ensure_ascii=False))
 
     def _rows(self, sql: str, params: tuple = ()) -> list[dict]:
@@ -326,7 +303,7 @@ class Store:
         return self._rows(f"select * from tasks where {_IN_ACTIVE} order by id", ACTIVE)
 
     def recent(self, hours: float = 24, limit: int = 20) -> list[dict]:
-        """Active tasks, plus any that changed in the last `hours`; scheduled runs with nothing to say left out."""
+        """Active tasks plus those updated in the last `hours`, excluding hidden runs."""
         return self._rows(
             f"select * from tasks where ({_IN_ACTIVE} or updated > ?) and {_SHOWN} order by id desc limit ?",
             (*ACTIVE, time.time() - hours * 3600, limit),
@@ -336,12 +313,13 @@ class Store:
         return self._rows(f"select * from tasks where seen = 0 and {_SHOWN} order by id")
 
     def runs(self, job: int, limit: int = 10) -> list[dict]:
-        """A scheduled job's latest runs, newest first, the hidden ones (silent checks) included."""
+        """A scheduled job's latest runs, newest first, hidden ones included."""
         return self._rows("select * from tasks where job = ? order by id desc limit ?", (job, limit))
 
     def prune_hidden(self, days: float) -> list[int]:
-        """Forget hidden scheduled runs (watch checks that found nothing) that ended more than `days` ago, with their
-        logs; returns their ids. The newest task is always kept, so no id is ever handed out twice."""
+        """Delete hidden finished runs older than `days`, with their logs; return their ids.
+
+        The newest task is always kept so its id is never reused."""
         ids = [r["id"] for r in self.db.execute(
             f"select id from tasks where hidden and not {_IN_ACTIVE} and updated < ? and id < (select max(id) from tasks)",
             (*ACTIVE, time.time() - days * 86400))]
@@ -360,26 +338,25 @@ class Store:
         self.db.execute("insert into log values (?, ?, ?, ?)", (task_id, time.time(), kind, text))
 
     def last_logged(self, task_id: int) -> float:
-        """When the task's latest log line was written; 0 if it has none."""
+        """Time of the task's latest log line; 0 if none."""
         return self.db.execute("select max(at) from log where task = ?", (task_id,)).fetchone()[0] or 0.0
 
-    # ── Approvals: risky host commands waiting for the user's yes ──
+    # ── Approvals: risky host commands awaiting a yes ──
 
     def approval(self, approval_id: int) -> dict | None:
         row = self.db.execute("select * from approvals where id = ?", (approval_id,)).fetchone()
         return _approval(row) if row else None
 
     def approvals(self, task_id: int | None = None, states: tuple[str, ...] = (PENDING,)) -> list[dict]:
-        """A task's approvals (or every task's) in these states, oldest first."""
+        """Approvals in `states` for one task (or all), oldest first."""
         marks = ", ".join("?" * len(states))
         sql = f"select * from approvals where state in ({marks})" + (" and task = ?" if task_id is not None else "")
         rows = self.db.execute(sql + " order by id", (*states, *(() if task_id is None else (task_id,))))
         return [_approval(r) for r in rows]
 
     def ask_approval(self, task_id: int, item: dict, expires: float, batch_seconds: float) -> tuple[dict, bool]:
-        """Add a risky command to the task's requests: to one already pending for the identical command, or to
-        the one it opened in the last `batch_seconds` and hasn't announced yet, or else a new one. Returns the
-        request, and whether the command is new to it."""
+        """Attach a risky command to a pending request (an identical one, or an unannounced one opened within
+        `batch_seconds`), else open a new one. Returns (request, whether the command was added)."""
         now = time.time()
         pending = self.approvals(task_id)
         if same := next((a for a in pending if any(same_command(c, item) for c in a["commands"])), None):
@@ -392,20 +369,20 @@ class Store:
         return self.approval(cur.lastrowid), True
 
     def set_approval(self, approval_id: int, **fields) -> dict:
-        columns = ", ".join(f"{k} = ?" for k in fields)  # keys come from code, never from input
+        columns = ", ".join(f"{k} = ?" for k in fields)  # keys come from code, never input
         self.db.execute(f"update approvals set {columns} where id = ?", (*fields.values(), approval_id))
         return self.approval(approval_id)
 
     def answer_approval(self, approval_id: int, state: str, via: str) -> bool:
-        """Record the first answer to a pending request; False if it had already been answered (or lapsed)."""
+        """Record the first answer to a pending request; False if already answered or lapsed."""
         cur = self.db.execute("update approvals set state = ?, via = ?, answered_at = ? where id = ? and state = ?",
                               (state, via, time.time(), approval_id, PENDING))
         return cur.rowcount == 1
 
     def use_approved(self, task_id: int, item: dict) -> dict | None:
-        """If the user said yes to exactly this command for the task, mark it run and return the request it was in.
-        The yes lasts the run it resumed (then it's spent): run again in it, say after a failure, it isn't asked about
-        again."""
+        """If this exact command was approved, mark it used and return its request, else None.
+
+        Approval lasts for the resumed run, so a retry within it isn't asked again."""
         for a in self.approvals(task_id, (APPROVED,)):
             same = [i for i, c in enumerate(a["commands"]) if same_command(c, item)]
             if fresh := [i for i in same if i not in a["used"]]:
@@ -415,7 +392,7 @@ class Store:
         return None
 
     def history(self, task_id: int, limit: int = 30, steps: bool = False) -> list[dict]:
-        """The task's latest `limit` log entries, oldest first; its steps (each tool call) only if asked."""
+        """Latest `limit` log entries, oldest first; tool-call steps only if `steps`."""
         return self._rows(
             "select at, kind, text from (select rowid, * from log where task = ? and (? or kind != 'step')"
             " order by rowid desc limit ?) order by rowid",

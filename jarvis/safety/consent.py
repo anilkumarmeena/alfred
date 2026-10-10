@@ -1,28 +1,12 @@
-"""What the user's spoken reply to a yes-or-no question means: yes (and how far it goes), no, or unclear.
+"""Classify a spoken reply to a yes/no question: yes (with scope), no, or unclear.
 
-The word lists in jarvis.safety.commands (yes_scope, refuses) decide first, and a clear no from them always wins.
-Only a reply they can't read goes to one short call to CONSENT_MODEL with no tools, which sees just three things: the
-user's own words (the conversation's `heard`, or the words that start a turn: never a draft, a command, an email or anything else
-a tool turned up), which of the fixed KINDS of question was asked, and what's waiting as the gate itself describes it
-(`about`: "a command that stops a process", "sending a Google Chat message"), made in code from the command or the
-draft's kind, never from their text. It says yes, no or unclear, and for a yes how far it goes (once, session or
-always), so a yes in other words or another language counts. Unclear is not a yes: the question stays open and the
-user is asked again, as for any reply the lists can't read. A call that fails, or takes longer than CONSENT_SECONDS,
-is unclear too.
-
-A reply straight after the question answers it. Once other talk has come between (`later`), only words that tell
-JARVIS to go ahead with it count as a yes: a stray "okay" or "sure" a few turns on is about something else, so the
-lists take only a yes that also says so plainly (commands.tells_approve), and the model is told the question was put a
-while ago.
-
-Starting the CLI takes longer than a check may, so `warm` starts a session as soon as a question is put, while the user
-is still answering, and the check only waits for the model's reply. Each session is used for one check and closed in
-the background, so nothing from one reply carries into the next, and a check that runs out of time never holds up the
-turn while its session closes.
-
-The model never decides what a yes covers: what can be remembered, and what a rule allows, stays with
-jarvis.safety.remembered, and an "always" is still put to the user as a rule to save (the conversation's `offer`) before it's kept.
-A scope phrase the lists find in the same words narrows the model's scope, never the other way round.
+- Word lists (commands.yes_scope, refuses) decide first; their clear no always wins.
+- Otherwise one tool-less CONSENT_MODEL call sees only: the user's own words, one of the fixed KINDS, and `about`
+  (built in code from the command or draft kind, never from tool output). Failure or > CONSENT_SECONDS is unclear.
+- Unclear is never a yes; the question stays open.
+- `later`: other talk intervened, so a yes must plainly say go ahead (commands.tells_approve).
+- `warm` pre-starts a single-use CLI session when a question is put; sessions close in the background.
+- The model never decides what a yes covers (jarvis.safety.remembered does). List scope phrases only narrow its scope.
 """
 
 import asyncio
@@ -45,9 +29,9 @@ from jarvis.safety.commands import (
 )
 
 log = logging.getLogger("jarvis.safety.consent")
-_IDLE_SECONDS = 600  # a session warmed for a check that never came is closed after this long
+_IDLE_SECONDS = 600  # close an unused warmed session after this
 
-# The kinds of question, as the model is told them: fixed here, so nothing a tool turned up reaches the call
+# Question kinds as told to the model; fixed here so no tool output reaches the call
 COMMAND, GOOGLE, SERVICE, ACTION, TASK, RULE, SCREEN, TELL = (
     "command", "google", "service", "action", "task", "rule", "screen", "tell")
 KINDS = {
@@ -65,8 +49,8 @@ KINDS = {
     TELL: "No question was just asked: a background task is waiting for their go-ahead to run a command. yes means "
           "their words tell JARVIS to approve it, no that they tell it to turn it down.",
 }
-MAX_CHARS = 300  # longer than a reply: a change of subject, never sent
-_KEEP_SECONDS = 120  # a verdict is reused for the same words and kind this long: one turn checks them more than once
+MAX_CHARS = 300  # longer means a change of subject; never sent
+_KEEP_SECONDS = 120  # verdict cache lifetime (one turn may check the same words more than once)
 
 PROMPT = """JARVIS, a voice assistant, needs to know whether the person it works for has said yes or no, and you read their spoken words. You can't act or use tools. Reply with one line of JSON only: {"answer": "yes" or "no" or "unclear", "scope": "once" or "session" or "always"}
 
@@ -99,15 +83,15 @@ class Verdict:
 
 NO, UNCLEAR = Verdict("no"), Verdict("unclear")
 _kept: dict[tuple[str, str, str, bool], tuple[float, Verdict]] = {}
-_standby: asyncio.Task | None = None  # a CLI session starting, or started, for the next check (warm)
-_background: set[asyncio.Task] = set()  # sessions closing, and the standby's idle timer
+_standby: asyncio.Task | None = None  # warmed CLI session for the next check
+_background: set[asyncio.Task] = set()  # closing sessions and the idle timer
 
 
 def words(said: str, kind: str = "", later: bool = False) -> Verdict | None:
-    """What the word lists make of a reply: yes with how far it goes, no, or None when they can't tell. To a RULE
-    question, a scope phrase alone ("for this session") isn't a yes: the rule would go further. `later`: other talk
-    has come since the question, so a yes must also plainly say to go ahead ("yes", "go ahead", "do it"), not just
-    agree ("okay", "fine")."""
+    """Word-list verdict, or None if they can't tell.
+
+    For RULE, a scope phrase alone isn't a yes. `later`: a yes must plainly say go ahead, not just agree ("okay").
+    """
     if kind == RULE:
         return Verdict("yes") if approves(said) else NO if refuses(said) else None
     if (scope := yes_scope(said)) is not None and (not later or tells_approve(said)):
@@ -116,8 +100,7 @@ def words(said: str, kind: str = "", later: bool = False) -> Verdict | None:
 
 
 def told(said: str) -> Verdict | None:
-    """The same for words said later in the conversation, telling JARVIS to answer a task's request
-    (commands.tells_approve, tells_deny), when only one of the two fits; else None."""
+    """Verdict for a later instruction to answer a task's request, if exactly one of approve/deny fits."""
     yes, no = tells_approve(said), tells_deny(said)
     if yes != no:
         return Verdict("yes", said_scope(said)) if yes else NO
@@ -125,17 +108,14 @@ def told(said: str) -> Verdict | None:
 
 
 async def reply(said: str, kind: str, about: str = "", later: bool = False) -> Verdict:
-    """What a reply to a question of `kind` (one of KINDS) means: the word lists' verdict if they have one, else the
-    model's, else UNCLEAR. `about` is what's waiting, as the gate describes it in code; `later`, that other talk has
-    come since the question was put."""
+    """Verdict for a reply to a `kind` question: word lists, else the model, else UNCLEAR."""
     if (found := told(said) if kind == TELL else words(said, kind, later)) is not None:
         return found
     return await ask(said, kind, about, later)
 
 
 async def ask(said: str, kind: str, about: str = "", later: bool = False) -> Verdict:
-    """The model's verdict on words the lists couldn't read; UNCLEAR if it's off, the words can't be a yes or no
-    (a question, too long), or the call fails or is slow."""
+    """Model verdict; UNCLEAR if disabled, the words can't be an answer, or the call fails or is slow. Cached."""
     said = " ".join(said.split())
     if not CONSENT_ENABLED or not said or "?" in said or len(said) > MAX_CHARS or kind not in KINDS:
         return UNCLEAR
@@ -152,18 +132,18 @@ async def ask(said: str, kind: str, about: str = "", later: bool = False) -> Ver
         if not call.done():
             raise TimeoutError
         answer = call.result()
-    except Exception as e:  # the type alone: the user's words stay out of the log
+    except Exception as e:  # log the type only: keep the user's words out of the log
         log.warning("yes or no check failed after %.1f s, so the reply counts as unclear: %s",
                     time.monotonic() - now, type(e).__name__)
         return UNCLEAR
     finally:
-        if not call.done():  # left to wind down on its own: the turn doesn't wait for its session to close
+        if not call.done():  # let it wind down without holding up the turn
             call.cancel()
             _keep(call)
     if (verdict := parse(answer)) is None:
         log.warning("yes or no check gave no verdict, so the reply counts as unclear: %r", answer[:200])
         return UNCLEAR
-    if verdict.yes:  # a scope phrase the lists find narrows the model's, never widens it
+    if verdict.yes:  # list scope phrases narrow the model's scope, never widen it
         verdict = Verdict("yes", min([verdict.scope, *scopes_said(said)], key=SCOPES.index))
     log.info("yes or no check (%s%s): %s, %s, in %.1f s", kind, ", later" if later else "", verdict.answer,
              verdict.scope, time.monotonic() - now)
@@ -183,7 +163,7 @@ def _prompt(said: str, kind: str, about: str = "", later: bool = False) -> str:
 
 
 def parse(answer: str) -> Verdict | None:
-    """The verdict in the model's reply, or None if it has none: one JSON object with a known answer."""
+    """Verdict from the model's JSON reply, or None if missing or malformed."""
     if not (m := re.search(r"\{.*?\}", answer or "", re.DOTALL)):
         return None
     try:
@@ -199,8 +179,10 @@ def parse(answer: str) -> Verdict | None:
 
 
 async def ask_model(prompt: str) -> str:
-    """One short call to CONSENT_MODEL with no tools, on the session warmed for it if there is one; returns its reply.
-    RuntimeError if the call fails. The session is closed afterwards, in the background."""
+    """One tool-less CONSENT_MODEL call, on the warmed session if any; returns its text.
+
+    Raises RuntimeError on failure. The session is closed afterwards in the background.
+    """
     from claude_agent_sdk import RateLimitEvent, ResultMessage
 
     from jarvis.brain import usage
@@ -221,9 +203,10 @@ async def ask_model(prompt: str) -> str:
 
 
 def warm() -> None:
-    """Start a CLI session for the next check now, as a question is put, so that the check, if the user's answer needs
-    one, waits only for the model's reply. One at a time, and it waits for its check: a session nobody used is closed
-    after _IDLE_SECONDS. Nothing happens outside a running event loop."""
+    """Pre-start a CLI session for the next check (CLI startup exceeds a check's budget).
+
+    One at a time; closed after _IDLE_SECONDS if unused. No-op outside a running event loop.
+    """
     global _standby
     if not CONSENT_ENABLED:
         return
@@ -239,27 +222,26 @@ def warm() -> None:
 
 
 async def close() -> None:
-    """The conversation is over: a session warmed for a check that never came is closed."""
+    """Close any unused warmed session at conversation end."""
     global _standby
     task, _standby = _standby, None
     if task is None or task.get_loop() is not asyncio.get_running_loop():
         return
     if not task.done():
-        task.cancel()  # still starting: the SDK closes what it started
+        task.cancel()  # still starting: the SDK cleans up
     elif not _failed(task):
         _close(task.result())
 
 
 async def _session():
-    """The session warmed for this check, waiting for it to finish starting if need be, or else a new one. Either way
-    it's this check's alone."""
+    """Take the warmed session (awaiting startup) or connect a new one; single-use either way."""
     global _standby
     task, _standby = _standby, None
     if task is None or task.get_loop() is not asyncio.get_running_loop() or _failed(task):
         return await _connect()
     try:
         return await asyncio.shield(task)
-    except asyncio.CancelledError:  # the check ran out of time while it started: closed once it has
+    except asyncio.CancelledError:  # timed out during startup: close it once started
         task.add_done_callback(lambda t: None if _failed(t) else _close(t.result()))
         raise
 
@@ -270,7 +252,7 @@ async def _connect():
     from jarvis.brain.sdk import short_options
 
     client = ClaudeSDKClient(short_options(PROMPT, CONSENT_MODEL))
-    await client.connect()  # on failure the SDK closes what it started
+    await client.connect()  # on failure the SDK cleans up
     return client
 
 
@@ -281,7 +263,7 @@ async def _expire(task: asyncio.Task) -> None:
 
 
 def _started(task: asyncio.Task) -> None:
-    """Logs a warmed session that failed to start; the check then starts one of its own."""
+    """Log a warmed session's startup failure; the check will connect its own."""
     if not task.cancelled() and (e := task.exception()) is not None:
         log.warning("starting a session for the yes or no check failed: %s", type(e).__name__)
 
@@ -303,6 +285,6 @@ def _close(client) -> None:
 
 
 def _keep(task: asyncio.Task) -> None:
-    """Hold on to a task left to run on its own until it ends."""
+    """Keep a reference to a fire-and-forget task until it ends."""
     _background.add(task)
     task.add_done_callback(_background.discard)

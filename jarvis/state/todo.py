@@ -1,11 +1,7 @@
-"""The user's to-do list, kept in the todos table of data/tasks.db beside the background tasks.
+"""The user's to-do list (todos table in the profile database).
 
-read() gives the list as a markdown checklist: open items in the order added, then the done ones.
-
-The voice agent (its to-do tools), the runner (applying tasks' suggested edits, and ticking off the item a task was
-started for: jarvis.tasks.goal) and the control panel
-(jarvis.panel, which works by id: items(), then check(), edit() or delete()) use it, each opening the database
-for a moment per call.
+Text API (voice tools, task runner) matches items by wording: find(), done(), reword(). The control panel works by
+id: items(), check(), edit(), delete(). read() renders a Markdown checklist, open items first.
 """
 
 import re
@@ -18,15 +14,15 @@ from jarvis.core import database
 from jarvis.safety import scan
 
 HEADER = "# To-do"
-_LISTED = re.compile(r"^\s*-\s*\[ \]\s*|\s*\(added \d{4}-\d{2}-\d{2}\)\s*$")  # an open item's line in read()
+_LISTED = re.compile(r"^\s*-\s*\[ \]\s*|\s*\(added \d{4}-\d{2}-\d{2}\)\s*$")  # strips read()'s decoration from a quoted line
 
 _SCHEMA = """
 create table todos (
-    id integer primary key,     -- the list's order
+    id integer primary key,     -- list order
     text text not null,
     done integer not null default 0,
     created real not null,
-    done_at real                -- when it was ticked off; null while open
+    done_at real                -- null while open
 )"""
 
 
@@ -39,7 +35,7 @@ def _day(at: float) -> str:
 
 
 def read() -> str:
-    """The list as a markdown checklist, "- [ ]" open and "- [x]" done; empty when there's nothing on it."""
+    """Markdown checklist ("- [ ]" open, "- [x]" done); "" if the list is empty."""
     with _db() as db:
         rows = db.execute("select * from todos order by done, id").fetchall()
     if not rows:
@@ -53,7 +49,7 @@ def read() -> str:
 
 
 def add(item: str) -> str:
-    item = " ".join(scan.clean(item).split())  # no invisible characters (jarvis.safety.scan)
+    item = " ".join(scan.clean(item).split())  # strip invisible characters
     if not item:
         raise ValueError("The to-do is empty.")
     with _db() as db:
@@ -62,8 +58,9 @@ def add(item: str) -> str:
 
 
 def find(text: str) -> dict:
-    """The one open item containing `text`, or worded exactly as it is; read()'s "- [ ]" and "(added ...)" are let
-    through."""
+    """The single open item matching `text` exactly, else by substring. Accepts lines quoted from read().
+
+    ValueError if none or several match."""
     text = _LISTED.sub("", text).strip()
     with _db() as db:
         rows = db.execute("select * from todos where not done order by id").fetchall()
@@ -82,21 +79,21 @@ def get(item_id: int) -> dict | None:
 
 
 def done(text: str) -> str:
-    """Tick off the one open item containing `text`."""
+    """Tick off the open item matching `text`."""
     item = find(text)
     check(item["id"])
     return f"Ticked off: {item['text']}"
 
 
 def reword(text: str, new: str) -> str:
-    """Reword the one open item containing `text`."""
+    """Reword the open item matching `text`."""
     item = find(text)
     edit(item["id"], new)
     return f"Reworded the to-do '{item['text']}' as: {get(item['id'])['text']}"
 
 
 def items() -> list[dict]:
-    """Every item, open ones first in the order added, then the done ones, latest ticked off first."""
+    """All items: open in added order, then done, most recently ticked first."""
     with _db() as db:
         rows = db.execute("select * from todos order by done, case when done then -done_at end, id").fetchall()
     return [dict(r) | {"done": bool(r["done"])} for r in rows]
@@ -109,7 +106,7 @@ def _change(item_id: int, sql: str, *params) -> None:
 
 
 def check(item_id: int, done: bool = True) -> None:
-    """Tick the item off, or put it back on the list."""
+    """Mark done, or reopen with `done=False`."""
     _change(item_id, "update todos set done = ?, done_at = ? where id = ?", int(done), time.time() if done else None)
 
 

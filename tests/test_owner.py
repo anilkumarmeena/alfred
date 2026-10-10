@@ -1,5 +1,4 @@
-"""Tests for what the persona says about its owner (jarvis.brain): their "about you" setting, in the settings table of
-data/tasks.db (jarvis.state.settings), and their Google accounts. Run with: make test"""
+"""Tests for the persona's owner details (jarvis.brain): the "about you" setting and Google accounts."""
 
 import io
 import sqlite3
@@ -21,7 +20,6 @@ JARVIS = Path(jarvis.__file__).parent
 
 @pytest.fixture
 def db(tmp_path, monkeypatch):
-    """A database of the test's own."""
     use_profile(monkeypatch, tmp_path)
     return tmp_path
 

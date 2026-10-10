@@ -1,12 +1,8 @@
-"""JARVIS's own keys: the LiveKit API key and secret, the APNs auth key's id and the Google OAuth client. They're kept
-encrypted in the vault (jarvis.core.vault) and entered in the control panel (Settings → Logins and keys), never by
-voice; there they're only ever written, and shown back as set or not. Logs name which one changed, never what to.
+"""JARVIS's own keys (LiveKit key/secret, APNs key id, Google OAuth client), encrypted in the vault.
 
-Until the vault has one, its variable in .env stands in (for the Google client, the JSON file GOOGLE_CLIENT_SECRET
-names, or a client_secret*.json in secrets/: config.GOOGLE_CLIENT_SECRET), which is how a first setup starts:
-jarvis.setup_local writes the LiveKit keys into .env. adopt(), as the web service starts and at the end of setup,
-then moves each into the vault and takes its line out of .env. When the vault can't be opened (its master key is
-missing or wrong), .env's stays in use, so a broken key never locks JARVIS out.
+Entered only in the control panel, never by voice; write-only there (shown as set/unset). Logs name the key, never
+the value. Until the vault has one, the .env variable (or the Google client JSON file) is used; adopt() moves them
+into the vault and strips .env. If the vault can't be opened, .env stays in use so a bad master key never locks out.
 """
 
 import json
@@ -24,17 +20,17 @@ from jarvis.core.files import write_atomic
 
 log = logging.getLogger("jarvis.core.credentials")
 
-MOST = 8000  # characters of a value entered in the panel: the Google client's JSON is about 400
+MOST = 8000  # max chars entered in the panel (Google client JSON is ~400)
 
 
 @dataclass(frozen=True)
 class Credential:
-    name: str  # its secret's name in the vault
-    var: str  # the .env variable that stands in until the vault has it
+    name: str  # vault secret name
+    var: str  # .env fallback variable
     label: str
-    pattern: str  # what a value entered in the panel must look like (the Google client's is JSON, checked apart)
-    hint: str  # what it is and where it comes from, shown in the panel
-    required: bool = False  # JARVIS can't take calls without it, so it can be replaced but not cleared
+    pattern: str  # regex for panel input (Google client is JSON, checked separately)
+    hint: str  # shown in the panel
+    required: bool = False  # needed for calls: replaceable, not clearable
 
     def __repr__(self) -> str:
         return f"Credential({self.name})"
@@ -51,7 +47,7 @@ GOOGLE_CLIENT = Credential("google.client", "GOOGLE_CLIENT_SECRET", "Google OAut
                            "The Desktop app client's JSON from Google Cloud (APIs & Services → Credentials), pasted "
                            "whole. Used when a Google account signs in on the Mac.")
 ALL = {c.name: c for c in (LIVEKIT_KEY, LIVEKIT_SECRET, APNS_KEY_ID, GOOGLE_CLIENT)}
-VARS = [c.var for c in ALL.values()]  # kept out of every session's and command's environment (jarvis.safety.host)
+VARS = [c.var for c in ALL.values()]  # stripped from every session/command env
 
 
 def need(name: str) -> Credential:
@@ -61,7 +57,7 @@ def need(name: str) -> Credential:
 
 
 def _from_env(c: Credential) -> str:
-    """What stands in for the credential until the vault has it: its variable, or the Google client's file."""
+    """Fallback value: the .env variable, or the Google client file's contents."""
     if c is not GOOGLE_CLIENT:
         return os.environ.get(c.var, "").strip()
     try:
@@ -71,7 +67,7 @@ def _from_env(c: Credential) -> str:
 
 
 def _kept(c: Credential) -> str:
-    """The vault's value, or "" when it has none or can't be opened (said in the log, which names only the key)."""
+    """Vault value; "" if absent or the vault can't be opened (logged by key name only)."""
     try:
         return vault.get(c.name) if vault.has(c.name) else ""
     except vault.VaultError as e:
@@ -80,12 +76,12 @@ def _kept(c: Credential) -> str:
 
 
 def get(c: Credential) -> str:
-    """The credential: the vault's, else what .env has; "" when neither has it."""
+    """Vault value, else the .env fallback, else ""."""
     return _kept(c) or _from_env(c)
 
 
 def source(c: Credential) -> str:
-    """Where it comes from: "vault", ".env" (or the Google client's file, "file"), or "" when it isn't set."""
+    """"vault", ".env", "file" (Google client file) or "" if unset."""
     if vault.has(c.name):
         return "vault"
     if _from_env(c):
@@ -94,7 +90,7 @@ def source(c: Credential) -> str:
 
 
 def _checked(c: Credential, value: str) -> str:
-    """The value as it's kept, or ValueError saying what's wrong with it, never the value itself."""
+    """Normalised value; ValueError explains the problem without echoing the value."""
     value = value.strip()
     if not value or len(value) > MOST:
         raise ValueError(f"Paste the {c.label}.")
@@ -114,27 +110,27 @@ def _checked(c: Credential, value: str) -> str:
 
 
 def put(c: Credential, value: str) -> None:
-    """Keeps the credential in the vault, making the master key if there's none. ValueError says why it can't."""
+    """Store in the vault, creating the master key if needed. Raises ValueError on failure."""
     value = _checked(c, value)
     try:
         vault.ensure()
         vault.put(c.name, value)
     except vault.VaultError as e:
         raise ValueError(str(e)) from None
-    log.warning("%s set in the vault", c.label)  # which, never what
+    log.warning("%s set in the vault", c.label)  # name only, never the value
 
 
 def clear(c: Credential) -> bool:
-    """Forgets the vault's value: .env's, if it has one, is used again."""
+    """Remove the vault value; any .env fallback applies again."""
     if c.required:
         raise ValueError(f"JARVIS can't take calls without its {c.label}: replace it instead.")
     return vault.remove(c.name)
 
 
 def adopt() -> list[str]:
-    """Moves each credential .env still holds into the vault, where the vault has none, and takes its line out of .env.
-    Returns the labels of those moved. Leaves .env as it is when the vault can't take them. The Google client's file
-    stays where it is, for the user to remove."""
+    """Move .env credentials the vault lacks into the vault and strip them from .env; return moved labels.
+
+    On vault failure .env is left as is. The Google client file is never deleted."""
     moved = []
     for c in ALL.values():
         if vault.has(c.name) or not (value := _from_env(c)):
@@ -152,8 +148,8 @@ def adopt() -> list[str]:
 
 @contextmanager
 def google_client_file() -> Iterator[str]:
-    """The Google OAuth client JSON's path, for a sign-in: the vault's, written for the while to a file in secrets/
-    only the user can read, and removed after; else the file that stands in for it; "" with neither."""
+    """Yield a path to the Google client JSON: a temporary 0600 copy of the vault value (deleted on exit), else the
+    fallback file, else ""."""
     if not (kept := _kept(GOOGLE_CLIENT)):
         yield config.GOOGLE_CLIENT_SECRET
         return

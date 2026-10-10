@@ -1,10 +1,10 @@
-"""A task's tools on the Mac itself (jarvis.tasks.worker): host_run for a command of up to 10 minutes, start_job,
-job_status and job_wait for longer ones. They run in the runner, under jarvis.safety.host's Seatbelt profile and without
-JARVIS's keys in their environment, and each host_run and start_job call meets `_host_gate` first: refused, run, run
-once as agreed, or put to the user (Reporter.request_approval).
+"""Task tools that run on the Mac outside the task sandbox (MCP server "host").
 
-TaskJobs keeps every task's long jobs, and the sessions its host_run commands ran in, so what they left running counts
-as the task's own (`_own`); task_temp is each task's own temp folder.
+  host_run     one command, up to MAX_MINUTES
+  start_job    long command that runs detached; follow with job_status / job_wait
+They run in the runner under the host Seatbelt profile, without JARVIS's keys. host_run and start_job pass
+`_host_gate` first: refused, allowed, allowed by a prior yes or rule, or sent to the user for approval.
+TaskJobs tracks each task's jobs and host_run sessions so processes they leave behind count as the task's own.
 """
 
 import asyncio
@@ -30,23 +30,22 @@ if TYPE_CHECKING:
 log = logging.getLogger("jarvis.tasks.worker")
 
 HOST_RUN, START_JOB, JOB_STATUS, JOB_WAIT = (f"mcp__host__{n}" for n in ("host_run", "start_job", "job_status", "job_wait"))
-HOST_COMMANDS = {HOST_RUN: "host_run", START_JOB: "start_job"}  # what meets _host_gate; the job tools only read
-MAX_MINUTES = 10  # the longest host_run runs, and job_wait waits, per call
+HOST_COMMANDS = {HOST_RUN: "host_run", START_JOB: "start_job"}  # gated tools; the job tools only read
+MAX_MINUTES = 10  # per-call limit for host_run and job_wait
 
 
 class TaskJobs(host.Jobs):
-    """Every task's long jobs, in data/tasks/jobs/, each marked with its task and run inside the host profile, and the
-    sessions each task's host_run commands ran in (host.in_sessions), newest last: what they left running is the
-    task's own. The runner keeps one (Runner.host_jobs, which tasks reach as their Reporter's) and sets `on_end` to
-    hear when a job ends."""
+    """All tasks' long jobs (data/tasks/jobs/) plus each task's host_run session leaders, newest last.
+
+    Processes in those sessions count as the task's own. The runner holds one (Runner.host_jobs) and sets `on_end`.
+    """
 
     def __init__(self, folder: Path | None = None, **options) -> None:
         super().__init__(folder or host.TASK_JOBS_DIR, **{"notify": False, "walls": True} | options)
         self.on_end: Callable[[dict, int], None] | None = None
         self.ran: dict[int, list[tuple[int, float]]] = {}
-        # The host_run commands each task is running on the Mac right now: one a shutdown cuts off isn't resumed on
-        # its own, as what the command did is unknown (Runner.shutdown). A long job runs on through a restart, so
-        # isn't one.
+        # host_run commands in flight per task. A task cut off mid-command isn't auto-resumed on restart, since the
+        # command's effect is unknown. Long jobs survive restarts and aren't tracked here.
         self.on_mac: dict[int, list[str]] = {}
 
     def ended(self, job: dict, code: int) -> None:
@@ -54,18 +53,18 @@ class TaskJobs(host.Jobs):
             self.on_end(job, code)
 
     def started(self, task_id: int, pid: int) -> None:
-        """A task's host_run command started, leading session `pid`."""
+        """Record a host_run command's session leader `pid`."""
         kept = self.ran.setdefault(task_id, [])
         kept.append((pid, time.time()))
         del kept[:-KEEP_SESSIONS]
 
     def task_sessions(self, task_id: int) -> list[tuple[int, float]]:
-        """Every session the task's host_run commands and jobs ran in."""
+        """All sessions the task's host_run commands and jobs ran in."""
         return [*self.ran.get(task_id, []), *self.sessions(task_id)]
 
     @contextmanager
     def running(self, task_id: int, command: str) -> Iterator[None]:
-        """While the task runs `command` on the Mac: kept in `on_mac`."""
+        """Track `command` in `on_mac` while it runs."""
         self.on_mac.setdefault(task_id, []).append(command)
         try:
             yield
@@ -79,12 +78,12 @@ KEEP_SESSIONS = 200  # host_run sessions remembered per task
 
 
 def task_temp(task_id: int) -> Path:
-    """A task's own temp folder, in the cache folder, where its sandboxed commands may write as well."""
+    """Per-task temp folder in the cache dir; sandboxed commands may write there too."""
     return TASK_CACHE_DIR / "tmp" / f"task-{task_id}"
 
 
 def few(names: list[str]) -> str:
-    """The first ten, and how many more."""
+    """First ten names, plus a count of the rest."""
     return ", ".join(names[:10]) + (f" and {len(names) - 10} more" if len(names) > 10 else "")
 
 
@@ -99,7 +98,7 @@ def _inside(path: str, cwd: Path, roots: list[Path]) -> bool:
 
 
 def _still_running(leader: int) -> str:
-    """What a host_run command left running, for the task to stop when it's done with it."""
+    """Note listing processes a host_run command left running, or ""."""
     if not (left := host.lingering(leader)):
         return ""
     listed = few([f"{pid} ({name})" for pid, name in left])
@@ -108,7 +107,7 @@ def _still_running(leader: int) -> str:
 
 
 def call_minutes(args: dict) -> float:
-    """How long a host_run or job_wait call may take, in minutes, from its `minutes`."""
+    """Clamped `minutes` for a host_run or job_wait call."""
     try:
         return min(max(float(args.get("minutes") or MAX_MINUTES), 0.1), MAX_MINUTES)
     except (TypeError, ValueError):
@@ -120,9 +119,10 @@ def _host_server(task: dict, cwd: Path, jobs: TaskJobs):
 
 
 def _host_tools(task: dict, cwd: Path, jobs: TaskJobs) -> list:
-    """host_run and the job tools. host_run and start_job only run once `_host_gate` has let them through,
-    and they check commands.refused again themselves, as a second wall. An approved install that sandboxes itself
-    (commands.own_sandbox) runs outside the host profile."""
+    """Build the host tools. host_run/start_job re-check commands.refused after the gate as a second wall.
+
+    Commands that sandbox themselves (commands.own_sandbox) run outside the host profile.
+    """
     task_id, in_place = task["id"], bool(task["in_place"])
 
     def folder(args: dict) -> Path:
@@ -216,8 +216,10 @@ def _host_tools(task: dict, cwd: Path, jobs: TaskJobs) -> list:
 
 
 def _own(task: dict, cwd: Path, folder: Path, jobs: TaskJobs) -> commands.Own:
-    """What's the task's own for a host command run in `folder`: its folder, its temp folder, what it started.
-    Neither folder counts once it's been swapped for a link (say by an earlier command) to somewhere else."""
+    """Task-owned scope for a command in `folder`: its folder, its temp folder, processes it started.
+
+    A folder replaced by a symlink no longer counts as owned.
+    """
     task_id = task["id"]
     temp = task_temp(task_id)
     roots = [cwd] if not cwd.is_symlink() else []
@@ -225,7 +227,7 @@ def _own(task: dict, cwd: Path, folder: Path, jobs: TaskJobs) -> commands.Own:
         roots.append(temp)
 
     @functools.cache
-    def sessions() -> list[tuple[int, float]]:  # read once per command, when a pid needs checking
+    def sessions() -> list[tuple[int, float]]:  # lazy, once per command
         return jobs.task_sessions(task_id)
 
     def process(pid: int) -> bool:
@@ -235,17 +237,17 @@ def _own(task: dict, cwd: Path, folder: Path, jobs: TaskJobs) -> commands.Own:
 
 
 def approval_item(tool: str, args: dict, cwd: Path, why: str, own: commands.Own | None = None) -> dict:
-    """A host command as an approval covers it: the exact text, the tool and the folder (and why it's risky,
-    from commands.describe), with what it offers to be remembered (remembered.pieces), worked out here, with what's
-    the task's own, and kept with the request."""
+    """Approval request for a host command: exact command, tool, folder, risk reason and rememberable pieces."""
     command = args.get("command", "").strip()
     return {"tool": tool, "command": command, "folder": str(_resolve(args.get("folder") or str(cwd), cwd)), "why": why,
             "remember": remembered.pieces(command, own)}
 
 
 def _host_gate(task: dict, cwd: Path, reporter: "Reporter"):
-    """Decides host_run and start_job calls: refused, run, run once as agreed, or put to the user. Deleting the
-    task's own files and stopping its own processes run without asking (commands.Own)."""
+    """Permission gate for host_run/start_job: deny, allow, allow as agreed, or request approval.
+
+    Deleting the task's own files or killing its own processes needs no approval (commands.Own).
+    """
     task_id, in_place = task["id"], bool(task["in_place"])
     roots = [cwd, TASK_CACHE_DIR]
 
@@ -267,7 +269,7 @@ def _host_gate(task: dict, cwd: Path, reporter: "Reporter"):
             log.warning("task %s runs on the Mac, deleting or stopping only its own: %s", task_id, command)
             return PermissionResultAllow()
         item = approval_item(tool, args, cwd, why, own)
-        if reporter.cleared(task_id, item):  # a yes to exactly this, or a rule the user made (jarvis.safety.remembered)
+        if reporter.cleared(task_id, item):  # a prior yes to exactly this, or a remembered rule
             log.warning("task %s runs on the Mac, as agreed (%s): %s", task_id, item["why"], command)
             return PermissionResultAllow()
         if getattr(ctx, "agent_id", None):

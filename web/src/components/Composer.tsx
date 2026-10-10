@@ -1,5 +1,4 @@
-// Typing instead of talking: JARVIS answers a typed message the same way, spoken and captioned. The camera button
-// picks a photo to show it (state/photo.ts), which goes with the next thing typed or said.
+// Message box. Typed messages are answered like speech. The camera button attaches a photo to the next turn.
 import { useSignal } from "@preact/signals";
 import { sendText } from "../state/session";
 import { ASK, attach, discard, photo, photoReady } from "../state/photo";
@@ -7,7 +6,7 @@ import { CameraIcon, CloseIcon, SendIcon } from "./icons";
 
 export function Composer() {
   const text = useSignal("");
-  const busy = useSignal(false);  // waiting for the photo to reach the Mac before sending
+  const busy = useSignal(false);  // waiting for the photo upload before sending
   const p = photo.value;
   const empty = !text.value.trim() && !p;
 
@@ -21,7 +20,7 @@ export function Composer() {
     if (busy.value) return;
     busy.value = true;
     try {
-      if (!(await photoReady())) return;  // it didn't get there: the thumbnail says why
+      if (!(await photoReady())) return;  // upload failed; the thumbnail shows why
       if (sendText(t || ASK, `📷 ${t || ASK}`)) text.value = "";
     } finally { busy.value = false; }
   }
@@ -29,7 +28,7 @@ export function Composer() {
   function picked(e: Event) {
     const input = e.currentTarget as HTMLInputElement;
     const file = input.files?.[0];
-    input.value = "";  // so picking the same photo again still counts
+    input.value = "";  // so re-picking the same file fires change
     if (file) attach(file);
   }
 

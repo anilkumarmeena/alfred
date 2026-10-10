@@ -1,5 +1,4 @@
-"""Tests for the project list in tasks.db, registering projects anywhere
-(project_register), changing and removing them, folders without git, and project_git_init."""
+"""Tests for the project list: registering, aliases, changing and removing, folders without git, project_git_init."""
 
 import asyncio
 import json
@@ -17,7 +16,7 @@ from tests.test_in_place import env, fake_run, git, listed, make_repo, settle  #
 
 @pytest.fixture
 def home(env, monkeypatch):
-    """env, with the temporary folder standing in for the home folder and JARVIS's own folders inside it."""
+    """env with tmp as the home folder and JARVIS's folders inside it."""
     tmp = env["tmp"]
     monkeypatch.setenv("HOME", str(tmp))
     monkeypatch.setattr(projects, "ALLOWED_ROOT", tmp)
@@ -27,7 +26,7 @@ def home(env, monkeypatch):
 
 
 def entries() -> dict:
-    """The list as kept: each project's row, by name, in order."""
+    """Stored rows keyed by project name, in list order."""
     with projects._db() as db:
         rows = db.execute("select * from projects order by id").fetchall()
     return {r["name"]: {"path": r["path"], "in_place": bool(r["in_place"]), "aliases": json.loads(r["aliases"]),
@@ -117,7 +116,7 @@ def test_unsafe_or_taken_paths_are_refused_leaving_nothing_behind(home, case):
     path, message = REFUSALS[case]
     path = path(tmp)
     before = entries()
-    # everything in tmp, and beside it (not inside other tests' folders, whose files can still be settling)
+    # tmp and its siblings, not inside other tests' folders (they may still be settling)
     def ls():
         return sorted(str(p) for p in (*tmp.rglob("*"), *tmp.parent.iterdir()) if ".git" not in p.parts)
 
@@ -211,7 +210,6 @@ def test_in_place_task_without_git_that_changes_nothing(home, monkeypatch):
 
 
 def test_in_place_task_in_a_repo_with_no_commits(home, monkeypatch):
-    """Like astro-agent: git init was run, but nothing is committed yet."""
     astro = empty_repo(home["tmp"] / "astro-agent")
     (astro / "staged.py").write_text("a = 1\n")
     git(astro, "add", "staged.py")

@@ -1,5 +1,4 @@
-"""Which build of the web app jarvis.web serves, which an open page compares with its own to reload after a rebuild
-(web/src/lib/build.ts). Run with: make test"""
+"""Tests for the web build id jarvis.web serves; an open page compares it to reload after a rebuild."""
 
 import asyncio
 import json
@@ -19,7 +18,7 @@ def test_build_id_comes_from_the_built_page(tmp_path, monkeypatch):
 
 
 class Request:
-    """Just enough of aiohttp's request for the handler (the sandboxed test run can't open a port)."""
+    """Minimal aiohttp request (the sandboxed test run can't open a port)."""
 
     remote = "127.0.0.1"
     host = "localhost:8787"

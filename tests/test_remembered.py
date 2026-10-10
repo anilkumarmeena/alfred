@@ -1,6 +1,4 @@
-"""Tests for remembered approvals (jarvis.safety.remembered): answering a risky command "just this once", "for this
-session" or "always", by voice, through the brain or with the panel's buttons; what a rule covers, what can never be
-remembered, and withdrawing rules. Run with: make test"""
+"""Tests for jarvis.safety.remembered: once/session/always scopes, rule coverage, voice and panel answers, withdrawing."""
 
 import asyncio
 import time
@@ -27,7 +25,7 @@ from jarvis.voice import session as voice_session
 
 @pytest.fixture
 def db(tmp_path, monkeypatch):
-    """A database of the test's own, so no rule outlives it."""
+    """Own database, so no rule outlives the test."""
     use_profile(monkeypatch, tmp_path)
     return tmp_path
 
@@ -297,7 +295,7 @@ def test_a_rule_offered_is_saved_only_on_the_very_next_clear_yes():
 
 @pytest.fixture
 def voice(through, monkeypatch):
-    """The voice agent's answers, against a runner in process, with a fresh offer and a brain that notes."""
+    """Voice agent answers against an in-process runner, with a fresh offer and a recording brain."""
     r = through
 
     async def remember_(approval_id, breadth, via, scope="always"):

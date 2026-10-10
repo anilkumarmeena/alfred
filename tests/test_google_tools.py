@@ -1,6 +1,4 @@
-"""Tests for how JARVIS gets its Google tools from AI Armory (jarvis.tools.google): the tools and their names, the
-settings it hands over (accounts, sign-ins, time zone, its own wording), which tools wait for the user's yes, and the
-sign-in command (jarvis.integrations.accounts). The tools themselves are tested in AI Armory. Run with: make test"""
+"""Tests for tools.google: Armory tools and names, settings handed over, gated tools, and Google sign-in."""
 
 import asyncio
 
@@ -34,7 +32,7 @@ TOOLS = {
 }
 GATED = {"gmail_send", "chat_send", "calendar_send_invite", "calendar_send_update", "calendar_send_response",
          "calendar_delete_event", "docs_delete", "sheets_delete_tab"}
-# JARVIS's own, reading and transcribing attachments (jarvis.tools.files)
+# JARVIS's own attachment tools (jarvis.tools.files)
 OWN = {"gmail_attachments", "gmail_attachment_read", "gmail_attachment_transcribe"}
 
 

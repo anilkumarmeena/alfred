@@ -1,6 +1,4 @@
-"""The task runner's HTTP API (jarvis.tasks.runner), served on its Unix socket: each route calls the runner. Its client
-is jarvis.tasks.client.
-"""
+"""Task runner HTTP API on its Unix socket; each route calls the Runner. Client: jarvis.tasks.client."""
 
 import asyncio
 import json
@@ -16,7 +14,7 @@ from jarvis.tasks.runner_base import SHUTTING_DOWN
 if TYPE_CHECKING:
     from jarvis.tasks.runner import Runner
 
-# How many of a task's latest log lines GET /tasks/ID/log returns unless asked, and the most it returns
+# GET /tasks/ID/log: default and max lines
 LOG_LINES, MAX_LOG_LINES = 12, 40
 
 
@@ -154,7 +152,7 @@ def routes(r: "Runner") -> list[web.RouteDef]:
 
 
 def closing(r: "Runner"):
-    """Refuses whatever would start or change work once the runner is shutting down."""
+    """Middleware: 503 on non-GET requests once the runner is shutting down."""
     @web.middleware
     async def refuse(request: web.Request, handler):
         if r.closing and request.method != "GET":
@@ -165,7 +163,7 @@ def closing(r: "Runner"):
 
 
 def app(r: "Runner") -> web.Application:
-    """The API's app, answering for the runner `r`."""
+    """The aiohttp app for runner `r`."""
     made = web.Application(middlewares=[errors, closing(r)])
     made.add_routes(routes(r))
     return made

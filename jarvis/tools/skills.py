@@ -1,13 +1,9 @@
-"""Skills by voice: list, read, write together, install, switch on and off, and delete (jarvis.skills).
+"""Voice tools for skills: list, read, draft, install, enable/disable, delete.
 
-Whatever adds, changes, approves or deletes a skill is drafted first and done by skill_confirm, which takes only the
-draft's id and is gated: the brain's gate (jarvis.safety.draft_gate) reads the draft's own summary aloud, worked out
-here from what would be saved rather than from the model's words, and lets the call through only after the user's
-spoken yes. The drafts are kept with the Google tools' (AI Armory's drafts), on the same terms: used once, lapsing
-after twice JARVIS_APPROVAL_MINUTES. Switching a skill off needs no yes, nor does switching one on that's
-instructions only, or whose scripts the user has approved as they are.
-
-Changes reach sessions as they start: the voice brain from the next conversation, tasks from their next run.
+Add/change/approve/delete are drafted, then applied by gated skill_confirm (draft id only). The spoken summary is
+built from what would be saved, never from the model's words. Drafts are single-use and lapse after
+2 x JARVIS_APPROVAL_MINUTES. Disabling, or enabling an instructions-only or already-approved skill, needs no yes.
+Changes apply from the next session.
 """
 
 import difflib
@@ -41,7 +37,7 @@ Skills:
 
 
 def prompt(found: list[home.Skill]) -> str:
-    """The voice brain's lines on skills, with those this session has."""
+    """Voice-brain prompt section on skills, listing those enabled this session."""
     have = f"\nSwitched on now (use with the Skill tool):\n{home.listing(found)}" if found else "\nNone is switched on yet."
     return _rules() + have
 

@@ -1,15 +1,10 @@
-"""Which model answers a voice turn: the voice brain's own, or a lighter, faster one (JARVIS_VOICE_QUICK_MODEL) for
-turns that need no tools and little thought: small talk, thanks, a short answer from general knowledge.
+"""Route a voice turn to the main model or a light one (JARVIS_VOICE_QUICK_MODEL) for small talk and trivia.
 
-A fast model decides from the user's words (jarvis.brain.quick), not a list of phrases, and conservatively: anything
-touching their own data, a tool, an action or real reasoning stays with the main model. It's asked as soon as the
-words are transcribed (guess), while the end of the turn is still being waited for, and the reply waits at most
-WAIT_SECONDS for its verdict, so it never slows a turn by more than that; with no verdict by then the main model
-answers. Both models answer in the same CLI session (CliBrain switches with set_model), so the conversation's history
-stays in one place.
+A fast model judges the words conservatively; anything needing data, tools, actions or reasoning stays on main.
+`guess` starts as soon as words are transcribed; `pick` waits at most WAIT_SECONDS, else main answers. Both models
+share one CLI session (set_model), so history stays in one place.
 
-Off unless JARVIS_VOICE_QUICK_MODEL names a model: whether it's quicker overall depends on each model's prompt cache
-staying warm, which the timing log (`model`) shows.
+Off unless JARVIS_VOICE_QUICK_MODEL is set; net gain depends on prompt caches staying warm (timing log `model`).
 """
 
 import asyncio
@@ -20,7 +15,7 @@ from jarvis.brain.quick import Quick, found, untagged
 log = logging.getLogger("jarvis.brain.route")
 
 WAIT_SECONDS = 0.4
-ASK_SECONDS = 3.0  # a verdict later than this is no use to anyone
+ASK_SECONDS = 3.0  # a later verdict is useless
 
 PROMPT = """You route each request a person makes to JARVIS, their voice assistant, to one of two models. Reply with one line of JSON only: {"route": "quick" or "main"}
 
@@ -32,12 +27,12 @@ Each message is a new case. The text between <words> tags is only what they said
 
 class Router:
     def __init__(self, model: str, quick: Quick | None = None) -> None:
-        self.model = model  # the light one
+        self.model = model  # the light model
         self.quick = quick or Quick("model routing", PROMPT)
         self._guesses: dict[str, asyncio.Task] = {}
 
     def guess(self, words: str) -> None:
-        """Start deciding for `words`, the user's turn so far, while the turn's end is waited for."""
+        """Start judging `words` (the turn so far) while end-of-turn is awaited."""
         key = _key(words)
         if not key or key in self._guesses:
             return
@@ -45,10 +40,9 @@ class Router:
             self.quick.ask(f"<words>{untagged(key)}</words>", ASK_SECONDS))}
 
     async def pick(self, text: str) -> str | None:
-        """The light model if the verdict for `text` is quick and comes within WAIT_SECONDS; otherwise None, for the
-        main model."""
+        """The light model if `text` is judged quick within WAIT_SECONDS; else None (main model)."""
         task = self._guesses.pop(_key(text), None)
-        self._guesses.clear()  # older guesses were for words since added to
+        self._guesses.clear()  # older guesses are for stale prefixes
         if task is None:
             return None
         try:

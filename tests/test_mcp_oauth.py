@@ -1,7 +1,4 @@
-"""Signing in to an HTTP MCP server (jarvis.integrations.mcp_oauth), beyond the round trip tests/test_connections.py
-makes: finding where to sign in when the server says little, what's refused (no https, no PKCE, no registration),
-a sign-in that comes back turned down, and keeping, refreshing and forgetting the tokens. Every HTTP exchange is
-answered here. Run with: make test"""
+"""Tests for jarvis.integrations.mcp_oauth: discovery, refusals, denied sign-ins, keeping and refreshing tokens."""
 
 import asyncio
 import base64
@@ -26,7 +23,7 @@ AS_META = {"authorization_endpoint": "https://login.notes.example/authorize",
 
 
 def answering(pages: dict[str, dict], seen: list[str] | None = None):
-    """A handler serving `pages` (URL to JSON), 404 for the rest, noting each URL asked for in `seen`."""
+    """Handler serving `pages` (URL to JSON), 404 otherwise; records each URL asked for in `seen`."""
     def handler(request: httpx.Request) -> httpx.Response:
         if seen is not None:
             seen.append(str(request.url))

@@ -1,34 +1,12 @@
-"""Scanning text for hidden instructions before JARVIS keeps it or loads it: prompt injection aimed at the assistant,
-and invisible or unusual Unicode that could hide it.
+"""Scan text JARVIS keeps (memory, to-dos, projects) or loads (CLAUDE.md, skills) for hidden instructions.
 
-  scan(text, source)   a Scan: the text with invisible characters stripped (`clean`), what was found (`findings`),
-                       and whether to flag it (`suspicious`, said in a sentence by `reason`)
-  clean(text)          just the stripping, for what's kept whatever it says (the user's own words in the panel)
-  reveal(text)         the stripping, with what tag characters spell out shown instead, for a model that judges it
-  scan_file(path)      scan() of a file's text, as instructions (a CLAUDE.md, a skill)
+  scan / scan_file   Scan(clean, findings); `suspicious` and `reason()` say whether and why to flag
+  clean / reveal     strip invisible chars; reveal also decodes tag characters for a judging model
+  vetted             clean text, or raises Suspicious
 
-Used before anything is written to long-term memory, the to-do list or the project list: tasks' and the learning
-review's suggested edits (jarvis.tasks.data_edits) are flagged for the user's yes rather than applied, and the voice
-brain's own saves are refused with what was found, for it to tell the user. Code tasks scan the project files they load
-(jarvis.tasks.project_claude): CLAUDE.md, AGENTS.md, subagents, skills and slash commands, leaving out any that look
-tampered with and telling the user. It's here, apart from all of them, for anything else that vets text, such as
-installed skills.
-
-What counts:
-
-  invisible   zero-width characters, bidirectional controls, Unicode tag characters (which can spell out hidden
-              ASCII: decoded into the finding), variation selectors and other format characters. Always stripped.
-              Bidirectional controls and tag characters are flagged; a stray zero-width space from a copy and paste
-              isn't, but several are.
-  unusual     private-use characters, which render as nothing or as anything a font likes. Flagged, not stripped.
-  injection   phrases that try to change the assistant's rules ("ignore previous instructions", "you are now",
-              "bypass the sandbox", "auto-approve"), keep things from the user ("don't tell the user", or the user
-              by their configured name, as it was when the service started), get data sent
-              away ("send the API key to ..."), or fake the start of a system or assistant message. A CLAUDE.md or a
-              skill is meant to instruct the assistant, so with source="instructions" only the plain attacks count, not
-              text that merely talks to it.
-
-It errs towards flagging: the cost of a false alarm is one question to the user.
+Findings: invisible (zero-width, bidi, tag, variation, format; always stripped, flagged by kind/count), unusual
+(private-use; flagged, kept), injection (rule overrides, hiding things from the user, exfiltration, fake system
+turns). source=INSTRUCTIONS counts only plain attacks. Errs toward flagging: a false alarm costs one question.
 """
 
 import functools
@@ -40,9 +18,9 @@ from pathlib import Path
 from jarvis.core import profile
 from jarvis.core.config import ASSISTANT_NAME
 
-DATA, INSTRUCTIONS = "data", "instructions"  # what the text is: something kept, or something meant to instruct
-EXCERPT = 80  # characters of the text around a finding, quoted in it
-ZERO_WIDTH_FLAGGED = 3  # this many zero-width characters in one text look like a hidden encoding
+DATA, INSTRUCTIONS = "data", "instructions"  # stored data vs text meant to instruct
+EXCERPT = 80  # chars of context quoted per finding
+ZERO_WIDTH_FLAGGED = 3  # this many zero-width chars suggests a hidden encoding
 
 # ── Characters ──────────────────────────────────────────────────
 
@@ -55,7 +33,7 @@ _KEPT_FORMAT = set("\n\r\t")
 
 
 def _kind(ch: str) -> str | None:
-    """What sort of hidden character `ch` is, or None for an ordinary one."""
+    """Hidden-character kind of `ch`, or None."""
     cp = ord(ch)
     if ch in _BIDI:
         return "bidi"
@@ -76,16 +54,14 @@ _STRIPPED = {"bidi", "tag", "zero-width", "variation", "format", "control"}
 
 
 def clean(text: str) -> str:
-    """The text without invisible characters (zero-width, bidirectional controls, tags, variation selectors and
-    other format or control characters, but for newlines and tabs)."""
+    """Strip invisible characters: zero-width, bidi, tags, variation selectors, format/control (not \\n \\r \\t)."""
     return "".join(ch for ch in text if _kind(ch) not in _STRIPPED)
 
 
 def reveal(text: str) -> str:
-    """clean(text), but with what each run of Unicode tag characters spells out shown where it was, as
-    [hidden text: ...], for a reader that judges it (jarvis.safety.injection)."""
+    """clean(text), with each run of tag characters decoded in place as [hidden text: ...]."""
     out, hidden = [], []
-    for ch in text + " ":  # the space ends a run at the very end
+    for ch in text + " ":  # sentinel ends a trailing run
         kind = _kind(ch)
         if kind == "tag":
             if 0x20 <= ord(ch) - 0xE0000 < 0x7F:
@@ -103,8 +79,7 @@ def reveal(text: str) -> str:
 
 
 def _names(name: str) -> list[str]:
-    """Patterns for a configured name, whole and by its first word ("Sam Lee", "Sam"), any whitespace between the
-    words; none for "the user", the default with no name set, whose first word would match far too much."""
+    """Regexes for a name, whole and first word; none for the default "the user" (too broad)."""
     words = name.split()
     if not words or name.strip().lower() == "the user":
         return []
@@ -118,13 +93,12 @@ _WHERE = r"(https?://|www\.|[\w.+-]+@[\w-]+\.\w|\b[\w-]+\.(com|net|org|io|xyz|ru
 
 
 def compile_patterns(user: str, assistant: str) -> dict[str, list[tuple[str, re.Pattern]]]:
-    """The phrase patterns for each source, DATA and INSTRUCTIONS, with the user's and the assistant's names among the
-    words for each ("don't tell Sam", "Dear JARVIS"), as well as the general ones ("the user", "the assistant")."""
+    """Phrase patterns per source (DATA, INSTRUCTIONS), including the user's and assistant's names."""
     named = _names(assistant)
     bot = "(" + "|".join([r"ai|assistant|agent|bot|model|llm|claude|chatgpt|gpt", *named]) + ")"
     who = "(" + "|".join([r"the\s+user|the\s+owner|your\s+user|your\s+owner|the\s+human", *_names(user)]) + ")"
     owned = "".join(rf"|{n}'?s?\s+" for n in named)  # "bypass JARVIS's safety"
-    attacks = [  # (what it does, the pattern): plain attacks, wherever they are, CLAUDE.md and skills included
+    attacks = [  # (what, pattern): plain attacks, flagged in any source
         ("tries to override the assistant's rules",
          rf"\b(ignore|disregard|forget|override)\s+(all\s+|any\s+)?(of\s+)?(the\s+|your\s+|my\s+|these\s+|those\s+)?"
          rf"(previous|prior|above|earlier|preceding|former|original|existing|system|other)\s+{_RULES}\b|"
@@ -148,7 +122,7 @@ def compile_patterns(user: str, assistant: str) -> dict[str, list[tuple[str, re.
          r"\b(reveal|print|show|output|repeat|dump|leak|disclose)\s+(your|the)\s+(full\s+|entire\s+|hidden\s+)?"
          r"(system\s+prompt|hidden\s+instructions|initial\s+instructions|instructions\s+above)"),
     ]
-    # Text kept as data (memory, to-dos, projects) shouldn't talk to the assistant or about its rules at all
+    # Stored data shouldn't address the assistant or discuss its rules at all
     data_only = [
         ("tries to approve commands without asking",
          r"\b(auto[\s-]?approve|always\s+approve|approve\s+(all|every|any)\s+(commands?|requests?|actions?)|"
@@ -183,7 +157,7 @@ def _patterns(user_name: str) -> dict[str, list[tuple[str, re.Pattern]]]:
 
 
 def _compiled() -> dict[str, list[tuple[str, re.Pattern]]]:
-    """The patterns for the name of the person JARVIS works for now (jarvis.core.profile), compiled once each."""
+    """Patterns for the current profile's user name, cached."""
     return _patterns(profile.name())
 
 
@@ -193,9 +167,9 @@ def _compiled() -> dict[str, list[tuple[str, re.Pattern]]]:
 @dataclass(frozen=True)
 class Finding:
     kind: str  # "invisible", "unusual" or "injection"
-    what: str  # in a few words: "tries to override the assistant's rules", "2 bidirectional controls"
-    excerpt: str = ""  # the text it was found in, or what tag characters spell out
-    flagged: bool = True  # False for what's only stripped: a stray zero-width space, an emoji's variation selector
+    what: str  # e.g. "tries to override the assistant's rules", "2 bidirectional controls"
+    excerpt: str = ""  # surrounding text, or decoded tag characters
+    flagged: bool = True  # False when only stripped (a stray zero-width space, an emoji variation selector)
 
     def __str__(self) -> str:
         return f"{self.what}: “{self.excerpt}”" if self.excerpt else self.what
@@ -203,17 +177,16 @@ class Finding:
 
 @dataclass
 class Scan:
-    clean: str  # the text without invisible characters
+    clean: str  # invisible characters stripped
     findings: list[Finding] = field(default_factory=list)
 
     @property
     def suspicious(self) -> bool:
-        """Whether to flag it to the user rather than keep or load it quietly."""
+        """Whether to flag it to the user instead of keeping it quietly."""
         return any(f.flagged for f in self.findings)
 
     def reason(self) -> str:
-        """What was found that's flagged, in a sentence: 'it tries to override the assistant's rules: “…”; it has 2
-        bidirectional controls'."""
+        """Flagged findings as one sentence: 'it tries to …: “…”; it has 2 bidirectional controls'."""
         return "; ".join(("it " if f.kind == "injection" else "it has ") + str(f) for f in self.findings if f.flagged)
 
 
@@ -226,14 +199,13 @@ def _excerpt(text: str, start: int, end: int) -> str:
 _NAMES = {"bidi": "bidirectional control", "tag": "Unicode tag character", "zero-width": "zero-width character",
           "variation": "variation selector", "format": "invisible format character", "control": "control character",
           "private": "private-use character"}
-# How many of a kind it takes to flag it: a few zero-width spaces come with copied text, and emoji carry variation
-# selectors, but many can spell out a hidden message. Those in the supplement (beyond U+E0100) are never in emoji.
+# Count needed to flag: copied text and emoji carry a few of these legitimately. Supplementary variation selectors
+# (U+E0100+) never appear in emoji and are always flagged.
 _FLAG_AT = {"zero-width": ZERO_WIDTH_FLAGGED, "variation": 8}
 
 
 def scan(text: str, source: str = DATA) -> Scan:
-    """Scan text for hidden instructions; `source` is DATA for what's kept (memory, to-dos, projects) or
-    INSTRUCTIONS for what's meant to instruct the assistant (CLAUDE.md, skills), where only plain attacks count."""
+    """Scan text for hidden instructions. `source`: DATA (stored text) or INSTRUCTIONS (plain attacks only)."""
     if source not in (compiled := _compiled()):
         raise ValueError(f"source must be {DATA} or {INSTRUCTIONS}.")
     counts: dict[str, int] = {}
@@ -247,15 +219,14 @@ def scan(text: str, source: str = DATA) -> Scan:
             if kind in _STRIPPED:
                 continue
         kept.append(ch)
-    stripped = "".join(kept)  # clean(text), from the same pass
+    stripped = "".join(kept)  # == clean(text)
     findings = []
     for kind, n in counts.items():
         spelled = "".join(hidden) if kind == "tag" else ""
         flagged = n >= _FLAG_AT.get(kind, 1) or (kind == "variation" and supplement)
         findings.append(Finding("unusual" if kind == "private" else "invisible", f"{n} {_NAMES[kind]}{'s' * (n > 1)}",
                                 f"hidden text: {spelled[:EXCERPT]}" if spelled.strip() else "", flagged))
-    # The words as they'd read once invisible characters are gone, and fullwidth or styled letters made plain; with
-    # any text the tag characters spelled out
+    # Visible text, NFKC-normalised (fullwidth/styled letters made plain), plus any decoded tag text
     plain = unicodedata.normalize("NFKC", stripped) + ("\n" + "".join(hidden) if hidden else "")
     for what, pattern in compiled[source]:
         if any(f.what == what for f in findings):
@@ -266,12 +237,12 @@ def scan(text: str, source: str = DATA) -> Scan:
 
 
 def scan_file(path: Path, source: str = INSTRUCTIONS) -> Scan:
-    """scan() of a file's text (read as UTF-8, any bad bytes replaced)."""
+    """scan() a file's text (UTF-8, bad bytes replaced)."""
     return scan(Path(path).read_bytes().decode("utf-8", errors="replace"), source)
 
 
 class Suspicious(ValueError):
-    """Text that looks like hidden instructions, refused with what was found."""
+    """Refused: text looks like hidden instructions."""
 
     def __init__(self, found: Scan, what: str = "it") -> None:
         super().__init__(f"Not saved: {what} looks like hidden instructions ({found.reason()}).")
@@ -279,7 +250,7 @@ class Suspicious(ValueError):
 
 
 def vetted(text: str, what: str = "it", source: str = DATA) -> str:
-    """The text, cleaned of invisible characters, if nothing about it is suspicious; else raises Suspicious."""
+    """Cleaned text if not suspicious; else raises Suspicious."""
     found = scan(text, source)
     if found.suspicious:
         raise Suspicious(found, what)

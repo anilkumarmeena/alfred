@@ -1,6 +1,4 @@
-"""Tests for the goal loop (jarvis.tasks.goal): a task that says it's finished is checked against what it was asked,
-sent back to finish what it can a few times at most, and announced once, with every check in its log. The check's
-model call is faked. Run with: make test"""
+"""Tests for jarvis.tasks.goal: verdict parsing, the finish-check rounds and announcement, scheduled runs."""
 
 import asyncio
 import os
@@ -24,8 +22,9 @@ from jarvis.tasks.worker import Outcome
 
 @pytest.fixture
 def checks(monkeypatch):
-    """Turns the goal loop on, with its model call faked: each check answers with the next of `checks.replies` (an
-    exception is raised, an event waited for), costing 0.002. `checks.asked` has what each check read."""
+    """Enable the goal loop with a faked check: each answers the next of `checks.replies` (exception raised,
+    event awaited), costing 0.002. `checks.asked` records what each check read.
+    """
     fake = SimpleNamespace(replies=[], asked=[])
 
     async def ask_model(text: str) -> tuple[dict | None, float]:
@@ -42,12 +41,12 @@ def checks(monkeypatch):
     monkeypatch.setattr(goal, "GOAL_ROUNDS", 2)
     monkeypatch.setattr(goal, "GOAL_MAX_COST", 0.0)
     monkeypatch.setattr(goal, "ask_model", ask_model)
-    fake_run(monkeypatch, *[finishes()] * 10)  # each run says "Did it.", unless the test says otherwise
+    fake_run(monkeypatch, *[finishes()] * 10)  # each run says "Did it." unless the test overrides it
     return fake
 
 
 def verdict(kind: str, said: str, *to_finish: str, todos: dict[int, str] | None = None) -> dict:
-    """A check's JSON reply; `todos` has what's left of each to-do item by its number, "" for one the work finishes."""
+    """A check's JSON reply; `todos` maps to-do number to what's left ("" if finished)."""
     found = {"verdict": kind, "said": said} | ({"to_finish": list(to_finish)} if to_finish else {})
     if todos is not None:
         found["todos"] = [{"id": n, "done": not left} | ({"left": left} if left else {}) for n, left in todos.items()]
@@ -63,8 +62,10 @@ def statuses(said: list[dict]) -> list[str]:
 
 
 def run_task(*replies, kind: str = "research", project: str | None = None, checks, then=None):
-    """Start a task, its checks answering with `replies`, let it settle, and return the runner, the task and what was
-    announced. `then(r, task)` runs once it has settled, and it settles again after."""
+    """Start a task with checks answering `replies`, let it settle; return (runner, task, announced).
+
+    `then(r, task)` runs once it settles, then it settles again.
+    """
     checks.replies = list(replies)
 
     async def main():
@@ -105,7 +106,7 @@ def test_a_check_that_gave_no_usable_reply_is_none():
      verdict(BLOCKED, "needs Xcode.") | {"to_finish": []}),
     ('Here it is: {"verdict": "incomplete", "said": "Y.", "todos": [{"id": 4, "done": false, "left": "Y"}]}',
      verdict(INCOMPLETE, "Y.", todos={4: "Y"})),
-    ("COMPLETE: done.", None),  # the old keyword form is no verdict
+    ("COMPLETE: done.", None),  # keyword form, not JSON: no verdict
     ('{"verdict": "finished", "said": "done."}', None),  # not one of the three
     ('{"verdict": "complete"}', None),  # nothing said
     ('{"verdict": "complete", "said": "done.", "todos": [{"id": "4", "done": true}]}', None),  # an id not a number
@@ -151,7 +152,7 @@ def test_with_no_cost_limit_any_cost_is_sent_back(checks):
 
 @pytest.mark.parametrize("setting, model", [("", "claude-task-model"), ("claude-sonnet-5", "claude-sonnet-5")])
 def test_the_checks_model_is_a_setting_else_the_tasks_own(tmp_path, setting, model):
-    # A fresh process, as config is read once at import; set but empty is "use the default", whatever .env says
+    # Fresh process: config is read at import. Set but empty means the default, whatever .env says
     env = os.environ | {"JARVIS_GOAL_MODEL": setting, "JARVIS_TASK_MODEL": "claude-task-model",
                         "JARVIS_GOAL_MAX_COST": "", "JARVIS_DB_FILE": str(tmp_path / "t.db")}
     out = subprocess.run([sys.executable, "-c", "from jarvis.core import config; print(config.GOAL_MODEL, config.GOAL_MAX_COST)"],

@@ -1,11 +1,8 @@
-"""What JARVIS did lately, for the bell in the web page's control panel: the activity table of data/tasks.db.
+"""Recent-activity feed for the control panel's bell (activity table).
 
-Two processes add to it. The voice brain (jarvis.brain.cli) adds each of its tools that changed something (those
-registered with `changes`, jarvis.tools) and each MCP server write, once it has run without an error; the task runner
-adds tasks starting, finishing, failing, asking, being merged or discarded, requests for a yes and their answers, and
-heartbeat alerts. Reads and searches are left out. jarvis.server sends new rows to open pages as they come; entries
-older than KEEP_DAYS go.
-Adding never raises: the bell is a convenience, so a failure there is logged and the caller carries on.
+Writers: the voice brain (successful state-changing tools and MCP writes) and the task runner (task lifecycle,
+approvals, heartbeat alerts). Reads/searches are not recorded. Entries older than KEEP_DAYS are pruned.
+add() never raises: failures are logged and the caller carries on.
 """
 
 import logging
@@ -19,8 +16,8 @@ from jarvis.core import database
 log = logging.getLogger("jarvis.state.activity")
 
 KEEP_DAYS = 7
-PRUNE_EVERY = 50  # entries added between clear-outs of those older than KEEP_DAYS
-MOST = 200  # entries listed at once
+PRUNE_EVERY = 50  # prune every N inserts
+MOST = 200  # max entries returned
 MAX_TEXT = 240
 KINDS = ("ok", "bad", "warn", "run")
 
@@ -28,12 +25,12 @@ _SCHEMA = """
 create table activity (
     id integer primary key,
     at real not null,
-    kind text not null,         -- ok, bad, warn or run: the colour of its light
+    kind text not null,         -- ok, bad, warn, run (indicator colour)
     text text not null,
-    task integer                -- the task it was about, if any
+    task integer                -- related task, if any
 )"""
 
-# A result that says nothing changed after all
+# Tool results meaning no change happened
 _UNCHANGED = re.compile(r"nothing (changed|deleted)", re.IGNORECASE)
 _URL = re.compile(r":?\s*https?://\S+")
 
@@ -48,8 +45,7 @@ def _tidy(text: str) -> str:
 
 
 def add(text: str, kind: str = "ok", task: int | None = None) -> dict | None:
-    """Keep an entry, now and then letting go of those older than KEEP_DAYS. None if there's nothing to say, or it
-    couldn't be kept."""
+    """Insert an entry (pruning occasionally); return it, or None if empty or the write failed."""
     if not (text := _tidy(text)):
         return None
     if kind not in KINDS:
@@ -68,8 +64,9 @@ def add(text: str, kind: str = "ok", task: int | None = None) -> dict | None:
 
 
 def tool_ran(name: str, args: dict, result: str, said: str = "") -> None:
-    """Note a tool that changed something and has run without an error: as `said`, filled in from its arguments, or
-    else as its result says it. Nothing if the result says nothing changed after all."""
+    """Record a successful state-changing tool call: `said` formatted with `args`, else the result's text.
+
+    Skipped when the result reports no change."""
     if _UNCHANGED.search(result):
         return
     if said:
@@ -79,13 +76,13 @@ def tool_ran(name: str, args: dict, result: str, said: str = "") -> None:
         except (KeyError, IndexError, ValueError):
             pass
     first = result.strip()
-    if first.startswith(("{", "[")) or not first:  # a structured result: say which tool, at least
+    if first.startswith(("{", "[")) or not first:  # structured result: fall back to the tool name
         first = name.replace("_", " ").capitalize()
     add(first)
 
 
 def recent(after: int = 0) -> list[dict]:
-    """The latest entries in the last KEEP_DAYS, newest first; only those after the id `after`, if given."""
+    """Entries from the last KEEP_DAYS with id > `after`, newest first."""
     with _db() as db:
         rows = db.execute("select * from activity where id > ? and at > ? order by id desc limit ?",
                           (after, time.time() - KEEP_DAYS * 86400, MOST)).fetchall()

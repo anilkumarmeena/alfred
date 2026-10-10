@@ -1,4 +1,4 @@
-// What sits over everything: the approval card, the activity list behind the bell, ⌘K and the toast.
+// Overlays: approval card, activity list, ⌘K palette, toast.
 import { useEffect, useRef } from "preact/hooks";
 import { useSignal } from "@preact/signals";
 import { pressMute, toggleSpeaker } from "../../state/session";
@@ -38,7 +38,7 @@ export function ApprovalCard() {
 
 export function Activity() {
   const ref = useRef<HTMLDivElement>(null);
-  // A tap anywhere else closes it
+  // Close on outside tap
   useEffect(() => {
     if (!activityOpen.value) return;
     const away = (e: Event) => { if (!(e.target as Element).closest("#activity, #activityBtn")) toggleActivity(false); };
@@ -137,7 +137,7 @@ export function Toast() {
   );
 }
 
-// Keys for the panel, before the voice screen's own (main.tsx). True if the key was the panel's.
+// Panel keyboard shortcuts, checked before the voice screen's (main.tsx). True if handled.
 export function panelKey(e: KeyboardEvent): boolean {
   const typing = !!(e.target as Element).closest?.("input, textarea");
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {

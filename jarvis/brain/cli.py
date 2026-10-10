@@ -1,21 +1,12 @@
-"""The brain on the local `claude` CLI, through the Claude Agent SDK.
+"""Voice brain on the local `claude` CLI via the Claude Agent SDK.
 
-Uses the CLI's own login under CLAUDE_CONFIG_DIR, separate from the user's everyday
-Claude Code login. One CLI process stays open per voice session, so only the first
-turn pays the start-up cost. Claude Code's own abilities (file editing, settings,
-its own skills, other MCP servers) are switched off; JARVIS's tools, web search/fetch, a
-sandboxed shell and long jobs (see jarvis.safety.shell), JARVIS's own web browser when it's on
-(jarvis.integrations.browser), and the enabled MCP servers such as GitHub
-and GitLab (jarvis.integrations.mcp_servers, writes gated by jarvis.safety.mcp_gate, their tools loaded on demand with
-the CLI's ToolSearch: jarvis.brain.sdk.on_demand) are available, plus a read-only lookup
-subagent on a cheap model, which does the brain's file reading so its replies stay quick, and the skills
-switched on in data/skills (jarvis.skills.home), as a plugin made for the session.
+Own login under CLAUDE_CONFIG_DIR; one CLI process per voice session. Claude Code's own abilities (file edits,
+settings, its skills, other MCP servers) are off. Available: JARVIS tools, web search/fetch, sandboxed shell and jobs
+(jarvis.safety.shell), the browser when on, enabled MCP servers (writes gated by jarvis.safety.mcp_gate), a read-only
+lookup subagent on a cheap model, and enabled skills as a per-session plugin.
 
-Photos the user sends from the page go to Claude with their next turn, spoken or typed, as image content blocks
-(jarvis.state.pictures); screen_look shows it the Mac's screen when the user asks (jarvis.tools.screen).
-
-Talking over JARVIS normally stops its reply. While a shell command is running, though, the
-reply is left to finish unheard, so the command isn't cut off; the next turn waits for it.
+Photos sent from the page ride along with the next turn as image blocks. Talking over JARVIS stops the reply,
+except while a shell command runs: then the reply finishes unheard and the next turn waits for it.
 """
 
 import asyncio
@@ -64,20 +55,18 @@ from jarvis.tools import browser, connections, screen, skills as skill_tools
 from jarvis.voice import timing
 
 log = logging.getLogger("jarvis.brain.cli")
-JARVIS_TOOLS = "mcp__jarvis__"  # how the CLI names JARVIS's own tools (sdk.jarvis_server)
-# Web and JARVIS tools, job_status and stop_job (which stops only jobs: command tasks), and MCP servers' reads, are
-# allowed outright, on purpose; only Bash the sandbox won't run by itself, start_job, the Google tools' sends and
-# deletes, MCP servers' writes, subagents and their file reads meet the gate.
+JARVIS_TOOLS = "mcp__jarvis__"  # CLI prefix for JARVIS's own tools
+# Allowed outright: web, JARVIS tools, job_status/stop_job, MCP reads. The gate sees unsandboxed Bash, start_job,
+# Google sends/deletes, MCP writes, subagents and their file reads.
 warnings.filterwarnings("ignore", category=CanUseToolShadowedWarning)
 
 ALLOWED_BUILTINS = ["WebSearch", "WebFetch"]
-INTERRUPT_SECONDS = 15  # for an interrupted reply to end; past it the CLI restarts
+INTERRUPT_SECONDS = 15  # wait for an interrupted reply to end, then restart the CLI
 
 
 
 def lookup() -> AgentDefinition:
-    """A quick read-only helper on a cheap model, so a file or code lookup doesn't slow the spoken reply; told where
-    the profile's data is."""
+    """Read-only lookup subagent on a cheap model, so file lookups don't slow the spoken reply."""
     data = profile.current().data
     return AgentDefinition(
         description="Fast read-only lookup in files on the Mac: finds a file, a setting, a version, a function or a "
@@ -93,13 +82,13 @@ def lookup() -> AgentDefinition:
     )
 
 
-AGENTS = ("lookup",)  # the voice brain's subagents, by name
+AGENTS = ("lookup",)  # voice brain subagents
 
 LOOKUP_PROMPT = "\n\n" + prompts.load("voice_lookups")
 
 
 def _result_text(response) -> str:
-    """A tool call's result, as text: MCP results come as a list of content blocks, or a dict holding one."""
+    """A tool result as text; MCP results are a list of content blocks or a dict holding one."""
     if isinstance(response, dict):
         response = response.get("content", response.get("text", ""))
     if isinstance(response, list):
@@ -108,9 +97,8 @@ def _result_text(response) -> str:
 
 
 def _bell_hook(gate: mcp_gate.Gate) -> list[HookMatcher]:
-    """After each tool call that ran, a note for the control panel's bell (jarvis.state.activity) if it changed
-    something: JARVIS's own tools registered with `changes`, and MCP servers' writes. A write the gate holds for a
-    yes never runs, so it isn't noted until it does."""
+    """PostToolUse hook: note changes (tools with `changes`, MCP writes) for the panel's bell. Held writes never
+    run, so aren't noted."""
 
     async def noted(data: dict, _tool_use_id, _ctx) -> dict:
         name, args, response = data["tool_name"], data.get("tool_input") or {}, data.get("tool_response")
@@ -127,12 +115,11 @@ def _bell_hook(gate: mcp_gate.Gate) -> list[HookMatcher]:
 
 def _options(gate: mcp_gate.Gate, jobs: shell.Jobs) -> ClaudeAgentOptions:
     server, allowed = jarvis_server()
-    # Read as the session starts, so a change needs no restart. A slow call doesn't hold up the reply: after
-    # CONNECTION_WAIT seconds it carries on in the background (jarvis.integrations.mcp_relay)
+    # Read per session; a slow server goes to the background after CONNECTION_WAIT seconds
     mcp = mcp_servers.session(mcp_servers.for_voice(), wait=CONNECTION_WAIT)
     gate.use(mcp.servers)
     shell.scratch_dir().mkdir(parents=True, exist_ok=True)
-    # The skills switched on, as a plugin of this session's own, read as it starts (jarvis.skills.home)
+    # Enabled skills as a per-session plugin
     plugin = skills.voice_plugin()
     found = skills.plugin(plugin)
     return sdk_options(
@@ -142,24 +129,23 @@ def _options(gate: mcp_gate.Gate, jobs: shell.Jobs) -> ClaudeAgentOptions:
                                     + (browser.prompt() if browser_on() else "")
                                     + mcp_servers.prompt(mcp.servers) + connections.prompt()
                                     + skill_tools.prompt(found)),
-        model=usage.available(CLI_MODEL),  # a lighter one while Opus's own weekly limit is used up
+        model=usage.available(CLI_MODEL),  # lighter model while Opus's weekly limit is used up
         effort=EFFORT,
         # the file reads are for the lookup subagent
         tools=ALLOWED_BUILTINS + ["Bash", "Agent"] + shell.FILE_READS + (["Skill"] if found else []),
-        skills=[skills.qualified(s) for s in found],  # each allowed as Skill(name); no other skill is offered
+        skills=[skills.qualified(s) for s in found],  # only these, as Skill(name)
         plugins=[{"type": "local", "path": str(plugin)}] if found else [],
         mcp_servers={"jarvis": server, "shell": shell.job_server(jobs)} | mcp.configs,
-        # sandboxed Bash is allowed by the sandbox itself
+        # sandboxed Bash is allowed by the sandbox
         allowed_tools=ALLOWED_BUILTINS + allowed + [shell.JOB_STATUS, shell.STOP_JOB] + mcp.allowed,
         disallowed_tools=BUILTIN_AGENTS_DENIED + mcp.blocked,
         agents={"lookup": lookup()},
         permission_mode="default",
-        # Everything else: Bash outside the sandbox and start_job, where risky commands need a yes, the Google tools'
-        # sends and deletes and MCP servers' writes, which always do (draft_gate, mcp_gate), and subagents and their
-        # reads
+        # Everything else: unsandboxed Bash and start_job (risky ones need a yes), Google sends/deletes and MCP
+        # writes (always need a yes), subagents and their reads
         can_use_tool=gate,
         hooks={"PostToolUse": _bell_hook(gate)},
-        screen_seconds=INJECTION_VOICE_SECONDS,  # a spoken reply waits for each check of a tool's result
+        screen_seconds=INJECTION_VOICE_SECONDS,  # the reply waits on each tool-result injection check
         sandbox=shell.SANDBOX,
         settings=json.dumps(json.loads(shell.SETTINGS) | skills.FLAGS),  # no skill's hooks or !`commands` run
         max_turns=MAX_TOOL_ROUNDS,
@@ -177,16 +163,16 @@ class CliBrain(Notes):
         super().__init__()
         self.client: ClaudeSDKClient | None = None
         self._lock = asyncio.Lock()
-        self._drain: asyncio.Task | None = None  # reads the last reply to its end after the user spoke over it
-        self._holding = False  # whether that reply is running a command, which is left to finish
-        self._running: dict[str, str] = {}  # tool calls under way in the current reply: id to tool name
-        self._unheard: list[str] = []  # what that reply said after the user spoke over it
-        self._cut: str = ""  # what the user asked for when they spoke over the work on it, for the next turn
+        self._drain: asyncio.Task | None = None  # drains a talked-over reply
+        self._holding = False  # that reply is running a command, left to finish
+        self._running: dict[str, str] = {}  # tool_use id -> tool name, current reply
+        self._unheard: list[str] = []  # text of a talked-over reply
+        self._cut: str = ""  # request whose work was cut off, for the next turn
         self.limits = LimitWatch("voice")
         self.shell = mcp_gate.Gate(agents=AGENTS)
-        self.jobs = shell.Jobs()  # command tasks in the runner, said as they end like any task's update
-        self.next_model: str | None = None  # a lighter model for the next turn alone (jarvis.brain.route)
-        self._main = self._model = ""  # the session's own model, and the one answering now
+        self.jobs = shell.Jobs()  # command tasks; announced on end like any task update
+        self.next_model: str | None = None  # lighter model for the next turn only (jarvis.brain.route)
+        self._main = self._model = ""  # session model, current model
 
     async def start(self) -> None:
         async with self._lock:
@@ -198,8 +184,7 @@ class CliBrain(Notes):
                 self._main = self._model = options.model
 
     async def _use_model(self) -> None:
-        """Answer this turn on next_model if one was picked, else on the session's own; the same session either way,
-        so the history stays in one place."""
+        """Switch to next_model for this turn if set, else the session model; same session keeps history."""
         wanted, self.next_model = (usage.available(self.next_model) if self.next_model else self._main), None
         if wanted != self._model:
             await self.client.set_model(wanted)
@@ -213,11 +198,10 @@ class CliBrain(Notes):
             await client.disconnect()
 
     async def end(self) -> None:
-        """The conversation is over: the CLI stops, and so does the browser if it opened one (its logins stay). What
-        the user allowed "for this session" goes with it."""
+        """Stop the CLI and browser (logins kept) and drop "for this session" approvals."""
         await self.close()
         await browser.browser_close()
-        await consent.close()  # a session started for a yes-or-no check that never came
+        await consent.close()  # a yes/no-check session that was never used
         await asyncio.to_thread(remembered.end_session, self.shell.session)
 
     def question_open(self) -> bool:
@@ -235,8 +219,7 @@ class CliBrain(Notes):
             await self.close()
 
     async def _finish(self) -> None:
-        """Read a reply the user spoke over to its end without stopping it, so the command it's running
-        finishes. What it says is kept for the next turn, since nobody heard it."""
+        """Drain a talked-over reply without stopping its command; keep its text for the next turn."""
         try:
             async for msg in self.client.receive_response():
                 self._track(msg)
@@ -251,7 +234,7 @@ class CliBrain(Notes):
             self._running.clear()
 
     def _track(self, msg) -> None:
-        """Keeps count of the tool calls under way."""
+        """Track in-flight tool calls."""
         if isinstance(msg, AssistantMessage) and msg.parent_tool_use_id is None:
             self._running |= {b.id: b.name for b in msg.content if isinstance(b, ToolUseBlock)}
         elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
@@ -278,8 +261,7 @@ class CliBrain(Notes):
 
     @staticmethod
     def _message(prompt: str, photos: list):
-        """What goes to the CLI: the prompt as it is, or with photos the user sent, one message of image content
-        blocks followed by the prompt's text."""
+        """The prompt, or with photos a single message of image blocks followed by the text."""
         if not photos:
             return prompt
         content = [pictures.block(p) for p in photos] + [{"type": "text", "text": prompt}]
@@ -294,19 +276,19 @@ class CliBrain(Notes):
         if self._drain is not None:
             if self._holding and not self._drain.done():
                 yield shell.HOLD + " "
-            # Shielded: a turn that's itself talked over mustn't stop the command.
+            # Shielded: a talked-over turn must not stop the command
             await asyncio.shield(self._drain)
             self._drain = None
         self._running.clear()
         spoken: list[str] = []
         finished = interrupted = False
-        # A reply to a question open: the word lists, or failing them a short model call on these words alone
+        # Answer to an open question: word lists first, else a short model call
         agreed = self.shell.new_turn(text, await self.shell.judge(text))
-        approved = self.shell.described(agreed)  # now, while a draft agreed to is still there to describe
+        approved = self.shell.described(agreed)  # before the agreed draft goes away
         photos: list = []
         try:
             try:
-                photos = await asyncio.to_thread(pictures.take)  # sent from the page since the last turn
+                photos = await asyncio.to_thread(pictures.take)  # sent since the last turn
             except OSError:
                 log.exception("couldn't take the photos sent")
             await self.start()
@@ -321,7 +303,7 @@ class CliBrain(Notes):
                         spoken.append(event["delta"]["text"])
                         yield event["delta"]["text"]
                     elif event.get("type") == "message_start" and spoken and not spoken[-1].endswith((" ", "\n")):
-                        spoken.append(" ")  # a new model turn after a tool call
+                        spoken.append(" ")  # new model turn after a tool call
                         yield " "
                     elif event.get("type") == "content_block_start" and event["content_block"].get("type") == "tool_use":
                         timing.tool("".join(spoken), event["content_block"].get("name", ""))
@@ -339,12 +321,12 @@ class CliBrain(Notes):
                             limit = self.limits.describe(msg.result)
                             yield "Sorry, that didn't work. " + (f"I've hit {limit}." if limit else "Something went wrong on my end.")
         except (asyncio.CancelledError, GeneratorExit):
-            interrupted = True  # the user spoke again, so the reply was cut off: logged as such, not as a blank one
+            interrupted = True  # logged as cut off, not blank
             if not finished and self.client is not None:
                 self._holding = "Bash" in self._running.values()
                 if self._holding:
                     log.info("spoken over while a command runs; letting it finish")
-                elif self._running:  # stopped mid-work: the next turn may hand it to the background
+                elif self._running:  # stopped mid-work; next turn may background it
                     self._cut = " ".join(text.split())[:300]
                 self._drain = asyncio.create_task(self._finish() if self._holding else self._interrupt())
             raise

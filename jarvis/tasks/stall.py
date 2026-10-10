@@ -1,22 +1,13 @@
-"""The stall watchdog: notices a running task that has gone quiet, so the user can nudge it or stop it.
+"""Stall watchdog: flag a running task that has gone quiet so the user can nudge or stop it.
 
-A running task shows it's alive with everything its session sends (each message, tool call and result, and its
-subagents' progress, which the worker hands to Reporter.alive) and with its log lines and updates in tasks.db. One that
-has shown none of these for TASK_STALL_MINUTES is stalled, unless its quiet is one it's meant to have:
+Signs of life: any session message (incl. subagent progress via Reporter.alive), log lines and updates in tasks.db.
+A running task with none for TASK_STALL_MINUTES is stalled unless the quiet is expected:
+  pending approval of a risky command, an open question or access request, Claude's usage limit hit,
+  a command still within its time limit (host_run, Bash, job_wait), or a running start_job job.
+Queued and waiting tasks never count.
 
-  a request to run a risky command, waiting for the user's yes
-  a question of its own, or access it asked for, waiting for an answer (asked mid-turn, just before it stops to wait)
-  Claude's usage limit, used up until it resets: the run saw it rejected, or it's used up for every model
-  a command it's running, for as long as that command may take: host_run and Bash up to their time limits, job_wait
-  a long job it started (start_job), still running
-
-Only running tasks count: queued ones wait for a slot, and waiting ones for the user, on purpose.
-
-The runner keeps the pulse in memory (a restart stops running tasks anyway) and shows a stalled task's `stalled` in its
-task views: task_list, task_detail and the control panel. The heartbeat's tasks source flags it once, by voice, a Mac
-notification and a push, offering to nudge it or stop it; again only if it moves on and then stalls afresh. Nothing is
-ever stopped on its own: that's the user's call. Checks follow the heartbeat, so a stall is flagged within
-HEARTBEAT_MINUTES of reaching TASK_STALL_MINUTES, and not in quiet hours or do not disturb; the views show it at once.
+The pulse is in memory only. Task views show `stalled` at once; the heartbeat flags it once per stall (voice, Mac
+notification, push), so within HEARTBEAT_MINUTES and not in quiet hours or do-not-disturb. Never stops a task itself.
 """
 
 import time
@@ -30,19 +21,19 @@ from jarvis.core.database import COMMAND
 from jarvis.safety import host
 from jarvis.tasks.host_tools import HOST_RUN, JOB_WAIT, call_minutes
 
-GRACE = 120  # seconds beyond a command's own time limit before its quiet counts
-BASH_DEFAULT, BASH_MOST = 120, 600  # seconds: the Bash tool's time limit unless it's given one, and its longest
-# What a command still running is doing, as the task's excuse for being quiet
+GRACE = 120  # seconds of slack past a command's own time limit
+BASH_DEFAULT, BASH_MOST = 120, 600  # seconds: Bash tool default and maximum timeout
+# Excuse shown for a quiet task, per still-running command tool
 DOING = {"Bash": "running a command", HOST_RUN: "running a command on the Mac", JOB_WAIT: "waiting for one of its jobs"}
 
 
 def lasts(block: ToolUseBlock) -> float:
-    """How long a tool call may legitimately go without a word, in seconds: 0 for any but the commands that wait."""
+    """Seconds a tool call may legitimately stay silent; 0 for tools that don't block."""
     args = block.input or {}
     if block.name in (HOST_RUN, JOB_WAIT):
         return call_minutes(args) * 60
     if block.name == "Bash" and not args.get("run_in_background"):
-        try:  # its timeout is in milliseconds
+        try:  # timeout is in ms
             return min(float(args.get("timeout") or BASH_DEFAULT * 1000) / 1000, BASH_MOST)
         except (TypeError, ValueError):
             return BASH_DEFAULT
@@ -50,17 +41,16 @@ def lasts(block: ToolUseBlock) -> float:
 
 
 class Pulse:
-    """When each running task last showed a sign of life, the commands it's in the middle of, and the usage limit its
-    run hit."""
+    """Per running task: last sign of life, in-flight blocking commands, and usage-limit reset time."""
 
     def __init__(self, clock: Callable[[], float] = time.time) -> None:
         self.clock = clock
         self.last: dict[int, float] = {}
-        self.calls: dict[int, dict[str, tuple[str, float]]] = {}  # task: tool call id: (what it's doing, until when)
-        self.limited: dict[int, float] = {}  # task: when the usage limit its run hit resets
+        self.calls: dict[int, dict[str, tuple[str, float]]] = {}  # task -> tool_use id -> (doing, deadline)
+        self.limited: dict[int, float] = {}  # task -> usage-limit reset time
 
     def saw(self, task_id: int, msg: object = None) -> None:
-        """A sign of life: any message from the task's session (or none, just word that it's alive)."""
+        """Record a sign of life, tracking blocking tool calls and rate-limit events in `msg` if given."""
         now = self.clock()
         self.last[task_id] = now
         if isinstance(msg, AssistantMessage):
@@ -82,22 +72,22 @@ class Pulse:
         return self.last.get(task_id, 0.0)
 
     def busy(self, task_id: int, now: float) -> str:
-        """What the task's command still within its time limit is doing, or ""."""
+        """Label for an in-flight command still within its time limit, or ""."""
         return next((what for what, until in self.calls.get(task_id, {}).values() if until > now), "")
 
     def limit(self, task_id: int, now: float) -> float | None:
-        """When the usage limit the task's run hit resets, while it hasn't."""
+        """Reset time of a usage limit the run hit, if not yet reset."""
         resets = self.limited.get(task_id)
         return resets if resets and resets > now else None
 
     def forget(self, task_id: int) -> None:
-        """Its run is over."""
+        """Drop all state for a finished run."""
         for kept in (self.last, self.calls, self.limited):
             kept.pop(task_id, None)
 
 
 def excuse(task: dict, store, pulse: Pulse, jobs: host.Jobs, now: float) -> str:
-    """Why a running task may be quiet now without being stuck, or "" if nothing explains it."""
+    """Why a running task may legitimately be quiet now, or ""."""
     task_id = task["id"]
     if store.approvals(task_id):
         return "waiting for your go-ahead"
@@ -114,9 +104,10 @@ def excuse(task: dict, store, pulse: Pulse, jobs: host.Jobs, now: float) -> str:
 
 def check(task: dict, store, pulse: Pulse, jobs: host.Jobs, now: float | None = None,
           minutes: int = TASK_STALL_MINUTES) -> dict | None:
-    """{"minutes": how long it has been quiet, "since": when it last showed a sign of life} for a running task that
-    has stalled; None for any other. A command task (jarvis.tasks.command_jobs) runs with no model, so it has no pulse:
-    its quiet is its command at work."""
+    """{"minutes", "since"} for a stalled running task, else None.
+
+    Command tasks are never stalled: they have no model session, so silence is expected.
+    """
     if minutes <= 0 or task["status"] != "running" or task.get("kind") == COMMAND:
         return None
     now = now or time.time()

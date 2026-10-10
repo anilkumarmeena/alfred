@@ -1,13 +1,10 @@
-"""Tests for how a task's end is said (jarvis.tasks.announce): worded by a model from the facts, or in fixed words when it
-can't be, never with the task's number or JARVIS's internals; the structured facts stay on the task for the tools, and
-the brain hears the task's number and pending edits beside the words, unsaid. The model call is faked.
-Run with: make test"""
+"""Tests for jarvis.tasks.announce: model-worded and fixed task-end wording, kept facts, what the brain hears."""
 
 import asyncio
 
 import pytest
-from test_data_edits import FACT, TODO, data, run_task  # noqa: F401  (data is a fixture)
-from test_in_place import env  # noqa: F401  (env is a fixture)
+from test_data_edits import FACT, TODO, data, run_task  # noqa: F401  (fixture)
+from test_in_place import env  # noqa: F401  (fixture)
 
 from jarvis.brain import persona, usage
 from jarvis.core.database import edits
@@ -18,7 +15,7 @@ TICK = ("tick off the to-do matching 'MCP connection tools'", "JARVIS's check fo
 
 
 class Model:
-    """Stands in for the wording call: what it was asked, and its reply (or an exception to raise)."""
+    """Fake wording call: records each prompt; returns its reply or raises the given exception."""
 
     def __init__(self, reply="The to-do linking work is finished. It'd also like to tick off your connection tools "
                              "to-do."):

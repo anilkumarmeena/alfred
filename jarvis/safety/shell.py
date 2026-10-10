@@ -1,31 +1,13 @@
 """Shell access for the CLI brain.
 
-Commands run in Claude Code's sandbox, where they're allowed without asking: they can read
-files other than secrets, write only to data/shell/, and reach no network. A command that
-needs more (to leave the sandbox, say) goes to `ShellGate`. Most run straight away; only risky
-ones (`risky`: deleting, pushing, installing, killing, changing the system, sending data off the
-Mac) are refused while a short spoken question is asked. The command isn't read out (it's
-logged in full). It runs once the user says a clear yes, within APPROVAL_MINUTES, and the model
-repeats that command (the same risky parts, in the same folders: commands.same_risk), so what runs is always fixed
-before the yes; run again in that turn, say after a failure, it isn't asked about again. Talk in between
-leaves the question open; a clear no drops it. Once other talk has come between, though, only words that tell JARVIS to
-go ahead count as the yes, not a stray "okay" (consent `later`). A reply the yes and no word lists can't read goes to a
-short model call that sees only the user's words, the kind of question and what's waiting as the gate describes it
-("a command that stops a process"), never the command (jarvis.safety.consent): unclear leaves the question open.
-As a question is put, that call's session is started (consent.warm), so it answers in time.
-A yes "for this session" also lets commands of that kind run without asking for the rest of the conversation, and an
-"always", once the user has heard what the rule covers and said yes again, from then on (jarvis.safety.remembered);
-some kinds always ask.
-
-Nothing is asked when the user's own words this turn already order just what the command does ("push it", "restart
-now", "delete the build folder": commands.ordered), or are a clear yes to JARVIS's question just before, which asked to
-do it ("Shall I push the changes?" "Yes.", or a yes in other words: commands.agreed_to, consent). Those words are the
-user's alone (the conversation's `heard`): nothing an email, a web page or a tool result says can stand in for them.
-
-Anything long (a render, a build) goes to `start_job`, which runs it as a command task in the task runner
-(jarvis.tasks.command_jobs), apart from the CLI, so neither talking over JARVIS, a Bash timeout nor the session ending
-cuts it off; it's in the task list, and said as it ends like any task. `stop_job` stops one of those, and only those, on
-the user's say-so, without the yes a kill command would need.
+Sandboxed commands run without asking (read non-secrets, write only the scratch dir, no network). Others go to
+`ShellGate`: safe ones run; risky ones are refused while JARVIS asks aloud (never reading the command out).
+  - A clear yes within APPROVAL_MINUTES lets the identical command (commands.same_risk) run, and rerun this turn.
+  - Talk in between keeps the question open, but then only an explicit go-ahead counts; a clear no drops it.
+  - No question if the user's own words this turn already order it (commands.ordered) or said yes to JARVIS's
+    proposal (commands.agreed_to). Only `heard` counts, never tool output.
+  - "For this session" / "always" yes create rules (jarvis.safety.remembered).
+Long work goes to `start_job` (a command task in the runner, immune to interruptions); `stop_job` stops only those.
 """
 
 import json
@@ -46,7 +28,7 @@ from jarvis.safety.commands import (
     HOME_SECRETS,
     JARVIS_SECRETS,
     agreed_to,
-    approves,  # noqa: F401  (with refuses and risky, imported from here elsewhere)
+    approves,  # noqa: F401  (re-exported, with refuses and risky)
     names_secret,
     ordered,
     reads_environment,
@@ -64,32 +46,29 @@ log = logging.getLogger("jarvis.safety.shell")
 
 
 def scratch_dir() -> Path:
-    """The sandbox's working folder, and the only place it may write: the profile's."""
+    """The profile's scratch dir: the sandbox's cwd and only writable place."""
     return profile.current().shell
 
 
 SANDBOX = {
     "enabled": True,
     "autoAllowBashIfSandboxed": True,
-    "allowUnsandboxedCommands": True,  # sent to ShellGate, which wants a yes for risky ones
+    "allowUnsandboxedCommands": True,  # routed through ShellGate
     "network": {"allowedDomains": []},
 }
-# The CLI's Bash gives up on a command after 2 minutes by default; long work belongs in start_job, but a
-# command that runs longer than expected shouldn't be cut off halfway.
+# Bash defaults to a 2-minute timeout; raise it so an unexpectedly slow command isn't cut off halfway
 BASH_ENV = {"BASH_DEFAULT_TIMEOUT_MS": "600000", "BASH_MAX_TIMEOUT_MS": "600000"}
 
-# Hidden from sandboxed commands, so nothing can read a secret and pass it on through web
-# search or a mail draft. Leading "//" is an absolute path in permission rules.
+# Unreadable from the sandbox, so no secret can leak via web search or a draft. "//" = absolute path in rules.
 _RULE_PATHS = [f"/{p}" for p in JARVIS_SECRETS] + HOME_SECRETS
 SETTINGS = json.dumps({"permissions": {"deny": [r for p in _RULE_PATHS for r in (f"Read({p})", f"Read({p}/**)")]}})
-# Outside the sandbox the rules above don't apply, so a command naming a secret is refused even with a yes
-# (commands.names_secret).
+# These don't apply outside the sandbox, so commands naming a secret are refused even with a yes.
 
-QUESTION = "Okay to go ahead?"  # all that's said aloud when a command needs a yes
-HOLD = "One moment, that command is still running."  # said when the user speaks while one runs
+QUESTION = "Okay to go ahead?"  # the only thing said aloud for a risky command
+HOLD = "One moment, that command is still running."  # said if the user speaks mid-command
 
 START_JOB, JOB_STATUS, STOP_JOB = "mcp__shell__start_job", "mcp__shell__job_status", "mcp__shell__stop_job"
-JARVIS_TOOLS = "mcp__jarvis__"  # JARVIS's own tools; only those that may keep a command to run later come here
+JARVIS_TOOLS = "mcp__jarvis__"  # only the ones that schedule a command reach this gate
 
 
 def prompt() -> str:
@@ -108,49 +87,46 @@ Shell:
 # ── The gate ────────────────────────────────────────────────────
 
 
-FILE_READS = ["Read", "Glob", "Grep"]  # for the brain's lookup subagents only
-_AGENT_TOOLS = {"Agent", "Task"}  # the subagent tool, which the bundled CLI still calls by its old name, Task
+FILE_READS = ["Read", "Glob", "Grep"]  # lookup subagents only
+_AGENT_TOOLS = {"Agent", "Task"}  # the bundled CLI may name the subagent tool either way
 
 
 class ShellGate:
-    """Decides the tool calls the CLI doesn't allow on its own: Bash it won't run by itself, start_job,
-    and the `agents` subagents and the file reads they make. The brain itself doesn't read files: its
-    subagents do, so file contents stay out of the spoken turn. Secrets stay out of reach of both."""
+    """Permission callback for calls the CLI won't allow alone: unsandboxed Bash, start_job, scheduled commands,
+    subagents and their file reads. The brain itself never reads files, keeping contents out of the spoken turn.
+    """
 
     def __init__(self, clock: Callable[[], float] = time.monotonic, agents: tuple[str, ...] = ()) -> None:
         self.clock = clock
         self.agents = set(agents)
-        self.session = f"voice:{uuid.uuid4().hex[:12]}"  # this conversation, as its remembered approvals name it
-        self.said = ""  # the user's words this turn
-        self.asked: list[str] = []  # risky commands that need a yes, from this turn
-        self.put = False  # whether this turn got as far as asking
-        self.pending: dict[str, float] = {}  # risky commands put to the user and awaiting a yes, with when
-        self.agreed: dict[str, float] = {}  # commands the user said yes to that haven't run yet, with when
-        self.ran: list[str] = []  # commands run on a yes this turn, which may run again in it (a retry) without asking
-        self.offered: dict[str, dict] = {}  # risky shell commands asked about, with what each offers to be remembered
-        self.what: dict[str, str] = {}  # what each one asked about does, as the gate describes it, for consent's model
-        self.kept: list[dict] = []  # rules the user's yes this turn kept for the conversation, to tell the model
-        # An "always" this turn: what to offer (approvals.RuleOffer.put's rules, request, breadth and example), or why not
+        self.session = f"voice:{uuid.uuid4().hex[:12]}"  # session id for remembered rules
+        self.said = ""  # user's words this turn
+        self.asked: list[str] = []  # keys needing a yes, from this turn
+        self.put = False  # this turn reached the question
+        self.pending: dict[str, float] = {}  # asked, awaiting a yes -> when
+        self.agreed: dict[str, float] = {}  # approved, not yet run -> when
+        self.ran: list[str] = []  # run on a yes this turn; may rerun without asking
+        self.offered: dict[str, dict] = {}  # command -> remembered.pieces()
+        self.what: dict[str, str] = {}  # key -> description for the consent model
+        self.kept: list[dict] = []  # session rules kept this turn, to tell the model
+        # After an "always": RuleOffer.put args (rules, request, breadth, example), or why not
         self.offer: tuple[list[dict], None, str, str] | str | None = None
 
     def _waiting(self, now: float) -> dict[str, float]:
-        """The questions the user's next words answer, with when each was put: those still open, and this turn's if it
-        got as far as asking (an interrupted turn's commands lapse)."""
+        """Open questions -> when asked, within APPROVAL_MINUTES. An interrupted turn's own questions lapse."""
         pending = self.pending | (dict.fromkeys(self.asked, now) if self.put else {})
         return {c: t for c, t in pending.items() if now - t < APPROVAL_MINUTES * 60}
 
     def kind_of(self, key: str) -> str:
-        """Which kind of question (consent.KINDS) asking about this command is, for the model that reads a reply."""
+        """consent.KINDS entry for this key."""
         return consent.COMMAND
 
     def _later(self) -> bool:
-        """Whether other talk has come since the questions open were put: the last turn didn't put one."""
+        """Whether other talk has passed since the open questions were asked."""
         return not (self.put and self.asked)
 
     async def judge(self, text: str) -> Verdict | None:
-        """What the user's next words make of the questions open, before new_turn takes them: the word lists' verdict,
-        or failing them the model's, which sees only these words, the kind of question and what's waiting
-        (consent.reply). None when nothing is open."""
+        """consent.reply verdict on the user's words for the open questions; None if none are open."""
         if not (waiting := self._waiting(self.clock())):
             return None
         kinds = {self.kind_of(k) for k in waiting}
@@ -158,9 +134,10 @@ class ShellGate:
         return await consent.reply(text, kinds.pop() if len(kinds) == 1 else consent.ACTION, about, self._later())
 
     def new_turn(self, text: str, verdict: Verdict | None = None) -> list[str]:
-        """Takes the user's next words, and returns the commands they have just said yes to. A yes "for this
-        session" keeps rules for those commands at once; an "always" offers them at the end of the turn. `verdict` is
-        what judge made of the words; without it, the word lists decide."""
+        """Start a turn; returns the commands just approved.
+
+        A session yes saves rules now; an "always" queues a rule offer. `verdict` from judge(), else the word lists.
+        """
         now = self.clock()
         later = self._later()
         self.pending = self._waiting(now)
@@ -183,7 +160,7 @@ class ShellGate:
         return yes
 
     def _remember(self, commands: list[str], scope: str, breadth: str) -> None:
-        """Keep rules for commands the user said yes to "for this session", or line them up to offer for "always"."""
+        """Save session rules now, or queue an "always" offer (or why not)."""
         found = remembered.fitting([self.offered[c] for c in commands], breadth)
         example = " && ".join(commands)
         if isinstance(found, str):
@@ -242,45 +219,40 @@ class ShellGate:
         )
 
     def _yes(self, command: str) -> str | None:
-        """The command the user said yes to that this one is (the same risky parts, in the same folders), or one that
-        ran this turn on a yes or an order, which may run again in it; else None."""
+        """The approved (or already-run-this-turn) command this one matches via same_risk, else None."""
         return next((c for c in [*self.agreed, *self.ran] if c == command or same_risk(c, command)), None)
 
     async def _told(self, command: str, why: str) -> bool:
-        """Whether the user's own words this turn order just what the command does, or are a clear yes to JARVIS's
-        question just before them, which asked to do it. Their words come from the conversation's `heard`, set before the turn,
-        which nothing but the user's words reach; a yes the word lists can't read is the model's to judge, from those
-        words and what the command does (consent.reply)."""
+        """Whether the user's own words this turn (`heard`) order the command or say yes to JARVIS's proposal of it."""
         heard = conversation.current().heard
         if heard.said != self.said.strip():
             return False
         if ordered(heard.said, command):
             return True
         if not heard.before or not agreed_to(heard.before, heard.said, command, yes=True):
-            return False  # no question just before that asked to do just this
+            return False  # the previous reply didn't propose exactly this
         return (await consent.reply(heard.said, consent.COMMAND, what(why))).yes
 
     def question_open(self) -> bool:
-        """Whether a question about a risky command is waiting for the user's yes: a background task's request
-        isn't put to them meanwhile (jarvis.safety.approvals)."""
+        """Whether a risky-command question is open (task approvals wait meanwhile)."""
         now = self.clock()
         return bool(self.asked) or any(now - t < APPROVAL_MINUTES * 60 for t in self.pending.values())
 
     def question(self, spoken: str = "") -> str:
-        """What to say at the end of a turn that asked about a risky command, or ''. Never the command
-        itself, and nothing when the reply so far already ends in a question. A turn that asked nothing, after a
-        yes that said "always", offers its rule instead (the conversation's `offer`)."""
+        """End-of-turn question, or ''. Never the command itself; nothing if the reply already asks something.
+
+        A turn with nothing asked offers any pending "always" rule instead.
+        """
         if not self.asked:
             return self._offer(spoken)
-        self.offer = None  # a new question comes first: the rule isn't offered
+        self.offer = None  # a new question takes precedence over the rule offer
         self.put = True
         if asks_question(spoken):
             return ""
         return following(spoken, QUESTION)
 
     def _offer(self, spoken: str) -> str:
-        """What a turn that ran commands agreed to "always" ends with: what the rule would cover, and whether to
-        save it; or, for commands that always ask, that the yes went no further."""
+        """After an "always" yes: the save-rule question, or why the yes was one-off."""
         offer, self.offer = self.offer, None
         if offer is None or asks_question(spoken):
             return ""
@@ -291,7 +263,7 @@ class ShellGate:
         return following(spoken, text)
 
     def agreed_hint(self, agreed: list[str]) -> str:
-        """Tells the model, with the user's yes, exactly what it may now run, and what it keeps for the conversation."""
+        """Tell the model exactly what it may now run, and any session rules kept."""
         hint = agreed_hint(agreed)
         if self.kept:
             hint += (f"\n[For the rest of this conversation, {remembered.covers(self.kept)} won't need asking. Say so in "
@@ -300,17 +272,17 @@ class ShellGate:
 
 
 def what(why: str) -> str:
-    """A risky command as consent's model is told it: what it does, never the command."""
+    """Consent-model description of a risky command: what it does, never the command."""
     return f"a command that {why}"
 
 
 def following(spoken: str, text: str) -> str:
-    """`text`, to say after the reply so far: with a space before it, unless the reply is empty or ends in one."""
+    """`text`, space-prefixed unless `spoken` is empty or ends in whitespace."""
     return text if not spoken or spoken[-1].isspace() else " " + text
 
 
 def agreed_hint(commands: list[str]) -> str:
-    """Tells the model, with the user's yes, exactly what it may now run."""
+    """Tell the model exactly what it may now run."""
     listed = " ".join(f"({i}) {c}" for i, c in enumerate(commands, 1)) if len(commands) > 1 else commands[0]
     return (f"[{profile.name()} has said yes to what you asked about. Run it now, exactly as before, with the same tool, "
             f"one call per command: {listed}]")
@@ -328,10 +300,10 @@ def _minutes(task: dict) -> int:
 
 
 class Jobs:
-    """The voice brain's long jobs, each a command task in the task runner (jarvis.tasks.command_jobs): run there with
-    no model while it works, in the task list beside every other task, stopped with stop_job or task_stop, and said as it
-    ends like any task's update, a failure looked into and, as the model reading it decides, fixed. The scheduled
-    commands' runs are command tasks too, so job_status shows them and stop_job stops them."""
+    """Voice brain long jobs, each a command task in the runner (jarvis.tasks.command_jobs).
+
+    No model runs while they work; failures may get an auto-fix task. Scheduled command runs are command tasks too.
+    """
 
     async def start(self, command: str, title: str, folder: str = "", timeout_minutes: int = 0,
                     fix: bool = True) -> str:
@@ -348,7 +320,7 @@ class Jobs:
                 + (", or if it fails, why, and what it does about it." if fix else "."))
 
     async def status(self) -> list[dict]:
-        """The jobs running, and those that ended in the last day, oldest first, each with the end of its output."""
+        """Running and last-day command tasks, oldest first, each with its output tail."""
         return [self._view(t) for t in reversed(await client.tasks()) if t["kind"] == COMMAND]
 
     @staticmethod
@@ -364,8 +336,7 @@ class Jobs:
         return view
 
     async def stop_job(self, job_id: int | None = None, title: str = "", scheduled: int | None = None) -> str:
-        """Stops a job by its id (its task's), or a scheduled command's run by its scheduled job's id; or else by its
-        title among the running ones: the exact title, or else the one running job whose title contains it."""
+        """Stop by task id, by scheduled job id, or by title (exact, else a unique substring among running jobs)."""
         try:
             return await self._stop_job(job_id, title, scheduled)
         except client.RunnerUnavailable:
@@ -415,9 +386,7 @@ class Jobs:
 
 
 def job_server(jobs: Jobs):
-    """start_job, job_status and stop_job for the CLI brain: each job is a command task, so task_list, task_detail and
-    task_stop reach them too. start_job isn't allowed outright: it meets ShellGate like Bash. stop_job is, since it
-    stops only jobs."""
+    """MCP server for start_job, job_status, stop_job. start_job goes through ShellGate; stop_job is allowed."""
 
     @sdk_tool(
         "start_job",
@@ -469,7 +438,7 @@ def job_server(jobs: Jobs):
         }},
     )
     async def stop_job(args: dict) -> dict:
-        # the server checks them against the schema
+        # args already validated against the schema
         text = await jobs.stop_job(args.get("id"), args.get("title", ""), args.get("scheduled_job"))
         return {"content": [{"type": "text", "text": text}]}
 

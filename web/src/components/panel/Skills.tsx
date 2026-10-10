@@ -1,6 +1,5 @@
-// Skills: the how-tos JARVIS loads when a request matches one (jarvis.skills). Each can be read, switched on or off
-// and deleted here; one with scripts goes on only once the review of those very files has been read and approved.
-// Installing and writing them is by voice.
+// Skills: view, enable/disable, delete. A skill with scripts can be enabled only after approving the review of its
+// current files. Installing and authoring is by voice.
 import { useEffect } from "preact/hooks";
 import { useSignal } from "@preact/signals";
 import { act, skills, type Skill, type SkillDetail } from "../../state/panel";
@@ -12,7 +11,7 @@ const SOURCE_PILL: Record<string, string> = { installed: "running", written: "do
 const STATE_PILL: Record<string, string> = { on: "done", off: "muted", broken: "failed" };
 const VERDICT_PILL: Record<string, string> = { low: "done", medium: "waiting", high: "failed" };
 
-// SKILL.md's frontmatter, shown as it is, and its instructions, rendered
+// SKILL.md: frontmatter raw, body rendered
 function split(md: string): [string, string] {
   const m = /^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)([\s\S]*)$/.exec(md);
   return m ? [m[1] ?? "", m[2] ?? ""] : ["", md];
@@ -93,7 +92,7 @@ function Detail({ name }: { name: string }) {
 function Row({ s }: { s: Skill }) {
   const open = useSignal(false);
   async function toggle() {
-    if (!s.enabled && s.needs_approval) { open.value = true; return; }  // its review comes first, below
+    if (!s.enabled && s.needs_approval) { open.value = true; return; }  // review first
     const r = await act<SkillDetail>("skill_switch", { name: s.name, on: !s.enabled }, s.enabled ? "Switched off" : "Switched on");
     if (r) reload();
   }

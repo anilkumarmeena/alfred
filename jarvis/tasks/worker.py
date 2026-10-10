@@ -1,74 +1,16 @@
 """One run of a background task: a Claude Code session limited to what its kind allows.
 
-  code_change    edits the project's own folder in place, leaving the changes uncommitted; for projects
-                 set to worktrees (in_place false), a git worktree of the project on the task's own branch instead
-  code_question  reads the project's live checkout; the only shell commands are read-only git ones
-  research       web search plus JARVIS's read-only tools (mail, calendar, Google Sheets, Docs, Slides and Drive), and
-                 the MCP servers marked for research (GitHub, GitLab, whatever's connected), started read-only
-                 (jarvis.integrations.mcp_servers)
+  code_change    edits the project folder in place (uncommitted), or a worktree + branch when in_place=false
+  code_question  reads the live checkout; shell is read-only git only
+  research       web plus read-only account tools and research MCP servers (read-only); works in data/tasks/ID
 
-Every file tool passes through `TaskGate`: reads stay inside the task's folders, the user's
-projects (TASK_READ_DIRS) and JARVIS's voice session logs, and edits inside the worktree.
-Secrets are hidden from both the file tools and the sandbox (`_secret`, `_secret_rules`).
-code_change shell commands run in Claude Code's sandbox, which lets them write only to the
-worktree and the shared cache folder, and reach any host (`OPEN_NETWORK`); a Bash command that
-asks to leave the sandbox is denied. What needs the Mac itself (a signed Xcode build, devicectl,
-Homebrew) goes through the host tools instead (`_host_server`): host_run for a command of up to
-10 minutes, start_job, job_status and job_wait for longer ones. They run in the runner, under
-jarvis.safety.host's Seatbelt profile and without JARVIS's keys in their environment, and each call
-meets `_host_gate` first: a command naming a secret or JARVIS's controls is refused
-(commands.refused), an ordinary one runs, and a risky one (commands.risky) waits for the user's
-yes, which the runner asks for (Reporter.request_approval) by push and by voice; once it's given,
-the identical command runs, in the run it resumes. One the user has said to allow for the task's session or always
-runs under that rule (jarvis.safety.remembered), and one the user's own words sent with the task order ("merge and
-push") runs as they said, both of which Reporter.cleared checks too. Deleting only the task's own files (in its folder
-or its temp folder, `task_temp`) and stopping only processes it started (this command's $!, or those in the
-sessions its host commands and jobs ran in, `TaskJobs.ran`) run without asking, where the command
-itself proves it (commands.Own). An approved package install that runs its steps in a macOS sandbox of its own
-(brew install, commands.own_sandbox) runs outside the Seatbelt profile, since macOS won't start one sandbox inside
-another; the line may hold nothing but the install. Sessions don't commit: the runner commits worktree code_change
-work when a run ends; in-place work stays uncommitted.
-
-The CLI itself gets none of .env's values either: they're blanked in its environment (`_blank_env`),
-so a sandboxed command can't read them.
-
-No task can write JARVIS's own data files (the project list, the to-do list, memory). It
-suggests edits to them with propose_data_edit instead, which the runner keeps on the task for
-JARVIS to apply or dismiss (jarvis.tasks.data_edits).
-
-Messages sent to a running task (nudges) reach the session after its next tool call, through
-a PostToolUse hook. Any still waiting when it ends its turn go to it as one more prompt.
-
-Each session can hand side jobs to its subagents (the Agent tool), on cheaper models: a
-read-only code searcher for code tasks, a test runner for code_change, and a web researcher
-for research. Their tool calls meet the same gate and sandbox, and the gate refuses any
-edit from them. Their starts and ends go in the task's log, and what they're doing shows as
-its activity. A run doesn't end while any is still running in the background, nor without a
-final report (`run`).
-
-code_change and research tasks can also publish pages to claude.ai with Claude Code's Artifact tool (TASK_ARTIFACTS),
-which the bundled CLI only loads with CLAUDE_CODE_ARTIFACT=1 set. A publish sends a local file off the Mac, so the gate
-(`TaskGate.artifact`) lets it publish only files in the task's own folder, never secrets, and only publish, read and
-list: no deleting or sharing. Research gets Write in its own folder for its pages, and nothing else to write with.
-
-A task can be granted more than its kind has (jarvis.tasks.access), when it starts or on a reply, and asks for what it
-lacks with request_access, which pauses it like a question. Granted, it's resumed in the same session with options
-built from its kind and its grants (`_options`): artifacts, sandboxed shell commands, the host tools, edits in the
-user's other projects (`TaskGate`'s `more_writes`, never secrets or JARVIS's own files, `_jarvis_own`), or the
-read-only account tools. A code_question's own folder for these is data/tasks/ID, as research's is; its sandboxed
-commands can't write in the user's checkout, and its host commands treat that as in-place work.
-
-Code tasks also load the project's own Claude Code setup (jarvis.tasks.project_claude): its CLAUDE.md,
-subagents, skills and slash commands, but not its settings or hooks. JARVIS's helpers win a name
-clash. The project's own subagents may edit files, where the task itself may. Skills can grant
-tools (allowed-tools), so the gate runs again as a PreToolUse hook (`TaskGate.hook`), ahead of
-any allow rule. Every kind also gets JARVIS's own skills that are switched on (jarvis.skills.home),
-as a plugin of the run's own, under jarvis-skills:, with no hooks or !`commands` run from them.
-
-Its parts: what the session is told (jarvis.tasks.briefs); the Reporter, the task's own tools and nudges
-(jarvis.tasks.reporting); the tools on the Mac and their gate (jarvis.tasks.host_tools); the gate on every other call and
-the secrets it hides (jarvis.tasks.gate); and its subagents (jarvis.tasks.subagents). Here: the options a run's session
-gets, and the run.
+Safety: every tool call passes TaskGate (also as a PreToolUse hook, since skills' allowed-tools become allow rules).
+Reads stay in task folders, TASK_READ_DIRS and voice logs; writes in the worktree. Secrets are hidden from file tools
+and the sandbox. code_change shell runs sandboxed (writes: worktree + cache; network: open); escaping is denied.
+Mac-level work goes through host tools (host_tools), gated by `_host_gate`. The CLI's env has .env values blanked.
+Tasks never write JARVIS's data files; they propose edits. Extra access (jarvis.tasks.access) shapes `_options`.
+Code tasks load the project's Claude setup (project_claude); JARVIS's enabled skills load as a plugin. JARVIS's
+helper subagents win name clashes. A run doesn't end while background subagents run, nor without a final report.
 """
 
 import asyncio
@@ -127,7 +69,7 @@ from jarvis.tasks.host_tools import HOST_RUN, JOB_STATUS, JOB_WAIT, START_JOB, _
 from jarvis.tasks.reporting import PAUSES, REQUEST_ACCESS, Reporter, _nudge_hook, _task_server, nudge_text
 from jarvis.tasks.subagents import _AGENT_TOOLS, Subagents, _agents
 
-# Moved to the modules above, and still importable from here
+# Re-exported: other modules and tests import these from here
 from jarvis.tasks.host_tools import TaskJobs  # noqa: F401
 from jarvis.tasks.reporting import with_nudges  # noqa: F401
 from jarvis.tasks.subagents import RESEARCHER, SEARCHER, TESTER, result_text  # noqa: F401
@@ -142,22 +84,22 @@ READ_ONLY_TOOLS = ["calendar_events", "calendar_event", "calendar_free_time", "g
 
 @dataclass
 class Outcome:
-    result: str  # the session's final message
-    error: str  # empty when the run succeeded
+    result: str  # final message
+    error: str  # "" on success
     cost: float
-    kind: str = ""  # a failed run's kind of failure (jarvis.brain.retry)
+    kind: str = ""  # failure kind (jarvis.brain.retry)
 
 
-ARTIFACT_ENV = {"CLAUDE_CODE_ARTIFACT": "1"}  # undocumented; without it the CLI leaves the tool out when run by the SDK
+ARTIFACT_ENV = {"CLAUDE_CODE_ARTIFACT": "1"}  # undocumented; the CLI omits Artifact under the SDK without it
 
 
-# code_change commands may reach any host: "*" matches every domain in the CLI's sandbox proxy. configd is the
-# macOS network-settings service; uv and other Rust tools that read the system proxy crash on start without it.
+# "*" allows every domain through the sandbox proxy. configd (macOS network settings) is needed by uv and other
+# Rust tools that read the system proxy, or they crash on start.
 OPEN_NETWORK = {"allowedDomains": ["*"], "allowMachLookup": ["com.apple.SystemConfiguration.configd"]}
 
 
 def _cache_env() -> dict[str, str]:
-    """Point build and package caches into the cache folder, where sandboxed commands may write."""
+    """Env pointing build/package caches into TASK_CACHE_DIR (sandbox-writable)."""
     dirs = {"GOCACHE": "go-build", "GOMODCACHE": "go-mod", "npm_config_cache": "npm", "UV_CACHE_DIR": "uv",
             "PIP_CACHE_DIR": "pip", "XDG_CACHE_HOME": "xdg", "PYTHONPYCACHEPREFIX": "pycache"}
     for sub in dirs.values():
@@ -166,17 +108,15 @@ def _cache_env() -> dict[str, str]:
 
 
 def _blank_env() -> dict[str, str]:
-    """Every .env setting, blanked: the CLI would otherwise inherit JARVIS's keys from the runner, and hand them
-    to every command it runs. CLAUDE_ settings stay, since they're the CLI's own. Every MCP server's secret variables
-    go whatever set them, and the vault's master key: only the MCP servers' launcher needs it, and reads it from .env
-    itself (jarvis.integrations.mcp_launch)."""
+    """Blank every .env key (except CLAUDE_*) plus MCP secrets and the vault key, so commands can't inherit them.
+
+    The MCP launcher reads the vault key from .env itself.
+    """
     return {k: "" for k in host.env_keys() if not k.startswith("CLAUDE_")} | mcp_servers.session_env()
 
 
 def _model(task: dict) -> tuple[str, str]:
-    """The model and effort a run gets: scheduled runs and watch checks (jarvis.tasks.scheduler) are routine, so they
-    get a lighter one, unless they change code. A lighter one still stands in while the model's own weekly limit is
-    used up (jarvis.brain.usage)."""
+    """(model, effort): scheduled non-code runs get SCHEDULE_MODEL; usage.available falls back if a limit is out."""
     if task.get("job") is not None and task["kind"] != "code_change":
         return usage.available(SCHEDULE_MODEL), SCHEDULE_EFFORT
     return usage.available(TASK_MODEL), TASK_EFFORT
@@ -192,7 +132,7 @@ def _options(task: dict, reporter: Reporter) -> ClaudeAgentOptions:
     denied: list[str] = []
     sandbox = bash = host_gate = None
     if kind == "code_change":
-        cwd = Path(task["worktree"])  # for an in-place task, the project's own folder
+        cwd = Path(task["worktree"])  # the project folder when in place
         denied = _IN_PLACE_DENIED if task["in_place"] else []
         builtins = ["Read", "Glob", "Grep", "Edit", "Write", "Bash", "TodoWrite", "WebSearch", "WebFetch"]
         read_roots, write_roots = [cwd, TASK_CACHE_DIR, host.TASK_JOBS_DIR, *TASK_READ_DIRS, profile.current().voice_logs], [cwd]
@@ -202,14 +142,14 @@ def _options(task: dict, reporter: Reporter) -> ClaudeAgentOptions:
         sandbox = {"enabled": True, "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False,
                    "network": OPEN_NETWORK}
         mcp["host"] = _host_server(task, cwd, reporter.host_jobs)
-        allowed += [JOB_STATUS, JOB_WAIT]  # they only read; host_run and start_job meet the gate
+        allowed += [JOB_STATUS, JOB_WAIT]  # read-only; host_run/start_job are gated
         host_gate = _host_gate(task, cwd, reporter)
     elif kind == "code_question":
         cwd = projects.find(task["project"]).path
         builtins = ["Read", "Glob", "Grep", "Bash", "WebSearch", "WebFetch"]
         read_roots, write_roots = [cwd, *TASK_READ_DIRS, profile.current().voice_logs], []
         bash = _read_only_git
-        # Bash still goes through the gate (read-only git only); the sandbox is a second wall.
+        # Bash is gated to read-only git; the sandbox is a second wall.
         sandbox = {"enabled": True, "autoAllowBashIfSandboxed": False, "allowUnsandboxedCommands": False,
                    "network": {"allowedDomains": []}}
     else:
@@ -217,76 +157,73 @@ def _options(task: dict, reporter: Reporter) -> ClaudeAgentOptions:
         cwd.mkdir(parents=True, exist_ok=True)
         builtins = ["WebSearch", "WebFetch"]
         read_roots, write_roots = [], []
-    # What its kind has by default and what it was granted (jarvis.tasks.access). A code_question keeps what it makes
-    # in a folder of its own, as research does, since its project is the user's live checkout.
+    # Default + granted access. code_question gets its own folder (like research): its project is the live checkout.
     can = access.has(task)
     own = DATA_DIR / "tasks" / str(task["id"]) if kind == "code_question" else cwd
-    more_writes, edit_denied = [], []  # edits beyond write_roots; where sandboxed commands may not write
-    if kind != "code_change":  # code_change has its shell and host tools already, set up above
+    more_writes, edit_denied = [], []  # extra edit roots; sandbox write denials
+    if kind != "code_change":  # code_change already has shell and host tools
         if can & {"artifacts", "shell", "mac"}:
             own.mkdir(parents=True, exist_ok=True)
-            builtins, write_roots = builtins + ["Write"], [own]  # pages to publish and the like, in its own folder only
+            builtins, write_roots = builtins + ["Write"], [own]  # own folder only
         if can & {"shell", "mac"}:
             task_temp(task["id"]).mkdir(parents=True, exist_ok=True)
         if "shell" in can:
             builtins.append("Bash")
-            bash = None  # sandboxed commands run on their own; one that asks to leave the sandbox is denied
-            add_dirs += [d for d in (own, TASK_CACHE_DIR) if d != cwd]  # where they may write, besides cwd
+            bash = None  # sandboxed; requests to leave the sandbox are denied
+            add_dirs += [d for d in (own, TASK_CACHE_DIR) if d != cwd]  # extra writable dirs
             env |= _cache_env()
             sandbox = {"enabled": True, "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False,
                        "network": OPEN_NETWORK}
             if kind == "code_question" and "projects" not in can:
-                # Its commands can't write in the user's checkout: everything there but the way to its own folder
-                # (which is inside only for JARVIS's own repo). Edit rules are the sandbox's write rules too.
+                # Block writes in the user's checkout except the path to its own folder (inside only for JARVIS's
+                # repo). Edit deny rules also act as sandbox write rules.
                 edit_denied = [r for p in _hide_except(cwd.resolve(), own.resolve()) for r in (f"Edit(/{p})", f"Edit(/{p}/**)")]
         if "mac" in can:
-            # Host commands start in its own folder. A code_question's project is the user's checkout, where git
-            # commands that change it are refused, as for in-place work.
+            # Host commands start in its own folder; for code_question, treat the checkout as in-place (no git changes).
             on = task | {"in_place": 1} if kind == "code_question" else task
             mcp["host"] = _host_server(on, own, reporter.host_jobs)
             allowed += [JOB_STATUS, JOB_WAIT]
             host_gate = _host_gate(on, own, reporter)
     if "projects" in can:
         builtins += ["Read", "Glob", "Grep", "Edit", "Write"]
-        read_roots = read_roots or [own, *TASK_READ_DIRS, profile.current().voice_logs]  # research reads nothing otherwise
-        more_writes = list(TASK_READ_DIRS)  # but for secrets and JARVIS's own files (TaskGate)
+        read_roots = read_roots or [own, *TASK_READ_DIRS, profile.current().voice_logs]  # research has none otherwise
+        more_writes = list(TASK_READ_DIRS)  # TaskGate still blocks secrets and JARVIS's own files
     if "accounts" in can:
         mcp["jarvis"], jarvis_allowed = jarvis_server(READ_ONLY_TOOLS)
-        # The MCP servers marked for research, started read-only, with only their reads
+        # Research MCP servers, read-only
         servers = mcp_servers.session(mcp_servers.for_research(), read_only=True)
         mcp |= servers.configs
         allowed += jarvis_allowed + servers.allowed
         denied = denied + servers.blocked
     if "artifacts" in can:
         env |= ARTIFACT_ENV
-        builtins, allowed = builtins + [ARTIFACT], allowed + [ARTIFACT]  # each call still meets TaskGate.artifact
-    # The project's own agents, skills, commands and CLAUDE.md, but never its settings (jarvis.tasks.project_claude).
-    # Research works in no project, so it has none.
+        builtins, allowed = builtins + [ARTIFACT], allowed + [ARTIFACT]  # each call still checked by TaskGate.artifact
+    # Project's own agents, skills, commands and CLAUDE.md, never its settings. Research has no project.
     setup = None
     helpers = _agents(kind)
-    # Secrets hidden wherever it reads, and, for shell commands, in the projects too
+    # Hide secrets in read roots, and in projects too when it has a shell
     hidden_in = read_roots + (TASK_READ_DIRS if "shell" in can else [])
     flags: dict = _secret_rules(hidden_in) if hidden_in else {}
     if edit_denied:
         flags["permissions"]["deny"] += edit_denied
     if kind != "research" and task["project"]:
         setup = project_claude.load(cwd, task["project"], DATA_DIR / "tasks" / str(task["id"]) / "claude-plugin")
-        if setup.claude_md:  # not one that looks like hidden instructions
-            add_dirs.append(cwd)  # for its CLAUDE.md, which the CLI reads from additional directories (CLAUDE_MD_ENV)
+        if setup.claude_md:  # not tampered
+            add_dirs.append(cwd)  # CLI reads CLAUDE.md from additional dirs (CLAUDE_MD_ENV)
             env |= project_claude.CLAUDE_MD_ENV
         if setup.flagged:
             reporter.flag(task["id"], f"Left out of {task['project']}'s setup, as they look like hidden instructions: "
                                       f"{'; '.join(setup.flagged)}")
-        flags["disableAllHooks"] = True  # hooks in its skills and commands; the SDK's own callbacks still run
-    # JARVIS's own skills that are switched on, as a plugin of the run's own (jarvis.skills.home)
+        flags["disableAllHooks"] = True  # project hooks off; SDK callback hooks still run
+    # JARVIS's enabled skills, as a per-run plugin
     mine_at = DATA_DIR / "tasks" / str(task["id"]) / "jarvis-skills"
     mine = skills.plugin(mine_at)
     if mine:
-        flags |= skills.FLAGS  # no hooks or !`commands` from them either
+        flags |= skills.FLAGS  # no hooks or !`commands` from them
     skill_names = (setup.skills if setup else []) + [skills.qualified(s) for s in mine]
     plugins = ([{"type": "local", "path": str(setup.plugin)}] if setup and setup.plugin else []) + (
         [{"type": "local", "path": str(mine_at)}] if mine else [])
-    agents = (setup.agents if setup else {}) | helpers  # JARVIS's helpers win a name clash
+    agents = (setup.agents if setup else {}) | helpers  # helpers win name clashes
     gate = TaskGate(cwd, read_roots, write_roots, bash, agents, host_gate,
                     editors=set(setup.agents) - set(helpers) if setup else (), more_writes=more_writes)
     model, effort = _model(task)
@@ -302,7 +239,7 @@ def _options(task: dict, reporter: Reporter) -> ClaudeAgentOptions:
         allowed_tools=allowed,
         disallowed_tools=denied + BUILTIN_AGENTS_DENIED,
         agents=agents,
-        skills=skill_names,  # each allowed as Skill(name); the rest stay hidden
+        skills=skill_names,  # each allowed as Skill(name); others hidden
         plugins=plugins,
         mcp_servers=mcp,
         permission_mode="default",
@@ -317,7 +254,7 @@ def _options(task: dict, reporter: Reporter) -> ClaudeAgentOptions:
 
 
 def _describe(block: ToolUseBlock) -> str | None:
-    """A short, speakable note of what a tool call is doing."""
+    """Short speakable activity for a tool call, or None."""
     name, args = block.name, block.input
     if name == "Bash":
         return f"running {args.get('command', '')[:80]}"
@@ -342,25 +279,23 @@ def _describe(block: ToolUseBlock) -> str | None:
     if name.startswith("mcp__") and name.count("__") >= 2:
         server, _, tool = name.removeprefix("mcp__").partition("__")
         return f"using {server}: {tool}"
-    return None  # the Agent tool included: Subagents logs its start, which becomes the activity
+    return None  # incl. Agent: Subagents reports its start
 
 
 def _error(msg: ResultMessage, limits: LimitWatch, api_error: str | None) -> tuple[str, str]:
-    """Why the run failed, and the kind of failure (jarvis.brain.retry), from its result, the rate-limit events and the
-    CLI's error on its last turn (`api_error`); ("", "") if it didn't."""
+    """(reason, retry kind) for a failed result; ("", "") on success."""
     if not msg.is_error:
         return "", ""
     if msg.subtype == "error_max_turns":
         return "it ran out of steps", retry.ERROR
     text = msg.result or "; ".join(str(e) for e in msg.errors or []) or msg.subtype
-    limit = limits.describe(text)  # first: it forgets a rejection whose window has reset
+    limit = limits.describe(text)  # first: it clears rejections whose window has reset
     kind = retry.result_kind(msg.api_error_status, msg.terminal_reason, limits.rejected is not None, api_error)
     return (f"it hit {limit}" if limit else text[:200]), kind
 
 
-# A session's turn can end while subagents it sent to the background are still running. The run waits for them, at
-# most SUBAGENT_WAIT seconds, and then for the CLI to wake the session with their reports; if it hasn't begun a new
-# turn WAKE_GRACE seconds after the last one ended, the run wakes it itself.
+# A turn may end with background subagents still running: wait up to SUBAGENT_WAIT for them, then up to WAKE_GRACE
+# for the CLI to start a turn with their reports, else prompt the session ourselves.
 SUBAGENT_WAIT = 3600.0
 WAKE_GRACE = 30.0
 SUBAGENTS_DONE = ("Your background subagents have all finished; their reports are above. Check what they found, "
@@ -370,16 +305,17 @@ REPORT_MISSING = ("You ended without a summary. Write it now: its first line one
 
 
 class _Ended(Exception):
-    """The session's stream ended, or the wait for its next message ran out."""
+    """Session stream ended, or the wait for a message timed out."""
 
 
 async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
-    """Send one prompt to the task's session (resumed if it has one) and wait for its final report. The run only
-    finishes once every subagent has ended and the session has written a report (a question or a failure aside);
-    otherwise it fails, saying why."""
+    """Send `prompt` to the task's session (resuming if any) and wait for its final report.
+
+    Finishes only once all subagents have ended and a report exists (unless it asked a question or failed).
+    """
     asked = False
-    turn_began = False  # a message of a new turn arrived: the session is working again
-    api_error: str | None = None  # the CLI's error on the session's latest message (AssistantMessage.error), if any
+    turn_began = False  # a new turn has started
+    api_error: str | None = None  # AssistantMessage.error on the latest main-session message
     limits = LimitWatch(f"task {task['id']}")
     helpers = Subagents(task["id"], reporter)
 
@@ -388,9 +324,9 @@ async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
         reporter.alive(task["id"], msg)
         if isinstance(msg, TaskStartedMessage):
             helpers.task_started(msg)
-        elif isinstance(msg, TaskNotificationMessage):  # a background subagent finished
+        elif isinstance(msg, TaskNotificationMessage):  # background subagent finished
             helpers.ended(msg.tool_use_id, msg.status != "completed")
-        elif isinstance(msg, TaskUpdatedMessage):  # sometimes the only word that one ended
+        elif isinstance(msg, TaskUpdatedMessage):  # sometimes the only end signal
             helpers.task_updated(msg)
         elif isinstance(msg, SystemMessage) and msg.subtype == "init" and msg.data.get("session_id"):
             reporter.session(task["id"], msg.data["session_id"])
@@ -400,7 +336,7 @@ async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
                 api_error = msg.error
             for block in msg.content:
                 if isinstance(block, ToolUseBlock):
-                    if msg.parent_tool_use_id is None:  # the task's own session, not a subagent
+                    if msg.parent_tool_use_id is None:  # main session, not a subagent
                         asked |= block.name in PAUSES
                         if block.name in _AGENT_TOOLS:
                             helpers.started(block)
@@ -426,11 +362,10 @@ async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
                 async for msg in client.receive_messages():
                     inbox.put_nowait(msg)
             finally:
-                inbox.put_nowait(None)  # the stream ended
+                inbox.put_nowait(None)  # end of stream
 
         async def read(timeout: float | None = None, until: Callable[[], bool] = lambda: False) -> ResultMessage | None:
-            """Handle messages up to the next result (returned), or until `until()` holds (None). Raises _Ended if the
-            stream ends or `timeout` seconds pass first."""
+            """Handle messages until a result (returned) or `until()` (None). _Ended on stream end or timeout."""
             deadline = None if timeout is None else time.monotonic() + timeout
             while not until():
                 try:
@@ -455,36 +390,35 @@ async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
             result = await read()
             while not result.is_error:
                 if helpers.waiting:
-                    # Its turn ended with subagents still at work (a question too: their reports belong in the
-                    # session it resumes). Wait for them, then for a turn the CLI starts itself with their reports.
+                    # Turn ended with subagents still running (even after a question): wait for them, then for the
+                    # CLI-started turn carrying their reports.
                     turn_began = False
                     try:
                         if (again := await read(SUBAGENT_WAIT, until=lambda: not helpers.waiting)) is not None:
                             result = again
                             continue
                         if (again := await read(WAKE_GRACE, until=lambda: turn_began)) is None:
-                            again = await read()  # the CLI woke it: wait for that turn's result
+                            again = await read()  # CLI woke it: wait for that result
                     except _Ended as e:
                         if str(e) != "timeout" or helpers.waiting:
                             raise
-                        if asked:  # it's waiting for an answer, which brings the reports with it
+                        if asked:  # the answer will bring the reports
                             break
-                        await prompt_again(SUBAGENTS_DONE)  # no new turn: wake it with the reports
+                        await prompt_again(SUBAGENTS_DONE)  # no new turn: wake it ourselves
                         again = await read()
                     result = again
                     continue
                 if asked:
                     break
-                # Messages sent after its last tool call become one more prompt in the same session.
-                # A question keeps them for the answer, and a failure for the next reply.
+                # Late nudges become one more prompt (a question or failure keeps them for the next reply).
                 if late := reporter.take_nudges(task["id"]):
                     await prompt_again(nudge_text(late, finished=True))
                 elif not (result.result or "").strip() and not reminded:
                     reminded = True
-                    await prompt_again(REPORT_MISSING)  # once: a second silence fails the run below
+                    await prompt_again(REPORT_MISSING)  # once; a second silence fails the run
                 else:
                     break
-                result = await read()  # total_cost_usd in the next result covers the whole run
+                result = await read()  # its total_cost_usd covers the whole run
         except _Ended as e:
             if waiting := helpers.waiting:
                 who = ", ".join(waiting)
@@ -492,7 +426,7 @@ async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
                        if str(e) == "timeout" else f"the session ended while its subagents ({who}) were still running")
             else:
                 why = "the session ended before its final report"
-            kind = retry.ERROR if waiting else retry.PASSING  # the CLI died mid-run, say: that passes
+            kind = retry.ERROR if waiting else retry.PASSING  # e.g. CLI died mid-run: transient
             return Outcome((result.result or "") if result else "", why, (result.total_cost_usd or 0) if result else 0,
                            kind)
         finally:

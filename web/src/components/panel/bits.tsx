@@ -1,4 +1,4 @@
-// Small pieces the panel's views share.
+// Shared panel components.
 import type { ComponentChildren } from "preact";
 import { useSignal } from "@preact/signals";
 
@@ -15,7 +15,7 @@ export function StatusPill({ status, requestsOnly }: { status: string; requestsO
   return <Pill kind={STATUS_PILL[status] ?? "muted"}>{text}</Pill>;
 }
 
-// A one-line form: a text field and a button, cleared once `send` says it went.
+// One-line form: field and button, cleared when `send` succeeds.
 export function InlineForm({ placeholder, label, send, initial = "", primary = false, children }: {
   placeholder: string; label: string; send: (text: string) => Promise<boolean>; initial?: string; primary?: boolean;
   children?: ComponentChildren;

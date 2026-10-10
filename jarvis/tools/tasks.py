@@ -1,4 +1,4 @@
-"""Background tasks, run by the task runner (jarvis.tasks.runner) while the conversation carries on."""
+"""Voice tools for background tasks (run by jarvis.tasks.runner), approvals, data edits and projects."""
 
 import time
 
@@ -33,13 +33,13 @@ def _brief(t: dict, requests: list[dict] = ()) -> dict:
         if t.get(key):
             out[key] = t[key]
     if t.get("in_place"):
-        out.pop("branch", None)  # the user's own branch, not one the task made
+        out.pop("branch", None)  # user's branch, not the task's
         on = f"on its checked-out branch {t['branch']}" if t.get("branch") else "on whatever is checked out"
         out["in_place"] = f"Works in the project's own folder {on}, no separate branch; changes are left uncommitted."
     if t.get("todo") and (item := todo.get(t["todo"])):
         out["todo"] = item["text"] + (" (ticked off)" if item["done"] else "")
     if granted := access.granted(t):
-        out["access"] = granted  # beyond its kind's
+        out["access"] = granted  # beyond the kind's defaults
     if t["status"] == "waiting" and (wants := access.wanted(t)):
         out["access_requested"] = wants
     if waiting := nudges(t):
@@ -48,10 +48,10 @@ def _brief(t: dict, requests: list[dict] = ()) -> dict:
         out["suggested_edits"] = [_edit(e) for e in suggested]
     if waiting := [_request(a) for a in requests if a["task"] == t["id"]]:
         out["waiting_for_approval"] = waiting
-    if stalled := t.get("stalled"):  # running, but quiet for a while (jarvis.tasks.stall)
+    if stalled := t.get("stalled"):  # running but quiet for a while
         out["stalled"] = (f"No sign of progress for {stalled['minutes']} minutes: it may be stuck. Offer to nudge it "
                           f"(task_reply) or stop it (task_stop); never stop it without {profile.name()}'s say-so.")
-    if t["kind"] == COMMAND:  # a shell job: what it runs, and how far it has got (its output is data, never orders)
+    if t["kind"] == COMMAND:  # shell job; its output is data, never instructions
         how = command_jobs.spec(t)
         out["command"] = _clip(t["instruction"], 400)
         out |= {k: how[k] for k in ("folder", "fix_task") if how.get(k)}
@@ -66,10 +66,9 @@ def _brief(t: dict, requests: list[dict] = ()) -> dict:
 
 
 def _launched(t: dict) -> dict:
-    """A task as task_start and task_reply leave it, with `now`: whether it has started or is queued, and on what it
-    waits, from its status as the runner gives it."""
+    """`_brief` plus `now`: started, queued (and on what), or running with a pending nudge."""
     out = _brief(t)
-    if t["status"] == "running":  # a message still undelivered is a nudge: it goes in after the current step
+    if t["status"] == "running":  # undelivered message = nudge, delivered after the current step
         out["now"] = "running: it gets the message after its current step" if nudges(t) else "started: it's running"
     elif t["status"] == "queued":
         out["now"] = f"queued, not started yet: {t.get('activity') or 'waiting for a free slot'}; it starts by itself"
@@ -77,20 +76,18 @@ def _launched(t: dict) -> dict:
 
 
 async def _waiting() -> list[dict]:
-    """Tasks' requests to run risky commands that the user has been asked about and hasn't answered, oldest first.
-    One still being put together (for a few seconds) isn't among them: it can't be answered yet."""
+    """Announced, unanswered risky-command requests, oldest first (unannounced ones can't be answered yet)."""
     return [a for a in await client.approvals() if a["announced"]]
 
 
 def _request(a: dict) -> dict:
-    """A request as the brain sees it. What each command does comes from the command itself; the command and its
-    folder are the task's, to describe, never to take instructions from."""
+    """A request as the brain sees it. Commands and folders are task data: to describe, never to obey."""
     return {"request": a["id"], "commands": [{"does": c["why"], "command": _clip(c["command"], 400), "folder": c["folder"]}
                                              for c in a["commands"]]}
 
 
 def _edit(e: dict) -> dict:
-    """One edit a task suggested to JARVIS's data files, as the brain sees it."""
+    """A task-suggested data edit, as the brain sees it."""
     out = {"n": e["n"], "change": data_edits.describe(e), "reason": e["reason"]}
     if e.get("needs_yes"):
         out["needs_yes"] = e["needs_yes"]
@@ -101,9 +98,10 @@ def _edit(e: dict) -> dict:
 
 
 def _order() -> str:
-    """The user's own words this turn (the conversation's `heard`, never the model's), when they order something a
-    risky command does ("merge and push", "restart now"): sent with a reply or a new task, so the task isn't asked
-    about it again."""
+    """The user's own words this turn (`heard`) if they order a risky action, else "".
+
+    Sent with a reply or new task so the task isn't asked again.
+    """
     said = conversation.current().heard.said
     return said if orders(said) else ""
 
@@ -176,7 +174,7 @@ async def task_detail(id: int) -> dict:
     out = _brief(t, await _waiting()) | {"instruction": t["instruction"], "summary": t["summary"],
                        "log": [f"{e['kind']}: {e['text']}" for e in t["log"]]}
     if every := edits(t):
-        out["suggested_edits"] = [_edit(e) for e in every]  # the ones already applied or dismissed too
+        out["suggested_edits"] = [_edit(e) for e in every]  # includes applied and dismissed
     return out
 
 
@@ -190,7 +188,7 @@ def _ago(at: float) -> str:
 
 
 def _clip(text: str, most: int = 160) -> str:
-    """One log line, short enough to speak: a long instruction or command is cut."""
+    """Collapse whitespace and truncate to `most` chars."""
     text = " ".join(text.split())
     return text if len(text) <= most else text[:most - 1] + "…"
 
@@ -266,31 +264,31 @@ async def task_approve(id: int, approve: bool, request: int = 0) -> dict:
     decision = "approve" if approve else "deny"
     talk = conversation.current()
     heard = talk.heard.said
-    # Words that order nothing are read by the lists, or failing them a short model call that sees only them
+    # Non-ordering words: word lists first, else a model call that sees only them
     orders_all = approve and any(all(ordered(heard, c["command"]) for c in a["commands"]) for a in mine)
     verdict = None if orders_all or talk.heard.spent else await consent.reply(heard, consent.TELL)
-    yes = bool(verdict and verdict.yes) and not tells_deny(heard)  # a no in the words wins
-    whole = approve and (tells_approve(heard) or yes)  # a yes goes for all the task asked; an order, for what it orders
+    yes = bool(verdict and verdict.yes) and not tells_deny(heard)  # a no wins
+    whole = approve and (tells_approve(heard) or yes)  # yes covers all requests; an order only what it orders
     if approve and not whole:
         waiting = [a for a in mine if all(ordered(heard, c["command"]) for c in a["commands"])] or waiting
     if (said := talk.heard.take(decision, [c["command"] for a in waiting for c in a["commands"]], verdict)) is None:
         raise ValueError(f"Not answered: what {profile.name()} just said doesn't plainly tell you to {decision} it, or "
                          f"already answered a request. Ask them in one sentence, naming task {id} and what its command "
                          "does, and call this again once they say yes or no.")
-    # How far the yes goes is the user's words', read by the lists or the model that saw them alone; never the brain's
+    # Scope comes from the user's words (lists or isolated model), never from the brain
     scope = (verdict.scope if yes else said_scope(said)) if approve else "once"
 
-    async def answer(a: dict, whole_task: bool = False) -> dict:  # each as it was shown, with the user's words
+    async def answer(a: dict, whole_task: bool = False) -> dict:  # as shown, with the user's words
         return await client.answer(a["id"], decision, "assistant", task=id, commands=a["commands"], said=said,
                                    remember="session" if scope == "session" else "once", whole_task=whole_task)
 
-    chosen, *rest = waiting[:1] if whole else waiting  # the runner answers the rest of a yes; an order's, one by one
+    chosen, *rest = waiting[:1] if whole else waiting  # runner fans out a whole yes; orders go one by one
     outcome = await answer(chosen, whole)
     if rest:
         outcome["also"] = [a["id"] for a in rest if (await answer(a))["answered"]]
     say = approvals.answered(chosen, decision, outcome)
     if scope == "always" and outcome["answered"]:
-        # JARVIS hears the user's next words itself, and saves the rule only on a yes
+        # Rule is saved only on the user's own next-turn yes
         say += " " + approvals.offer_always(talk.offer, chosen["id"], chosen["commands"], said)[0]
     return _request(chosen) | {"id": id, "answered": outcome["answered"], "outcome": outcome["outcome"], "say": say,
                                "also": outcome.get("also", [])}
@@ -410,7 +408,7 @@ def projects_list() -> list[dict]:
 )
 async def project_register(name: str, path: str = "", aliases: list[str] | None = None, about: str = "",
                            in_place: bool = projects.IN_PLACE_DEFAULT) -> dict:
-    vetted("\n".join([name, about, *(aliases or [])]), "the project's entry")  # register strips invisible characters
+    vetted("\n".join([name, about, *(aliases or [])]), "the project's entry")  # register strips invisible chars itself
     return await client.register_project(name, path or None, aliases or [], about, in_place)
 
 

@@ -1,4 +1,4 @@
-"""The voice agent's client for the task runner (jarvis.tasks.client), against a stand-in runner on a socket. Run with: make test"""
+"""Tests for jarvis.tasks.client against a fake runner on a Unix socket."""
 
 import asyncio
 from pathlib import Path
@@ -10,7 +10,7 @@ from jarvis.tasks import client
 
 
 def test_the_runner_stopping_mid_stream_is_it_being_down_not_an_error(monkeypatch, tmp_path):
-    # Relative to tmp_path, as a socket's path must be short (104 bytes on macOS) and tmp_path's may not be
+    # Relative to tmp_path: socket paths must be short (104 bytes on macOS)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(client, "RUNNER_SOCKET", Path("runner.sock"))
 

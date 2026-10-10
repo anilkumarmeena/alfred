@@ -1,4 +1,4 @@
-"""Tests for task_log, the live log tail, and task_discard, throwing a task's work away unmerged. Run with: make test"""
+"""Tests for task_log (live log tail) and task_discard (throw a task's work away unmerged)."""
 
 import asyncio
 import json
@@ -27,13 +27,13 @@ from jarvis.tools import tasks as task_tools
 
 
 def working_task() -> tuple[runner.Runner, dict]:
-    """A runner with one task that has taken some steps, reported progress and used a subagent."""
+    """A runner with one task that has taken steps, reported progress and used a subagent."""
 
     async def main():
         r = runner.Runner()
         task = r.store.create("code_change", "retry logic", "Add retries", "other")
         r.activity(task["id"], "reading app.py")
-        r.activity(task["id"], "reading app.py")  # the same step again
+        r.activity(task["id"], "reading app.py")  # repeated step
         r.subagent(task["id"], "code searcher started: find the retry logic")
         r.activity(task["id"], "code searcher: searching the code")
         r.subagent(task["id"], "code searcher finished")
@@ -225,7 +225,7 @@ def test_both_tools_are_on_the_voice_side_only():
 def test_discarding_asks_first_and_task_log_says_the_latest_steps():
     discard = tools.get("task_discard").description
     assert "can't be undone" in discard and "wait for a yes" in discard
-    assert "discarding a task's work" in persona.persona()  # among the persona's few confirmations
+    assert "discarding a task's work" in persona.persona()  # one of the persona's few confirmations
     assert "latest steps" in tools.get("task_log").description
 
 
@@ -238,7 +238,7 @@ def test_the_voice_prompt_takes_a_request_as_the_yes_and_confirms_only_the_excep
     for kind in ("discarding a task", "Messaging other people", "you chose yourself",
                  "JARVIS asks for the yes itself", "don't ask first"):
         assert kind in exceptions, kind
-    # The draft-then-send steps are in the Google tools' own descriptions (AI Armory), not the persona
+    # Draft-then-send steps live in the Google tools' descriptions (AI Armory), not the persona
     for name in ("chat_send", "docs_delete", "sheets_delete_tab", "calendar_send_invite", "chat_mark_read"):
         assert name not in prompt, name
     for name in ("task_merge", "project_git_init"):

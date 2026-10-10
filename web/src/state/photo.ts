@@ -1,6 +1,5 @@
-// A photo to show JARVIS, picked in the message box. It's made smaller here and sent to the Mac at once
-// (jarvis.server's /api/picture), where it waits for the next turn, typed or spoken (jarvis.state.pictures). Once the
-// user says or types something after it's there, that turn has taken it, and the message box lets it go.
+// Photo attached in the message box. Downscaled and uploaded at once to /api/picture, where it waits for the next
+// turn (typed or spoken). The first user line after upload consumes it and the box clears.
 import { effect, signal } from "@preact/signals";
 import { postAuthedJson, Unauthorized } from "../lib/api";
 import { DEVICE } from "../lib/device";
@@ -9,14 +8,14 @@ import { passcode, setPasscode, showLogin } from "./store";
 import { lines } from "./transcript";
 
 export interface Photo {
-  preview: string;  // an object URL of the file picked, for the thumbnail
+  preview: string;  // object URL for the thumbnail
   state: "sending" | "ready" | "failed";
-  id?: string;  // the Mac's, once it has it
+  id?: string;  // server id, once uploaded
   error?: string;
-  after: number;  // the last transcript line before it was ready: a line of the user's after this took it
+  after: number;  // last transcript line before upload; a later user line consumes the photo
 }
 
-export const ASK = "What's in this photo?";  // sent with a photo and no words
+export const ASK = "What's in this photo?";  // default text for a photo with no words
 export const photo = signal<Photo | null>(null);
 let sending: Promise<boolean> = Promise.resolve(false);
 
@@ -29,10 +28,10 @@ function clear() {
 }
 
 function drop(id: string) {
-  postAuthedJson("/api/picture/drop", { id }).catch(() => {});  // left there, it lapses on the Mac by itself
+  postAuthedJson("/api/picture/drop", { id }).catch(() => {});  // best effort: it expires server-side anyway
 }
 
-// Pick a photo: it replaces one picked before, and starts on its way to the Mac.
+// Attach a photo (replacing any previous one) and start uploading.
 export function attach(file: File): void {
   if (!passcode.peek()) return showLogin();
   discard();
@@ -54,17 +53,17 @@ export function attach(file: File): void {
   })();
 }
 
-// Whether the photo picked last reached the Mac, once it has or hasn't.
+// Resolves to whether the latest photo uploaded.
 export const photoReady = (): Promise<boolean> => sending;
 
-// The user took it back before asking about it.
+// User removed the photo before using it.
 export function discard(): void {
   const p = photo.peek();
   if (p?.state === "ready" && p.id) drop(p.id);
   clear();
 }
 
-// Something the user said or typed once it was there went with it: the photo's been seen.
+// A user turn after upload consumed the photo.
 effect(() => {
   const p = photo.value, all = lines.value;
   if (p?.state === "ready" && all.some((l) => l.kind === "msg" && l.who === "you" && l.id > p.after)) clear();

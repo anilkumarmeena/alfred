@@ -1,16 +1,9 @@
-"""Projects that code tasks can work on, kept in the projects table of data/tasks.db beside the to-do list.
+"""Projects code tasks can work on (projects table in data/tasks.db).
 
-Names are matched ignoring case, spaces and punctuation, so "at las" from speech
-recognition still finds "atlas". Aliases cover names Whisper tends to mishear.
-code_change tasks work in the project's own folder by default (in place); in_place false
-opts a project into a separate git worktree and branch per task instead. JARVIS's own repo
-always works that way, whatever its entry says: a task editing JARVIS in place would be
-editing the code that's running it.
-
-register() adds a project: it makes the folder if needed and adds an entry, without
-touching git. A folder without git history is always in_place, since worktrees need commits.
-update() changes a project's folder, aliases, about or in_place; remove() takes one off the list.
-init_git() sets git up later, on request: git init, a default .gitignore and a first commit.
+Names match ignoring case, spaces and punctuation ("at las" finds "atlas"); aliases cover common mishearings.
+code_change tasks edit the project folder in place by default; in_place=false gives each task a worktree and branch.
+JARVIS's own repo always uses worktrees (a task must not edit the running code). Folders without commits are always
+in place. register/update/remove never touch git; init_git sets it up on request.
 
     uv run python -m jarvis.tasks.projects                       list the projects
     uv run python -m jarvis.tasks.projects add NAME [--path P] [--aliases "a, b"] [--about T] [--worktrees]
@@ -32,27 +25,27 @@ from jarvis.core import database
 from jarvis.core.config import DATA_DIR, NEW_PROJECTS_DIR, ROOT, SECRETS_DIR
 from jarvis.safety import scan
 
-ALLOWED_ROOT = Path.home()  # new projects live somewhere under here
-PROTECTED = [DATA_DIR, SECRETS_DIR]  # JARVIS's own folders, never a project
-JARVIS_REPO = ROOT  # JARVIS itself: a project whose code tasks always get a worktree and branch
+ALLOWED_ROOT = Path.home()  # projects must live under here
+PROTECTED = [DATA_DIR, SECRETS_DIR]  # never a project
+JARVIS_REPO = ROOT  # always worktree mode
 NO_GIT, NO_COMMITS, GIT = "none", "no commits", "repo"
-# Dependency and cache folders: never part of a task's work, whatever a project's .gitignore says
+# Dependency/cache folders, never part of a task's work regardless of .gitignore
 CACHE_DIRS = ("node_modules", "venv", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".next")
 DEFAULT_GITIGNORE = "\n".join([
     ".DS_Store", ".env", ".env.*", "!.env.example", *(f"{d}/" for d in CACHE_DIRS),
     "*.pyc", "dist/", "build/", "coverage/", "*.log",
 ]) + "\n"
 
-IN_PLACE_DEFAULT = True  # for projects registered without saying
+IN_PLACE_DEFAULT = True
 
 _SCHEMA = """
 create table projects (
-    id integer primary key,     -- the list's order
+    id integer primary key,     -- list order
     name text not null unique,
-    path text not null,         -- as given: ~/... for a folder under the home folder
-    aliases text not null default '[]',  -- JSON list of other names speech recognition might hear
+    path text not null,         -- ~/... when under home
+    aliases text not null default '[]',  -- JSON list
     about text not null default '',
-    in_place integer not null default 1  -- 0: each code_change task gets its own worktree and branch
+    in_place integer not null default 1  -- 0: worktree + branch per task
 )"""
 
 
@@ -62,7 +55,7 @@ class Project:
     path: Path
     aliases: list[str]
     about: str
-    in_place: bool = IN_PLACE_DEFAULT  # code_change tasks edit the project's folder directly: no worktree, branch or commit
+    in_place: bool = IN_PLACE_DEFAULT  # edit the folder directly: no worktree, branch or commit
 
 
 def is_jarvis(path: Path) -> bool:
@@ -74,11 +67,11 @@ def _key(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", name.lower())
 
 
-# ── The table ───────────────────────────────────────────────────
+# ── Table ───────────────────────────────────────────────────────
 
 
 def _db() -> AbstractContextManager[sqlite3.Connection]:
-    """The database, with the table made the first time; closed after."""
+    """DB connection context, creating the table on first use."""
     return database.table("projects", _SCHEMA)
 
 
@@ -116,14 +109,14 @@ def _git(folder: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def git_state(folder: Path) -> str:
-    """NO_GIT, NO_COMMITS (git init but nothing committed yet) or GIT."""
+    """NO_GIT, NO_COMMITS or GIT."""
     if not folder.is_dir() or _git(folder, "rev-parse", "--git-dir").returncode:
         return NO_GIT
     return GIT if _git(folder, "rev-parse", "--verify", "-q", "HEAD").returncode == 0 else NO_COMMITS
 
 
 def worktree_problem(p: Project) -> str | None:
-    """Why a code_change task can't have its own worktree and branch in this project, if it can't."""
+    """Why worktree mode can't work for `p`, or None."""
     state = git_state(p.path)
     if state == GIT:
         return None
@@ -133,7 +126,7 @@ def worktree_problem(p: Project) -> str | None:
 
 
 def _enclosing_repo(path: Path) -> Path | None:
-    """The top of a git repo that `path` sits inside of, other than `path` itself."""
+    """Top of an enclosing git repo other than `path` itself, or None."""
     existing = next(p for p in (path, *path.parents) if p.exists())
     out = _git(existing, "rev-parse", "--show-toplevel")
     if out.returncode:
@@ -143,8 +136,7 @@ def _enclosing_repo(path: Path) -> Path | None:
 
 
 def init_git(name: str) -> dict:
-    """Put a registered project under git: git init, a default .gitignore if it has none, and a
-    first commit of its current files (whatever .gitignore allows)."""
+    """git init a registered project, add a default .gitignore if missing, and commit its current files."""
     p = find(name)
     folder = _check_folder(str(p.path))
     if not folder.is_dir():
@@ -175,11 +167,11 @@ def _run_git(folder: Path, *args: str) -> str:
     return out.stdout.strip()
 
 
-# ── Registering ─────────────────────────────────────────────────
+# ── Register ────────────────────────────────────────────────────
 
 
 def _check_folder(path: str) -> Path:
-    """The folder `path` names, resolved, if it's somewhere a project may live."""
+    """Resolve `path`; ValueError unless it's an allowed project location."""
     given = Path(path).expanduser()
     if not given.is_absolute():
         raise ValueError(f"The path must be absolute or start with ~, not '{path}'.")
@@ -209,7 +201,7 @@ def _default_path(name: str) -> Path:
 
 
 def shown(folder: Path) -> str:
-    """The path as the project list keeps it: ~/... when it's under the home folder."""
+    """Path as stored: ~/... when under home."""
     home = Path.home().resolve()
     return f"~/{folder.relative_to(home)}" if folder.is_relative_to(home) else str(folder)
 
@@ -221,7 +213,7 @@ def _tidy_aliases(aliases: object) -> list[str]:
 
 
 def _check_names(others: list[Project], names: list[str]) -> None:
-    """That each name or alias has something to match on, and matches none of the other projects' names."""
+    """Check each name is matchable and doesn't clash with other projects."""
     taken = {k: p.name for p in others for k in (_key(p.name), *map(_key, p.aliases))}
     for said in names:
         if not _key(said):
@@ -231,42 +223,41 @@ def _check_names(others: list[Project], names: list[str]) -> None:
 
 
 def _check_own_repo(folder: Path) -> None:
-    """That the folder isn't inside another git repo. Before the write lock: it runs git."""
+    """Reject a folder inside another git repo. Call before taking the write lock (runs git)."""
     if top := _enclosing_repo(folder):
         raise ValueError(f"{folder} is inside the git repository at {top}. Register that folder instead, or pick another.")
 
 
 def _check_free(others: list[Project], folder: Path) -> None:
-    """That no other project has the folder."""
+    """Reject a folder another project already uses."""
     for p in others:
         if p.path.resolve() == folder:
             raise ValueError(f"{folder} is already registered, as the project {p.name}.")
 
 
 def mode(in_place: bool) -> str:
-    """How a project's code tasks work, in a few words."""
+    """Short label for a project's task mode."""
     return "in place" if in_place else "with worktrees"
 
 
 def register(name: str, path: str | None = None, aliases: list[str] | None = None, about: str = "",
              in_place: bool = IN_PLACE_DEFAULT) -> dict:
-    """Add a project: make its folder if it's missing, and add it to the end of the list.
-    Everything is checked before anything is written; git is left alone."""
+    """Add a project, creating its folder if missing. All checks run before any write; git untouched."""
     if not (isinstance(name, str) and isinstance(about, str) and (path is None or isinstance(path, str))):
         raise ValueError("name, path and about must be text.")
     if not isinstance(in_place, bool):
         raise ValueError("in_place must be true or false.")
-    name, about = scan.clean(name).strip(), scan.clean(about).strip()  # no invisible characters (jarvis.safety.scan)
+    name, about = scan.clean(name).strip(), scan.clean(about).strip()  # strip invisible characters
     aliases = _tidy_aliases(aliases or [])
     if not _key(name):
         raise ValueError("The project needs a name with letters or digits in it.")
     folder = _check_folder(path or str(_default_path(name)))
     _check_own_repo(folder)
     state = git_state(folder)
-    in_place = (in_place or state != GIT) and not is_jarvis(folder)  # worktrees need git history; JARVIS always has one
+    in_place = (in_place or state != GIT) and not is_jarvis(folder)  # worktrees need commits; JARVIS never in place
 
     with _db() as db:
-        db.execute("begin immediate")  # the checks and the entry together, so two at once can't both pass them
+        db.execute("begin immediate")  # checks + insert atomically
         known = _read(db)
         _check_free(known, folder)
         _check_names(known, [name, *aliases])
@@ -287,8 +278,10 @@ def register(name: str, path: str | None = None, aliases: list[str] | None = Non
 
 def update(name: str, path: str | None = None, aliases: list[str] | None = None, about: str | None = None,
            in_place: bool | None = None) -> dict:
-    """Change a project's folder (one that exists), aliases (the whole list), about or in_place; what's left out
-    stays as it was. Its name stays: tasks are kept under it. Returns the project as it is now."""
+    """Change an existing project's folder, aliases (full list), about or in_place; None leaves a field as is.
+
+    The name is immutable (tasks reference it). Returns the updated project.
+    """
     if path is None and aliases is None and about is None and in_place is None:
         raise ValueError("Say what to change: path, aliases, about or in_place.")
     if not (path is None or isinstance(path, str)) or not (about is None or isinstance(about, str)):
@@ -324,7 +317,7 @@ def update(name: str, path: str | None = None, aliases: list[str] | None = None,
         elif not wanted and git_state(where) != GIT:
             if in_place is False:
                 raise ValueError(worktree_problem(Project(p.name, where, [], "")))
-            wanted = True  # moved to a folder without git history: worktrees need one, as when registering
+            wanted = True  # no commits: worktrees impossible
         db.execute("update projects set path = ?, aliases = ?, about = ?, in_place = ? where name = ?",
                    (shown(folder) if folder else row["path"],
                     row["aliases"] if aliases is None else json.dumps(aliases, ensure_ascii=False),
@@ -336,14 +329,14 @@ def update(name: str, path: str | None = None, aliases: list[str] | None = None,
 
 
 def remove(name: str) -> str:
-    """Take a project off the list. Its folder stays as it is."""
+    """Remove a project from the list; its folder is untouched."""
     with _db() as db:
         p = _find(_read(db), name)
         db.execute("delete from projects where name = ?", (p.name,))
     return f"Removed {p.name} from the project list; its folder {p.path} is as it was."
 
 
-# ── From the command line ───────────────────────────────────────
+# ── CLI ─────────────────────────────────────────────────────────
 
 
 def show(known: list[Project]) -> str:

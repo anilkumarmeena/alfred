@@ -1,4 +1,4 @@
-// The conversation, following the newest line unless you've scrolled up to read.
+// The conversation; follows the newest line unless the user has scrolled up.
 import { useComputed, type Signal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
 import { heights } from "../lib/fold";
@@ -7,13 +7,13 @@ import { SendIcon } from "./icons";
 import { reading } from "../state/store";
 import { lines } from "../state/transcript";
 
-const READ_FROM = 48, BACK_AT = 4;  // px from the bottom: reading back starts past the first, ends under the second
-const SETTLE = 150;  // ms the reader leaves the transcript alone before following picks up again
-const EASE = 90;  // ms: how quickly following glides down to the newest line
+const READ_FROM = 48, BACK_AT = 4;  // px from bottom: enter reading mode above READ_FROM, leave below BACK_AT
+const SETTLE = 150;  // ms of no user input before following resumes
+const EASE = 90;  // ms time constant of the follow glide
 const TASK = /\b([Tt]ask) (\d+)\b/g;
 
-// JARVIS's words, with each "task 6" a button that opens it in the panel. Most lines link nothing: their text is
-// bound straight to its node, so a streamed chunk changes one text node and re-renders nothing.
+// JARVIS's text with each "task N" as a button. Unlinked lines bind the signal directly, so streamed chunks update
+// one text node without re-rendering.
 function Linked({ text }: { text: Signal<string> }) {
   const linked = useComputed(() => shown.value && /\btask \d+\b/i.test(text.value));
   if (!linked.value) return <>{text}</>;
@@ -29,7 +29,7 @@ function Linked({ text }: { text: Signal<string> }) {
   return <>{parts}</>;
 }
 
-// Its own component, so reading back re-renders this button rather than the whole conversation
+// Separate component so `reading` changes re-render only this button
 function Latest({ go }: { go: () => void }) {
   return <button id="latest" type="button" tabIndex={reading.value ? 0 : -1} onClick={go}><SendIcon />Latest</button>;
 }
@@ -46,8 +46,8 @@ export function Transcript() {
     let anchor: HTMLElement | null = null, anchorTop = 0;
 
     const end = () => t.scrollHeight - t.clientHeight;
-    // Where el lies in the transcript's content. Not el.offsetTop alone: while the feed slides (below) it's
-    // transformed, which makes it the offsetParent of everything in it.
+    // el's offset within the transcript. Summed up the chain: while sliding, the transformed feed becomes the
+    // offsetParent.
     const topOf = (el: HTMLElement) => {
       let y = 0;
       for (let e: Element | null = el; e instanceof HTMLElement && e !== t; e = e.offsetParent) y += e.offsetTop;
@@ -59,8 +59,7 @@ export function Transcript() {
       fromBottom = t.scrollHeight - wrote - t.clientHeight;
     };
 
-    // Following: glide down to the newest line, rather than jump a line at a time as it streams in, and only once
-    // the reader has left the transcript alone (a finger on it, or a scroll just now, waits).
+    // Follow: glide to the newest line instead of jumping per chunk; wait while touched or recently scrolled.
     const step = (now: number) => {
       raf = 0;
       if (reading.peek() || touching) return;
@@ -79,11 +78,11 @@ export function Transcript() {
     };
 
     const onScroll = () => {
-      if (t.clientHeight !== height) return;  // the layout's doing, mid-resize (below), not the reader's
+      if (t.clientHeight !== height) return;  // layout resize, not the user
       const top = t.scrollTop, up = top < prevTop - .5;
       prevTop = top;
       fromBottom = t.scrollHeight - top - t.clientHeight;
-      if (Math.abs(top - wrote) < 1) return;  // following's own scroll
+      if (Math.abs(top - wrote) < 1) return;  // our own scroll
       userAt = performance.now();
       if (!reading.peek() && up && fromBottom > READ_FROM) reading.value = true;
       else if (reading.peek() && fromBottom < BACK_AT) reading.value = false;
@@ -95,9 +94,8 @@ export function Transcript() {
     };
     const onWheel = () => { userAt = performance.now(); };
 
-    // What scrolling can't absorb: with too few lines to scroll, the lines sit at the bottom and each new one pushes
-    // the rest up. Show them where they were, then ease them into place, from wherever the last ease had got to.
-    // The offset goes on inline first, so this very frame shows it even if the animation starts a frame late.
+    // With too few lines to scroll, a new line pushes the rest up: offset them back, then ease into place from
+    // wherever the last ease was. Inline transform first so this frame shows it even if the animation starts late.
     let sliding: Animation | null = null;
     const slide = (by: number) => {
       if (!by || still.matches) return;
@@ -110,18 +108,17 @@ export function Transcript() {
       a.onfinish = () => { if (sliding === a) { sliding = null; feed.style.transform = ""; } };
     };
 
-    // The stage lies over the top of the transcript (lib/fold.ts). Once lines reach under it, leave room to scroll
-    // up past READ_FROM, so reading back can fold it away and show them.
+    // The stage overlays the transcript top. Once lines reach under it, add room to scroll past READ_FROM so
+    // reading mode can fold the stage away.
     const roomy = () => {
       const split = document.body.dataset.layout === "split";
-      const content = feed.offsetHeight - (topOf(log) - topOf(feed));  // the lines sit at the bottom of the feed
+      const content = feed.offsetHeight - (topOf(log) - topOf(feed));  // lines sit at the feed's bottom
       const pb = parseFloat(getComputedStyle(t).paddingBottom) || 0;
       const room = !split && content > t.clientHeight - pb - heights.stage - 22;
       feed.classList.toggle("room", room);
     };
-    // Whatever changed size, keep the view steady: when the transcript itself resizes, the reader stays as far from
-    // the bottom as they were; otherwise the newest line stays where it was on screen, whatever moved above it
-    // (the stage, room, old lines dropping off the top). Safari has no scroll anchoring to do this itself.
+    // Keep the view steady on any resize: if the transcript resized, keep distance from bottom; otherwise pin the
+    // newest line on screen. Manual because Safari has no scroll anchoring.
     const settle = () => {
       roomy();
       if (t.clientHeight !== height) {
@@ -137,11 +134,10 @@ export function Transcript() {
     };
     latest.current = () => { reading.value = false; follow(); };
 
-    // Lines stream in a chunk at a time, straight into their text nodes: watch the sizes rather than the DOM, which
-    // also catches the typing dots and the stage
+    // Streamed text bypasses the DOM tree, so watch sizes (also catches the typing dots and the stage)
     const resized = new ResizeObserver(settle);
     resized.observe(t);
-    for (const el of feed.children) resized.observe(el);  // not the feed: its min-height hides growth inside it
+    for (const el of feed.children) resized.observe(el);  // not feed: its min-height hides inner growth
     const host = t.parentElement!;
     host.addEventListener("fold", settle);
     t.addEventListener("scroll", onScroll, { passive: true });

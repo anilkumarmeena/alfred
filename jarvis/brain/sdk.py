@@ -1,4 +1,4 @@
-"""What the voice brain and the background tasks share on the Claude Agent SDK."""
+"""Claude Agent SDK helpers shared by the voice brain and background tasks."""
 
 import asyncio
 import json
@@ -29,19 +29,17 @@ from jarvis.core.config import (
 from jarvis.safety import injection
 
 log = logging.getLogger("jarvis.brain.sdk")
-TOOL_SEARCH_TOOL = "ToolSearch"  # the CLI's own tool that finds deferred tools and loads them
+TOOL_SEARCH_TOOL = "ToolSearch"  # CLI tool that loads deferred tools
 
-# Claude Code's built-in subagents, which inherit every tool the session has. Sessions that
-# allow the Agent tool deny these, so only the subagents JARVIS defines (with narrower tools) run.
-# The bundled CLI still reports that tool as "Task", its old name, so rules name it both ways.
+# Built-in subagents inherit every session tool, so deny them; only JARVIS's narrower subagents run.
+# The CLI may report the tool as "Task", so rules name it both ways.
 BUILTIN_AGENTS_DENIED = [f"{tool}({a})" for tool in ("Agent", "Task")
                          for a in ("general-purpose", "claude", "Explore", "Plan", "statusline-setup", "claude-code-guide")]
 
-# The largest single message the SDK will read from the CLI. Its 1 MB default killed tasks with CLIJSONDecodeError
-# when one message (a large tool result, say) ran past it.
+# Max single CLI message; the SDK's 1 MB default fails large tool results with CLIJSONDecodeError
 MAX_BUFFER_SIZE = 20 * 1024 * 1024
-ASK_SECONDS = 120  # the longest one short call (`ask`) may take, unless its caller says otherwise
-# A tool marked so only reads: the CLI runs such calls of one step side by side, and any other one by one
+ASK_SECONDS = 120  # default `ask` timeout
+# Read-only tools: the CLI may run them in parallel within one step
 READS = ToolAnnotations(readOnlyHint=True)
 
 
@@ -49,27 +47,28 @@ def _sdk_tool(t: tools.Tool):
     async def handler(args: dict) -> dict:
         log.info("tool %s %s", t.name, args)
         content, is_error = await tools.run(t.name, args)
-        blocks = content if isinstance(content, list) else [{"type": "text", "text": content}]  # pictures too
+        blocks = content if isinstance(content, list) else [{"type": "text", "text": content}]  # list: may hold images
         return {"content": blocks, "is_error": is_error}
 
     return sdk_tool(t.name, t.description, tools.input_schema(t), READS if t.reads else None)(handler)
 
 
 def jarvis_server(names: list[str] | None = None) -> tuple[dict, list[str]]:
-    """JARVIS's tools (or just `names`) as an MCP server, plus their allowed_tools entries. Gated tools
-    (chat_send, docs_delete, ...) and those that may carry a shell command (schedule_add) aren't allowed outright, so
-    each call meets the session's can_use_tool gate. Tools switched off in the settings (the browser's) are left out."""
+    """JARVIS's enabled tools (or just `names`) as an MCP server, plus their allowed_tools entries.
+
+    Gated and shell-carrying tools are not in allowed_tools, so each call goes through can_use_tool.
+    """
     chosen = [t for t in tools.all_tools() if (names is None or t.name in names) and t.on()]
     server = create_sdk_mcp_server("jarvis", tools=[_sdk_tool(t) for t in chosen])
     return server, [f"mcp__jarvis__{t.name}" for t in chosen if not (t.gated or t.shell)]
 
 
 def on_demand(options: dict) -> dict:
-    """`options` with connections' tools loaded on demand. JARVIS's own in-process servers (jarvis, shell, task,
-    host) always load. A connection marked deferred (alwaysLoad false: jarvis.integrations.mcp_servers.session) has
-    only its tool names in context until the model looks one up with the CLI's ToolSearch, which the session then has
-    and may call freely: it only loads tools, and a call to one still meets the same allow and deny rules and gate.
-    With no deferred connection, every tool loads up front, as before."""
+    """`options` with deferred connections (alwaysLoad false) loaded on demand via ToolSearch.
+
+    In-process (sdk) servers always load. ToolSearch is allowed freely: it only loads tools, and calls still meet the
+    same rules and gate. With no deferred connection, everything loads up front.
+    """
     if not (servers := options.get("mcp_servers")):
         return options
     servers = servers | {name: c | {"alwaysLoad": True} for name, c in servers.items() if c.get("type") == "sdk"}
@@ -82,11 +81,11 @@ def on_demand(options: dict) -> dict:
 
 def sdk_options(env: dict[str, str] | None = None, screen_seconds: float = INJECTION_TASK_SECONDS,
                 **options) -> ClaudeAgentOptions:
-    """CLI options on JARVIS's own login, with no user or project settings or other MCP servers, and no skills
-    unless `skills` names some. Settings stay out because their allow rules would bypass permission_mode and
-    can_use_tool (tasks get a project's agents and skills without them: jarvis.tasks.project_claude). Connections'
-    tools load on demand (`on_demand`). A session with tools has their results screened for hidden instructions
-    while that check is on, each check given `screen_seconds` (jarvis.safety.injection)."""
+    """CLI options on JARVIS's own login: no user/project settings, no other MCP servers, no skills unless named.
+
+    Settings are excluded because their allow rules would bypass permission_mode and can_use_tool. With tools and
+    the injection check on, tool results are screened, `screen_seconds` per check.
+    """
     options = on_demand(options | {"env": {"CLAUDE_CONFIG_DIR": CLAUDE_CONFIG_DIR} | (env or {})})
     if (options.get("tools") or options.get("mcp_servers")) and injection_check_on():
         options["hooks"] = injection.with_screening(options.get("hooks"), screen_seconds)
@@ -99,18 +98,18 @@ def sdk_options(env: dict[str, str] | None = None, screen_seconds: float = INJEC
 
 
 def short_options(system_prompt: str, model: str, **options) -> ClaudeAgentOptions:
-    """Options for one short call with no tools (ask, and jarvis.safety.consent's standby session). A lighter model
-    stands in while the model's own limit is used up (jarvis.brain.usage)."""
+    """Options for one short tool-less call; falls back to a lighter model while the limit is used up."""
     return sdk_options(model=usage.available(model), system_prompt=system_prompt, tools=[], allowed_tools=[],
                        max_turns=1, cwd=str(DATA_DIR), **options)
 
 
 async def ask(prompt: str, system_prompt: str, model: str, timeout: float = ASK_SECONDS,
               **options) -> tuple[str, float]:
-    """One short call with no tools, whose reply is only read: the reply and what it cost. retry.CallFailed (a
-    RuntimeError) if the call fails, with the kind of failure (jarvis.brain.retry); TimeoutError if it takes over
-    `timeout` seconds. `options` go to sdk_options (effort, say)."""
-    import claude_agent_sdk  # looked up at the call, so a test's fake query is used
+    """One short tool-less call. Returns (reply, cost_usd).
+
+    Raises retry.CallFailed (a RuntimeError, with kind) on an error result, TimeoutError past `timeout`.
+    """
+    import claude_agent_sdk  # resolved at call time so tests can fake query
 
     options = short_options(system_prompt, model, **options)
     reply, cost, rejected, error = "", 0.0, False, None
@@ -131,8 +130,7 @@ async def ask(prompt: str, system_prompt: str, model: str, timeout: float = ASK_
 
 
 def json_reply(reply: str, schema: dict) -> dict | None:
-    """The JSON object a reply holds, if it matches `schema`: the whole reply, or failing that the part from its first {
-    to its last (a reply in a code fence, or with a word before it); None if there's none, or it doesn't match."""
+    """The reply (or its first-{ to last-} span) parsed as a JSON object matching `schema`; else None."""
     from jsonschema import Draft202012Validator
 
     text = (reply or "").strip()
@@ -147,9 +145,10 @@ def json_reply(reply: str, schema: dict) -> dict | None:
 
 
 async def ask_json(prompt: str, schema: dict, system_prompt: str, model: str, **options) -> tuple[dict | None, float]:
-    """One short call (`ask`) whose reply is a JSON object matching `schema`, a JSON schema put to the model in its
-    system prompt: the object and what the call cost. A reply that isn't such an object is None, for the caller's
-    fallback, and logged without its words (they may quote the user's data). RuntimeError if the call fails."""
+    """`ask` for a JSON object matching `schema`. Returns (object or None, cost); RuntimeError on failure.
+
+    A non-matching reply is logged by length only, since it may quote user data.
+    """
     system_prompt += ("\n\nReply with only a JSON object, with nothing before or after it, that matches this JSON "
                       f"schema:\n{json.dumps(schema)}")
     reply, cost = await ask(prompt, system_prompt, model, **options)
@@ -160,8 +159,7 @@ async def ask_json(prompt: str, schema: dict, system_prompt: str, model: str, **
 
 async def ask_flag(prompt: str, field: str, system_prompt: str, model: str, timeout: float = 60,
                    **options) -> bool | None:
-    """One short call (`ask_json`) answering a yes-or-no question as the JSON boolean `field`: the answer, or None if
-    the call fails, takes over `timeout` seconds or its reply isn't usable (logged by the error's type alone)."""
+    """Yes/no via `ask_json` as boolean `field`; None on failure, timeout or unusable reply."""
     schema = {"type": "object", "properties": {field: {"type": "boolean"}}, "required": [field]}
     try:
         found, _ = await ask_json(prompt, schema, system_prompt, model, timeout=timeout, **options)
@@ -172,8 +170,7 @@ async def ask_flag(prompt: str, field: str, system_prompt: str, model: str, time
 
 
 class LimitWatch:
-    """Notices the Claude usage limit from the CLI's rate-limit events, or failing that the error text. Every event is
-    recorded for the other processes too (jarvis.brain.usage)."""
+    """Detect the usage limit from rate-limit events, else error text. Events are recorded for other processes."""
 
     def __init__(self, label: str) -> None:
         self.label = label
@@ -187,9 +184,9 @@ class LimitWatch:
         self.rejected = info if info.status == "rejected" else None
 
     def describe(self, error: str | None) -> str | None:
-        """'the Claude usage limit, which resets at 3 PM' if that's why the response failed, else None."""
+        """E.g. 'the Claude usage limit, which resets at 3 PM' if that caused the failure, else None."""
         if self.rejected and self.rejected.resets_at and self.rejected.resets_at < time.time():
-            self.rejected = None  # the CLI only reports changes, so a long-lived watch can outlast the window
+            self.rejected = None  # CLI reports only changes; the window may have passed
         if self.rejected is None and not usage.LIMIT_TEXT.search(error or ""):
             return None
         if not (self.rejected and self.rejected.resets_at):

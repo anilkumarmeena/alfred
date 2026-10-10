@@ -1,5 +1,4 @@
-"""Tests for loading a project's own Claude Code setup into background tasks: its subagents, skills, slash
-commands and CLAUDE.md, never its settings or hooks, and the gate still deciding every call. Run with: make test"""
+"""Tests for project_claude: a project's agents, skills, commands, CLAUDE.md load into tasks; settings and hooks don't."""
 
 import asyncio
 import json
@@ -70,7 +69,7 @@ def test_agents_are_read_with_their_own_names_and_nothing_that_widens_access(pro
     agents = project_claude.agents(project)
     assert set(agents) == {"scout", "evaluator", "code-searcher"}  # subfolders count; broken ones are skipped
     scout = agents["scout"]
-    # not valid YAML (a colon in the description), which Claude Code reads anyway, and so does this
+    # invalid YAML (colon in description); Claude Code reads it anyway, so this must too
     assert scout.description == "Ideation step 1 (Scout). Finds topic candidates: web-search heavy."
     assert scout.prompt == "Read roles/01-scout.md and execute the Scout role."
     assert scout.tools == ["Read", "Grep", "WebSearch"] and scout.model == "sonnet" and scout.maxTurns == 25
@@ -119,7 +118,7 @@ def test_code_tasks_load_the_project_s_agents_skills_and_claude_md(project, kind
 @pytest.mark.parametrize("kind", ["code_change", "code_question"])
 def test_the_project_s_settings_never_load_and_its_hooks_are_off(project, kind):
     opts = options(project, kind)
-    assert opts.setting_sources == []  # so none of settings.json's rules, sandbox, env, helpers or hooks
+    assert opts.setting_sources == []  # none of settings.json applies
     flags = json.loads(opts.settings)
     assert flags["disableAllHooks"] is True and set(flags) == {"permissions", "disableAllHooks"}
     assert flags["permissions"].keys() == {"deny"}

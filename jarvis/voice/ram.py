@@ -1,12 +1,10 @@
-"""How much memory the voice agent's processes take: logged now and then, and on demand.
+"""Memory used by the voice agent's processes, logged periodically and on demand.
 
-  uv run python -m jarvis.voice.ram    the running agent's processes, one line each, and their total
+  uv run python -m jarvis.voice.ram    per-process sizes of the running agent, plus total
 
-Each process is measured by its footprint, what Activity Monitor's Memory column shows: what it has in RAM plus what
-macOS compressed or swapped out of it, and the GPU (Metal) buffers MLX holds, which resident size can miss. Where the
-footprint can't be read, resident size stands in. The worker's main process logs one line for the whole tree every
-JARVIS_VOICE_MEMORY_LOG_MINUTES (jarvis.voice.agent), and each job process logs its own tree at debug level after
-every reply.
+Size is phys_footprint (Activity Monitor's Memory column): RAM plus compressed/swapped pages and MLX's Metal buffers,
+which RSS misses. Falls back to RSS. The main process logs every JARVIS_VOICE_MEMORY_LOG_MINUTES; job processes log
+at debug after each reply.
 """
 
 import ctypes
@@ -24,7 +22,7 @@ MB = 2**20
 
 
 class _RUsageInfoV0(ctypes.Structure):
-    """libproc's rusage_info_v0: the start of every later version, and all a footprint needs."""
+    """libproc's rusage_info_v0: a prefix of every later version, enough for phys_footprint."""
     _fields_ = [("uuid", ctypes.c_uint8 * 16)] + [(name, ctypes.c_uint64) for name in (
         "user_time", "system_time", "pkg_idle_wkups", "interrupt_wkups", "pageins", "wired_size", "resident_size",
         "phys_footprint", "proc_start_abstime", "proc_exit_abstime")]
@@ -43,7 +41,7 @@ _LIBPROC = _libproc()
 
 
 def footprint(pid: int) -> int | None:
-    """A process's footprint in bytes (macOS's phys_footprint); None where it can't be read."""
+    """phys_footprint in bytes; None if unreadable."""
     info = _RUsageInfoV0()
     if _LIBPROC is None or _LIBPROC.proc_pid_rusage(pid, 0, ctypes.byref(info)) != 0:
         return None
@@ -51,7 +49,7 @@ def footprint(pid: int) -> int | None:
 
 
 def size(proc: psutil.Process) -> int:
-    """Bytes a process takes: its footprint, or its resident size where that can't be read."""
+    """Footprint in bytes, falling back to RSS."""
     return footprint(proc.pid) or proc.memory_info().rss
 
 
@@ -68,9 +66,10 @@ def _program(proc: psutil.Process) -> str:
 
 
 def roles(main: psutil.Process) -> list[tuple[str, psutil.Process]]:
-    """The worker's processes, each named by what it most likely is. LiveKit starts the shared speech process
-    (jarvis.voice.speech) before any job process, so it's the oldest Python child; a job process with a call on has
-    the brain's claude CLI under it ("call"); the others are warm spares."""
+    """Worker processes labelled by likely role.
+
+    The shared speech process starts first, so it's the oldest Python child. A job with a claude CLI child is a
+    "call"; other jobs are warm "spare"s."""
     named = [("main", main)]
     children = main.children()
     pythons = sorted((c for c in children if _program(c) == "python"), key=lambda c: c.pid)
@@ -86,7 +85,7 @@ def roles(main: psutil.Process) -> list[tuple[str, psutil.Process]]:
 
 
 def tree(main: psutil.Process | None = None) -> list[tuple[str, int, int]]:
-    """(role, pid, bytes) for the worker's main process and everything under it."""
+    """(role, pid, bytes) for the main process and all descendants."""
     out = []
     for role, proc in roles(main or psutil.Process()):
         try:
@@ -97,7 +96,7 @@ def tree(main: psutil.Process | None = None) -> list[tuple[str, int, int]]:
 
 
 def describe(procs: list[tuple[str, int, int]]) -> str:
-    """One line: the total, then each process's size."""
+    """One line: total, then each process."""
     parts = [f"{role} {n / MB:.0f} MB (pid {pid})" for role, pid, n in procs]
     return f"voice memory {sum(n for *_, n in procs) / MB:.0f} MB: " + ", ".join(parts)
 
@@ -105,19 +104,18 @@ def describe(procs: list[tuple[str, int, int]]) -> str:
 def log_tree(level: int = logging.INFO, main: psutil.Process | None = None) -> None:
     try:
         log.log(level, describe(tree(main)))
-    except Exception as e:  # measuring must never break a call
+    except Exception as e:  # never break a call over this
         log.debug("couldn't measure the voice processes: %r", e)
 
 
 def log_job(level: int = logging.DEBUG) -> None:
-    """From a job process: the whole worker tree, from its parent, the main process."""
+    """Log the whole worker tree from a job process (via its parent)."""
     if log.isEnabledFor(level):
         log_tree(level, psutil.Process(os.getppid()))
 
 
 def watch(minutes: float, first: float = 90) -> threading.Thread | None:
-    """Log the tree from a daemon thread in the worker's main process: `first` seconds after it starts, once the
-    models have loaded, then every `minutes`. None when `minutes` is 0 (off)."""
+    """Log the tree from a daemon thread: after `first` seconds (models loaded), then every `minutes`. None if off."""
     if minutes <= 0:
         return None
 
@@ -133,7 +131,7 @@ def watch(minutes: float, first: float = 90) -> threading.Thread | None:
 
 
 def _agent_main() -> psutil.Process | None:
-    """The running voice agent's main process: the one started with jarvis.voice.agent whose parent isn't one too."""
+    """Root jarvis.voice.agent process (its parent isn't one)."""
     agents = {p.pid: p for p in psutil.process_iter(["cmdline"])
               if "jarvis.voice.agent" in " ".join(p.info["cmdline"] or [])}
     for p in agents.values():

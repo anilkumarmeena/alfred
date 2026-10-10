@@ -1,27 +1,14 @@
-"""The speech vocabulary: names and unusual words speech recognition should expect, so Whisper writes "JARVIS" rather
-than "Yavis", and the user's projects and colleagues' names as they're spelled.
+"""Speech vocabulary: names and unusual words Whisper should expect, plus known mishearings to fix.
 
-It belongs to whoever uses this JARVIS, like long-term memory: plain markdown in data/vocabulary.md beside memory.md,
-to read and edit by hand. One line per entry: the right spelling, then what Whisper has been heard to make of it, if
-known, then the date it was added or last confirmed; one the learning review added on its own is marked learned:
+Stored as hand-editable Markdown in the profile's vocabulary.md (SEED until first written):
 
     - JARVIS (heard as: Yavis, Cajarves) (2026-10-08)
     - Siobhan (heard as: Shivon) (2026-10-08, learned)
 
-Until the first change the file needn't exist: the list is then SEED, the assistant's own name, which everyone says.
-What speech recognition is given (load()) is the entries, then the names of the projects on the project list, so a
-project is expected from the day it's added, without being copied here.
-
-Whisper takes them as its prompt (initial_prompt), which biases it towards those spellings (JARVIS_STT_PROMPT=off stops
-that). As the prompt doesn't always win, a clip the speech gate passes also has its known mishearings put right
-(Vocabulary.correct): whole words or phrases only, and only those listed here. Whisper can echo a prompt back for a
-clip with no words in it, so a transcript that is nothing but several of the prompt's words is dropped (echo()).
-
-The learning review (jarvis.tasks.learning) adds the words it judges were misheard without asking: a wrong entry costs
-little. It's careful with mishearings, as those change what the user said: one is kept only if it's in the user's own
-words in that conversation and isn't an everyday word (plausible_mishearing). The list holds at most MAX_ENTRIES; when
-the review adds one more, the learned entry confirmed longest ago makes room. What the user added is never dropped
-to make room: a full list of those refuses another until one is removed.
+load() = entries + project names. Terms bias Whisper via initial_prompt; Vocabulary.correct() rewrites listed
+mishearings (whole words only); echo() drops transcripts that are just the prompt echoed back. The learning review
+adds entries unasked, but keeps a mishearing only if the user said it and it isn't an everyday word. At MAX_ENTRIES
+the stalest learned entry is evicted; user-added entries are never evicted.
 """
 
 import re
@@ -35,16 +22,16 @@ from jarvis.core.files import write_atomic
 from jarvis.safety import scan
 
 MAX_ENTRIES = 60
-MAX_HEARD = 6  # mishearings kept per entry: the latest
-WORD_MAX = 40  # characters in an entry's word or a mishearing
+MAX_HEARD = 6  # latest mishearings kept per entry
+WORD_MAX = 40  # max chars per word or mishearing
 WORD_MAX_WORDS = 4
-PROMPT_MAX_CHARS = 600  # of Whisper's prompt, about 150 tokens: under the 223 it keeps, so the start isn't cut off
-ECHO_TERMS = 3  # a transcript of nothing but this many of the prompt's terms or more is the prompt echoed back
+PROMPT_MAX_CHARS = 600  # ~150 tokens, under Whisper's 223-token prompt cap
+ECHO_TERMS = 3  # this many prompt terms and nothing else = echo
 HEADER = ("# Vocabulary\n\nNames and words speech recognition should expect, one per line: the right spelling, then what "
           "it has been misheard as. JARVIS adds to it as it learns.\n\n")
 SEED = [("JARVIS", ("Yavis", "Cajarves", "Jarves"))]
 DICTIONARY = Path("/usr/share/dict/words")
-# Everyday words a mishearing may never be, when the system dictionary is missing
+# Fallback everyday words when the system dictionary is missing
 COMMON = frozenset("""a an and are as at be but by can do for from go has have he her his how i if in is it its me my no
 not of on or our out say see she so that the them then there they this to up us was we what when who will with yes you
 your okay ok hey hi hello thanks thank please right just like""".split())
@@ -65,12 +52,12 @@ class Entry:
 
 
 def _key(text: str) -> str:
-    """Words compared ignoring case, spacing and punctuation: "AI-Armory" is "ai armory"."""
+    """Normalise for comparison: "AI-Armory" -> "ai armory"."""
     return " ".join(re.findall(r"[^\W_]+", text.lower()))
 
 
 def same(a: str, b: str) -> bool:
-    """Whether two words are the same but for case, spacing and punctuation."""
+    """Equal ignoring case, spacing and punctuation."""
     return _key(a) == _key(b)
 
 
@@ -79,8 +66,7 @@ def _today() -> str:
 
 
 def tidy(text: str, what: str) -> str:
-    """A word or mishearing on one line, without invisible characters or the brackets and commas the file uses.
-    Raises ValueError for one that's empty, too long, or not a word."""
+    """Clean a word for the file (no invisible chars, brackets or commas). ValueError if empty or too long."""
     text = " ".join(scan.clean(str(text)).replace("(", " ").replace(")", " ").replace(",", " ").split())
     if not _key(text):
         raise ValueError(f"The {what} is empty.")
@@ -90,7 +76,7 @@ def tidy(text: str, what: str) -> str:
 
 
 def parse(text: str) -> list[Entry]:
-    """The entries in vocabulary.md's text, in order; lines that aren't entries are left out."""
+    """Entries from vocabulary.md text, in order; non-entry lines ignored."""
     found = []
     for raw in text.splitlines():
         if not (m := _LINE.fullmatch(raw.strip())) or not _key(m["word"]):
@@ -105,7 +91,7 @@ def render(entries: list[Entry]) -> str:
 
 
 def entries() -> list[Entry]:
-    """The vocabulary as it is now: the file's entries, or SEED before it exists."""
+    """Current entries, or SEED if the file doesn't exist."""
     if not (path := profile.current().vocabulary_file).exists():
         return [Entry(word, list(heard), _today()) for word, heard in SEED]
     return parse(path.read_text())
@@ -120,7 +106,7 @@ def find(found: list[Entry], word: str) -> Entry | None:
 
 
 def _merged(old: list[str], new: list[str], word: str) -> list[str]:
-    """`old` mishearings and then the `new` ones not among them, leaving out the word itself, the latest MAX_HEARD."""
+    """Deduplicated `old` + `new` mishearings, excluding `word`, last MAX_HEARD kept."""
     out: list[str] = []
     for h in [*old, *new]:
         if not same(h, word) and not any(same(h, o) for o in out):
@@ -129,8 +115,7 @@ def _merged(old: list[str], new: list[str], word: str) -> list[str]:
 
 
 def _room(found: list[Entry]) -> None:
-    """Make room for one more entry: the learned one confirmed longest ago goes. Raises ValueError when all are the
-    user's own."""
+    """Evict the stalest learned entry if full. ValueError if all entries are user-added."""
     if len(found) < MAX_ENTRIES:
         return
     learned = [e for e in found if e.learned]
@@ -140,13 +125,14 @@ def _room(found: list[Entry]) -> None:
 
 
 def _tidied(word: str, heard: list[str] | tuple[str, ...]) -> tuple[str, list[str]]:
-    """A word and its mishearings, each tidied; blank mishearings are left out."""
+    """Tidy a word and its mishearings, dropping blanks."""
     return tidy(word, "word"), [tidy(h, "mishearing") for h in heard if _key(str(h))]
 
 
 def add(word: str, heard: list[str] | tuple[str, ...] = (), learned: bool = False) -> str:
-    """Add a word, or more ways it's misheard to one already there, which is then confirmed today. The user's own
-    addition (learned False) makes a learned entry theirs. Returns what changed, in a sentence."""
+    """Add a word or merge mishearings into an existing one (re-dated today); return a summary sentence.
+
+    A user add (learned=False) converts a learned entry to user-owned."""
     word, heard = _tidied(word, heard)
     found = entries()
     if have := find(found, word):
@@ -162,8 +148,7 @@ def add(word: str, heard: list[str] | tuple[str, ...] = (), learned: bool = Fals
 
 
 def save(old: str, word: str, heard: list[str]) -> str:
-    """Rewrite the entry for `old` as `word` with exactly these mishearings, confirmed by the user today (the panel's
-    edit)."""
+    """Control-panel edit: replace entry `old` with `word` and exactly `heard`, as user-owned."""
     word, heard = _tidied(word, heard)
     found = entries()
     if not (have := find(found, old)):
@@ -189,7 +174,7 @@ def remove(word: str) -> str:
 
 @cache
 def _dictionary() -> frozenset[str]:
-    """The everyday words: the system dictionary's lowercase ones (its capitalised ones are names), else COMMON."""
+    """Lowercase system-dictionary words (capitalised ones are names) plus COMMON."""
     try:
         return frozenset(w for w in DICTIONARY.read_text().split() if w.islower()) | COMMON
     except OSError:
@@ -197,7 +182,7 @@ def _dictionary() -> frozenset[str]:
 
 
 def everyday(token: str) -> bool:
-    """Whether a word is an everyday one, or one with a common ending ("services", "talked", "running", "Bob's")."""
+    """Whether a token is an everyday word, allowing common suffixes ("services", "talked", "Bob's")."""
     words = _dictionary()
     token = token.lower().removesuffix("'s")
     stems = {token, token.removesuffix("s"), token.removesuffix("es"), token.removesuffix("ed"),
@@ -206,9 +191,9 @@ def everyday(token: str) -> bool:
 
 
 def plausible_mishearing(heard: str, word: str) -> bool:
-    """Whether the learning review may keep `heard` as a mishearing of `word`, to be replaced by it in what the user
-    says: at least 3 letters, not the word itself, and not made only of everyday words, which the user may well have
-    meant ("service" for "JARVIS" would change every "service" they say)."""
+    """Whether `heard` is safe to auto-correct to `word`: >= 3 letters, not `word`, not all everyday words.
+
+    Everyday words are excluded because correcting them would rewrite real speech."""
     tokens = _key(heard).split()
     if not tokens or len("".join(tokens)) < 3 or same(heard, word):
         return False
@@ -216,9 +201,9 @@ def plausible_mishearing(heard: str, word: str) -> bool:
 
 
 def learnable(word: str, heard: list[str]) -> tuple[str, list[str]]:
-    """A word the learning review suggests, tidied, with only the mishearings it may keep (plausible_mishearing) that
-    the vocabulary doesn't have yet; unusable ones are left out. Raises ValueError for a word already there with all
-    of them."""
+    """Filter a learning-review suggestion to new, plausible mishearings.
+
+    ValueError if the word already exists with nothing new to add."""
     word, kept = tidy(word, "word"), []
     for h in heard:
         try:
@@ -234,12 +219,12 @@ def learnable(word: str, heard: list[str]) -> tuple[str, list[str]]:
 
 
 def _phrase(heard: str) -> str:
-    """A regex for `heard` as a whole word or phrase, in any spacing or hyphens between its words."""
+    """Regex matching `heard` as a whole phrase, with any spaces/hyphens between words."""
     return r"(?<![\w'-])" + r"[\s-]+".join(map(re.escape, _key(heard).split())) + r"(?![\w-])"
 
 
 def said_in(heard: str, text: str) -> bool:
-    """Whether `heard` is in `text` as a whole word or phrase, in any case."""
+    """Whether `heard` occurs in `text` as a whole phrase (case-insensitive)."""
     return bool(_key(heard)) and re.search(_phrase(heard), text, re.IGNORECASE) is not None
 
 
@@ -247,14 +232,13 @@ def said_in(heard: str, text: str) -> bool:
 
 
 def _spoken(name: str, aliases: list[str]) -> str:
-    """A project's name as it's said and written: an alias that's the same name in other case or spacing ("AI Armory"
-    for ai-armory), else the name with its hyphens and underscores as spaces."""
+    """Spoken form of a project name: a cased alias ("AI Armory" for ai-armory), else separators as spaces."""
     cased = next((a for a in aliases if same(a, name) and a != a.lower()), None)
     return cased or" ".join(name.replace("-", " ").replace("_", " ").split())
 
 
 def project_terms() -> list[str]:
-    """The project list's names, as said; none if it can't be read."""
+    """Spoken project names; [] on any error."""
     try:
         from jarvis.tasks import projects
 
@@ -265,13 +249,12 @@ def project_terms() -> list[str]:
 
 @dataclass(frozen=True)
 class Vocabulary:
-    """What speech recognition is given for a conversation: the words to expect, most important first, and the known
-    mishearings, each with the word it stands for."""
+    """Per-conversation STT hints: terms (priority order) and (mishearing, word) fixes."""
     terms: tuple[str, ...] = ()
     fixes: tuple[tuple[str, str], ...] = ()
 
     def prompt(self, limit: int = PROMPT_MAX_CHARS) -> str:
-        """Whisper's prompt: the terms as a list, as many as fit in `limit` characters; "" for none."""
+        """Comma-separated terms that fit in `limit` chars; "" if none."""
         shown, size = [], 0
         for t in self.terms:
             if shown and size + len(t) + 2 > limit:
@@ -281,15 +264,13 @@ class Vocabulary:
         return f"{', '.join(shown)}." if shown else ""
 
     def correct(self, text: str) -> str:
-        """`text` with each known mishearing, as a whole word or phrase in any case, replaced by its word. Longer
-        mishearings go first, so "hey Yavis" is put right before "Yavis"."""
+        """Replace known mishearings (whole phrases, case-insensitive), longest first."""
         for heard, word in sorted(self.fixes, key=lambda f: -len(f[0])):
             text = re.sub(_phrase(heard), lambda _, w=word: w, text, flags=re.IGNORECASE)
         return text
 
     def echo(self, text: str) -> bool:
-        """Whether `text` is only the prompt echoed back: ECHO_TERMS or more of its terms and nothing else, which no
-        one says. A user saying a term or two ("JARVIS", "open AI Armory") is never an echo."""
+        """True if `text` is only prompt terms, at least ECHO_TERMS of them; one or two terms never count."""
         said, terms = _key(text), sorted({k for t in self.terms if (k := _key(t))}, key=len, reverse=True)
         if not said or not terms:
             return False
@@ -301,12 +282,11 @@ class Vocabulary:
 
 
 def build(found: list[Entry], projects: list[str]) -> Vocabulary:
-    """The user's own entries, then the projects, then the learned ones newest first: the order the prompt keeps them
-    in when it's cut short."""
+    """Order terms for truncation priority: user entries, projects, then learned (newest first)."""
     learned = sorted((e for e in found if e.learned), key=lambda e: e.date, reverse=True)
     words = [e.word for e in found if not e.learned] + projects + [e.word for e in learned]
     terms, taken = [], set()
-    for w in words:  # each once, where it first comes
+    for w in words:  # dedupe, keeping first position
         if _key(w) not in taken:
             terms.append(w)
             taken.add(_key(w))
@@ -315,7 +295,7 @@ def build(found: list[Entry], projects: list[str]) -> Vocabulary:
 
 
 def load() -> Vocabulary:
-    """The vocabulary as speech recognition uses it now."""
+    """Current Vocabulary for speech recognition."""
     try:
         found = entries()
     except OSError:

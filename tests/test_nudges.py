@@ -1,4 +1,4 @@
-"""Tests for nudges: messages sent to a queued or running task with task_reply. Run with: make test"""
+"""Tests for nudges: task_reply messages to a queued or running task, their delivery, and late nudges."""
 
 import asyncio
 
@@ -17,14 +17,13 @@ PROJECTS = ["video-agent", "other"]  # in place, and on its own worktree
 
 
 async def settle(r: runner.Runner) -> None:
-    """Until every task has finished. A job leaves r.jobs before it commits, so a run relaunched
-    for a late nudge can be committing while r.jobs is empty: its status says it isn't done."""
+    """Wait until every task is done, by status: a relaunched run may still be committing outside r.jobs."""
     while r.jobs or any(t["status"] in ("queued", "running") for t in r.store.active()):
         await (asyncio.gather(*list(r.jobs.values())) if r.jobs else asyncio.sleep(0.01))
 
 
 def fake_run(monkeypatch, *bodies) -> list[str]:
-    """Stands in for worker.run: run n does bodies[n](task, prompt, reporter). Returns every run's prompt."""
+    """Fake worker.run: run n calls bodies[n](task, prompt, reporter). Returns every run's prompt."""
     prompts: list[str] = []
 
     async def run(task: dict, prompt: str, reporter) -> Outcome:
@@ -135,9 +134,11 @@ def test_task_sessions_run_the_hook_after_every_tool_call(env, monkeypatch):
 
 
 class FakeClient:
-    """Stands in for ClaudeSDKClient: query n answers with script[n]. A script item that's a number is a pause of
-    that many seconds (the CLI saying nothing); the stream ends when a query has no script left, or after the last
-    one with `end=True`."""
+    """Fake ClaudeSDKClient: query n answers with script[n].
+
+    A number in a script is a silent pause in seconds. The stream ends when a query's script runs out, or
+    after the last one with `end=True`.
+    """
 
     def __init__(self, *script: list, end: bool = False) -> None:
         self.script, self.prompts, self.end = script, [], end

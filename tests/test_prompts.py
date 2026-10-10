@@ -1,5 +1,4 @@
-"""Tests for the long prompts kept as markdown (jarvis.prompts) and for what the persona leaves to the tools'
-descriptions. Run with: make test"""
+"""Tests for jarvis.prompts markdown prompts and what the persona leaves to tool descriptions."""
 
 import pytest
 

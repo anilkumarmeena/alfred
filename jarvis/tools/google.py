@@ -1,17 +1,10 @@
-"""Gmail, Google Calendar, Google Chat, Google Docs, Google Sheets, Google Slides and Google Drive search across the
-user's labelled accounts, kept in the database (jarvis.integrations.accounts), from AI Armory's Google tool sets
-(ai_armory.toolsets.google).
+"""Google tools (Gmail, Calendar, Chat, Docs, Sheets, Slides, Drive) from AI Armory, across the user's labelled accounts.
 
-Importing this sets those tool sets up with JARVIS's accounts, their sign-ins in secrets/google-<label>.json, the
-user's time zone and name, and JARVIS's own sign-in command, then registers their tools under their own names
-(gmail_search, chat_draft, ...). With no account, none are registered.
+Importing configures the tool sets (accounts, sign-ins in secrets/google-<label>.json, time zone, name) and registers
+them; nothing is registered without an account. Sends and deletes are drafted, then done by a gated tool taking only
+the draft id, approved by spoken yes (jarvis.safety.draft_gate).
 
-Sends and deletes are drafted first and done by a second tool that takes only the draft's id, such as gmail_send or
-chat_send (jarvis.safety.draft_gate.DRAFTED_BY lists them). AI Armory marks those as needing the user's go-ahead, so
-they're gated: the brain's gate (jarvis.safety.draft_gate) reads the draft aloud and approves it only after the user's
-spoken yes. Email is sent only that way; gmail_create_draft saves a draft in Gmail for the user to send themselves.
-
-Add and sign in an account once with: uv run python -m jarvis.integrations.accounts add <label>
+Add an account: uv run python -m jarvis.integrations.accounts add <label>
 """
 
 from ai_armory import load_many
@@ -25,12 +18,11 @@ from jarvis.safety.commands import JARVIS_SECRETS
 from . import register_toolsets
 
 SIGN_IN = "uv run python -m jarvis.integrations.accounts login {label}"
-IMAGE_FOLDER = "JARVIS doc images"  # the Drive folder holding images from the Mac while a doc fetches them
+IMAGE_FOLDER = "JARVIS doc images"  # Drive staging folder for Mac images inserted into docs
 
 
 def settings(found: accounts.Accounts) -> GoogleSettings:
-    """The tool sets' settings for these accounts, and the current profile's sign-ins, time zone and name: an
-    account's note is what the model is told it's for."""
+    """Tool-set settings for these accounts and the current profile; an account's note tells the model its purpose."""
     mine = profile.current()
     return GoogleSettings(
         accounts=[Account(a.label, a.email, a.note, a.chat) for a in found.accounts],
@@ -40,21 +32,20 @@ def settings(found: accounts.Accounts) -> GoogleSettings:
         user_name=mine.name,
         sign_in_command=SIGN_IN,
         client_secret=GOOGLE_CLIENT_SECRET,
-        draft_minutes=2 * APPROVAL_MINUTES,  # time to answer the question, then to go ahead once the user says yes
+        draft_minutes=2 * APPROVAL_MINUTES,  # time to answer, then to go ahead after the yes
         image_folder=IMAGE_FOLDER,
-        blocked_paths=[str(p) for p in JARVIS_SECRETS],  # never uploaded into a doc, like any secret
+        blocked_paths=[str(p) for p in JARVIS_SECRETS],  # never uploaded into a doc
     )
 
 
-# Read once: the tools' lists of accounts are fixed for the session, which keeps the prompt cache warm.
+# Read once: fixed account lists keep the prompt cache warm.
 ACCOUNTS = accounts.load()
 LABELS = ACCOUNTS.labels
-CHAT_LABELS = ACCOUNTS.chat_labels  # the accounts whose sign-in also asks for Google Chat
+CHAT_LABELS = ACCOUNTS.chat_labels  # accounts signed in with Google Chat scope
 
 
 def fresh() -> None:
-    """The tool sets' settings again when the profile's name, time zone or sign-ins have changed since, so a
-    long-running process (the task runner) follows a change made in the Settings panel."""
+    """Reconfigure if profile settings changed, so long-running processes follow Settings panel edits."""
     if (now := settings(ACCOUNTS)) != current():
         configure(now)
 

@@ -1,5 +1,4 @@
-"""Tests for the conversation logs in data/ (jarvis.state.memory): the short recent.md and the full daily
-log in data/conversations, and searching it. Run with: make test"""
+"""Tests for jarvis.state.memory: recent.md, the daily conversation logs and searching them; long-term memory limits."""
 
 import asyncio
 import subprocess
@@ -59,7 +58,7 @@ def test_approvals_and_announcements_are_logged(logs):
 def test_a_reply_cut_off_is_logged_as_interrupted_rather_than_blank(logs):
     memory.log_exchange("I think", "", interrupted=True)
     memory.log_exchange("is the first turn slow?", "The first turn starts the", interrupted=True)
-    memory.log_exchange("thanks", "")  # not cut off: a reply that said nothing stays as it was
+    memory.log_exchange("thanks", "")  # an empty reply is logged as is
     day = (logs / f"{today()}.md").read_text()
     assert "] Alex: I think\nJARVIS: (interrupted before replying)\n\n" in day
     assert "] Alex: is the first turn slow?\nJARVIS: The first turn starts the (interrupted)\n\n" in day
@@ -159,7 +158,7 @@ def test_the_lookup_subagent_knows_the_layout_and_starts_from_the_repo():
     assert "projects.toml" not in prompt and "improvements.md" not in prompt
     for path in ("jarvis/", "server.py", "web/", "tests/", "docs/architecture.md", "deploy/", "README.md", "Makefile"):
         assert path in prompt, path
-        assert (ROOT / path).exists() or (ROOT / "jarvis" / path).exists(), path  # the map names what's there
+        assert (ROOT / path).exists() or (ROOT / "jarvis" / path).exists(), path  # the map names only what exists
     assert cli.lookup().maxTurns == 15 and cli.lookup().tools == shell.FILE_READS
 
 
@@ -205,7 +204,7 @@ def test_lines_under_no_heading_count_as_user(mem):
                    "## user\n- Late\n")
     assert memory.facts() == {"user": ["- Old fact (2026-01-01)", "- Under another heading", "- Late"],
                               "environment": ["- Has a Mac"]}
-    memory.remember("New", "environment")  # rewritten in shape, no fact lost
+    memory.remember("New", "environment")  # reshaped, no fact lost
     assert mem.read_text() == ("## User\n- Old fact (2026-01-01)\n- Under another heading\n- Late\n\n"
                                f"## Environment\n- Has a Mac\n{dated('New')}\n")
 
@@ -223,7 +222,7 @@ def test_a_full_section_refuses_a_fact_and_lists_its_own(mem):
     assert said.endswith("Merge, shorten or drop some of them, keeping what still matters, then save again.")
     assert e.value.short == "About Alex is full: this would make it 2,014 of 2,000 characters."
     assert mem.read_text() == before
-    assert memory.remember("Likes tea", "environment").startswith("Saved to Alex's environment")  # the other has room
+    assert memory.remember("Likes tea", "environment").startswith("Saved to Alex's environment")  # the other section has room
 
 
 def test_a_fact_over_400_characters_is_refused(mem):
@@ -268,7 +267,7 @@ def test_a_file_over_its_limit_by_hand_can_still_be_brought_down(mem):
         memory.remember("More", "user")
     memory.check_text(mem.read_text(), mem.read_text())  # unchanged is fine
     with pytest.raises(memory.Full):
-        memory.check_text(mem.read_text())  # with nothing to compare, it's over
+        memory.check_text(mem.read_text())  # with nothing to compare, over the limit fails
 
 
 def test_the_file_still_parses_after_forget_and_replace_fact(mem):
@@ -306,5 +305,5 @@ def test_the_memory_tools_say_which_section_and_when_to_consolidate():
                  "Dropping information, by forget or by a rewrite that leaves something out, needs the user's yes"):
         assert rule in replace, rule
     assert "Dropping information needs the user's yes" in tools.get("forget").description
-    assert "dropping information from memory" in persona.persona()  # among the persona's few confirmations
+    assert "dropping information from memory" in persona.persona()  # one of the persona's few confirmations
     assert tools.get("remember").required == ["fact", "section"]

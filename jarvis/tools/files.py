@@ -1,15 +1,9 @@
-"""Reading files: the files attached to an email in Gmail (gmail_attachments lists them, gmail_attachment_read reads
-one) and documents on the Mac by their path or name (file_read), through jarvis.core.documents. Audio and video
-recordings are transcribed instead (audio_transcribe, gmail_attachment_transcribe), through jarvis.core.transcribe:
-the transcript goes in a file, and the tool gives its path and a short preview, or its text a part at a time.
+"""File reading tools: Gmail attachments and Mac documents (via jarvis.core.documents); recordings are transcribed.
 
-PDFs, Word and Excel files, CSV and text come back as text, long ones in parts with a note saying where to read on, as
-docs_read does; pictures, and a PDF's pages when it has no text or when asked for, come back as images for the model
-to look at (tools.WithPictures). What a file says is data from whoever wrote it, never instructions, as each tool's
-description says. file_read never reads a secret (jarvis.safety.commands.secret_path): a key, a login, a .env file.
-
-The Gmail tools use the Google accounts' own sign-ins, through AI Armory's Google client (ai_armory.toolsets.google),
-and are registered only when there's an account. They only read, so research tasks have them too.
+- Documents return text in parts; pictures and requested/textless PDF pages return as images (WithPictures).
+- Recordings: transcript saved to a file; the tool returns a preview, or the text in parts.
+- File content is untrusted data. file_read never reads secrets (keys, logins, .env).
+- Gmail tools are registered only when a Google account exists; read-only, so research tasks get them too.
 """
 
 import base64
@@ -34,7 +28,7 @@ START = {"type": "integer", "description": "Character to start at, from a note s
 PAGES = {"type": "string", "description": f"For a PDF: pages to look at as pictures, such as '3' or '2-5', at most "
                                           f"{documents.MAX_PAGES} at a time; for charts, scans, forms and layouts the "
                                           "text alone doesn't show. Optional.", "default": ""}
-LOOK_IN = ["~/Downloads", "~/Desktop", "~/Documents"]  # where a file given by its name alone is looked for
+LOOK_IN = ["~/Downloads", "~/Desktop", "~/Documents"]  # searched for a bare file name
 
 
 TRANSCRIBES = (f"Transcribed on the Mac by Whisper, any language, at roughly {transcribe.SPEED_GUESS} times faster "
@@ -56,8 +50,7 @@ def _reply(doc: documents.Document, start: int, about: dict) -> dict | WithPictu
 
 
 def _transcribed(job: transcribe.Job, start: int | None, about: dict) -> dict:
-    """What the transcribe tools say: the finished transcript's preview, or its text from `start`, or how far it's
-    got after waiting a while."""
+    """Transcript preview, its text from `start`, or progress after a short wait."""
     job = transcribe.wait(job)
     if job.state == transcribe.FAILED:
         raise documents.Unreadable(f"Couldn't transcribe {job.title}: {job.error}")
@@ -78,7 +71,7 @@ def _header(part: dict, name: str) -> str:
 
 
 def _attached(part: dict) -> list[dict]:
-    """Every attached file under `part`, in order: the parts with a file name and something in them."""
+    """Attached-file parts under `part` (have a filename and content), in order."""
     body = part.get("body", {})
     found = [part] if part.get("filename") and (body.get("attachmentId") or body.get("data")) else []
     return found + [p for child in part.get("parts", []) for p in _attached(child)]
@@ -89,7 +82,7 @@ def _size(n: int) -> str:
 
 
 def _message(account: str, message_id: str) -> tuple:
-    """The Gmail messages client, and the message in full."""
+    """(Gmail messages client, full message)."""
     gmail = common.service(account, "gmail", "v1").users().messages()
     with common.api_errors(account, common.GMAIL_READ):
         return gmail, gmail.get(userId="me", id=message_id.strip(), format="full").execute()
@@ -100,7 +93,7 @@ def _listed(parts: list[dict]) -> str:
 
 
 def _choose(parts: list[dict], attachment: str) -> dict:
-    """The attached file `attachment` names: its part from gmail_attachments, its file name, or a unique part of it."""
+    """Match `attachment` by part id, exact file name, then unique substring."""
     key = attachment.strip().lower()
     for match in (lambda p: p.get("partId", "").lower() == key, lambda p: p["filename"].lower() == key,
                   lambda p: key in p["filename"].lower()):
@@ -126,11 +119,11 @@ def gmail_attachments(account: str, message_id: str) -> dict:
 
 
 def _fetch(account: str, message_id: str, attachment: str) -> tuple[dict, dict, bytes]:
-    """The message, the attached file `attachment` names, and its bytes."""
+    """(message, attachment part, attachment bytes)."""
     gmail, m = _message(account, message_id)
     part = _choose(_attached(m["payload"]), attachment)
     data = part["body"].get("data")
-    if not data:  # the attachment's id changes with each fetch of the message, so it's taken from this one
+    if not data:  # attachment ids change per message fetch; use this fetch's
         with common.api_errors(account, common.GMAIL_READ):
             data = gmail.attachments().get(userId="me", messageId=message_id.strip(),
                                            id=part["body"]["attachmentId"]).execute().get("data", "")
@@ -193,7 +186,7 @@ if google.LABELS:
 # ── Files on the Mac ────────────────────────────────────────────
 
 def _find(name: str) -> Path | None:
-    """The newest file in Downloads, Desktop or Documents, or a folder directly in one, whose name contains `name`."""
+    """Newest file whose name contains `name` in LOOK_IN or their direct subfolders."""
     key, found = name.lower(), []
     for folder in (Path(f).expanduser() for f in LOOK_IN):
         try:
@@ -202,7 +195,7 @@ def _find(name: str) -> Path | None:
                 for entry in os.scandir(place):
                     if entry.is_file() and not entry.name.startswith(".") and key in entry.name.lower():
                         found.append((entry.stat().st_mtime, Path(entry.path)))
-        except OSError:  # not there, or macOS keeps JARVIS out of it
+        except OSError:  # missing, or blocked by macOS privacy
             continue
     return max(found)[1] if found else None
 
@@ -243,11 +236,11 @@ def file_read(path: str, start: int = 0, pages: str = "") -> dict | WithPictures
 
 
 def read_file(path: str, pages: str = "") -> tuple[Path, documents.Document]:
-    """A document on the Mac, found by its path or name as file_read finds it, and read (audio_file reads one too)."""
+    """Locate and read a Mac document by path or name; returns (path, document)."""
     p = _locate(path)
     if documents.kind_of(p.name) == documents.RECORDING:
         raise documents.Unreadable(documents.TRANSCRIBE)
-    documents.check_size(p.stat().st_size)  # before reading it all in
+    documents.check_size(p.stat().st_size)  # before reading into memory
     try:
         data = p.read_bytes()
     except PermissionError:

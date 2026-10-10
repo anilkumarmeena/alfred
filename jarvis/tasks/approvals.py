@@ -1,7 +1,8 @@
-"""Approvals, the task runner's part (jarvis.tasks.runner) for a task's requests to run risky commands on the Mac: kept
-in tasks.db, batched, announced and answered (by push, the control panel, voice, the assistant or the command line),
-remembered as rules (jarvis.safety.remembered), ordered by the user's own words, lapsed and withdrawn. The runner's
-docstring tells the whole story.
+"""Runner mixin for approval requests: a task asking to run a risky command on the Mac.
+
+Requests live in tasks.db and are batched, announced (push, Mac notification, voice), answered (push, panel, voice,
+assistant, CLI), turned into remembered rules, auto-approved by the user's own orders, lapsed, or withdrawn.
+See jarvis.tasks.runner for the full flow.
 """
 
 import asyncio
@@ -24,24 +25,24 @@ from jarvis.tasks.runner_base import RunnerBase
 
 log = logging.getLogger("jarvis.tasks.runner")
 
-APPROVAL_BATCH_SECONDS = 5  # what a task asks for within this long goes into one request
-APPROVAL_QUESTION = "may it run "  # how the question of a task waiting only for approvals opens
-ACCESS_QUESTION = "may it also "  # and of one asking for more access with request_access
-# "panel" is the web page's control panel, which jarvis.server only lets through with the passcode, so it needs no nonce
+APPROVAL_BATCH_SECONDS = 5  # asks within this window share one request
+APPROVAL_QUESTION = "may it run "  # opens the question of a task waiting only on approvals
+ACCESS_QUESTION = "may it also "  # opens a request_access question
+# "panel" needs no nonce: jarvis.server already requires the passcode for it
 _VIA = {"push": "with a tap", "web": "on the web page", "panel": "in the control panel", "voice": "by voice",
         "cli": "on the command line", "assistant": "by telling JARVIS", "rule": "with a rule they made",
         "order": "by telling JARVIS to do it"}
-_OWN_ANSWERS = ("rule", "order")  # how the runner answers a request itself, on what the user said before
-SAID_MOST = 500  # how much of the user's words an answer through the assistant, or an order, keeps in the task's log
-ORDER_HOURS = remembered.SESSION_HOURS  # the user's orders last until the task finishes, and at most this long
-# Why a request stopped being waited on, by what withdrew it (its `via`); re-queued says who sent the instructions
+_OWN_ANSWERS = ("rule", "order")  # the runner answering on the user's earlier say-so
+SAID_MOST = 500  # chars of the user's words kept in the task log
+ORDER_HOURS = remembered.SESSION_HOURS  # orders last until the task ends, capped at this
+# Withdrawal reason, by the `via` that withdrew the request
 WITHDRAWN = {"re-queued": "{name} sent the task new instructions, so it started a new run",
              "stopped": "the task stopped", "failed": "the task failed", "done": "the task finished",
              "discarded": "the task was discarded"}
 
 
 class NotAllowed(PermissionError):
-    """A wrong nonce: the answer didn't come from the push it was sent in."""
+    """The answer's nonce or assistant details don't match the request."""
 
 
 def _hash(nonce: str) -> str:
@@ -49,24 +50,24 @@ def _hash(nonce: str) -> str:
 
 
 def approval_summary(commands: list[dict]) -> str:
-    """'a command that installs software (brew install)', or '2 commands: one that ..., one that ...'."""
+    """'a command that ...' or '2 commands: one that ..., one that ...'."""
     if len(commands) == 1:
         return f"a command that {commands[0]['why']}"
     return f"{len(commands)} commands: " + ", ".join(f"one that {c['why']}" for c in commands)
 
 
 def approval_question(pending: list[dict]) -> str:
-    """The question a task waiting only for approvals has: 'may it run a command that deletes files (rm)?'"""
+    """Question for a task waiting only on approvals: 'may it run a command that ...?'"""
     return APPROVAL_QUESTION + " and ".join(approval_summary(a["commands"]) for a in pending) + "?"
 
 
 def approval_spoken(approval: dict, task: dict) -> str:
-    """What the voice agent asks. The program and the reason come from the command itself, not from the task."""
+    """What the voice agent asks. Wording comes from the gate's analysis, not the task's own text."""
     return f"Task {task['id']}, {task['title']}, wants to run {approval_summary(approval['commands'])}. Okay to go ahead?"
 
 
 def approval_result(approval: dict) -> str:
-    """What the task is told when a request is answered, or lapses."""
+    """Message to the task once a request is answered, withdrawn or lapsed."""
     n, state, via = approval["id"], approval["state"], _VIA.get(approval["via"] or "", "")
     if state == APPROVED:
         listed = [f"with {c['tool']}, in {c['folder']}: {c['command']}" for c in approval["commands"]]
@@ -82,7 +83,7 @@ def approval_result(approval: dict) -> str:
             f"you can, and end with the exact command for {profile.name()} to run themselves.")
 
 
-# What became of a request, as said in its push and the bell, and its light there
+# Settled state -> (word for push and bell, light colour)
 SETTLED = {APPROVED: ("approved", "ok"), DENIED: ("declined", "bad"), EXPIRED: ("lapsed", "warn"),
            CANCELLED: ("no longer needed", "warn")}
 
@@ -92,24 +93,23 @@ def _commands(approval: dict) -> str:
 
 
 def _check_via(via: str) -> None:
-    """ValueError unless `via` is a way the user answers a request ("rule" and "order" are only how one answers
-    itself)."""
+    """ValueError unless `via` is a user channel (not "rule" or "order")."""
     if via not in _VIA or via in _OWN_ANSWERS:
         raise ValueError(f"via must be one of {', '.join(v for v in _VIA if v not in _OWN_ANSWERS)}.")
 
 
 def session_key(task_id: int) -> str:
-    """A task's session, as its remembered approvals name it (jarvis.safety.remembered)."""
+    """Session key for a task's session-scoped remembered rules."""
     return f"task:{task_id}"
 
 
 def _offered(approval: dict) -> list[dict]:
-    """What each of a request's commands offers to be remembered, as its task's gate worked it out."""
+    """Per-command rememberable offers, as computed by the gate."""
     return [c.get("remember") or {} for c in approval["commands"]]
 
 
 def _approval_view(approval: dict, task: dict | None = None) -> dict:
-    """A request as the API shows it, with what answering it for longer would remember: never its nonce's hash."""
+    """API view of a request plus its remember offer; never includes the nonce hash."""
     view = {k: v for k, v in approval.items() if k != "nonce_hash"} | {
         "summary": approval_summary(approval["commands"]), "remember": remembered.offer(_offered(approval))}
     if task:
@@ -118,13 +118,13 @@ def _approval_view(approval: dict, task: dict | None = None) -> dict:
 
 
 class Approvals(RunnerBase):
-    """The runner's requests: asking, announcing, answering, remembering, lapsing and withdrawing them; and the user's
-    orders kept with a task (`orders`), which answer for them."""
+    """Approval requests and the user's standing orders on a task."""
 
     def cleared(self, task_id: int, item: dict) -> bool:
-        """Whether the user said yes to exactly this host command, in the run it resumed; if so it may now run. Or
-        whether their own words, sent with the task, order just what it does (`orders`), or rules they made let it run
-        (jarvis.safety.remembered): always ones, and the task's session's."""
+        """Whether this host command may run now, and log why.
+
+        Cleared by an approval for this exact command in the resumed run, a standing order, or a remembered rule
+        (always-scope or this task's session)."""
         if (approval := self.store.use_approved(task_id, item)) is not None:
             self.store.log(task_id, "agreed", f"running, as agreed in request {approval['id']}: {item['command']}")
             return True
@@ -137,18 +137,17 @@ class Approvals(RunnerBase):
         return False
 
     def _orders(self, task_id: int) -> list[dict]:
-        """The user's own words that the task was sent with and still go by, oldest first."""
+        """Unexpired orders kept on the task, oldest first."""
         kept = json.loads((self.store.get(task_id) or {}).get("orders") or "[]")
         return [o for o in kept if time.time() - o["at"] < ORDER_HOURS * 3600]
 
     def _ordering(self, task_id: int, items: list[dict]) -> str:
-        """The user's words, kept with the task, that order just what every one of these host commands does; or ''."""
+        """The first order covering every one of `items`, or ''."""
         return next((o["said"] for o in self._orders(task_id)
                      if all(ordered(o["said"], i["command"]) for i in items)), "")
 
     def _order(self, task_id: int, said: str | None) -> None:
-        """Keep the user's own words, sent with a reply or a new task, when they order something a risky command
-        does ("merge and push"): until the task finishes, commands they order run without asking."""
+        """Keep the user's words if they order a risky action ("merge and push"); such commands then skip asking."""
         said = " ".join((said or "").split())[:SAID_MOST]
         if not orders(said):
             return
@@ -157,27 +156,25 @@ class Approvals(RunnerBase):
         self.store.log(task_id, "order", f"{profile.name()}'s own words, which go ahead for what they order: \"{said}\"")
 
     def _apply_orders(self, task_id: int) -> list[int]:
-        """Approve the task's requests still waiting whose every command the user's words, kept with it, order."""
+        """Approve the task's pending requests fully covered by its orders."""
         def said(approval: dict) -> str:
             return (words := self._ordering(task_id, approval["commands"])) and f"as {profile.name()} said (\"{words}\")"
 
         return self._answer_each(task_id, APPROVED, "order", said)
 
     def request_approval(self, task_id: int, item: dict) -> dict:
-        """Put a risky host command to the user. What the task asks within a few seconds goes into one request,
-        announced once those seconds are up."""
+        """Ask the user about a risky host command; asks within APPROVAL_BATCH_SECONDS share one announcement."""
         expires = time.time() + TASK_APPROVAL_HOURS * 3600
         approval, new = self.store.ask_approval(task_id, item, expires, APPROVAL_BATCH_SECONDS)
         if new:
             self.store.log(task_id, "approval", f"request {approval['id']} asks to run a command that {item['why']}, "
                                                 f"in {item['folder']}: {item['command']}")
-            if len(approval["commands"]) == 1:  # the first in the batch: its announcement waits for the rest
+            if len(approval["commands"]) == 1:  # first of the batch: announce after the window
                 self._background(self._announce_approval(approval["id"], APPROVAL_BATCH_SECONDS))
         return approval
 
     async def _announce_approval(self, approval_id: int, delay: float = 0) -> None:
-        """Tell the user about a request: an event for the voice agent, a Mac notification and a push, whose
-        one-time nonce answers it from the phone."""
+        """Announce a request: voice event, Mac notification, and a push carrying a one-time nonce."""
         await asyncio.sleep(delay)
         approval = self.store.approval(approval_id)
         if not approval or approval["state"] != PENDING or approval["announced"]:
@@ -198,19 +195,17 @@ class Approvals(RunnerBase):
             data={"approval": {"id": approval_id, "task": task["id"], "nonce": nonce, "expires": int(approval["expires"])}}))
 
     def approvals(self) -> list[dict]:
-        """The requests still waiting for an answer, oldest first."""
+        """Pending requests, oldest first."""
         return [_approval_view(a, self.store.get(a["task"])) for a in self.store.approvals()]
 
     def answer(self, approval_id: int, decision: str, via: str, nonce: str | None = None, task: int | None = None,
                commands: list[dict] | None = None, said: str | None = None, remember: str = "once",
                breadth: str = "exact", whole_task: bool = False) -> dict:
-        """The user's answer to a request. From the phone it must carry the request's nonce. Through the assistant
-        it must name the request's task and its exact commands, as they were when the user was asked, and carry
-        the user's words, which go in the task's log. The first answer wins; a later one only hears how it stands.
-        A yes can `remember` it for the task's session or always (at `breadth`), which the caller has shown the
-        user first; what was saved, or why nothing could be, comes back as `remembered`. With `whole_task` (a spoken
-        answer, which is about the task) it goes for the task's other requests waiting too, once each has been put to
-        the user: their ids come back as `also`."""
+        """Record the user's answer. First answer wins; later ones get the current state with answered=False.
+
+        Phone answers need the nonce; assistant answers must match task, exact commands and carry the user's words.
+        A yes may `remember` (session/always, at `breadth`), result in `remembered`. `whole_task` applies the answer
+        to the task's other announced pending requests, listed in `also`. Raises NotAllowed or ValueError."""
         if decision not in ("approve", "deny"):
             raise ValueError("decision must be approve or deny.")
         _check_via(via)
@@ -251,15 +246,14 @@ class Approvals(RunnerBase):
         return view
 
     def _answer_rest(self, approval: dict, state: str, via: str) -> list[int]:
-        """One answer goes for all a task has asked: its other requests waiting, which have been put to the user, get it
-        too. Returns their ids."""
+        """Apply the same answer to the task's other announced pending requests; returns their ids."""
         with_it = f"{_VIA[via]}, with request {approval['id']}"
         return self._answer_each(approval["task"], state, via, lambda other: with_it if other["announced"] else "")
 
     def remember(self, approval_id: int, breadth: str, via: str, scope: str = "always") -> list[dict]:
-        """Keep rules (jarvis.safety.remembered) made from a request the user said yes to, for its task's session or
-        always, once they've heard what they cover; then any other request the rules cover is approved with them.
-        Raises NotRememberable, saying why, for commands that always ask."""
+        """Save rules from an approved request (session or always), then approve other requests they cover.
+
+        The caller must have shown the user what the rules cover. Raises NotRememberable for always-ask commands."""
         if not (approval := self.store.approval(approval_id)):
             raise ValueError(f"There's no request {approval_id}.")
         if approval["state"] not in (APPROVED, SPENT):
@@ -275,7 +269,7 @@ class Approvals(RunnerBase):
         return kept
 
     def apply_rules(self) -> list[int]:
-        """Approve the requests still waiting whose every command the rules now in force cover; returns their ids."""
+        """Approve pending requests fully covered by current rules; returns their ids."""
         def ruled(approval: dict) -> str:
             keys = [session_key(approval["task"])]
             covered = all(remembered.covering(o, keys) for o in _offered(approval))
@@ -284,8 +278,7 @@ class Approvals(RunnerBase):
         return self._answer_each(None, APPROVED, "rule", ruled)
 
     def _answer_each(self, task_id: int | None, state: str, via: str, why: Callable[[dict], str]) -> list[int]:
-        """Answer each request still waiting (a task's, or every task's) for which `why` gives a reason, logged with
-        it ('' passes it by), as any answer is; returns their ids."""
+        """Answer each pending request (one task's, or all) for which `why` returns a reason ('' skips); returns ids."""
         done = []
         for approval in self.store.approvals(task_id):
             if (reason := why(approval)) and self.store.answer_approval(approval["id"], state, via):
@@ -297,7 +290,7 @@ class Approvals(RunnerBase):
 
     @staticmethod
     def _check_told(approval: dict, task: int | None, commands: list[dict] | None, said: str | None) -> None:
-        """An answer through the assistant is for this task's request as the user was told of it, or none."""
+        """NotAllowed unless an assistant answer matches the request exactly as announced."""
         if task != approval["task"]:
             raise NotAllowed(f"Request {approval['id']} isn't task {task}'s.")
         if not approval["announced"]:
@@ -308,16 +301,16 @@ class Approvals(RunnerBase):
             raise NotAllowed(f"An answer through the assistant carries {profile.name()}'s words.")
 
     def _settled(self, approval_id: int) -> dict:
-        """A request has its answer (or has lapsed): the task hears it, and so do the phone and the voice agent."""
+        """Deliver a settled request's outcome to the task (nudge or relaunch), the voice agent and the phone."""
         approval = self.store.approval(approval_id)
         task_id, state = approval["task"], approval["state"]
         result = approval_result(approval)
         self.store.log(task_id, f"request {state}", result)
         task = self.store.get(task_id)
         if task["status"] in ("queued", "running"):
-            self.store.add_nudge(task_id, result)  # it reaches the session after its next tool call
+            self.store.add_nudge(task_id, result)  # delivered after its next tool call
         elif task["status"] == "waiting" and task["wait_kind"] != WAIT_APPROVAL:
-            self.store.add_nudge(task_id, result)  # it's waiting for an answer to its own question: it goes with that
+            self.store.add_nudge(task_id, result)  # waiting on its own question: deliver with that answer
         elif task["status"] in ("waiting", "stopped") and state != CANCELLED:
             if not task["worktree"] or Path(task["worktree"]).exists():
                 self._launch(task_id, result)
@@ -325,26 +318,25 @@ class Approvals(RunnerBase):
         self.broadcast({"type": "approval_answered", "text": f"Task {task_id}'s request {approval_id} {word}.",
                         "approval": _approval_view(approval)})
         carries_on = " It carries on." if state in (APPROVED, DENIED) else ""
-        if approval["announced"]:  # replaces the push with the buttons
+        if approval["announced"]:  # same tag: replaces the push with buttons
             self._background(self._push(f"Task {task_id}: request {word}", f"{approval_summary(approval['commands'])}."
                                         f"{carries_on}", f"/?task={task_id}", f"approval-{approval_id}"))
         return approval
 
     def _close_approvals(self, task_id: int, why: str = "stopped") -> None:
-        """A task that stops, ends or starts afresh on the user's reply no longer waits on what it asked for."""
+        """Withdraw the task's pending requests (it stopped, ended or was re-queued)."""
         for approval in self.store.approvals(task_id):
             if self.store.answer_approval(approval["id"], CANCELLED, why):
                 self._settled(approval["id"])
 
     def _spend_approvals(self, task_id: int, before: float) -> None:
-        """A yes is good for the run it resumed: once that's over, what wasn't run lapses."""
+        """A yes is valid only for the run it resumed: mark unused approvals from before `before` spent."""
         for approval in self.store.approvals(task_id, (APPROVED,)):
             if (approval["answered_at"] or 0) < before:
                 self.store.set_approval(approval["id"], state=SPENT)
 
     async def _expire_approvals(self, every: float = 60) -> None:
-        """Requests nobody answered in time lapse, and the task is told. Those a rule made since covers (the voice
-        shell keeps its own) are approved."""
+        """Loop: lapse expired requests, and approve any newly covered by rules."""
         while True:
             now = time.time()
             for approval in self.store.approvals():

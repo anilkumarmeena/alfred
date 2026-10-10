@@ -1,7 +1,9 @@
-"""Git for the task runner's code tasks (jarvis.tasks.runner): each worktree task's own worktree and branch, committed
-as a run ends, then merged (POST /tasks/ID/merge) or discarded (POST /tasks/ID/discard); an in-place task's folder,
-its uncommitted work saved under refs/jarvis/ before each run and what it changed reported after, or for a folder
-without git a snapshot of its files; and the project list's changes (POST /projects, POST /projects/git), one at a time.
+"""Runner mixin for git and project-list changes.
+
+  worktree tasks  own worktree + branch jarvis/<id>-<slug>; committed at run end, then merged or discarded
+  in-place tasks  user's uncommitted work saved under refs/jarvis/ before each run; changes reported after
+                  (non-git folders: a file mtime/size snapshot instead)
+  projects        register / git init, serialised by projects_lock
 """
 
 import asyncio
@@ -22,10 +24,10 @@ from jarvis.tasks.host_tools import few
 from jarvis.tasks.runner_base import RunnerBase
 
 log = logging.getLogger("jarvis.tasks.runner")
-# Kept out of task commits even in repos whose .gitignore doesn't cover them
+# Excluded from task commits even if .gitignore misses them
 JUNK = [*(f"{d}/" for d in projects.CACHE_DIRS), "*.pyc", ".DS_Store"]
 PATHSPEC = ["--", ".", *(f":(exclude,glob)**/{p}" for p in JUNK)]
-# Not walked when listing what an in-place task changed in a folder without git
+# Skipped when snapshotting a non-git folder
 SNAPSHOT_SKIP = {".git", *projects.CACHE_DIRS}
 
 
@@ -34,12 +36,12 @@ async def _git(cwd: str | Path, *args: str, timeout: float = 60) -> str:
 
 
 async def _git_try(cwd: str | Path, *args: str, timeout: float = 60) -> tuple[int, str]:
-    """A git command that may fail: its exit code, and its output (stderr too)."""
+    """Run git, tolerating failure: (exit code, stdout+stderr)."""
     return await proc.run_try("git", "-C", str(cwd), *args, timeout=timeout)
 
 
 def _snapshot(folder: Path) -> dict[str, tuple[int, int]]:
-    """Each file's modification time and size, to tell what a task changed in a folder without git."""
+    """relpath -> (mtime_ns, size) for every file, to diff a non-git folder."""
     files = {}
     for top, dirs, names in os.walk(folder):
         dirs[:] = [d for d in dirs if d not in SNAPSHOT_SKIP]
@@ -62,7 +64,7 @@ def _file_changes(before: dict, after: dict) -> str:
 
 
 class GitOps(RunnerBase):
-    """Worktrees and branches, in-place folders, commits, merges and discards, and the project list's changes."""
+    """Worktrees, in-place folders, commits, merges, discards and project registration."""
 
     async def register_project(self, name: str, path: str | None = None, aliases: list[str] | None = None,
                                about: str = "", in_place: bool = projects.IN_PLACE_DEFAULT) -> dict:
@@ -70,8 +72,9 @@ class GitOps(RunnerBase):
             return await asyncio.to_thread(projects.register, name, path, aliases, about, in_place)
 
     async def merge(self, task_id: int) -> dict:
-        """Merge a worktree task's branch into the branch checked out in the project's folder, then
-        remove the task's worktree and delete its branch. A branch that's already merged is only cleaned up."""
+        """Merge a worktree task's branch into the project's checked-out branch, then remove worktree and branch.
+
+        An already-merged branch is only cleaned up."""
         task = self._get(task_id)
         if task["status"] == "discarded":
             raise ValueError(f"Task {task_id} was discarded, so there's nothing to merge.")
@@ -83,7 +86,7 @@ class GitOps(RunnerBase):
             project = projects.find(task["project"])
             if busy := self._jobs_on(project.name, in_place=True):
                 raise ValueError(f"Task {' and '.join(map(str, busy))} is working in {project.name}'s folder; merge once it's finished.")
-            async with self._folder_lock(project.name):  # an in-place task started meanwhile waits for the merge
+            async with self._folder_lock(project.name):  # in-place tasks wait for the merge
                 did, cleaned = await self._merge(task, project)
         spoken = f"Task {task_id}, {task['title']}, {did}. {cleaned}."
         self.store.log(task_id, "merged", spoken)
@@ -91,7 +94,7 @@ class GitOps(RunnerBase):
         return self.store.update(task_id, spoken=spoken)
 
     async def _merge(self, task: dict, project: projects.Project) -> tuple[str, str]:
-        """The merge itself: what it did, and what it cleaned up."""
+        """Do the merge; returns (what it did, what it cleaned up)."""
         task_id = task["id"]
         repo, branch, wt = project.path, task["branch"], task["worktree"]
         if wt and Path(wt).exists() and await _git(wt, "status", "--porcelain", *PATHSPEC):
@@ -107,7 +110,7 @@ class GitOps(RunnerBase):
         else:
             if await _git(repo, "status", "--porcelain", "--untracked-files=no"):
                 raise ValueError(f"{project.name}'s folder has uncommitted changes; commit or put them aside before merging.")
-            # JARVIS's own branches only once their tests pass (jarvis.tasks.merge_check)
+            # JARVIS's own branches merge only once their tests pass
             tested = projects.is_jarvis(repo)
             if tested and (why := await merge_check.refusal(repo, branch, wt, into)):
                 raise ValueError(f"Task {task_id}'s branch {branch} wasn't merged, since {why}.")
@@ -119,9 +122,9 @@ class GitOps(RunnerBase):
         return did, await self._remove_branch(repo, wt, branch if exists else None)
 
     async def discard(self, task_id: int) -> dict:
-        """Throw away a finished, failed or stopped task's work without merging it, and mark it discarded.
-        A worktree task's worktree is removed and its branch deleted. An in-place task's changes are
-        mixed in with the user's own in the project's folder, so they're left there untouched."""
+        """Mark an ended task discarded, removing a worktree task's worktree and branch.
+
+        In-place changes are left untouched: they're mixed in with the user's own."""
         task = self._get(task_id)
         if task["status"] == "discarded":
             raise ValueError(f"Task {task_id} was already discarded.")
@@ -150,11 +153,11 @@ class GitOps(RunnerBase):
                                  wait_kind=None, seen=1)
 
     async def _discard_branch(self, task: dict, project: projects.Project) -> str:
-        """Remove a worktree task's worktree and delete its branch, unless the branch is already merged."""
+        """Remove a worktree task's worktree and branch; ValueError if not JARVIS's branch or already merged."""
         repo, branch, wt = project.path, task["branch"], task["worktree"]
         if wt and Path(wt).resolve() == repo.resolve():
             raise ValueError(f"Task {task['id']}'s worktree is {project.name}'s own folder, so nothing was removed.")
-        if not branch.startswith(f"jarvis/{task['id']}-"):  # only ever the branch the runner made for this task
+        if not branch.startswith(f"jarvis/{task['id']}-"):  # only the branch the runner made
             raise ValueError(f"Task {task['id']}'s branch {branch} wasn't made by JARVIS, so nothing was removed.")
         exists = (await _git_try(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"))[0] == 0
         if exists and await _git(repo, "rev-list", "--count", f"{task['base']}..{branch}") != "0" \
@@ -164,11 +167,10 @@ class GitOps(RunnerBase):
         return await self._remove_branch(repo, wt, branch if exists else None, force=True)
 
     async def _remove_branch(self, repo: Path, worktree: str | None, branch: str | None, force: bool = False) -> str:
-        """Remove a task's worktree and delete its branch: after a merge, when its work is all committed,
-        or on discard (`force`), when its unmerged commits and uncommitted changes go too."""
+        """Remove worktree and branch. `force` (discard) also drops unmerged commits; returns what was done."""
         done = []
         if worktree and Path(worktree).exists():
-            await _git(repo, "worktree", "remove", "--force", worktree)  # --force: after a merge, only caches like node_modules are left
+            await _git(repo, "worktree", "remove", "--force", worktree)  # --force: only caches like node_modules remain
             done.append("worktree removed")
         await _git_try(repo, "worktree", "prune")
         if branch:
@@ -182,16 +184,16 @@ class GitOps(RunnerBase):
             if busy := self._jobs_on(project.name):
                 raise ValueError(f"Task {' and '.join(map(str, busy))} is working on {project.name}; "
                                  "set up git once it's finished.")
-            async with self._folder_lock(project.name):  # an in-place task started meanwhile waits for git
+            async with self._folder_lock(project.name):  # in-place tasks wait for git init
                 return await asyncio.to_thread(projects.init_git, project.name)
 
     def _jobs_on(self, project: str, in_place: bool = False) -> list[int]:
-        """The tasks running or queued on a project (only the in-place ones, if asked)."""
+        """Running or queued task ids on a project (only in-place ones if `in_place`)."""
         tasks = (self.store.get(i) for i in self.jobs)
         return sorted(t["id"] for t in tasks if t and t["project"] == project and (t["in_place"] or not in_place))
 
     def _folder_lock(self, project: str) -> asyncio.Lock:
-        """Held by whatever changes a project's folder: an in-place task, a merge, or setting up git."""
+        """Per-project lock held by anything changing its folder: in-place tasks, merges, git init."""
         return self.folders.setdefault(project, asyncio.Lock())
 
     async def _make_worktree(self, task: dict) -> None:
@@ -209,10 +211,9 @@ class GitOps(RunnerBase):
         self.store.log(task["id"], "branch", f"{branch} from {base_ref} at {base[:7]}, in {worktree}")
 
     async def _enter_folder(self, task: dict) -> None:
-        """Before each run of an in-place task: save the folder's uncommitted work, and on the
-        first run note the branch and the commit its changes are measured against. A folder
-        without git gets a snapshot of its files instead (and no base), and a repo with no
-        commits yet has nothing to save and is measured against git's empty tree."""
+        """Before each in-place run: save uncommitted work to refs/jarvis/; on the first run record branch and base.
+
+        Non-git folders get a file snapshot (no base); repos with no commits use git's empty tree as base."""
         folder = Path(task["worktree"]) if task["worktree"] else projects.find(task["project"]).path
         state = await asyncio.to_thread(projects.git_state, folder)
         if state == projects.NO_GIT:
@@ -228,7 +229,7 @@ class GitOps(RunnerBase):
             base, at = await _git(folder, "hash-object", "-t", "tree", "/dev/null"), "with no commits yet"
         else:
             head, branch = (await _git(folder, "rev-parse", "HEAD", "--abbrev-ref", "HEAD")).split("\n")
-            # stash create records tracked changes as a commit without touching the files, the index or the stash list
+            # stash create: commit of tracked changes without touching files, index or stash list
             saved = await _git(folder, "stash", "create", f"JARVIS: uncommitted work before task {task['id']}")
             if saved:
                 ref = f"refs/jarvis/task-{task['id']}-{int(time.time())}"
@@ -242,12 +243,12 @@ class GitOps(RunnerBase):
                                                    "without a worktree; changes stay uncommitted")
 
     async def _uncommitted(self, task: dict) -> str:
-        """What an in-place task's folder has changed since the task began, all of it uncommitted."""
+        """Summary of an in-place task's uncommitted changes since it began."""
         folder = task["worktree"]
         if not Path(folder).exists():
             return "project folder missing"
         try:
-            if not task["base"]:  # not a git repo when the task began
+            if not task["base"]:  # wasn't a git repo at start
                 if (before := self.snapshots.get(task["id"])) is None:
                     return "not a git repo; its files weren't recorded before this run, so the changes aren't known"
                 return _file_changes(before, await asyncio.to_thread(_snapshot, Path(folder)))
@@ -260,7 +261,7 @@ class GitOps(RunnerBase):
             return f"couldn't read changes: {e}"[:200]
 
     async def _commit(self, task: dict, summary: str, finished: bool) -> str:
-        """Commit whatever the run changed; returns the branch's shortstat against its base."""
+        """Commit the run's changes; returns the branch's shortstat against its base."""
         wt = task["worktree"]
         if not Path(wt).exists():
             return "worktree missing"
@@ -269,7 +270,7 @@ class GitOps(RunnerBase):
             if await _git(wt, "diff", "--cached", "--name-only"):
                 subject = task["title"] if finished else f"{task['title']} (unfinished)"
                 message = f"{subject}\n\n{summary[:3000]}".strip() + f"\n\nJARVIS-Task: {task['id']}"
-                # --no-verify: hooks often need tools the fresh worktree lacks; the branch is for review anyway
+                # --no-verify: hooks often need tools a fresh worktree lacks; the branch is reviewed anyway
                 await _git(wt, "commit", "-q", "--no-verify", "-m", message)
             return await _git(wt, "diff", "--shortstat", task["base"], "HEAD") or "no changes"
         except Exception as e:

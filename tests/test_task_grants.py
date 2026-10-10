@@ -1,5 +1,4 @@
-"""Tests for access granted to background tasks beyond their kind's (jarvis.tasks.access): at the start, on a reply,
-and when a task asks for it with request_access. Run with: make test"""
+"""Tests for tasks.access grants beyond a task's kind: at start, on a reply, and via request_access."""
 
 import asyncio
 import json
@@ -20,8 +19,7 @@ from jarvis.tools import tasks as task_tools
 
 @pytest.fixture
 def box(mac, monkeypatch):
-    """The mac fixture's folders, with JARVIS's own repo and data in its projects folder, and a code_question's
-    project, video."""
+    """mac fixture folders, JARVIS's repo and data under projects, and a code_question project, video."""
     jarvis = mac["projects"] / "jarvis"
     monkeypatch.setattr(worker, "DATA_DIR", jarvis / "data")
     monkeypatch.setattr(gate, "ROOT", jarvis)
@@ -156,7 +154,7 @@ def test_request_access_asks_the_runner_and_pauses(monkeypatch):
     assert asyncio.run(tool.handler({"access": ["mac"], "reason": "x"}))["is_error"]
 
 
-# ── Granting, asking and upgrading through the runner ──────────
+# ── Granting, asking and upgrading via the runner ──────────────
 
 
 def runs(*bodies):

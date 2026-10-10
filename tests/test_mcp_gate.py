@@ -1,5 +1,4 @@
-"""The gate that holds MCP servers' write tools for a spoken yes (jarvis.safety.mcp_gate), and what JARVIS reads out before
-asking, from the tool's `says` phrase and the call's own arguments. Run with: make test"""
+"""Tests for jarvis.safety.mcp_gate: what's read out for an MCP write call, and holding it for a spoken yes."""
 
 import asyncio
 import json
@@ -13,7 +12,7 @@ from jarvis.integrations import mcp_servers
 from jarvis.integrations.mcp_servers import Server, Tool
 from jarvis.safety import mcp_gate
 
-# GitHub and GitLab as an earlier JARVIS sorted them by hand, `says` phrases and all: rows like any other now
+# GitHub and GitLab with hand-written `says` phrases, as plain server rows
 GITHUB = Server("github", "GitHub", command="github-mcp-server", tools={
     "get_me": Tool("read"),
     "add_issue_comment": Tool("write", "comment on {owner}/{repo} number {issue_number}, saying {body}"),

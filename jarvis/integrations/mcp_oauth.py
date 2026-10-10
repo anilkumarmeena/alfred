@@ -1,18 +1,12 @@
-"""Signing JARVIS in to an HTTP MCP server with OAuth, as MCP's authorization spec has it, in JARVIS's own browser.
+"""OAuth sign-in to HTTP MCP servers (MCP authorization spec), done in JARVIS's own browser.
 
-The server's URL answers 401 until signed in. Where to sign in comes from the server itself: its protected resource
-metadata (named by the 401's WWW-Authenticate, or at /.well-known/oauth-protected-resource), which names its
-authorization server, whose own metadata gives the authorize, token and registration endpoints (`discover`). JARVIS
-registers itself there as a client (dynamic client registration, `register`), then opens the authorize page, with
-PKCE, in its own browser (jarvis.integrations.browser), on the profile where the user signs in to sites themselves:
-they sign in and agree there, and JARVIS's browser catches the redirect back (REDIRECT, never served) and hands over
-the code, which is exchanged for tokens (`sign_in`).
+Flow: 401 -> protected-resource metadata -> authorization-server metadata (`discover`) -> dynamic client registration
+(`register`) -> authorize with PKCE in the user's browser profile; the browser intercepts REDIRECT and hands back the
+code, exchanged for tokens (`sign_in`).
 
-The tokens, with the client and the token endpoint, are kept encrypted in the vault as one secret, `<server>.oauth`
-(Server.oauth_secret), never shown or logged. Only the launcher's bridge reads them (jarvis.integrations.mcp_bridge),
-through `token`, which refreshes an access token that has run out, or that the server refused, and keeps the new one.
-A server that can't register clients this way can't be signed in to; it takes a key instead, entered in the control
-panel.
+Tokens, client and token endpoint live encrypted in the vault as one secret (Server.oauth_secret), never shown or
+logged. Only the bridge reads them, via `token`, which refreshes expired or refused tokens. Servers without dynamic
+registration take a key instead.
 """
 
 import base64
@@ -33,23 +27,22 @@ from jarvis.integrations.mcp_servers import Server
 
 log = logging.getLogger("jarvis.integrations.mcp_oauth")
 
-# Where the authorization server sends the browser back. Nothing listens there: JARVIS's browser catches the
-# navigation before it leaves (browser.Browser.sign_in), so the code never reaches the network.
+# Nothing listens here: the browser intercepts the navigation (browser.Browser.sign_in), so the code never leaves.
 REDIRECT = "http://127.0.0.1:47615/jarvis/signed-in"
 SIGN_IN_MINUTES = 10
 TIMEOUT = 20
-EARLY = 60  # seconds before an access token's end that it's refreshed
+EARLY = 60  # refresh this many seconds before expiry
 CLIENT_NAME = "JARVIS"
 
 
 class SignInError(Exception):
-    """Signing in can't go on; its message says why, fit to say aloud."""
+    """Sign-in failed; the message is fit to say aloud."""
 
 
 @dataclass
 class Meta:
-    """Where to sign in to one server."""
-    resource: str  # the server's URL, as tokens are asked for
+    """One server's OAuth endpoints."""
+    resource: str  # server URL, as sent in token requests
     authorize: str
     token: str
     register: str = ""
@@ -80,7 +73,7 @@ async def _json(client: httpx.AsyncClient, url: str) -> dict | None:
 
 
 async def challenge(url: str, client: httpx.AsyncClient) -> httpx.Response | None:
-    """The server's answer to an unsigned first request: a 401 asks for a sign-in. None if it can't be reached."""
+    """Send an unauthenticated `initialize`; a 401 means sign-in is needed. None if unreachable."""
     hello = {"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
         "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "jarvis", "version": "1"}}}
     try:
@@ -91,13 +84,13 @@ async def challenge(url: str, client: httpx.AsyncClient) -> httpx.Response | Non
 
 
 def _www_authenticate(response: httpx.Response | None) -> dict[str, str]:
-    """The 401's WWW-Authenticate parameters: resource_metadata, scope."""
+    """WWW-Authenticate parameters (resource_metadata, scope)."""
     said = response.headers.get("www-authenticate", "") if response is not None else ""
     return {k.lower(): v for k, v in re.findall(r'(\w+)="([^"]*)"', said)}
 
 
 async def discover(url: str, client: httpx.AsyncClient, first: httpx.Response | None = None) -> Meta:
-    """Where to sign in to the server at `url`. Raises SignInError if it doesn't say."""
+    """Find the OAuth endpoints for `url`. Raises SignInError if missing, non-https or without PKCE."""
     asked = _www_authenticate(first)
     resource_meta = None
     for where in filter(None, (asked.get("resource_metadata"),
@@ -107,7 +100,7 @@ async def discover(url: str, client: httpx.AsyncClient, first: httpx.Response | 
             break
     resource_meta = resource_meta or {}
     issuers = [s for s in resource_meta.get("authorization_servers") or [] if isinstance(s, str)]
-    issuer = (issuers[0] if issuers else _origin(url)).rstrip("/")  # older servers are their own
+    issuer = (issuers[0] if issuers else _origin(url)).rstrip("/")  # older servers are their own issuer
     meta = None
     for where in (f"{_origin(issuer)}/.well-known/oauth-authorization-server{_path(issuer)}",
                   f"{_origin(issuer)}/.well-known/openid-configuration{_path(issuer)}",
@@ -129,7 +122,7 @@ async def discover(url: str, client: httpx.AsyncClient, first: httpx.Response | 
 
 
 async def needs_sign_in(url: str, client: httpx.AsyncClient | None = None) -> bool:
-    """Whether the server at `url` asks for an OAuth sign-in: it refuses an unsigned request, and says where."""
+    """Whether `url` answers 401 and advertises discoverable OAuth endpoints."""
     own = client is None
     client = client or httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True)
     try:
@@ -147,7 +140,7 @@ async def needs_sign_in(url: str, client: httpx.AsyncClient | None = None) -> bo
 
 
 async def register(meta: Meta, client: httpx.AsyncClient) -> dict:
-    """JARVIS as a client of the authorization server: its client_id, and client_secret if it was given one."""
+    """Register JARVIS as a public client; returns client_id and client_secret (may be empty)."""
     if not meta.register:
         raise SignInError("Its sign-in doesn't let new apps register themselves, so it takes a key instead.")
     r = await client.post(meta.register, json={
@@ -178,7 +171,7 @@ def authorize_url(meta: Meta, client_id: str, code_challenge: str, state: str) -
 
 
 def _tokens(found: dict, kept: dict) -> dict:
-    """The record kept in the vault after a token answer, over what was kept before."""
+    """Merge a token response into the stored record."""
     if not found.get("access_token"):
         raise SignInError("The sign-in answered without a token.")
     expires = found.get("expires_in")
@@ -199,7 +192,7 @@ async def _token_call(client: httpx.AsyncClient, kept: dict, form: dict) -> dict
 
 
 def kept(server: Server) -> dict | None:
-    """What's kept of the server's sign-in, or None if it isn't signed in."""
+    """Stored sign-in record, or None if not signed in."""
     if not vault.has(server.oauth_secret):
         return None
     try:
@@ -216,13 +209,12 @@ def forget(server: Server) -> bool:
     return vault.remove(server.oauth_secret)
 
 
-# Opens a page in JARVIS's browser and returns the address the browser was sent back to (browser.Browser.sign_in)
+# Opens a URL in JARVIS's browser and returns the redirect URL it lands on (browser.Browser.sign_in)
 Opener = Callable[[str, str], Awaitable[str]]
 
 
 async def sign_in(server: Server, open_page: Opener, client: httpx.AsyncClient | None = None) -> str:
-    """Signs JARVIS in to the server: the user signs in on its page in JARVIS's browser, and the tokens are kept.
-    Returns a sentence saying so; raises SignInError with what went wrong."""
+    """Run the browser sign-in and store the tokens. Returns a spoken confirmation; raises SignInError."""
     if server.transport != "http":
         raise SignInError(f"{server.label} runs on this Mac, so it takes a key, not a sign-in.")
     own = client is None
@@ -257,8 +249,8 @@ async def sign_in(server: Server, open_page: Opener, client: httpx.AsyncClient |
 
 
 async def token(server: Server, refresh: bool = False, client: httpx.AsyncClient | None = None) -> str:
-    """The server's access token, refreshed first if it has run out (or is about to), or if `refresh`, as after the
-    server refused it. Raises SignInError if it isn't signed in, or the sign-in can't be refreshed."""
+    """Access token, refreshed if expiring or `refresh` (e.g. after a 401). Raises SignInError if not signed in or
+    the refresh fails."""
     record = kept(server)
     if record is None:
         raise SignInError(f"JARVIS isn't signed in to {server.label}.")

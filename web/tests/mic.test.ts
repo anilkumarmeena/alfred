@@ -1,4 +1,4 @@
-// Tests for src/lib/mic.ts: earphone controls and mic recovery. Run with: make test (or npm test in web/)
+// lib/mic.ts: earphone controls and mic recovery. Run: make test (or npm test in web/)
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { chime, mediaKeys, micGuard, silentWav, type GuardRoom, type MediaKeys } from "../src/lib/mic";
@@ -83,7 +83,7 @@ function fakeSession({ toggleMic = true, micActive = true } = {}) {
 
 class Metadata { constructor(init: object) { Object.assign(this, init); } }
 
-// A live, unmuted session on screen, with a clock and timers the test moves by hand.
+// Live, unmuted, visible session with a manual clock and timers.
 function keysWith(opts: { toggleMic?: boolean; micActive?: boolean } = {}) {
   const audio = fakeAudio(), session = fakeSession(opts), calls: boolean[] = [], cues: boolean[] = [], logged: string[] = [];
   const timers: [number, () => void][] = [];
@@ -105,7 +105,7 @@ function keysWith(opts: { toggleMic?: boolean; micActive?: boolean } = {}) {
   keys.enable();
   keys.sync({ live: true, muted: false, paused: false });
   const syncMuted = () => keys.sync({ live: true, muted, paused: false });
-  // A tap on the core: the page sets the mute and syncs, all inside the tap.
+  // Core tap: set mute and sync within the gesture.
   const tap = (m: boolean) => { tapping = true; muted = m; syncMuted(); tapping = false; };
   return { keys, audio, session, calls, cues, logged, tick, syncMuted, tap };
 }
@@ -114,7 +114,7 @@ test("play, pause, stop and a bare togglemicrophone each toggle the mute, with a
   const { session, calls, cues, tick } = keysWith();
   assert.deepEqual(Object.keys(session.handlers).sort(), ["pause", "play", "stop", "togglemicrophone"]);
   session.handlers.pause(); tick(1000);
-  session.handlers.pause(); tick(1000);  // iOS may send pause again: it's still a press
+  session.handlers.pause(); tick(1000);  // iOS may repeat pause: still a press
   session.handlers.play(); tick(1000);
   session.handlers.stop(); tick(1000);
   session.handlers.togglemicrophone();
@@ -126,20 +126,20 @@ test("togglemicrophone follows the state Safari reports, instead of toggling", (
   const { session, calls, cues, tick, syncMuted } = keysWith();
   session.handlers.togglemicrophone({ action: "togglemicrophone", isActivating: false });
   syncMuted(); tick(1000);
-  session.handlers.togglemicrophone({ action: "togglemicrophone", isActivating: false });  // a toggle would unmute here
+  session.handlers.togglemicrophone({ action: "togglemicrophone", isActivating: false });  // a toggle would wrongly unmute
   syncMuted(); tick(1000);
   session.handlers.togglemicrophone({ action: "togglemicrophone", isActivating: true });
   syncMuted(); tick(100);
   session.handlers.togglemicrophone({ action: "togglemicrophone", isActivating: true });
   assert.deepEqual(calls, [true, false]);
   assert.deepEqual(cues, [true, false]);
-  assert.deepEqual(session.micCalls, [true]);  // Safari switched the mic itself: it isn't asked again
+  assert.deepEqual(session.micCalls, [true]);  // Safari already switched the mic: not asked again
 });
 
 test("when the page and Safari disagree, Safari's report wins", () => {
   const { session, calls, tick, tap } = keysWith();
   tap(true); tick(1000);  // muted on screen
-  session.handlers.togglemicrophone({ isActivating: false });  // Safari saw the mic go off too: already there
+  session.handlers.togglemicrophone({ isActivating: false });  // already muted: no-op
   assert.deepEqual(calls, []);
   session.handlers.togglemicrophone({ isActivating: true });
   assert.deepEqual(calls, [false]);
@@ -149,7 +149,7 @@ test("a report of where a press left the mic counts right after a toggle, but a 
   const { session, calls, tick } = keysWith();
   session.handlers.togglemicrophone({ isActivating: false });
   tick(100);
-  session.handlers.pause();  // the same press as a media key
+  session.handlers.pause();  // same press reported as a media key
   assert.deepEqual(calls, [true]);
   tick(100);
   session.handlers.togglemicrophone({ isActivating: true });  // a real second press, however quick
@@ -186,7 +186,7 @@ test("iOS muting the mic track on a press mutes the page, and unmuting unmutes i
   const { keys, calls, cues, tick, syncMuted } = keysWith();
   let trackMuted = true;
   keys.micMuted(() => trackMuted);
-  assert.deepEqual(calls, []);  // not straight away
+  assert.deepEqual(calls, []);  // delayed
   tick(400);
   assert.deepEqual(calls, [true]);
   syncMuted(); tick(1000);
@@ -200,12 +200,12 @@ test("a track mute the page caused, or one that undoes itself, isn't a press", (
   const { keys, calls, tick, syncMuted } = keysWith();
   let trackMuted = true;
   keys.micMuted(() => trackMuted);
-  trackMuted = false;  // a blip: unmuted again before it counts
+  trackMuted = false;  // blip: unmuted before the delay
   keys.micMuted(() => trackMuted);
   tick(400);
   assert.deepEqual(calls, []);
   tick(1000);
-  keys.handlers.pause(); syncMuted(); tick(1000);  // the page muted: Safari then mutes the track
+  keys.handlers.pause(); syncMuted(); tick(1000);  // page muted, so Safari mutes the track
   trackMuted = true;
   keys.micMuted(() => trackMuted); tick(400);
   assert.deepEqual(calls, [true]);
@@ -214,11 +214,11 @@ test("a track mute the page caused, or one that undoes itself, isn't a press", (
 test("track mutes are ignored on the way to the background, just after returning and during recovery", () => {
   const { keys, calls, tick } = keysWith();
   keys.micMuted(() => true);
-  keys.setVisible(false);  // iOS mutes the mic as the app leaves
+  keys.setVisible(false);  // iOS mutes the mic on backgrounding
   tick(400);
   keys.micMuted(() => true); tick(400);
   keys.setVisible(true);
-  keys.micMuted(() => true); tick(400);  // still handing the mic back
+  keys.micMuted(() => true); tick(400);  // iOS still handing the mic back
   tick(2000);
   keys.sync({ live: true, muted: false, paused: true });
   keys.micMuted(() => true); tick(400);
@@ -228,8 +228,8 @@ test("track mutes are ignored on the way to the background, just after returning
   assert.deepEqual(calls, [true]);
 });
 
-// heard(): iOS muting the mic on a press without Safari passing it on leaves only digital silence.
-function hearing(keys: MediaKeys, tick: (ms: number) => void, silent: boolean | null, ms: number) {  // what the page reports, every 200 ms
+// heard(): an unreported iOS mute shows only as digital silence.
+function hearing(keys: MediaKeys, tick: (ms: number) => void, silent: boolean | null, ms: number) {  // reports every 200 ms
   for (let t = 0; t < ms; t += 200) { keys.heard(silent); tick(200); }
 }
 
@@ -238,15 +238,15 @@ test("lasting digital silence is iOS muting the mic, and sound coming back unmut
   tick(2000);
   hearing(keys, tick, false, 1000);
   hearing(keys, tick, true, 800);
-  assert.deepEqual(calls, []);  // not a second yet
+  assert.deepEqual(calls, []);  // under a second
   hearing(keys, tick, true, 400);
   assert.deepEqual(calls, [true]);
   assert.deepEqual(cues, [true]);
   assert.equal(keys.phoneMuted, true);
   syncMuted();
-  assert.deepEqual(session.micCalls, [true]);  // Safari isn't told: that would hide the sound coming back
-  hearing(keys, tick, true, 5000);  // still muted: nothing more
-  keys.heard(false);  // the next press
+  assert.deepEqual(session.micCalls, [true]);  // Safari not told: it would hide the returning sound
+  hearing(keys, tick, true, 5000);  // still silent: no further action
+  keys.heard(false);  // next press unmutes
   assert.deepEqual(calls, [true, false]);
   assert.deepEqual(cues, [true, false]);
   assert.equal(keys.phoneMuted, false);
@@ -258,18 +258,18 @@ test("lasting digital silence is iOS muting the mic, and sound coming back unmut
 test("silence is only trusted once sound has come through", () => {
   const { keys, calls, tick } = keysWith();
   tick(2000);
-  hearing(keys, tick, true, 5000);  // a copy of the mic that never carries sound
+  hearing(keys, tick, true, 5000);  // mic copy that never carries sound
   assert.deepEqual(calls, []);
 });
 
 test("silence while muted, just after connecting or returning, or while paused isn't a press", () => {
   const { keys, calls, tick, tap } = keysWith();
   hearing(keys, tick, false, 400);
-  hearing(keys, tick, true, 1000);  // the session only just started
+  hearing(keys, tick, true, 1000);  // session just started
   assert.deepEqual(calls, []);
-  tap(true);  // muted on screen: Safari mutes the mic, so it goes silent
+  tap(true);  // muted on screen: Safari mutes the mic, so silence
   hearing(keys, tick, true, 3000);
-  tap(false);  // unmuted: the silence starts counting afresh
+  tap(false);  // unmuted: silence count restarts
   hearing(keys, tick, true, 800);
   hearing(keys, tick, false, 200);
   keys.setVisible(false); keys.setVisible(true);
@@ -277,7 +277,7 @@ test("silence while muted, just after connecting or returning, or while paused i
   keys.sync({ live: true, muted: false, paused: true });
   hearing(keys, tick, true, 3000);
   keys.sync({ live: true, muted: false, paused: false });
-  hearing(keys, tick, null, 3000);  // can't tell: counts as nothing
+  hearing(keys, tick, null, 3000);  // unknown: ignored
   assert.deepEqual(calls, []);
   hearing(keys, tick, true, 1200);
   assert.deepEqual(calls, [true]);
@@ -293,10 +293,10 @@ test("a tap to unmute after iOS muted the mic asks Safari to switch it off and o
   tap(false);
   assert.deepEqual(session.micCalls, [true, false, true]);
   assert.equal(keys.phoneMuted, false);
-  hearing(keys, tick, true, 3000);  // iOS kept the mic muted, or the silence was something else: leave it
+  hearing(keys, tick, true, 3000);  // still silent after tap-unmute: distrusted, no mute
   assert.deepEqual(calls, [true]);
   assert.ok(logged.includes("mic still silent after a tap: not muting"));
-  hearing(keys, tick, false, 200);  // sound again: trusted again
+  hearing(keys, tick, false, 200);  // sound: trusted again
   hearing(keys, tick, true, 1200);
   assert.deepEqual(calls, [true, true]);
 });
@@ -305,7 +305,7 @@ test("the earphones mute and unmute through Safari and through silence alike, wi
   const { keys, session, calls, cues, tick, syncMuted } = keysWith();
   tick(2000);
   hearing(keys, tick, false, 400);
-  session.handlers.togglemicrophone({ isActivating: false });  // Safari passes the press on, and mutes the mic
+  session.handlers.togglemicrophone({ isActivating: false });  // Safari reports the press and mutes the mic
   syncMuted();
   hearing(keys, tick, true, 3000);
   session.handlers.togglemicrophone({ isActivating: true });
@@ -358,10 +358,10 @@ test("in the background there's nothing for Now Playing to show, and it all come
   assert.equal(audio.src, "");
   assert.equal(audio.loads, 1);
 
-  keys.sync({ live: true, muted: true, paused: false });  // mute changes while away aren't shown
+  keys.sync({ live: true, muted: true, paused: false });  // not shown while hidden
   assert.equal(session.playbackState, "none");
   assert.equal(session.metadata, null);
-  pause();  // a press that was already on its way
+  pause();  // press already in flight
   assert.deepEqual(calls, []);
 
   keys.setVisible(true);
@@ -399,7 +399,7 @@ test("without an audio element (desktop) nothing is registered or changed", () =
 
 // ── micGuard ────────────────────────────────────────────────────
 
-// A LiveKit room with just enough of a local mic track: ended, muted by the OS, or muted by LiveKit.
+// Minimal LiveKit room fake whose mic track can be ended, OS-muted or LiveKit-muted.
 function fakeRoom({ ended = false, osMuted = false, lkMuted = false, failures = 0 } = {}) {
   const log: string[] = [];
   const newTrack = () => ({ readyState: "live", muted: false });
@@ -447,11 +447,11 @@ test("a live mic is left alone", async () => {
 test("an ended mic that LiveKit still thinks is on gets a fresh track", async () => {
   const room = fakeRoom({ ended: true });
   const { g, states, waits } = guardWith(room);
-  assert.equal(g.check(), true);  // marks the dropout straight away
+  assert.equal(g.check(), true);  // flags the dropout immediately
   assert.equal(await g.recover({ settle: 600 }), true);
   assert.deepEqual(states, ["recovering", ""]);
   assert.deepEqual(room.log, ["startAudio", "restart"]);
-  assert.equal(waits[0], 600);  // LiveKit got its own go first
+  assert.equal(waits[0], 600);  // LiveKit gets the first try
 });
 
 test("a mic muted by the OS is restarted too", async () => {
@@ -498,7 +498,7 @@ test("if the user mutes during recovery, the mic ends up muted", async () => {
   const room = fakeRoom({ ended: true, lkMuted: true });
   const { g, states, setMuted } = guardWith(room);
   const orig = room.localParticipant.setMicrophoneEnabled;
-  room.localParticipant.setMicrophoneEnabled = async (on) => { await orig(on); if (on) setMuted(true); };  // mute lands mid-way
+  room.localParticipant.setMicrophoneEnabled = async (on) => { await orig(on); if (on) setMuted(true); };  // user mutes mid-recovery
   assert.equal(await g.recover(), true);
   assert.deepEqual(room.log, ["startAudio", "enable", "disable"]);
   assert.equal(room.localParticipant.isMicrophoneEnabled, false);
@@ -517,7 +517,7 @@ test("overlapping calls (visibilitychange and pageshow) share one recovery", asy
 test("a suspended or interrupted audio context is resumed without waiting on it", async () => {
   for (const state of ["suspended", "interrupted"]) {
     let resumed = false;
-    const ctx = { state, resume: () => { resumed = true; return new Promise<void>(() => {}); } };  // iOS may never settle it
+    const ctx = { state, resume: () => { resumed = true; return new Promise<void>(() => {}); } };  // iOS may never settle
     const { g } = guardWith(fakeRoom(), { ctx });
     assert.equal(await g.recover(), true);
     assert.equal(resumed, true);

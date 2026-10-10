@@ -1,4 +1,4 @@
-"""Small file helpers shared by the modules that keep state in data/ and secrets/."""
+"""File helpers for state kept in data/ and secrets/."""
 
 import os
 import tempfile
@@ -6,8 +6,7 @@ from pathlib import Path
 
 
 def write_atomic(file: Path, data: str | bytes, mode: int | None = None) -> None:
-    """Replace `file` atomically: write a temporary file beside it, then rename it into place.
-    It gets `mode` if given, else keeps the mode of the file it replaces (600 for a new one)."""
+    """Atomically replace `file` via a temp file and rename. Mode: `mode`, else the old file's, else 0600."""
     fd, tmp = tempfile.mkstemp(dir=file.parent, prefix=f".{file.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb" if isinstance(data, bytes) else "w") as f:

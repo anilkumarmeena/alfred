@@ -1,6 +1,4 @@
-"""Tests for approvals that stick: the user's own order ("push it", "restart now") as the go-ahead for just that
-command, by the voice shell and for background tasks; a clear yes to JARVIS's own question; one yes for every request
-a task has waiting; and no second question after a yes. Only the user's own words count. Run with: make test"""
+"""Tests for standing orders: the user's own words as the go-ahead for matching commands, in the shell and in tasks."""
 
 import asyncio
 
@@ -31,7 +29,7 @@ RESTART = "launchctl kickstart -k gui/501/com.example.jarvis.agent"
 
 
 @pytest.mark.parametrize("said, command", [
-    # heard on 2026-10-05 to 08, each then asked about again
+    # real phrasings that must count as orders
     ("okay I think you can push the changes new changes",
      "cd /Users/me/jarvis && git status -sb | head -3 && git push 2>&1 | tail -3"),
     ("Merge and push.", PUSH),
@@ -119,7 +117,7 @@ def heard(monkeypatch):
 
 
 def turn(gate: ShellGate, heard: Heard, said: str, before: str = "") -> None:
-    """A turn as the brain starts one: the shell's, then the words kept apart (brain.Notes.turn)."""
+    """Start a turn as the brain does: the shell's, then the words kept apart (brain.Notes.turn)."""
     heard.replied(before)
     gate.new_turn(said)
     heard.turn(said)

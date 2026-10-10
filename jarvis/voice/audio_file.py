@@ -1,19 +1,14 @@
-"""Text read into an audio file, in Kokoro's voice, to listen to later: the audio_file tool (jarvis.tools.audio) starts
-one as a long job (jarvis.safety.shell.Jobs), which runs
+"""Render text to an audio file in Kokoro's voice; run as a long job by the audio_file tool.
 
   python -m jarvis.voice.audio_file SPEC.json
 
-SPEC holds the text, already made speakable (`speakable`: no markdown, links or code fences), and the file to make.
-The text is read in parts of at most PART_CHARS, cut at paragraphs, then sentences, then clauses (`parts`), each part
-rendered on its own and joined, with a short pause between sentences and a longer one between paragraphs, into a WAV,
-which is then encoded: m4a by the Mac's own afconvert (or ffmpeg), mp3 by ffmpeg or lame, wav as it is. Without an
-encoder for the format the WAV is kept, and the last line says so.
+SPEC holds already-`speakable` text and the output path. Text is split into `parts` (<= PART_CHARS, at paragraph,
+sentence, then clause bounds), rendered with pauses into a WAV, then encoded (m4a: afconvert/ffmpeg; mp3: ffmpeg/lame).
+With no encoder the WAV is kept and the last line says so.
 
-It runs apart from the live voice: its own Kokoro (config.AUDIO_MODEL, the full 32-bit model by default, which is
-faster than the 8-bit one on Apple silicon), in a process of lower priority on AUDIO_THREADS cores, one file at a time
-(a lock in data/audio/), so live speech never waits behind it. Each part read prints a line, which job_status shows;
-the last line says where the file is, and the voice says it when the job ends. Asked to, it then shares the file with
-the phone (jarvis.state.shared_files) and pushes a notification that plays it.
+Isolated from live voice: own Kokoro (AUDIO_MODEL; fp32 is faster than int8 on Apple silicon), niced, AUDIO_THREADS
+cores, one file at a time via a lock. Prints one progress line per part (shown by job_status); the last line is the
+result. Optionally shares the file to the phone and pushes a notification that plays it.
 """
 
 import asyncio
@@ -43,28 +38,28 @@ from jarvis.core.config import (
     TTS_MODEL_FALLBACKS,
 )
 
-RATE = 24000  # Kokoro's
+RATE = 24000  # Kokoro's sample rate
 
 
 def work_dir() -> Path:
-    """Specs, the WAV being rendered, the lock, and files that couldn't go where asked: in the profile's data folder."""
+    """Profile folder for specs, in-progress WAVs, the lock, and files that couldn't go where asked."""
     return profile.current().audio
 
-PART_CHARS = 400  # the most read in one go: well within Kokoro's 510 phonemes, and a part a few seconds long
-SENTENCE_PAUSE, PARAGRAPH_PAUSE = 0.25, 0.7  # seconds of silence between parts
-WORDS_PER_SECOND = 2.5  # Kokoro's pace at speed 1, pauses and all, for estimates
-MAX_CHARS = 1_000_000  # about 12 hours of audio
-NICE = 10  # the render's priority, below the live voice's
-# Kokoro's voices by their first letter, and the language each reads (espeak's name for it)
+PART_CHARS = 400  # per render: well under Kokoro's 510-phoneme limit
+SENTENCE_PAUSE, PARAGRAPH_PAUSE = 0.25, 0.7  # seconds
+WORDS_PER_SECOND = 2.5  # Kokoro at speed 1 incl. pauses, for estimates
+MAX_CHARS = 1_000_000  # ~12 hours of audio
+NICE = 10  # below the live voice
+# Kokoro voice prefix -> espeak language
 LANGS = {"a": "en-us", "b": "en-gb", "e": "es", "f": "fr-fr", "h": "hi", "i": "it", "p": "pt-br"}
-BREW_BINS = ("/opt/homebrew/bin", "/usr/local/bin")  # where Homebrew puts ffmpeg and lame, off launchd's PATH
+BREW_BINS = ("/opt/homebrew/bin", "/usr/local/bin")  # Homebrew, missing from launchd's PATH
 
 
 def lang(voice: str) -> str:
     return LANGS.get(voice[:1], "en-us")
 
 
-# ── Making text speakable ───────────────────────────────────────
+# ── Speakable text ─────────────────────────────────────────────
 
 _FENCE = re.compile(r"^\s*(```|~~~).*$", re.MULTILINE)
 _HTML = re.compile(r"<[^>\n]{1,200}>")
@@ -81,14 +76,15 @@ _ENDS = ".!?…:;,"
 
 
 def _closed(line: str) -> str:
-    """A line read as a sentence of its own: a heading or list item gets a full stop if it has none."""
+    """Add a full stop if the line has no ending punctuation."""
     return line if not line or line[-1] in _ENDS + "\"'”’)" else line + "."
 
 
 def speakable(text: str) -> str:
-    """Text as it should be read: markdown's marks, code fences, HTML tags and link targets gone (a bare link is read
-    as its site's name), headings, list items and table rows each a sentence of their own, and paragraphs kept apart
-    by a blank line. Other line breaks inside a paragraph, as in text from a PDF, are only spaces."""
+    """Strip markdown, fences, HTML and link targets (bare URLs become the site name) for reading aloud.
+
+    Headings, list items and table rows become sentences; paragraphs are blank-line separated; other newlines
+    (e.g. from PDFs) become spaces."""
     text = _FENCE.sub("", text.replace("\r\n", "\n").replace("\r", "\n"))
     text = _HTML.sub(" ", text)
     text = _IMAGE.sub(r"\1", text)
@@ -127,7 +123,7 @@ def _unmarked(line: str) -> str:
     return line
 
 
-# ── Cutting it into parts ───────────────────────────────────────
+# ── Parts ──────────────────────────────────────────────────────
 
 _SENTENCE = re.compile(r"(?<=[.!?…])[\"'”’)\]]*\s+")
 _CLAUSE = re.compile(r"(?<=[,;:—–])\s+|\s+(?=[—–]\s)")
@@ -138,7 +134,7 @@ def _pieces(text: str, splitter: re.Pattern) -> list[str]:
 
 
 def _pack(pieces: list[str], limit: int) -> list[str]:
-    """Pieces joined into runs of at most `limit` characters, in order."""
+    """Greedily join pieces into runs of <= `limit` chars."""
     runs: list[str] = []
     for piece in pieces:
         if runs and len(runs[-1]) + 1 + len(piece) <= limit:
@@ -149,15 +145,13 @@ def _pack(pieces: list[str], limit: int) -> list[str]:
 
 
 def _words(text: str, limit: int) -> list[str]:
-    """Text cut between words into runs of at most `limit` characters (a word longer than that is cut too)."""
+    """Split at word bounds into runs of <= `limit` chars (overlong words are cut)."""
     words = [w[i:i + limit] for w in text.split() for i in range(0, len(w), limit)]
     return _pack(words, limit)
 
 
 def parts(text: str, limit: int = PART_CHARS) -> list[tuple[str, bool]]:
-    """The text in parts to read one at a time, each with whether it ends a paragraph. A paragraph's sentences are
-    joined into parts of up to `limit` characters; a longer sentence is cut at its clauses, and a longer clause
-    between words."""
+    """(part, ends_paragraph) list. Sentences are packed up to `limit`; longer ones split at clauses, then words."""
     found = []
     for paragraph in (p.strip() for p in re.split(r"\n\s*\n", text)):
         if not paragraph:
@@ -175,12 +169,12 @@ def parts(text: str, limit: int = PART_CHARS) -> list[tuple[str, bool]]:
 
 
 def seconds_of(text: str, speed: float = 1.0) -> float:
-    """About how long the text takes to read at `speed`."""
+    """Estimated reading time in seconds."""
     return len(text.split()) / (WORDS_PER_SECOND * speed)
 
 
 def length(seconds: float) -> str:
-    """A length to say: '40 seconds', '12 minutes', '1 hour 5 minutes'."""
+    """Spoken duration: '40 seconds', '12 minutes', '1 hour 5 minutes'."""
     if seconds < 60:
         n = max(1, round(seconds))
         return f"{n} second{'s' * (n != 1)}"
@@ -194,14 +188,14 @@ def length(seconds: float) -> str:
 
 
 def file_name(title: str) -> str:
-    """A file name, without its extension, from a title: what a Mac or a phone takes, at most 80 characters."""
+    """Safe file stem from a title, <= 80 chars."""
     name = re.sub(r"[\x00-\x1f/\\:*?\"<>|]+", " ", title)
     name = re.sub(r"\s+", " ", name).strip(" .")[:80].strip(" .")
     return name or "JARVIS audio"
 
 
 def free_path(folder: Path, name: str, ext: str) -> Path:
-    """`folder`/`name`.`ext`, or with ' 2', ' 3', ... if that's taken."""
+    """`folder`/`name`.`ext`, suffixed ' 2', ' 3', ... if taken."""
     path, n = folder / f"{name}.{ext}", 1
     while path.exists():
         n += 1
@@ -210,13 +204,12 @@ def free_path(folder: Path, name: str, ext: str) -> Path:
 
 
 def find_program(name: str) -> str | None:
-    """A program on the PATH, or where Homebrew puts it (a service's PATH often leaves that out)."""
+    """Find a program on PATH or in Homebrew's bin dirs."""
     return shutil.which(name) or next((str(p) for d in BREW_BINS if os.access(p := Path(d) / name, os.X_OK)), None)
 
 
 _FFMPEG = ["-nostdin", "-y", "-loglevel", "error", "-i"]
-# Each format's encoders, best first: the program, and its arguments before the WAV and between it and the file made.
-# afconvert comes with every Mac; ffmpeg and lame from Homebrew. A WAV needs none.
+# Encoders per format, best first: (program, args before WAV, args between WAV and output)
 ENCODERS = {
     "m4a": [("afconvert", ["-f", "m4af", "-d", "aac", "-b", "64000"], []),
             ("ffmpeg", _FFMPEG, ["-c:a", "aac", "-b:a", "64k", "-f", "ipod"])],
@@ -226,7 +219,7 @@ ENCODERS = {
 
 
 def programs(fmt: str) -> str:
-    """The programs that make `fmt`, to say: 'ffmpeg or lame'."""
+    """Encoder names for `fmt`, e.g. 'ffmpeg or lame'."""
     return " or ".join(program for program, _, _ in ENCODERS.get(fmt, []))
 
 
@@ -235,7 +228,7 @@ def _argv(program: str, before: list[str], after: list[str], wav: Path, out: Pat
 
 
 def encoders(fmt: str) -> list[Callable[[Path, Path], list[str]]]:
-    """The commands on this Mac that can make a file of `fmt` from a WAV, best first, each as argv for (wav, out)."""
+    """Installed encoders for `fmt`, best first, each a (wav, out) -> argv builder."""
     return [functools.partial(_argv, path, before, after) for program, before, after in ENCODERS.get(fmt, [])
             if (path := find_program(program))]
 
@@ -245,8 +238,7 @@ def can_make(fmt: str) -> bool:
 
 
 def encode(wav: Path, out: Path, fmt: str) -> tuple[Path, str]:
-    """Make `out` from `wav`, which goes. Returns the file made and "", or, when no encoder could make it, a WAV
-    beside where `out` was meant to be, and why."""
+    """Encode `wav` (consumed) to `out`. Returns (out, ""), or (fallback WAV, reason) if no encoder worked."""
     problems = []
     if fmt != "wav":
         tmp = out.with_name(f".{out.stem}.part{out.suffix}")
@@ -268,12 +260,11 @@ def encode(wav: Path, out: Path, fmt: str) -> tuple[Path, str]:
 
 # ── Rendering ───────────────────────────────────────────────────
 
-Speak = Callable[[str, str, float], np.ndarray]  # (text, voice, speed): float32 samples at RATE
+Speak = Callable[[str, str, float], np.ndarray]  # (text, voice, speed) -> float32 samples at RATE
 
 
 def kokoro(model: Path | None = None, threads: int = AUDIO_THREADS) -> tuple[Speak, list[str]]:
-    """Kokoro of this process's own, and its voices. Threads 0: a quarter of the cores (at least 2), leaving the rest
-    to the live voice."""
+    """Load a process-local Kokoro; returns (speak, voices). threads=0 means a quarter of the cores (min 2)."""
     import onnxruntime as ort
     from kokoro_onnx import Kokoro
     from kokoro_onnx.session import resolve_providers
@@ -299,7 +290,7 @@ def _silence(seconds: float) -> bytes:
 
 def render(text: str, wav: Path, speak: Speak, voice: str, speed: float,
            progress: Callable[[str], None] = print) -> float:
-    """Read `text` part by part into `wav`; returns how many seconds of audio it holds."""
+    """Render `text` into `wav`; returns audio seconds."""
     found = parts(text)
     if not found:
         raise ValueError("There's nothing to read.")
@@ -322,12 +313,12 @@ def render(text: str, wav: Path, speak: Speak, voice: str, speed: float,
 
 
 def shown(path: Path) -> str:
-    """A path to say, with ~ for the home folder."""
+    """Path for display, with ~ for home."""
     return f"~/{path.relative_to(Path.home())}" if path.is_relative_to(Path.home()) and path != Path.home() else str(path)
 
 
 def _writable(folder: Path) -> bool:
-    """Whether a file can be made in `folder` (macOS may keep JARVIS out of Downloads, Desktop and Documents)."""
+    """True if `folder` is writable (macOS privacy may block Downloads, Desktop, Documents)."""
     check = folder / f".jarvis-{os.getpid()}.check"
     try:
         folder.mkdir(parents=True, exist_ok=True)
@@ -339,7 +330,7 @@ def _writable(folder: Path) -> bool:
 
 
 def _wait_turn(lock) -> None:
-    """One file at a time: two renders would each hold a Kokoro, on a Mac that may have 8 GB."""
+    """Serialize renders: two Kokoro instances can exhaust an 8 GB Mac."""
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -348,7 +339,7 @@ def _wait_turn(lock) -> None:
 
 
 async def send_to_phone(path: Path, title: str, seconds: float) -> str:
-    """Share the file with the phone and push a notification that plays it; returns what to add to the last line."""
+    """Share the file and push a play notification; returns text to append to the result line."""
     from jarvis.core.config import PUSH_ENABLED
     from jarvis.notify import push
     from jarvis.state import shared_files
@@ -366,7 +357,7 @@ async def send_to_phone(path: Path, title: str, seconds: float) -> str:
 
 
 def make(spec: dict, speak: Speak | None = None, voices: list[str] | None = None) -> str:
-    """Render the file SPEC asks for; returns the last line to say. `speak` and `voices` stand in for Kokoro in tests."""
+    """Render SPEC; returns the result line. `speak`/`voices` replace Kokoro in tests."""
     text, voice, speed, fmt = spec["text"], spec["voice"], float(spec["speed"]), spec["format"]
     out = Path(spec["out"])
     if speak is None:
@@ -379,8 +370,8 @@ def make(spec: dict, speak: Speak | None = None, voices: list[str] | None = None
     try:
         seconds = render(text, wav, speak, voice, speed, functools.partial(print, flush=True))
         notes = ""
-        out = free_path(out.parent, out.stem, fmt)  # in case one was made since it started
-        if not _writable(out.parent):  # macOS keeps JARVIS out of that folder, say
+        out = free_path(out.parent, out.stem, fmt)  # may have been taken meanwhile
+        if not _writable(out.parent):  # e.g. blocked by macOS privacy
             notes += f" JARVIS couldn't write to {shown(out.parent)}, so it's in its own folder instead."
             out = free_path(work_dir(), out.stem, fmt)
         out, why = encode(wav, out, fmt)
@@ -399,13 +390,13 @@ def main(argv: list[str]) -> int:
         print("usage: python -m jarvis.voice.audio_file SPEC.json", file=sys.stderr)
         return 2
     spec_file = Path(argv[0])
-    # stop_job's SIGTERM unwinds, so the half-made WAV and the spec, with the user's words, don't stay behind
+    # Unwind on SIGTERM so the partial WAV and the spec (user text) are deleted
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(128 + signal.SIGTERM))
     try:
         spec = json.loads(spec_file.read_text())
         try:
             os.nice(NICE)
-        except OSError:  # a sandbox may not allow it; it still runs, at the usual priority
+        except OSError:  # sandbox may forbid it; run at normal priority
             pass
         work_dir().mkdir(parents=True, exist_ok=True)
         with open(work_dir() / "render.lock", "w") as lock:

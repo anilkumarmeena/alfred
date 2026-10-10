@@ -1,11 +1,10 @@
-// The page's one AudioContext, and analysers on audio tracks: the reactor draws their levels, and the
-// earphone code listens to a copy of the mic for the digital silence of iOS muting it.
+// The page's single AudioContext, and track analysers (for the reactor, and for detecting iOS mic-mute silence).
 
 let actx: AudioContext | null = null;
 
 export const audioContext = (): AudioContext | null => actx;
 
-// Create inside a tap so iOS lets it run.
+// Create within a user gesture so iOS lets it run.
 export function audioCtx(): AudioContext | null {
   const AC = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!actx && AC) { try { actx = new AC(); } catch {} }
@@ -18,8 +17,8 @@ export function resumeAudio(): void {  // iOS also has "interrupted"
 }
 
 export interface Tap {
-  track: MediaStreamTrack;  // the track tapped
-  copy: MediaStreamTrack | null;  // the clone actually analysed, if asked for one
+  track: MediaStreamTrack;
+  copy: MediaStreamTrack | null;  // clone actually analysed, if requested
   src: MediaStreamAudioSourceNode;
   an: AnalyserNode;
   freq: Uint8Array<ArrayBuffer>;
@@ -27,7 +26,7 @@ export interface Tap {
   at: number;
 }
 
-// copy: analyse a copy of the track, which keeps hearing when the page mutes the mic.
+// copy: analyse a clone, which keeps hearing when the page mutes the mic.
 export function tap(track: MediaStreamTrack | undefined, copy = false): Tap | null {
   const a = audioCtx();
   if (!a || !track) return null;
@@ -37,7 +36,7 @@ export function tap(track: MediaStreamTrack | undefined, copy = false): Tap | nu
     const src = a.createMediaStreamSource(new MediaStream([feed]));
     const an = a.createAnalyser();
     an.fftSize = 256; an.smoothingTimeConstant = .72;
-    src.connect(an);  // analysed only; playback stays on the <audio> element
+    src.connect(an);  // analysis only; playback stays on the <audio> element
     return { track, copy: copy ? feed : null, src, an, freq: new Uint8Array(an.frequencyBinCount), wave: new Float32Array(an.fftSize), at: Date.now() };
   } catch { if (feed !== track) feed.stop(); return null; }
 }

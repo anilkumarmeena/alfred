@@ -1,15 +1,9 @@
-"""Reviews of a skill's scripts, which the user hears before switching on a skill that has any.
+"""Script reviews the user hears before enabling a skill that has scripts.
 
-Two parts:
-- `scan`: fixed patterns, run over every script, for what's worth knowing whatever a model makes of it: reaching the
-  network, deleting files, reading secrets or credentials, running other programs, downloading and running code,
-  starting at login or changing the system, sudo, encoded code, compiled programs, and !`command` lines in SKILL.md;
-  and, in SKILL.md and the skill's other markdown, hidden instructions or invisible text (jarvis.safety.scan).
-- `summarise`: one short call to SKILL_REVIEW_MODEL with no tools, given the files fenced off as untrusted data. It says
-  in two or three sentences what the scripts do, lists what's risky and rates it. Its reply is read only as JSON.
-
-`run` does both and pins the result to the digest of the files it read (jarvis.skills.home.digest): approving the
-review approves those files only.
+  scan       fixed patterns over scripts (network, deletes, secrets, env, subprocess, installs, persistence, sudo,
+             obfuscation, binaries, !`command`) plus hidden-instruction checks on markdown (safety.scan)
+  summarise  one tool-less SKILL_REVIEW_MODEL call over the fenced (untrusted) files; reply parsed as JSON only
+  run        both, pinned to home.digest: approval covers exactly the files reviewed
 """
 
 import json
@@ -24,12 +18,12 @@ from jarvis.safety import scan as scan_text
 from jarvis.safety.commands import names_secret
 from jarvis.skills import home
 
-MAX_CHARS = 60_000  # of the files sent for the summary; past it, files are left out and the review says so
-MAX_FILE = 20_000  # of any one file
+MAX_CHARS = 60_000  # total chars sent; beyond this files are omitted and marked partial
+MAX_FILE = 20_000  # chars per file
 CALL_TIMEOUT = 180
 VERDICTS = ("low", "medium", "high")
 
-# What the scan flags: a plain phrase, and what in a file shows it
+# (spoken label, pattern)
 PATTERNS: list[tuple[str, re.Pattern]] = [(label, re.compile(rx, re.IGNORECASE)) for label, rx in [
     ("reaches the network", r"\b(curl|wget|nc|ncat|telnet|ssh|scp|sftp|rsync|ftp)\s|\brequests\.(get|post|put|patch|"
                             r"delete|request|Session)|\burllib|\bhttp\.client|\bhttpx\b|\baiohttp\b|\bfetch\(|"
@@ -64,7 +58,7 @@ def _text(path: Path) -> str | None:
 
 
 def scan(where: Path) -> list[str]:
-    """What the fixed patterns find in the skill's files, each as 'reaches the network (scripts/get.py)'."""
+    """Pattern findings, each like 'reaches the network (scripts/get.py)'."""
     hits: dict[str, list[str]] = {}
     for rel in home.files(where):
         path = where / rel
@@ -72,10 +66,10 @@ def scan(where: Path) -> list[str]:
             continue
         markdown, code = rel.endswith(".md"), rel == home.SKILL_FILE or home.is_script(path)
         if not (markdown or code):
-            continue  # documents and data: their links and examples aren't code that runs
+            continue  # documents and data aren't executed
         text = _text(path)
         if markdown and text is not None:
-            # Instructions JARVIS reads: hidden instructions or invisible text in them (jarvis.safety.scan)
+            # Markdown the model reads: check for hidden instructions or invisible text
             for finding in scan_text.scan(text, scan_text.INSTRUCTIONS).findings:
                 if finding.flagged:
                     hits.setdefault(f"looks like hidden instructions: it {'has ' * (finding.kind != 'injection')}"
@@ -91,7 +85,7 @@ def scan(where: Path) -> list[str]:
                                 []).append(rel)
             if names_secret(text):
                 hits.setdefault("mentions secrets or credentials in its instructions", []).append(rel)
-            continue  # the instructions are read out as the description; their URLs and words aren't code
+            continue  # SKILL.md prose isn't code; skip the script patterns
         for label, pattern in PATTERNS:
             if pattern.search(text):
                 hits.setdefault(label, []).append(rel)
@@ -100,8 +94,7 @@ def scan(where: Path) -> list[str]:
 
 
 def _fenced(where: Path) -> tuple[str, bool]:
-    """The skill's files as the model reads them, SKILL.md first, then scripts, then the rest; whether any were left
-    out or cut short to keep to MAX_CHARS."""
+    """Files fenced for the model (SKILL.md, scripts, rest), and whether any were cut to fit MAX_CHARS."""
     listed = home.files(where)
     order = [home.SKILL_FILE] + [f for f in listed if f != home.SKILL_FILE and home.is_script(where / f)]
     order += [f for f in listed if f not in order]
@@ -124,7 +117,7 @@ def _fenced(where: Path) -> tuple[str, bool]:
 
 
 def parse(reply: str) -> dict:
-    """The model's review; ValueError for a reply that isn't the JSON asked for."""
+    """Parse the model's JSON review; unknown verdicts become "high". Raises ValueError if unreadable."""
     found = re.search(r"\{.*\}", reply or "", re.DOTALL)
     try:
         got = json.loads(found[0]) if found else None
@@ -139,8 +132,7 @@ def parse(reply: str) -> dict:
 
 
 async def summarise(where: Path, name: str) -> tuple[dict, bool]:
-    """The model's review of the skill's files, and whether it saw only part of them. RuntimeError if the call fails,
-    ValueError if its reply can't be read, TimeoutError if it takes over CALL_TIMEOUT seconds."""
+    """(review, partial). Raises RuntimeError (call failed), ValueError (unreadable) or TimeoutError."""
     from jarvis.brain.sdk import ask
 
     files, partial = _fenced(where)
@@ -150,9 +142,8 @@ async def summarise(where: Path, name: str) -> tuple[dict, bool]:
 
 
 async def run(name: str, summariser=None) -> dict:
-    """Review a skill in the skills folder: the scan and the model's summary (`summarise`, unless a test's own), kept
-    on the skill, pinned to the digest of the files read. ValueError, saying why, if the summary couldn't be had: then
-    it can't be approved yet."""
+    """Scan + summarise a skill and store the review pinned to its digest. Raises ValueError if the summary fails or
+    files change mid-review. `summariser` is for tests."""
     skill = home.get(name)
     where, before = skill.folder, skill.digest
     try:
@@ -169,17 +160,17 @@ async def run(name: str, summariser=None) -> dict:
 
 
 def current(skill: home.Skill) -> dict | None:
-    """The skill's review, if it covers its files as they are now."""
+    """The stored review if it matches the current digest, else None."""
     return skill.review if skill.review and skill.review.get("digest") == skill.digest else None
 
 
 def said_flags(flags: list[str]) -> str:
-    """What the scan flagged, as said aloud: without the files each was found in."""
+    """Scan flags for speech, without file names."""
     return "; ".join(re.sub(r" [(].*", "", f) for f in flags)
 
 
 def spoken(name: str, review: dict) -> str:
-    """The review as JARVIS reads it out before asking."""
+    """Spoken review read out before asking for approval."""
     scripts = review.get("scripts") or []
     text = f"The skill {name} has {len(scripts)} script{'s' * (len(scripts) != 1)}. {review['summary']}"
     if review.get("risks"):

@@ -1,12 +1,12 @@
-"""Check that background tasks can publish claude.ai artifacts: one cheap session on JARVIS's own Claude login, with
-the options tasks get (CLAUDE_CODE_ARTIFACT=1 and the Artifact tool), asked to publish a tiny page. Not a unit test:
-it spends a little usage and publishes a real page.
+"""Check that background tasks can publish claude.ai artifacts by publishing one small real page.
 
-    uv run python -m jarvis.tasks.artifact_check                 # a "hello" page
-    uv run python -m jarvis.tasks.artifact_check --file page.html # publish this page instead (copied first)
+Runs one cheap session with the task Artifact options. Not a unit test: it spends usage and publishes a page.
 
-`make artifact-check` runs the first. It reports whether the CLI loaded the Artifact tool, how it's signed in (the
-tool needs a claude.ai subscription login, not an API key), and the link that came back. It never prints tokens."""
+    uv run python -m jarvis.tasks.artifact_check                 # a "hello" page (make artifact-check)
+    uv run python -m jarvis.tasks.artifact_check --file page.html # publish a copy of this page instead
+
+Reports whether the Artifact tool loaded, the login source (needs a claude.ai login, not an API key) and the link.
+Never prints tokens."""
 
 import argparse
 import asyncio

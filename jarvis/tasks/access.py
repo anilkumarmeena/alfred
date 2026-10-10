@@ -1,24 +1,21 @@
-"""Access a background task can be granted beyond what its kind has by default (jarvis.tasks.worker).
+"""Extra access a background task can be granted beyond its kind's defaults.
 
-  artifacts  publish pages to claude.ai with Claude Code's Artifact tool (code_change and research have it, unless
-             JARVIS_TASK_ARTIFACTS is off, which turns it off for every task)
-  shell      shell commands in the sandbox, reaching any host, writing only the task's own folders (code_change has it)
-  mac        commands on the Mac itself, outside the sandbox: host_run and jobs, risky ones still after the user's
-             yes (code_change has it)
-  projects   edit files in any of the user's projects (TASK_READ_DIRS), never secrets or JARVIS's own files
-  accounts   the user's mail, calendar, Chat, Sheets, Docs, GitHub and GitLab, read-only (research has it)
+  artifacts  publish claude.ai pages via the Artifact tool (default: code_change, research; JARVIS_TASK_ARTIFACTS=off
+             disables it everywhere)
+  shell      sandboxed shell, any host, writes only to the task's folders (default: code_change)
+  mac        host_run and jobs outside the sandbox; risky ones still need the user's yes (default: code_change)
+  projects   edit files in any of the user's projects (TASK_READ_DIRS), never secrets or JARVIS's files
+  accounts   read-only mail, calendar, Chat, Sheets, Docs, GitHub, GitLab (default: research)
 
-JARVIS grants them when it starts a task (task_start) or replies to one (task_reply), when the user's request needs
-them. A task that finds it lacks one asks for it with request_access and waits, as for a question; once granted it
-carries on in the same session, with the added tools. Whatever is granted, secrets and JARVIS's own data files stay
-out of reach, and risky commands on the Mac still wait for the user's yes.
+Granted via task_start / task_reply, or requested mid-run with request_access (the task waits, then resumes in the same
+session). Secrets and JARVIS's own data stay out of reach whatever is granted.
 """
 
 import json
 
 from jarvis.core.config import TASK_ARTIFACTS
 
-# Each as it ends "may it ...?", which JARVIS asks the user
+# Each completes the question "may it ...?" put to the user
 GRANTS = {
     "artifacts": "publish pages to claude.ai with the Artifact tool",
     "shell": "run sandboxed shell commands that reach any host",
@@ -30,17 +27,17 @@ _DEFAULTS = {"code_change": {"artifacts", "shell", "mac"}, "code_question": set(
 
 
 def _off() -> set[str]:
-    """What no task gets, whatever it's granted: artifacts, when JARVIS_TASK_ARTIFACTS is off."""
+    """Grants switched off for every task: artifacts when JARVIS_TASK_ARTIFACTS is off."""
     return set() if TASK_ARTIFACTS else {"artifacts"}
 
 
 def defaults(kind: str) -> set[str]:
-    """What a task of this kind has without being granted anything."""
+    """Access a task of this kind has by default."""
     return _DEFAULTS.get(kind, set()) - _off()
 
 
 def check(names) -> list[str]:
-    """The grants asked for, in GRANTS' order; raises ValueError for one that isn't known, or is switched off."""
+    """`names` in GRANTS order; ValueError if any is unknown or switched off."""
     names = list(names or [])
     if unknown := [n for n in names if n not in GRANTS]:
         raise ValueError(f"Unknown access {', '.join(map(str, unknown))}: it's one of {', '.join(GRANTS)}.")
@@ -50,43 +47,43 @@ def check(names) -> list[str]:
 
 
 def granted(task: dict) -> list[str]:
-    """What the task was granted beyond its kind's defaults."""
+    """Grants beyond the kind's defaults."""
     return json.loads(task.get("grants") or "[]")
 
 
 def wanted(task: dict) -> list[str]:
-    """What the task asked for with request_access, still unanswered."""
+    """Unanswered request_access grants."""
     return json.loads(task.get("wants") or "[]")
 
 
 def has(task: dict) -> set[str]:
-    """Everything the task can do: its kind's defaults and what it was granted."""
+    """Defaults plus grants, minus anything switched off."""
     return (defaults(task["kind"]) | set(granted(task))) - _off()
 
 
 def missing(task: dict) -> list[str]:
-    """What it could still be granted."""
+    """Grants the task could still be given."""
     out = has(task) | _off()
     return [n for n in GRANTS if n not in out]
 
 
 def new(task: dict, names) -> list[str]:
-    """Of `names` (checked), those the task doesn't have yet."""
+    """The checked `names` the task doesn't have yet."""
     have = has(task)
     return [n for n in check(names) if n not in have]
 
 
 def add(task: dict, names) -> str:
-    """The task's grants with `names` added, as kept in its row."""
+    """Grants with `names` added, as the JSON stored on the row."""
     return json.dumps(check([*granted(task), *names]))
 
 
 def describe(names) -> str:
-    """'publish pages to claude.ai with the Artifact tool and run commands on the Mac itself, ...'"""
+    """Grants as prose: 'publish pages ... and run commands on the Mac ...'."""
     said = [GRANTS[n] for n in names]
     return " and ".join(said) if len(said) < 3 else ", ".join(said[:-1]) + " and " + said[-1]
 
 
 def listing(names) -> str:
-    """'artifacts (publish pages to claude.ai ...), mac (run commands on the Mac ...)'"""
+    """Grants as 'name (description)' pairs."""
     return ", ".join(f"{n} ({GRANTS[n]})" for n in names)

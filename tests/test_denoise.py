@@ -1,6 +1,4 @@
-"""Noise suppression on the mic (jarvis.voice.denoise): the attenuation limit, frame sizes, the fallback to the original
-audio, and the VAD-only mode handing the original audio on. The tests marked `model` need the DeepFilterNet model
-(make models) and skip without it."""
+"""Tests for jarvis.voice.denoise: attenuation limit, frame sizes, fallback, VAD-only mode."""
 
 import asyncio
 import logging
@@ -18,7 +16,7 @@ model = pytest.mark.skipif(not DENOISE_MODEL.is_file(), reason="needs the DeepFi
 
 
 class Silent:
-    """Stands in for the model: takes everything out, as it would pure noise with no limit."""
+    """Fake model that removes everything, as with pure noise and no limit."""
 
     def run(self, _outputs, feed):
         return np.zeros_like(feed["input_frame"]), feed["states"], np.zeros(1, np.float32)
@@ -44,7 +42,7 @@ def test_attenuation_limit_mixes_the_original_back_in_step():
     x = noise(0.5, 48000)
     out = run(denoise.Denoiser(Silent(), atten_db=20), x, 48000, 2400)
     delayed = np.concatenate([np.zeros(denoise.MODEL_DELAY), x])[:len(out)]
-    assert np.abs(out - np.round(delayed * 0.1)).max() <= 1  # -20 dB of the original, lined up with the output
+    assert np.abs(out - np.round(delayed * 0.1)).max() <= 1  # -20 dB of the original, aligned to the output
     assert not run(denoise.Denoiser(Silent(), atten_db=0), x, 48000, 2400).any()  # 0 = no limit
 
 
@@ -91,7 +89,7 @@ def test_a_failing_filter_passes_the_original_through(caplog):
 
 
 class Recorder(vad.VAD):
-    """A stand-in for Silero: reports each frame as inferred, and every third frame since a flush as an utterance."""
+    """Fake Silero: every frame inferred; every third frame since a flush is an utterance."""
 
     def __init__(self) -> None:
         super().__init__(capabilities=vad.VADCapabilities(update_interval=0.05))
@@ -139,7 +137,7 @@ def test_vad_only_mode_hears_the_filter_but_hands_on_the_original():
     assert not np.concatenate(inner.heard).any()  # Silero only heard the filter's output
     ends = [ev for ev in events if ev.type == vad.VADEventType.END_OF_SPEECH]
     assert len(ends) == 2
-    original = np.concatenate([np.zeros(denoise.MODEL_DELAY, np.int16), x])  # the output is MODEL_DELAY behind
+    original = np.concatenate([np.zeros(denoise.MODEL_DELAY, np.int16), x])  # the output lags by MODEL_DELAY
     for ev, (start, stop) in zip(ends, [(0, 3), (4, 7)]):
         assert np.array_equal(np.frombuffer(ev.frames[0].data, np.int16), original[start * n:stop * n])
     inferred = np.concatenate([np.frombuffer(ev.frames[0].data, np.int16) for ev in events
@@ -164,7 +162,7 @@ def test_vad_only_mode_falls_back_to_the_original_if_the_filter_fails(caplog):
 
     with caplog.at_level(logging.ERROR, logger="jarvis.voice.denoise"):
         inner, events = asyncio.run(main())
-    assert np.array_equal(np.concatenate(inner.heard), x)  # the VAD carried on, on the original
+    assert np.array_equal(np.concatenate(inner.heard), x)  # the VAD carried on with the original
     end = next(ev for ev in events if ev.type == vad.VADEventType.END_OF_SPEECH)
     assert np.array_equal(np.frombuffer(end.frames[0].data, np.int16), x)
     assert len(caplog.records) == 1
@@ -194,18 +192,18 @@ def test_the_model_keeps_voiced_sound_and_cuts_the_noise_between():
     before = db(x[on & steady], x[~on & steady])
     after = db(out[on & steady], out[~on & steady])
     assert after - before > 10  # the gaps got much quieter relative to the voice
-    assert db(out[on & steady], x[on & steady]) > -6  # and the voice itself came through, even with no limit
+    assert db(out[on & steady], x[on & steady]) > -6  # and the voice came through, even with no limit
 
 
 @model
 def test_the_output_lags_by_the_delay_it_reports():
     rate = 24000
     x = noise(2, rate, 0.1)
-    d = denoise.Denoiser(denoise.load(DENOISE_MODEL, "on"), atten_db=6)  # half the original mixed back: easy to find
+    d = denoise.Denoiser(denoise.load(DENOISE_MODEL, "on"), atten_db=6)  # half the original mixed back in: easy to find
     out = run(d, x, rate, 1200).astype(np.float64)
     lag = max(range(4000), key=lambda k: np.dot(x[:len(out) - 4000], out[k:k + len(out) - 4000]))
-    assert abs(lag - d.delay) <= rate // 1000 * 2  # within 2 ms: plenty for cutting utterances out of the original
-    assert d.delay < rate * 0.05  # and no more than 50 ms in all
+    assert abs(lag - d.delay) <= rate // 1000 * 2  # within 2 ms: enough to cut utterances from the original
+    assert d.delay < rate * 0.05  # and at most 50 ms in all
 
 
 @model
@@ -213,10 +211,10 @@ def test_the_frame_processor_keeps_up_in_real_time():
     processor = denoise.DeepFilterNet(denoise.load(DENOISE_MODEL, "on"))
     x = noise(2, 24000)
     took = []
-    for f in frames(x, 1200):  # LiveKit's 50 ms frames at the room input's 24 kHz
+    for f in frames(x, 1200):  # LiveKit's 50 ms frames at 24 kHz
         frame = rtc.AudioFrame(f.tobytes(), 24000, 1, 1200)
         start = time.perf_counter()
         out = processor._process(frame)
         took.append(time.perf_counter() - start)
         assert (out.sample_rate, out.samples_per_channel, out.num_channels) == (24000, 1200, 1)
-    assert np.mean(took[5:]) < 0.025  # half of each frame's 50 ms at most; about 7 ms on the Mac
+    assert np.mean(took[5:]) < 0.025  # at most half of each 50 ms frame; about 7 ms on the Mac

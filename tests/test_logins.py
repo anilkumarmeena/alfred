@@ -1,5 +1,4 @@
-"""Per-user logins (jarvis.core.logins): hashed passcodes in secrets/logins.json, the passcode saying whose login it is,
-the shared JARVIS_PASSCODE becoming the user's login, and the web server and panel behind them. Run with: make test"""
+"""Tests for jarvis.core.logins: hashed passcodes, adopting JARVIS_PASSCODE, and the web server and panel using them."""
 
 import asyncio
 import base64
@@ -17,14 +16,14 @@ from tests.test_web_build import Request as TokenRequest
 
 
 def named(monkeypatch, name: str) -> None:
-    """The owner's profile, as the first login takes its name from, called `name`."""
+    """The owner profile, named `name`; the first login takes its name from it."""
     owner = dataclasses.replace(profile.owner(), name=name)
     monkeypatch.setattr(profile, "owner", lambda: owner)
 
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
-    """No logins yet, in a scratch file, and a scratch .env."""
+    """No logins yet, with scratch logins and .env files."""
     monkeypatch.setattr(logins, "FILE", tmp_path / "logins.json")
     monkeypatch.setattr(vault, "ENV_FILE", tmp_path / "dotenv")
     named(monkeypatch, "Alex")
@@ -97,7 +96,7 @@ def test_with_no_login_the_first_setup_passcode_is_checked_as_the_users(home, mo
 
 
 def test_the_shared_passcode_becomes_the_users_login_and_leaves_env(home, monkeypatch):
-    vault.ENV_FILE.write_text(f"JARVIS_USER_NAME=Alex\n{logins.VAR}=4321\n")  # shorter than a new one may be
+    vault.ENV_FILE.write_text(f"JARVIS_USER_NAME=Alex\n{logins.VAR}=4321\n")  # shorter than a new passcode may be
     monkeypatch.setenv(logins.VAR, "4321")
     assert logins.adopt() == "Alex"
     assert logins.check("4321") == "Alex" and "4321" not in logins.FILE.read_text()
@@ -128,9 +127,9 @@ def test_last_use_is_written_now_and_then(home, monkeypatch):
 def test_each_login_reaches_the_panel_with_its_own_passcode(home, monkeypatch):
     logins.add("Alex", "123456")
     logins.add("Sam", "sam-secret")
-    monkeypatch.setenv(logins.VAR, "999999")  # left in .env: no longer a way in once there are logins
+    monkeypatch.setenv(logins.VAR, "999999")  # left in .env: not accepted once logins exist
     assert reply("access", {"passcode": "999999"})[0] == 401
-    status, body = reply("access", {"passcode": "sam-secret", "login": "Alex"})  # who it is comes from the passcode
+    status, body = reply("access", {"passcode": "sam-secret", "login": "Alex"})  # the passcode decides who it is
     assert status == 200 and [(x["name"], x["this"]) for x in body["result"]["logins"]] == [("Alex", False), ("Sam", True)]
 
 

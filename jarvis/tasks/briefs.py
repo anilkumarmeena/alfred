@@ -1,7 +1,4 @@
-"""What a task's session is told (jarvis.tasks.worker): the system prompt for its kind, with what it can do beyond its
-kind's defaults (jarvis.tasks.access), the project's own Claude Code setup (jarvis.tasks.project_claude), JARVIS's own
-skills and the to-do item it works on.
-"""
+"""System prompt for a task session: the kind's brief plus extra grants, project Claude setup, skills and to-do."""
 
 from collections.abc import Iterable
 from pathlib import Path
@@ -17,7 +14,7 @@ from jarvis.tasks.subagents import _agents
 
 
 def brief() -> str:
-    """What every task is told about working for JARVIS, for the profile it runs as."""
+    """Shared brief for every task, for the current profile."""
     mine = profile.current()
     return prompts.load("task_brief", user_name=profile.name(), db_file=mine.db, memory_file=mine.memory_file)
 
@@ -42,7 +39,7 @@ def _artifact_brief(folder: Path) -> str:
 
 
 def _project_brief(setup: project_claude.Setup | None, helpers: Iterable[str]) -> str:
-    """What the session has from the project's own Claude Code setup."""
+    """Describe the loaded project Claude Code setup (CLAUDE.md, subagents, skills, flagged files)."""
     if setup is None:
         return ""
     own = sorted(set(setup.agents) - set(helpers))
@@ -62,9 +59,9 @@ def _project_brief(setup: project_claude.Setup | None, helpers: Iterable[str]) -
 
 
 def _grants_brief(task: dict, cwd: Path, own: Path, can: set[str]) -> str:
-    """What the task can do beyond its kind's defaults (jarvis.tasks.access), and how it asks for more."""
+    """Describe the task's extra grants and how to request_access for more."""
     kind, lines = task["kind"], []
-    if kind != "code_change":  # code_change's own brief covers its folder, shell and host tools
+    if kind != "code_change":  # code_change's brief already covers these
         if can & {"artifacts", "shell", "mac"}:
             lines.append(f"- Your own folder is {own}: keep what you make there.")
         if "shell" in can:
@@ -92,7 +89,7 @@ def _grants_brief(task: dict, cwd: Path, own: Path, can: set[str]) -> str:
 
 
 def _skills_brief(found: list[skills.Skill]) -> str:
-    """What the session has of JARVIS's own skills (jarvis.skills.home)."""
+    """List JARVIS's own skills loaded into the session."""
     if not found:
         return ""
     return (f"\n- JARVIS's own skills are loaded, how-tos {profile.name()} keeps for workflows they repeat. When the work "
@@ -101,7 +98,7 @@ def _skills_brief(found: list[skills.Skill]) -> str:
 
 
 def _todo_brief(task: dict) -> str:
-    """The to-do item the task was started for, which JARVIS settles itself when it ends (jarvis.tasks.goal)."""
+    """Note the linked to-do item; JARVIS settles it at the end, so the task must not."""
     if not task.get("todo") or not (item := todo.get(task["todo"])):
         return ""
     return (f"\n- This task works on {profile.name()}'s to-do item \"{item['text']}\". JARVIS ticks it off, or rewords it to "
@@ -110,8 +107,9 @@ def _todo_brief(task: dict) -> str:
 
 def _system_prompt(task: dict, cwd: Path, setup: project_claude.Setup | None = None, own: Path | None = None,
                    mine: Iterable[skills.Skill] = ()) -> str | dict:
-    """`own` is the task's own folder, where it keeps what it makes: `cwd`, unless that's a project it only reads.
-    `mine` are JARVIS's own skills the session has."""
+    """The session's system prompt: a plain string for research, else a claude_code preset with an append.
+
+    `own` is the task's output folder (defaults to `cwd`); `mine` are JARVIS skills loaded into the session."""
     kind, can, own = task["kind"], access.has(task), own or cwd
     pages = _artifact_brief(own) if "artifacts" in can else ""
     granted = _grants_brief(task, cwd, own, can) + _skills_brief(list(mine)) + _todo_brief(task)

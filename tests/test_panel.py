@@ -1,13 +1,11 @@
-"""Tests for the web page's control panel: its actions (jarvis.panel) over the to-do list, memory, "about you", the
-Google accounts, projects and push devices, the task runner's part (answers via "panel"), and the routes jarvis.server
-serves it on, /api/panel/ACTION and /api/events. Run with: make test"""
+"""Tests for jarvis.panel and its routes: to-dos, memory, preferences, sources, accounts, projects, tasks, jobs."""
 
 import asyncio
 import json
 from datetime import date
 
 import pytest
-from test_in_place import env  # noqa: F401  (a fixture)
+from test_in_place import env  # noqa: F401  (fixture)
 
 from conftest import use_profile
 from jarvis import panel, server
@@ -72,7 +70,7 @@ def test_the_panel_s_todo_actions_return_the_list(db):
 
 
 def shown(user: list[str], environment: list[str]) -> dict:
-    """What the panel's memory actions return for these lines."""
+    """Expected memory-action result for these lines."""
     return {"user": user, "environment": environment,
             "limits": {"user": {"used": sum(map(len, user)), "max": 2000},
                        "environment": {"used": sum(map(len, environment)), "max": 3000}, "fact": 400}}
@@ -127,7 +125,7 @@ def test_about_from_the_panel(db):
 
 @pytest.fixture
 def prefs(db, monkeypatch):
-    """A scratch database, and no preference set in .env."""
+    """Scratch database, no preference set in .env."""
     for var in config.PREFERENCES.values():
         monkeypatch.delenv(var, raising=False)
     return db
@@ -276,7 +274,7 @@ def test_tasks_are_listed_without_their_brief_and_requests_only_waits_are_told_a
             "question": runner.approval_question([{"commands": [{"why": "installs software (brew install)"}]}])}
 
     async def tasks(unseen=False):
-        # What it waits for is told by its wait_kind, never by how its question is worded
+        # The wait is given by wait_kind, never by the question's wording
         return [base, base | {"id": 4, "question": "Work or personal?", "wait_kind": "question"},
                 base | {"id": 5, "question": "may it run the migration on the live database?", "wait_kind": "question"},
                 base | {"id": 6, "wait_kind": "access"}]
@@ -474,3 +472,18 @@ def test_the_panel_route_says_when_the_runner_is_down(site, monkeypatch):
 
     monkeypatch.setattr(client, "tasks", down)
     assert reply("tasks", {"passcode": "123456"}) == (503, {"error": server.RUNNER_DOWN})
+
+
+def test_system_asks_launchd_by_full_label(db, monkeypatch):
+    asked = []
+
+    async def launchd(label):
+        asked.append(label)
+        return {"name": label, "state": "running"}
+
+    monkeypatch.setattr(panel, "_launchd", launchd)
+    monkeypatch.setattr(panel.shutil, "which", lambda cmd: "/bin/launchctl")
+    monkeypatch.setattr(panel, "_vault", lambda: {"state": "ok", "secrets": 0})
+    call("system")
+    assert asked == [config.service_label(name) for name in config.SERVICE_NAMES]
+    assert all(label.startswith(config.SERVICE_PREFIX + ".") for label in asked)

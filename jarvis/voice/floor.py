@@ -1,29 +1,15 @@
-"""When JARVIS may speak unprompted (jarvis.voice.agent): task updates, heartbeat alerts, finished shell jobs and
-tasks' requests to run risky commands.
+"""When JARVIS may speak unprompted: task updates, heartbeat alerts, finished shell jobs, approval requests.
 
-They wait while a conversation exchange is under way: while JARVIS is thinking or speaking, while the
-user is speaking or their words are still on the way to the brain (being transcribed, or waiting for
-the turn detector), and while JARVIS's last words asked the user a question they haven't answered. As
-soon as none of that holds they're said, one at a time, each waiting its turn again, so one that asks a
-question holds the rest. There's no quiet period beyond that.
+The floor is busy while JARVIS thinks or speaks, the user speaks or their words are in flight, or JARVIS's last
+question is unanswered (lapses after QUESTION_MINUTES of silence). Items are said one at a time, in order, never
+repeated within REPEAT_MINUTES. Nothing ever talks over the user, urgent items included.
 
-The question closes when the user next speaks to JARVIS, so held announcements follow JARVIS's reply to
-their answer (unless that reply asks another question). One left unanswered lapses after
-QUESTION_MINUTES with nobody talking, so it can't hold announcements for ever. Announcements are queued
-in order and said once: the same words queued again, or again within REPEAT_MINUTES of being said,
-aren't repeated.
-
-Whether a free floor is the right moment is the model's call (Moment), when one is set. Each item comes with an
-urgency from its source (urgent, soon or whenever), what time it's about if any (a meeting's start), and whether the
-source has already sent it to the phone. With the floor free, a fast model sees the waiting items and how the
-conversation stands (its last few lines, how long since anyone spoke) and picks, for each: now (a natural pause, or
-it's urgent), cut_in (urgent, and the user is mid-discussion: said after "Sorry to cut in"), pause (they're deep in
-something and it can wait: asked again after the next exchange, or after a quiet spell), or phone (the conversation
-is over or it can wait for another day: pushed, if its source hasn't already, and for a task's update left unseen,
-so the next greeting mentions it). Nothing ever talks over the user: the holds above still come first, for urgent
-items too. An item held past HOLD_MINUTES goes to the phone; one past its time (a meeting already started) is dropped;
-the session's end sends what's left to the phone. Without a model, or when its call fails, a free floor says
-everything at once, as before.
+On a free floor, Moment (a fast model, optional) picks per item from recent lines and urgency:
+  now     natural pause, or urgent
+  cut_in  urgent while mid-discussion; prefixed with CUT_IN
+  pause   re-judged after the next exchange or QUIET_SECONDS of silence; to the phone after HOLD_MINUTES
+  phone   pushed (unless the source already did); task updates stay unseen for the next greeting
+Items past their time are dropped; leftovers go to the phone at session end. No model or a failed call means "now".
 """
 
 import asyncio
@@ -39,52 +25,51 @@ from jarvis.safety import consent
 
 log = logging.getLogger("jarvis.voice.floor")
 
-QUESTION_MINUTES = 2  # an unanswered question stops holding announcements after this long with nobody talking
-WORDS_SECONDS = 10  # the user's transcribed words stop holding them after this long if no reply starts
-REPEAT_MINUTES = 5  # the same announcement isn't said again within this long
+QUESTION_MINUTES = 2  # unanswered question stops holding after this much silence
+WORDS_SECONDS = 10  # transcribed words stop holding if no reply starts by then
+REPEAT_MINUTES = 5  # no repeats within this window
 POLL_SECONDS = 0.25
-HOLD_MINUTES = 15  # an item held for a better moment this long goes to the phone instead
-QUIET_SECONDS = 45  # a held item is asked about again after this long with nobody talking, without a new exchange
-URGENT_MINUTES = 5  # an item about a time this close (a meeting starting) counts as urgent
-STALE_MINUTES = 5  # and is dropped this long after that time
-OLD_MINUTES = 3  # an item said this long after it came says how long ago
-RECENT_LINES = 8  # of the conversation, which the model sees
+HOLD_MINUTES = 15  # held this long -> phone
+QUIET_SECONDS = 45  # re-judge held items after this much silence
+URGENT_MINUTES = 5  # item due this soon counts as urgent
+STALE_MINUTES = 5  # dropped this long after its time
+OLD_MINUTES = 3  # older items say "From N minutes ago"
+RECENT_LINES = 8  # conversation lines shown to the model
 CUT_IN = "Sorry to cut in: "
 
 
 def asks_question(text: str) -> bool:
-    """Whether words JARVIS says end by asking the user something."""
+    """True if `text` ends with a question."""
     return text.rstrip().rstrip("\"')]").endswith("?")
 
 
 class Floor:
-    """Whether a conversation exchange is under way, which unprompted announcements wait out."""
+    """Tracks whether an exchange is under way; unprompted speech waits for it."""
 
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self.clock = clock
-        self.question = False  # JARVIS's last words asked the user something they haven't answered
-        self.words_at: float | None = None  # when the user's words were transcribed, until a reply to them starts
-        self.active_at = clock()  # when anyone was last talking or JARVIS thinking, for the question's lapse
+        self.question = False  # JARVIS's last words are an unanswered question
+        self.words_at: float | None = None  # transcript time, cleared when a reply starts
+        self.active_at = clock()  # last activity, for the question's lapse
         self.lock = asyncio.Lock()  # one unprompted speaker at a time
-        self.turns = 0  # user turns that reached JARVIS: a new exchange since an item was held
-        self.recent: deque[tuple[str, str]] = deque(maxlen=RECENT_LINES)  # who said what, lately
+        self.turns = 0  # user turns so far; detects a new exchange
+        self.recent: deque[tuple[str, str]] = deque(maxlen=RECENT_LINES)  # (who, text), recent
 
     def heard(self, transcript: str) -> None:
-        """The user's words were transcribed; the turn detector may still be waiting for more."""
+        """A transcript arrived; the turn may not have ended yet."""
         if transcript.strip():
             self.words_at = self.active_at = self.clock()
             self.recent.append((profile.name(), transcript.strip()))
 
     def turn(self) -> None:
-        """A user turn reached JARVIS: it answers any question open."""
+        """A user turn reached JARVIS; it answers any open question."""
         self.question = False
         self.words_at = None
         self.active_at = self.clock()
         self.turns += 1
 
     def said(self, text: str) -> None:
-        """JARVIS says `text`, a reply or an announcement: a question is open if it ends with one. The answer may need
-        the yes-or-no check, so its session starts now (consent.warm)."""
+        """JARVIS says `text`. A trailing question opens one and pre-warms the yes/no checker."""
         self.question = asks_question(text)
         self.active_at = self.clock()
         if text.strip():
@@ -93,12 +78,11 @@ class Floor:
             consent.warm()
 
     def quiet(self) -> float:
-        """Seconds since anyone was last talking, or JARVIS thinking."""
+        """Seconds since the last activity."""
         return self.clock() - self.active_at
 
     def held(self, agent_state: str, user_state: str, transcribing: int = 0, enrolling: bool = False) -> str | None:
-        """Why an announcement must wait now, or None if it may go. `enrolling`: the user is talking for their
-        voiceprint (jarvis.voice.speaker), which JARVIS's voice mustn't get into."""
+        """Reason an announcement must wait, or None. `enrolling`: voiceprint recording in progress."""
         now = self.clock()
         if agent_state in ("initializing", "thinking", "speaking"):
             reason = f"JARVIS is {agent_state}"
@@ -122,15 +106,14 @@ class Floor:
         return None
 
     async def wait(self, session, stt=None) -> None:
-        """Until nothing holds an announcement back. `stt` is the session's WhisperSTT, which says when it's
-        still transcribing what the user just said, or that they're enrolling their voice."""
+        """Block until the floor is free. `stt` reports in-flight transcription and enrollment."""
         while reason := self.held(session.agent_state, session.user_state, getattr(stt, "hearing", 0),
                                   getattr(stt, "enrolling", False)):
             log.debug("announcement held: %s", reason)
             await asyncio.sleep(POLL_SECONDS)
 
     async def say(self, session, text: str) -> bool:
-        """Say `text` unprompted, once the caller has waited for the floor (holding `lock`); False if it failed."""
+        """Say `text` unprompted; caller holds `lock` and has waited. False on failure."""
         self.said(text)
         try:
             await session.say(text, add_to_chat_ctx=False)
@@ -143,17 +126,17 @@ class Floor:
 
 @dataclass
 class Announcement:
-    text: str  # what's said
-    note: str = ""  # what the brain is told beside the words, unsaid
-    seen: list[int] = field(default_factory=list)  # task ids the runner marks as heard once it's said
-    urgency: str = "soon"  # urgent, soon or whenever, as its source sees it
-    at: float | None = None  # the time.time() it's about, such as a meeting's start
-    pushed: bool = False  # its source has sent it to the phone already
-    came: float = 0.0  # when it was queued (the floor's clock)
-    judged: tuple[int, float, bool] | None = None  # last held for a better moment: at how many user turns, when, urgent
-    held_at: float | None = None  # first held, when
-    cleared: bool = False  # its moment has come: said as soon as the one before it is
-    cuts_in: bool = False  # and it's urgent enough to cut into a discussion
+    text: str  # spoken words
+    note: str = ""  # unspoken context for the brain
+    seen: list[int] = field(default_factory=list)  # task ids marked heard once said
+    urgency: str = "soon"  # urgent | soon | whenever
+    at: float | None = None  # epoch time it's about (e.g. meeting start)
+    pushed: bool = False  # source already pushed it
+    came: float = 0.0  # queue time (floor clock)
+    judged: tuple[int, float, bool] | None = None  # last "pause": (turns, when, urgent)
+    held_at: float | None = None  # first "pause" time
+    cleared: bool = False  # cleared to speak, in queue order
+    cuts_in: bool = False  # prefix with CUT_IN
 
     def urgent(self, now: float) -> bool:
         return self.urgency == "urgent" or (self.at is not None and self.at - now <= URGENT_MINUTES * 60)
@@ -174,7 +157,7 @@ Judge from the conversation's flow and each item's urgency and time, not from pa
 
 
 class Moment:
-    """The fast model's choice of moment for waiting items (see the module's doc)."""
+    """Fast model choosing now/cut_in/pause/phone for waiting items."""
 
     CHOICES = ("now", "cut_in", "pause", "phone")
 
@@ -183,7 +166,7 @@ class Moment:
         self.seconds = seconds
 
     async def decide(self, items: list[Announcement], floor: Floor, now: float) -> list[str] | None:
-        """One choice per item, or None when the call fails or is slow."""
+        """One choice per item, or None if the call fails or times out."""
         lines = [f"{i}. [{'urgent' if a.urgent(now) else a.urgency}"
                  + (f", about {_minutes(a.at - now)} from now" if a.at is not None else "")
                  + (f", waiting {_minutes(floor.clock() - a.came)}" if floor.clock() - a.came >= 60 else "")
@@ -204,23 +187,22 @@ def _minutes(seconds: float) -> str:
 
 
 class Announcements:
-    """Announcements waiting for the floor, in order, each said once. `moment` judges when (see the module's doc);
-    `push(text)` sends one to the phone."""
+    """Ordered queue of announcements, each said once. `moment` judges timing; `push(text)` sends to the phone."""
 
     def __init__(self, floor: Floor, clock: Callable[[], float] = time.monotonic, moment: Moment | None = None,
                  push: Callable[[str], Awaitable[object]] | None = None, wall: Callable[[], float] = time.time) -> None:
         self.floor = floor
         self.clock = clock
-        self.wall = wall  # for the times items are about
+        self.wall = wall  # wall clock, for items' `at`
         self.moment = moment
         self.push = push
         self.queue: deque[Announcement] = deque()
-        self.said_at: dict[str, float] = {}  # words said lately (or being said), and when
+        self.said_at: dict[str, float] = {}  # recently said text -> when
         self._ready = asyncio.Event()
         self._pushing: set[asyncio.Task] = set()
 
     def add(self, item: Announcement) -> bool:
-        """Queue an announcement; False if it's one already queued or just said."""
+        """Queue an item; False if already queued (ids merged) or said within REPEAT_MINUTES."""
         now = self.clock()
         self.said_at = {text: at for text, at in self.said_at.items() if now - at < REPEAT_MINUTES * 60}
         if same := next((queued for queued in self.queue if queued.text == item.text), None):
@@ -235,8 +217,7 @@ class Announcements:
         return True
 
     def _due(self, now: float) -> list[Announcement]:
-        """The items to judge now: new ones, and held ones once there's been a new exchange, a quiet spell since they
-        were last judged, or their time has come close."""
+        """Items to judge: new ones, plus held ones after a new exchange, a quiet spell, or newly urgent."""
         quiet = self.floor.quiet() >= QUIET_SECONDS
 
         def due(a: Announcement) -> bool:
@@ -249,10 +230,11 @@ class Announcements:
 
     async def run(self, session, brain, stt=None, asks=None,
                   mark_seen: Callable[[list[int]], Awaitable[None]] | None = None) -> None:
-        """Say each announcement as the floor allows and the moment suits, for as long as the session lasts. `asks` is
-        the session's VoiceApprovals: a request left open is closed, so a yes after this isn't taken for it."""
+        """Speak queued items as the floor and moment allow, for the session's life.
+
+        Closes any open request in `asks` before speaking, so a later yes isn't taken for it."""
         while True:
-            try:  # held items wake it now and then: their moment may have come
+            try:  # wake periodically to re-judge held items
                 await asyncio.wait_for(self._ready.wait(), POLL_SECONDS * 20 if self.queue else None)
             except TimeoutError:
                 pass
@@ -266,14 +248,14 @@ class Announcements:
                     log.warning("marking tasks %s as heard failed: %s", said.seen, e)
 
     async def _take_turn(self, session, brain, asks) -> Announcement | None:
-        """With the floor free: settle what's due, and say the first item whose moment has come. Returns it if said."""
+        """On a free floor: judge due items and say the first cleared one. Returns it if said."""
         now = self.wall()
         self._expire(now)
         if due := self._due(now):
             choices = await self.moment.decide(due, self.floor, now) if self.moment is not None else None
             if choices is not None and self.floor.held(session.agent_state, session.user_state):
-                return None  # someone started while it was deciding: decide again once they're done
-            for item, choice in zip(due, choices or ["now"] * len(due)):  # no model or no answer: now, as before
+                return None  # someone spoke while deciding; retry later
+            for item, choice in zip(due, choices or ["now"] * len(due)):  # no model or no answer: now
                 self._settle(item, choice, now)
         if not (ready := next((a for a in self.queue if a.cleared), None)):
             self._ready.clear()
@@ -282,7 +264,7 @@ class Announcements:
 
     def _settle(self, item: Announcement, choice: str, now: float) -> None:
         if choice == "cut_in" and not item.urgent(now):
-            choice = "pause"  # only what can't wait may cut in
+            choice = "pause"  # only urgent items may cut in
         if choice == "phone":
             self._to_phone(item, "the moment didn't suit")
         elif choice == "pause":
@@ -301,7 +283,7 @@ class Announcements:
         if (waited := self.clock() - item.came) >= OLD_MINUTES * 60:
             text = f"From {_minutes(waited)} ago: {text}"
         if item.cuts_in:
-            log.info("announcement cuts in, urgent: %s", item.text)  # every break-in, so they can be tuned
+            log.info("announcement cuts in, urgent: %s", item.text)  # log every cut-in, for tuning
             text = CUT_IN + text
         self.said_at[item.text] = self.clock()
         if asks is not None:
@@ -321,8 +303,7 @@ class Announcements:
                 self._to_phone(item, f"held {HOLD_MINUTES} minutes")
 
     def _to_phone(self, item: Announcement, why: str) -> None:
-        """Off the queue and onto the phone, unless its source sent it there already. A task's update stays unseen,
-        so the next greeting mentions it."""
+        """Dequeue and push (unless already pushed). Task updates stay unseen for the next greeting."""
         if item in self.queue:
             self.queue.remove(item)
         log.info("announcement to the phone (%s): %s", why, item.text)
@@ -338,7 +319,7 @@ class Announcements:
             log.warning("pushing an announcement failed: %s", type(e).__name__)
 
     async def leave(self) -> None:
-        """The session is over: what's left goes to the phone, unless its time has passed."""
+        """Session over: push non-stale leftovers to the phone."""
         now = self.wall()
         for item in list(self.queue):
             if not item.stale(now):

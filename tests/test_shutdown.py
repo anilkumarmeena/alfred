@@ -1,5 +1,4 @@
-"""Tests for the task runner's clean shutdown (launchd's SIGTERM) and resuming the tasks it cut off at the next start.
-Run with: make test"""
+"""Tests for the task runner's clean shutdown on SIGTERM and resuming cut-off tasks at the next start."""
 
 import asyncio
 import json
@@ -8,7 +7,7 @@ import signal
 from types import SimpleNamespace
 
 import pytest
-from test_in_place import env, worker_task  # noqa: F401  (env is a fixture)
+from test_in_place import env, worker_task  # noqa: F401  (fixture)
 from test_nudges import fake_run, finishes, settle, until
 
 from conftest import use_task_cache
@@ -27,7 +26,7 @@ def cut_off(task: dict) -> dict:
 
 
 def hangs(on_mac: str | None = None):
-    """A run that gets its session going, then works until it's stopped: running `on_mac` on the Mac, if given."""
+    """Fake run: starts its session, then works until stopped, running `on_mac` on the Mac if given."""
     async def body(task, prompt, reporter) -> Outcome:
         reporter.session(task["id"], f"s{task['id']}")
         if on_mac:
@@ -83,7 +82,7 @@ def test_a_task_cut_off_before_its_first_step_is_left_to_resume_too(env, monkeyp
         events: asyncio.Queue = asyncio.Queue()
         r.listeners.add(events)
         task = r.start("research", "Flights", "Find flights to Goa.")
-        await r.shutdown()  # before its job has taken a step
+        await r.shutdown()  # before its job takes a step
         return r, events, r.store.get(task["id"])
 
     r, events, task = asyncio.run(main())
@@ -199,13 +198,12 @@ def test_every_kind_of_task_resumes_whatever_access_it_has(env, monkeypatch):
     r, tasks = asyncio.run(main())
     assert prompts[3:] == [runner.RESUMED] * 3
     assert [t["status"] for t in tasks] == ["done"] * 3
-    assert "artifacts" in access.has(tasks[1])  # it carries on with the access it was granted
+    assert "artifacts" in access.has(tasks[1])  # it keeps the access it was granted
     assert all(logged(r, t["id"]) == ["JARVIS is shutting down", runner.RESUMED_LOG] for t in tasks)
 
 
 def test_a_running_task_resumes_even_without_a_clean_shutdown(env, monkeypatch):
-    """As a runner from before the clean shutdown left task 156: a code question with extra access, running in its
-    session, never noted as interrupted."""
+    """A code task with extra access, left running and never marked interrupted."""
     store = Store()
     task = store.create("code_question", "Designs", "Design a home screen.", "other", grants=["artifacts"])
     store.set(task["id"], status="running", session_id="s1")
@@ -309,7 +307,7 @@ def test_resuming_can_be_turned_off(env, monkeypatch):
 
 
 class Site:
-    """Stands in for the Unix socket's site, which a sandbox may not let tests serve."""
+    """Fake Unix-socket site; a sandbox may not let tests serve one."""
 
     def __init__(self, site_runner, path: str) -> None: ...
 

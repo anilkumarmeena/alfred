@@ -1,6 +1,5 @@
-// Tasks: the scheduled jobs (set by voice; paused, resumed or cancelled here), what waits on the user (requests for a
-// yes, and questions), what's running, what finished lately; one task in full, with its live log, its suggested edits
-// and what can be done with it; and one scheduled job, with its recent runs.
+// Tasks section: scheduled jobs, items waiting on the user, running and recent tasks; plus task detail (live log,
+// suggested edits, actions) and job detail (recent runs).
 import { useEffect, useRef } from "preact/hooks";
 import { useSignal } from "@preact/signals";
 import { jobOf, kindLabel, nextRun, type Schedule } from "../../lib/schedule";
@@ -40,7 +39,7 @@ const reply = (id: number) => async (message: string) => {
   return !!r;
 };
 
-// A command task that failed where fixing it needs the user's yes (jarvis.tasks.command_jobs): fix it, or leave it
+// Failed command task whose fix needs the user's approval
 function FixQuestion({ t }: { t: Task }) {
   const busy = useSignal(false);
   async function answer(fix: boolean) {
@@ -73,7 +72,7 @@ function Question({ t }: { t: Task }) {
   );
 }
 
-// A running task with no sign of progress for a while (jarvis.tasks.stall): JARVIS never stops it on its own
+// Stalled running task; JARVIS never stops it on its own
 function Stuck({ t }: { t: Task }) {
   return (
     <div class="note amber">
@@ -86,7 +85,7 @@ function Stuck({ t }: { t: Task }) {
 function Card({ t }: { t: Task }) {
   const ref = useRef<HTMLButtonElement>(null);
   const sel = item.value === String(t.id);
-  // Opened from the chat or a notification: bring it into view and ring it
+  // Opened from chat or a notification: scroll into view and highlight
   useEffect(() => {
     const f = flash.value;
     if (f?.id !== t.id || !ref.current) return;
@@ -117,7 +116,7 @@ function Card({ t }: { t: Task }) {
   );
 }
 
-// ── Scheduled jobs: set by voice; here they're listed, paused, resumed and cancelled ──
+// ── Scheduled jobs (created by voice; managed here) ──
 
 const CANCEL_ASK = (j: Schedule) => `Cancel “${j.title}”? It won't run again; a run already under way carries on.`;
 
@@ -237,7 +236,7 @@ export function TaskList() {
 
 const LOG_KIND: Record<string, string> = { approval: "q", question: "q", failed: "bad", nudge: "you", reply: "you" };
 
-// The end of what a command task's command printed, following along while it runs
+// Tail of a command task's output, live while running
 function Output({ text }: { text: string }) {
   const box = useRef<HTMLPreElement>(null);
   useEffect(() => { if (box.current) box.current.scrollTop = box.current.scrollHeight; }, [text]);
@@ -246,7 +245,7 @@ function Output({ text }: { text: string }) {
 
 const TaskLink = ({ id }: { id: number }) => <button class="linkish" onClick={() => openTask(id)}>task #{id}</button>;
 
-// What a command task runs, where, and how it ties to the task fixing it, or the run it follows
+// Command task details and its links to a fix task or previous run
 function CommandFacts({ t }: { t: TaskDetail }) {
   const c = t.command!;
   return (
@@ -303,7 +302,7 @@ export function TaskView({ id }: { id: number }) {
     detail.value = null;
     loadTask(id);
   }, [id]);
-  // While it runs, the log follows along (events refresh it too; this covers steps, which aren't announced)
+  // Poll while active: events don't announce every step
   const active = !!t && ACTIVE.includes(t.status);
   useEffect(() => {
     if (!active) return;
@@ -315,7 +314,7 @@ export function TaskView({ id }: { id: number }) {
   const finished = !ACTIVE.includes(t.status) && t.status !== "discarded";
   const branchy = t.kind === "code_change" && !t.in_place && !!t.branch;
   const mine = approvals.value.filter((a) => a.task === id);
-  const shellJob = t.kind === "command" && !!t.command;  // a shell job: no model, no messages, its output to show
+  const shellJob = t.kind === "command" && !!t.command;  // no model or messages; show its output
 
   async function run(action: string, done: string, ask?: string) {
     if (ask && !confirm(ask)) return;
@@ -325,7 +324,7 @@ export function TaskView({ id }: { id: number }) {
     if (r) { loadTask(id); loadTasks(); }
   }
 
-  // A command runs again as a task of its own: that's the one to watch
+  // A rerun is a new task: open that one
   async function again() {
     busy.value = "retry";
     const r = await act<Task>("retry", { id }, `Running it again`);

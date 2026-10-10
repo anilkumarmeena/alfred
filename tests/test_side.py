@@ -1,6 +1,4 @@
-"""Tests for slow work in the background (jarvis.brain.side): reading the brain hands to a side job is announced when
-it's done while the conversation carries on, side jobs can only read, and work cut off by the user speaking is
-offered to the next turn to hand over. Run with: make test"""
+"""Tests for jarvis.brain.side: background reads announced when done, read-only side jobs, cut-off work handed over."""
 
 import asyncio
 

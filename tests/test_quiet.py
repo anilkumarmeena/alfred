@@ -1,5 +1,4 @@
-"""Speaker off (jarvis.voice.quiet): the user's switch turns the session's audio output, and so text-to-speech, on and
-off, from the token they joined with and as they change it. Run with: make test"""
+"""Tests for jarvis.voice.quiet: the speaker switch, from the join token and as it changes, gating TTS."""
 
 import asyncio
 import json
@@ -49,7 +48,7 @@ class Participant:
 
 
 def test_speaker_is_on_unless_switched_off():
-    assert quiet.speaker_on({})  # a page or app from before the switch
+    assert quiet.speaker_on({})  # no setting (older clients): on
     assert quiet.speaker_on({quiet.SPEAKER: "on"})
     assert not quiet.speaker_on({quiet.SPEAKER: "off"})
 

@@ -1,4 +1,4 @@
-"""Tests for native push to the JARVIS iPhone app (jarvis.notify.apns) and its endpoint. Run with: make test"""
+"""Tests for jarvis.notify.apns: devices, provider token, sending, and the endpoint."""
 
 import asyncio
 import base64
@@ -23,13 +23,13 @@ PHONE = {"token": TOKEN.upper(), "environment": "development", "topic": "com.exa
 
 @pytest.fixture
 def key(tmp_path, monkeypatch):
-    """An APNs auth key, as developer.apple.com gives it (a P-256 key in PKCS#8 PEM), and its settings."""
+    """A P-256 APNs auth key (PKCS#8 PEM) and its settings."""
     private = ec.generate_private_key(ec.SECP256R1())
     path = tmp_path / "apns_key.p8"
     path.write_bytes(private.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                                            serialization.NoEncryption()))
     monkeypatch.setattr(apns, "APNS_KEY_FILE", path)
-    monkeypatch.setenv("JARVIS_APNS_KEY_ID", "ABC123DEFG")  # not in the vault, so .env's
+    monkeypatch.setenv("JARVIS_APNS_KEY_ID", "ABC123DEFG")  # not in the vault, so read from .env
     monkeypatch.setattr(apns, "APNS_TEAM_ID", "TEAM123456")
     monkeypatch.setattr(apns, "_jwt", None)
     apns._signing_key.cache_clear()
@@ -47,7 +47,7 @@ def test_devices_persist_one_per_token(tmp_path):
     devices = Devices(tmp_path / "devices.json")
     assert devices.all() == []
     devices.add(PHONE, "iphone")
-    devices.add(PHONE | {"environment": "production"}, "iphone")  # the same token again replaces it
+    devices.add(PHONE | {"environment": "production"}, "iphone")  # the same token replaces the entry
     again = Devices(tmp_path / "devices.json").all()
     assert [(d["token"], d["environment"], d["topic"], d["device"]) for d in again] == [
         (TOKEN, "production", "com.example.jarvis", "iphone")]
@@ -100,7 +100,7 @@ class Reply:
 
 
 class FakeAPNs:
-    """Stands in for httpx.AsyncClient(http2=True); answers each device token with the given reply."""
+    """Fake httpx.AsyncClient(http2=True): answers each device token with the given reply."""
 
     def __init__(self, replies: dict[str, Reply] | None = None, error: Exception | None = None) -> None:
         self.replies, self.error, self.calls, self.closed = replies or {}, error, [], False
@@ -170,7 +170,7 @@ def test_failures_keep_the_device_and_log_no_token(key, phones, monkeypatch, cap
 
 def test_nothing_is_sent_until_apns_is_set_up(phones, monkeypatch, caplog, tmp_path):
     monkeypatch.setattr(apns, "APNS_KEY_FILE", tmp_path / "missing.p8")
-    monkeypatch.setenv("JARVIS_APNS_KEY_ID", "ABC123DEFG")  # not in the vault, so .env's
+    monkeypatch.setenv("JARVIS_APNS_KEY_ID", "ABC123DEFG")  # not in the vault, so read from .env
     monkeypatch.setattr(apns, "APNS_TEAM_ID", "TEAM123456")
     service = FakeAPNs()
     monkeypatch.setattr(apns, "_client", lambda: service)

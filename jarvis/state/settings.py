@@ -1,22 +1,15 @@
-"""Settings the user changes as they go, kept in the settings table of data/tasks.db beside the tasks, the to-do list
-and the Google accounts, so the web app can change them too.
+"""User settings in the profile database's settings table, editable from the CLI and web app.
 
-"about" is the user's "about you" text, what JARVIS knows about them (their job, their own projects, what to keep
-apart), one point per line, which the prompt passes on (brain._about). The services read it at start-up, so restart
-them after a change.
+  about        "about you" text for the prompt, one point per line; read at service start (restart after changes)
+  preferences  config.PREFERENCES keys; .env wins (see config for when each applies). Name and time zone live on
+               the profile and apply without a restart.
 
-The preferences (config.PREFERENCES) are the rest: name, time zone, voice, speed, speech gate, how many tasks run at
-once, the web browser (on or off, its window headed or headless), the speaker check (on, shadow or off) with its
-threshold, and the safety check for hidden instructions in what tools bring in (on or off, and its model). config
-reads them, a preference's variable in .env winning over what's here; see there for when each applies. Name and time
-zone are kept in the profile (jarvis.core.profile) rather than here, and apply without a restart.
-
-    uv run python -m jarvis.state.settings about                     show it
-    uv run python -m jarvis.state.settings about --set "Works at Acme."   replace it; a newline starts another point
-    uv run python -m jarvis.state.settings about --from FILE         replace it with a file's text, or stdin's with -
+    uv run python -m jarvis.state.settings about                          show it
+    uv run python -m jarvis.state.settings about --set "Works at Acme."   replace; newlines separate points
+    uv run python -m jarvis.state.settings about --from FILE              replace from a file, or stdin with -
     uv run python -m jarvis.state.settings about --clear
-    uv run python -m jarvis.state.settings prefs                     show the preferences
-    uv run python -m jarvis.state.settings prefs voice bm_lewis      change one; "" goes back to the default
+    uv run python -m jarvis.state.settings prefs                          show preferences
+    uv run python -m jarvis.state.settings prefs voice bm_lewis           set one; "" = default
 """
 
 import argparse
@@ -43,7 +36,7 @@ create table settings (
 
 
 def tidy(text: str) -> str:
-    """One point per line: each line trimmed, blank lines left out."""
+    """Trim lines and drop blank ones."""
     return "\n".join(l for l in (l.strip() for l in text.splitlines()) if l)
 
 
@@ -58,7 +51,7 @@ def get(key: str, default: str = "") -> str:
 
 
 def put(key: str, value: str) -> None:
-    """Sets `key` to `value`; an empty value takes the setting out."""
+    """Set `key`; an empty value deletes it."""
     with _db() as db:
         if value:
             db.execute("insert into settings values (?, ?) on conflict(key) do update set value = excluded.value",
@@ -68,7 +61,7 @@ def put(key: str, value: str) -> None:
 
 
 def about() -> str:
-    """The user's "about you" text. A database that can't be read is logged and counts as none, so JARVIS starts."""
+    """The "about you" text; "" (logged) if the DB is unreadable, so startup continues."""
     try:
         return get("about")
     except sqlite3.Error as e:
@@ -77,7 +70,7 @@ def about() -> str:
 
 
 def set_about(text: str) -> str:
-    """Replaces the "about you" text, tidied (see `tidy`), and returns it as kept."""
+    """Replace the "about you" text (tidied); return the stored value."""
     text = tidy(text)
     put("about", text)
     return text
@@ -90,7 +83,7 @@ ACCENTS = {"a": "American", "b": "British"}
 
 
 def voices() -> list[str]:
-    """Kokoro's English voices, as its voices file has them: a* American, b* British; then f or m."""
+    """English Kokoro voices from the voices file (a*/b* = American/British, then f/m)."""
     try:
         with np.load(VOICES_FILE) as found:
             names = found.files
@@ -100,7 +93,7 @@ def voices() -> list[str]:
 
 
 def _clean(key: str, value: str) -> str:
-    """`value` as kept for preference `key`; raises ValueError, with what to say, for one it can't take."""
+    """Normalise `value` for preference `key`; ValueError with a user-facing message if invalid."""
     if not (value := value.strip()):
         return ""
     if key == "name":
@@ -147,12 +140,11 @@ def _clean(key: str, value: str) -> str:
     return f"{number:g}"
 
 
-PROFILE_KEYS = ("name", "timezone")  # kept in the profile, not the settings table
+PROFILE_KEYS = ("name", "timezone")  # stored on the profile, not in settings
 
 
 def set_preference(key: str, value: str) -> None:
-    """Keeps preference `key`; an empty value goes back to the default. Raises ValueError for an unknown key or a
-    value it can't take."""
+    """Store preference `key` ("" = default). ValueError for an unknown key or invalid value."""
     if key not in config.PREFERENCES:
         raise ValueError(f"There's no {key} setting.")
     if key in PROFILE_KEYS:
@@ -162,10 +154,9 @@ def set_preference(key: str, value: str) -> None:
 
 
 def preferences() -> dict:
-    """Each preference as the Settings panel shows it: what's kept here, what applies with nothing kept, and what .env
-    sets (which wins, so the panel can't change it); and the voices to pick from."""
+    """Settings-panel view: per key {value, default, env} (env wins, read-only), plus available voices."""
     defaults = config.DEFAULTS | {"name": config.mac_name() or "the user", "timezone": config.mac_timezone() or "UTC"}
-    mine = profile.stored(profile.current().id)  # name and time zone are kept there
+    mine = profile.stored(profile.current().id)  # holds name and time zone
 
     def kept(key: str) -> str:
         return (mine.get(key) or "") if key in PROFILE_KEYS else get(key)

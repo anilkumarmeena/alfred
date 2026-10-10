@@ -1,10 +1,11 @@
-"""A stand-in for the `claude` CLI behind ClaudeSDKClient, for tests of the voice brain that drives it
-(jarvis.brain.cli). Each turn plays a script of what the CLI would stream: messages, made with the helpers here,
-`Hold`s where a tool keeps running until the test lets it end, and exceptions the stream breaks off with. The fake
-keeps what it was sent, how often it was interrupted, the models it was switched to and whether it was closed.
+"""Fake `claude` CLI (ClaudeSDKClient) for testing the voice brain, jarvis.brain.cli.
 
-The `voice` fixture (tests/conftest.py) puts a CliBrain on fake CLIs: each one the brain starts, at first or again
-after closing one, plays the turns still left."""
+Each turn is a script of steps the CLI streams:
+  message    built with the helpers below; a ResultMessage ends the turn
+  Hold       blocks until the test calls release() or the CLI is interrupted
+  exception  raised mid-stream
+FakeCli records prompts sent, interrupts, model switches and close. Every CLI the brain starts shares one turn queue.
+"""
 
 import asyncio
 from dataclasses import dataclass, field
@@ -13,13 +14,13 @@ from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, ToolR
 
 
 def text(words: str, parent: str | None = None) -> StreamEvent:
-    """Words of the reply as they stream; with `parent`, a subagent's, which aren't spoken."""
+    """Streamed reply text; with `parent`, a subagent's (not spoken)."""
     return StreamEvent(uuid="e", session_id="s", parent_tool_use_id=parent,
                        event={"type": "content_block_delta", "delta": {"type": "text_delta", "text": words}})
 
 
 def next_turn() -> StreamEvent:
-    """A new model turn starting, as after a tool call."""
+    """Start of a new model turn, as after a tool call."""
     return StreamEvent(uuid="e", session_id="s", event={"type": "message_start"})
 
 
@@ -32,14 +33,13 @@ def tool_done(tool_id: str, output: str = "") -> UserMessage:
 
 
 def result(error: str = "") -> ResultMessage:
-    """The turn's end; with `error`, a failed one, saying that."""
+    """End of turn; failed with `error` if given."""
     return ResultMessage(subtype="error_during_execution" if error else "success", duration_ms=1, duration_api_ms=1,
                          is_error=bool(error), num_turns=1, session_id="s", result=error or None)
 
 
 class Hold:
-    """A point in the script the reply waits at until the test calls `release()`, or the CLI is interrupted (which
-    kills whatever was running). `reached` is set once the reply gets there."""
+    """Script step that blocks until `release()` or an interrupt; `reached` is set when the stream gets here."""
 
     def __init__(self) -> None:
         self.reached, self.released = asyncio.Event(), asyncio.Event()
@@ -50,14 +50,16 @@ class Hold:
 
 @dataclass
 class FakeCli:
-    """The CLI: each query starts the next of `turns` (shared by every FakeCli a brain starts), which
-    receive_response plays from where it last stopped, up to its result. An interrupt ends the turn there, with a
-    result, unless `interrupt_fails` says what it raises instead; `drain_hangs` keeps the stream open after one."""
+    """Each query pops the next of `turns`; receive_response resumes it up to its result.
+
+    An interrupt ends the turn with a result, unless `interrupt_fails` is raised instead; `drain_hangs` keeps the
+    stream open after an interrupt.
+    """
 
     turns: list[list] = field(default_factory=list)
     interrupt_fails: Exception | None = None
     drain_hangs: bool = False
-    sent: list = field(default_factory=list)  # each query's prompt; photos' messages as a list of their dicts
+    sent: list = field(default_factory=list)  # str prompts, or a list of message dicts for photos
     models: list[str] = field(default_factory=list)
     interrupts: int = 0
     connected: bool = False
@@ -122,8 +124,7 @@ class FakeCli:
 
 
 class Voice:
-    """A CliBrain on fake CLIs, each made with `cli` (FakeCli's settings) and playing the turns left in `turns`,
-    with what memory would log of each exchange kept in `logged`: (user, assistant, interrupted)."""
+    """CliBrain on FakeClis built with `cli`; `logged` holds memory's (user, assistant, interrupted) per exchange."""
 
     def __init__(self, monkeypatch, turns: list[list], **cli) -> None:
         from jarvis.brain import cli as brain_cli
@@ -143,16 +144,15 @@ class Voice:
 
     @property
     def cli(self) -> FakeCli:
-        """The CLI the brain has now, or had last."""
+        """Current or most recent CLI."""
         return self.clis[-1]
 
     async def say(self, words: str) -> str:
-        """The user says `words`: the brain's whole spoken reply."""
+        """Full spoken reply to `words`."""
         return "".join([chunk async for chunk in self.brain.respond(words)])
 
     async def talk_over(self, words: str, hold: Hold) -> str:
-        """The user says `words`, then speaks again once the reply reaches `hold`, which cuts it off as LiveKit
-        does (cancelling it): what was spoken of it by then."""
+        """Say `words`, then barge in (cancel, as LiveKit does) when the reply reaches `hold`; return what was said."""
         spoken: list[str] = []
 
         async def listen() -> None:

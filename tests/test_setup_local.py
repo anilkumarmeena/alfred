@@ -1,5 +1,4 @@
-"""Tests for the launchd services' plists (deploy/), as jarvis.setup_local installs them, and its other setup. Run with:
-make test"""
+"""Tests for jarvis.setup_local: launchd plists from deploy/, moving to new labels, and where projects live."""
 
 import os
 import plistlib
@@ -16,7 +15,7 @@ GUI = f"gui/{os.getuid()}"
 
 @pytest.fixture(autouse=True)
 def default_prefix(monkeypatch):
-    monkeypatch.setattr(config, "SERVICE_PREFIX", "com.jarvis")  # whatever this Mac's .env says
+    monkeypatch.setattr(config, "SERVICE_PREFIX", "com.jarvis")  # regardless of this Mac's .env
 
 
 @pytest.mark.parametrize("name", setup_local.SERVICES)
@@ -64,7 +63,7 @@ def test_without_node_the_tasks_path_just_skips_it(monkeypatch):
 
 @pytest.fixture
 def agents(tmp_path, monkeypatch):
-    """A LaunchAgents folder of the test's own, and launchctl calls recorded rather than made."""
+    """Isolated LaunchAgents folder; launchctl calls recorded, not made."""
     folder = tmp_path / "LaunchAgents"
     folder.mkdir()
     monkeypatch.setattr(setup_local, "LAUNCH_AGENTS", folder)
@@ -79,7 +78,7 @@ def agents(tmp_path, monkeypatch):
 
 
 def installed_as(folder: Path, label: str, root: Path = ROOT) -> Path:
-    """A plist as an older install wrote it: under `label`, logging into `root`'s logs."""
+    """Write a plist as an older install did: under `label`, logging into `root`'s logs."""
     plist = folder / f"{label}.plist"
     log = f"{root}/logs/{label.rpartition('.')[2]}.log"
     plist.write_bytes(plistlib.dumps({"Label": label, "StandardOutPath": log}))
@@ -102,7 +101,7 @@ def test_start_moves_an_install_to_the_new_labels(agents, capsys):
     old = [installed_as(folder, f"com.someone.jarvis.{name}") for name in setup_local.SERVICES]
     other = installed_as(folder, "com.other.jarvis.agent", Path("/Users/alex/other-jarvis"))
     setup_local.start_services()
-    assert calls[:4] == [("bootout", GUI, str(p)) for p in sorted(old)]  # the old ones stop before the new ones start
+    assert calls[:4] == [("bootout", GUI, str(p)) for p in sorted(old)]  # old ones stop before the new ones start
     assert calls[4:] == [("bootstrap", GUI, str(setup_local.installed(name))) for name in setup_local.SERVICES]
     assert not any(p.exists() for p in old) and other.exists()
     for name in setup_local.SERVICES:

@@ -1,8 +1,7 @@
-"""Long-term memory, the recent-conversation log and the full conversation log.
+"""Long-term memory, recent-conversation log and full daily conversation log.
 
-All plain markdown in the profile's data folder (jarvis.core.profile), so they can be read and edited by hand.
-Long-term memory, memory.md, is one line per fact, '- fact (YYYY-MM-DD)', under the headings '## User' and
-'## Environment', each section with a size limit; changing it rewrites the file in that shape.
+Plain Markdown in the profile's data folder, editable by hand. memory.md holds '- fact (YYYY-MM-DD)' lines under
+'## User' and '## Environment', each section size-limited; writes re-render the file in that shape.
 """
 
 import re
@@ -23,23 +22,21 @@ def read_memory() -> str:
     return path.read_text() if path.exists() else ""
 
 
-# memory.md has two sections, each under its own heading: what JARVIS knows about the user themself, and about their
-# machine, setup and projects. Each holds at most so many characters, counting whole lines with their dates, so the
-# prompt stays small and JARVIS has to keep it tidy rather than let it grow.
-SECTIONS = {"user": "User", "environment": "Environment"}  # the name callers give, then the heading in the file
+# Section limits in characters (whole lines, dates included) keep the prompt small and force consolidation
+SECTIONS = {"user": "User", "environment": "Environment"}  # caller key -> file heading
 LIMITS = {"user": 2000, "environment": 3000}
-FACT_MAX = 400  # characters in any one line, date included
-NEAR_FULL = 0.9  # from this share of its limit, saving to a section says to consolidate soon
+FACT_MAX = 400  # max chars per line, date included
+NEAR_FULL = 0.9  # fill ratio that triggers a "consolidate soon" hint
 _HEADING = re.compile(r"#+\s*(.*?)[\s#]*")
 
 
 def title(section: str) -> str:
-    """The section's name in the prompt and in what JARVIS is told."""
+    """Section title as shown in the prompt and tool results."""
     return f"About {profile.name()}" if section == "user" else f"{profile.name()}'s environment"
 
 
 def _section(section: str) -> str:
-    """The section named, checked."""
+    """Validate and normalise a section key."""
     key = str(section).strip().lower()
     if key not in SECTIONS:
         raise ValueError("section must be user or environment.")
@@ -47,8 +44,7 @@ def _section(section: str) -> str:
 
 
 def parse(text: str) -> dict[str, list[str]]:
-    """memory.md's fact lines by section, each as written but trimmed, leaving out blank lines and headings. Lines
-    under no heading, or under one that isn't a section's, count as User."""
+    """Trimmed fact lines by section. Lines under no or an unknown heading count as User."""
     found: dict[str, list[str]] = {s: [] for s in SECTIONS}
     section = "user"
     for line in text.splitlines():
@@ -62,17 +58,17 @@ def parse(text: str) -> dict[str, list[str]]:
 
 
 def render(found: dict[str, list[str]]) -> str:
-    """memory.md as written back: each section's heading, then its lines."""
+    """Render sections back to memory.md text."""
     return "\n".join(f"## {h}\n" + "".join(f"{line}\n" for line in found[s]) for s, h in SECTIONS.items())
 
 
 def facts() -> dict[str, list[str]]:
-    """memory.md's lines by section, as written, leaving out blank ones and headings."""
+    """Current memory.md fact lines by section."""
     return parse(read_memory())
 
 
 def usage(lines: list[str]) -> int:
-    """The characters a section's lines take, as its limit counts them."""
+    """Characters counted against a section's limit."""
     return sum(len(line) for line in lines)
 
 
@@ -81,13 +77,12 @@ def _used(section: str, lines: list[str]) -> str:
 
 
 def _listed(lines: list[str]) -> str:
-    """A section's lines numbered, each with its length: what's needed to consolidate it."""
+    """Numbered lines with lengths, to help consolidate."""
     return "\n".join(f"{n}. {line} [{len(line)}]" for n, line in enumerate(lines, 1)) or "(none)"
 
 
 class Full(ValueError):
-    """A section with no room for a change: its message lists the section's facts for consolidating them, and
-    `short` says it in a sentence."""
+    """Section over its limit. Message lists the facts for consolidation; `short` is a one-sentence version."""
 
     def __init__(self, message: str, short: str) -> None:
         super().__init__(message)
@@ -95,9 +90,9 @@ class Full(ValueError):
 
 
 def check_text(text: str, before: str | None = None) -> None:
-    """Raise ValueError, saying what to do, if `text` as memory.md breaks the limits: a line over FACT_MAX, or a
-    section over its size. Given the file as it was `before`, only what got worse counts, so a file already over a
-    limit (edited by hand) can still be brought back under it a step at a time."""
+    """Raise ValueError (Full for sections) if `text` breaks FACT_MAX or a section limit.
+
+    With `before`, only regressions count, so a hand-edited file already over a limit can shrink step by step."""
     new, old = parse(text), parse(before) if before is not None else None
     for s in SECTIONS:
         for line in new[s]:
@@ -118,7 +113,7 @@ def _write(found: dict[str, list[str]], before: str) -> None:
 
 
 def _saved(lead: str, section: str, lines: list[str]) -> str:
-    """What saving to a section says: where, how full it is now, and a nudge once it's nearly full."""
+    """Result message: section, fill level, and a consolidate hint when nearly full."""
     out = f"{lead} {title(section)} ({_used(section, lines)})."
     if usage(lines) >= NEAR_FULL * LIMITS[section]:
         out += " It's nearly full, so consolidate soon: merge or shorten facts with memory_replace."
@@ -126,16 +121,14 @@ def _saved(lead: str, section: str, lines: list[str]) -> str:
 
 
 def _line(fact: str) -> str:
-    """A fact as memory.md writes it, dated today, without invisible characters (jarvis.safety.scan). Raises
-    ValueError for an empty one."""
+    """Format a fact as a dated line, stripping invisible characters. ValueError if empty."""
     if not (fact := " ".join(scan.clean(fact).split())):
         raise ValueError("The fact is empty.")
     return f"- {fact} ({datetime.now():%Y-%m-%d})"
 
 
 def remember(fact: str, section: str) -> str:
-    """Add a fact at the end of a section. One the section has no room for is refused with ValueError, which lists
-    the section's facts so they can be consolidated first."""
+    """Append a fact to a section. Raises Full (listing the facts) if there's no room."""
     section, line = _section(section), _line(fact)
     before = read_memory()
     found = parse(before)
@@ -145,8 +138,7 @@ def remember(fact: str, section: str) -> str:
 
 
 def replace(old: str, fact: str) -> str:
-    """Rewrite the one line containing `old` (in any case) as the fact `fact`, dated today, in the same section and
-    place: for merging or shortening facts, or updating one rather than adding a near-duplicate."""
+    """Replace the single line containing `old` (case-insensitive) with `fact`, in place. For merging/updating."""
     if not (needle := " ".join(old.split()).lower()):
         raise ValueError("Say which memory to replace: text found in that line only.")
     line = _line(fact)
@@ -176,8 +168,7 @@ def forget(text: str) -> str:
 
 
 def replace_fact(line: str, new: str = "") -> str:
-    """Rewrite the one line of memory.md that reads exactly `line` as the fact `new`, dated today, or delete it if
-    `new` is empty. The control panel's edit and forget, which name a line exactly rather than by a few words."""
+    """Replace the line exactly equal to `line` with `new` (dated), or delete it if `new` is empty. Control panel."""
     before = read_memory()
     found = parse(before)
     if not (section := next((s for s in SECTIONS if line in found[s]), None)):
@@ -189,8 +180,7 @@ def replace_fact(line: str, new: str = "") -> str:
 
 
 def prompt_block() -> str:
-    """Long-term memory as the prompt shows it: each section with how full it is, so JARVIS knows when to tidy. Any
-    invisible characters a hand edit brought in are left out."""
+    """Memory for the prompt, with each section's fill level; invisible characters stripped."""
     found = facts()
     parts = [f"{title(s)} ({_used(s, found[s])} characters):\n" + ("\n".join(map(scan.clean, found[s])) or "(nothing yet)")
              for s in SECTIONS]
@@ -202,11 +192,11 @@ def read_recent() -> str:
     return path.read_text() if path.exists() else ""
 
 
-NOT_REPLIED, CUT_OFF = "(interrupted before replying)", " (interrupted)"  # how a cut-off reply is logged
+NOT_REPLIED, CUT_OFF = "(interrupted before replying)", " (interrupted)"  # markers for cut-off replies
 
 
 def _reply(assistant: str, interrupted: bool) -> str:
-    """JARVIS's side of an exchange as logged; a reply cut off by the user's next words says so."""
+    """Reply text as logged, marked if the user cut it off."""
     said = assistant.strip()
     if not interrupted:
         return said
@@ -214,9 +204,9 @@ def _reply(assistant: str, interrupted: bool) -> str:
 
 
 def log_exchange(user: str, assistant: str, approved: list[str] | tuple[str, ...] = (), interrupted: bool = False) -> None:
-    """Keep a short rolling transcript so a new session knows what was just said, and add the
-    exchange to the day's full log. `approved` are the commands the user's words said yes to;
-    `interrupted` means the user spoke again before the reply was done, so it was cut off."""
+    """Append to the rolling recent log (for new sessions) and the day's full log.
+
+    `approved`: commands the user's words approved. `interrupted`: the reply was cut off by the user."""
     now = datetime.now(profile.tz())
     reply = _reply(assistant, interrupted)
     entry = f"[{now:%Y-%m-%d %H:%M}] {profile.name()}: {user.strip()}\nJARVIS: {reply}\n\n"
@@ -230,7 +220,7 @@ def log_exchange(user: str, assistant: str, approved: list[str] | tuple[str, ...
 
 
 def log_announcement(text: str) -> None:
-    """Something JARVIS said between turns, such as a task update, for the day's full log."""
+    """Log something said between turns (e.g. a task update) to the day's log."""
     _log_day(datetime.now(profile.tz()), f"JARVIS (announced): {text.strip()}\n\n")
 
 
@@ -243,13 +233,12 @@ def _log_day(now: datetime, entry: str) -> None:
 
 
 def day_entries(path: Path) -> list[str]:
-    """A day file's entries, oldest first, each from its "[HH:MM] " on, its heading left out."""
+    """A day file's "[HH:MM] ..." entries, oldest first, without the heading."""
     return [e.strip() for e in _ENTRY_START.split(path.read_text(errors="replace")) if e.startswith("[")]
 
 
 def search_conversations(text: str = "", date: str = "", days: int = 0) -> str:
-    """Entries from the full log, newest first: those containing every word of `text` (any, if empty),
-    on `date` (YYYY-MM-DD) or in the last `days` days (every day, if neither)."""
+    """Log entries containing every word of `text`, newest first, on `date` or within `days` (else all days)."""
     if date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
         raise ValueError("date must be YYYY-MM-DD")
     folder = profile.current().conversations

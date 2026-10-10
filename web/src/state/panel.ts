@@ -1,7 +1,5 @@
-// The control panel beside the voice screen: tasks, to-dos, projects, past conversations (state/history.ts) and
-// settings, kept in signals and loaded from
-// jarvis.panel. It follows the task runner's events on /api/events, which pop up a task's request for a yes (the
-// approval card), refresh the task list and fill the activity list behind the bell.
+// Control panel state (tasks, to-dos, projects, history, settings) as signals, loaded via jarvis.panel.
+// Follows runner events on /api/events: approval card pop-ups, task list refreshes, the activity bell.
 import { computed, effect, signal } from "@preact/signals";
 import { panelCall, Unauthorized } from "../lib/api";
 import { build } from "../lib/build";
@@ -20,13 +18,12 @@ export interface Task {
   id: number; kind: string; title: string; project: string | null; status: string; created: number; updated: number;
   activity: string | null; question: string | null; spoken: string | null; changes: string | null; error: string | null;
   cost: number; seen: number; in_place: number; branch: string | null; worktree: boolean; requests_only: boolean;
-  pending_edits: number; job?: number | null; job_title?: string | null;  // the scheduled job it ran for
-  stalled?: Stalled | null;  // running, but no sign of progress for a while (jarvis.tasks.stall)
-  command?: CommandRun | null;  // kind "command": a shell job, run with no model (jarvis.tasks.command_jobs)
-  fixes?: number | null;  // a task fixing a command task that failed: that one
+  pending_edits: number; job?: number | null; job_title?: string | null;  // scheduled job it ran for
+  stalled?: Stalled | null;  // running with no progress for a while
+  command?: CommandRun | null;  // kind "command": shell job, no model
+  fixes?: number | null;  // id of the failed command task this one fixes
 }
-// How a command task runs and how it went: its folder, which attempt it is (a rerun after a fix is 2, `after` saying what
-// failed and what fixed it), the task fixing it, and the end of its output
+// A command task's run. attempt is 2+ for a rerun after a fix (`after` says what failed and what fixed it).
 export interface CommandRun {
   folder: string; attempt?: number; timeout_minutes?: number; outcome?: string; code?: number; fix_task?: number;
   after?: { task: number; fix: number; failed: string; fixed: string }; said?: string; seconds: number;
@@ -37,8 +34,8 @@ export interface LogLine { at: number; kind: string; text: string }
 export interface Edit { n: number; status: string; what: string; reason: string; needs_yes: string; result: string }
 export interface TaskDetail extends Task { instruction: string; summary: string | null; log: LogLine[]; edits: Edit[] }
 export interface Command { tool: string; command: string; folder: string; why: string }
-// What answering a request for longer would remember (jarvis.safety.remembered): why it can't be, or what each
-// breadth's rule covers ("exact" is empty when the command's words can't be pinned down)
+// What remembering an approval would cover: `never` = why it can't be; per-breadth rule text ("exact" empty if
+// the command can't be pinned down)
 export interface Remember { never: string; exact: string; kind: string }
 export type Scope = "once" | "session" | "always";
 export type Breadth = "exact" | "kind";
@@ -46,7 +43,7 @@ export interface Approval {
   id: number; task: number; created: number; expires: number; commands: Command[]; state: string; summary: string;
   title?: string; spoken?: string; remember?: Remember;
 }
-// A remembered approval: a kind of risky command that runs without asking, for a task's session or always
+// Remembered approval: commands it covers run without asking, for a task's session or always
 export interface Rule {
   id: number; scope: "session" | "always"; session: string | null; covers: string; who: string; example: string; via: string;
   created: number; uses: number; last_used: number | null;
@@ -57,16 +54,15 @@ export interface Project {
   git: string; changed: number | null;
 }
 export interface Account { label: string; email: string; note: string; chat: boolean; default: boolean; signed_in: boolean }
-// Long-term memory's lines by section, and how much of each section's limit they take (jarvis.state.memory)
+// Long-term memory lines by section, with per-section usage
 export type MemorySection = "user" | "environment";
 export interface Memory extends Record<MemorySection, string[]> {
   limits: Record<MemorySection, { used: number; max: number }> & { fact: number };
 }
-// The speech vocabulary (jarvis.state.vocabulary): words speech recognition expects, with what it's misheard them as,
-// and the project names it's also given
+// Speech vocabulary: expected words with their mishearings, plus project names fed to recognition
 export interface Word { word: string; heard: string[]; date: string; learned: boolean }
 export interface Vocabulary { entries: Word[]; projects: string[]; max: number; prompt: boolean }
-// JARVIS's skills (jarvis.skills): how-tos it loads when a request matches, some with scripts that need approving
+// Skills: how-tos loaded when a request matches; some have scripts that need approval
 export interface Skill {
   name: string; description: string; source: string; kind: string; state: string; enabled: boolean;
   needs_approval: boolean; added: string; created: number; updated: number; scripts?: string[]; from?: string;
@@ -74,13 +70,13 @@ export interface Skill {
 }
 export interface SkillReview {
   summary: string; risks: string[]; flags: string[]; verdict: string; partial: boolean; at: number; model: string;
-  current: boolean;  // it covers the skill's files as they are now
+  current: boolean;  // matches the skill's current files
 }
 export interface SkillDetail extends Skill {
   skill_md: string; cut: boolean; files: { path: string; size: number; script: boolean }[]; review: SkillReview | null;
 }
 export interface Device { id: string; kind: "web" | "app"; device: string; added: number | null; this: boolean }
-// A connection (an MCP server), as jarvis.panel shows it: which of its keys are set, never what they are
+// An MCP server connection. Secrets report set/unset only, never values
 export interface Server {
   name: string; label: string; enabled: boolean; reviewed: boolean; command: string; tools: Record<string, number>;
   tool_list: { name: string; access: string }[]; secrets: { var: string; set: boolean }[];
@@ -88,15 +84,15 @@ export interface Server {
   problem: string;
 }
 export interface Service { name: string; state: string; since?: number | null; exit?: number | null }
-// A preference: what Settings keeps ("" for none), what applies then, and what .env sets, which wins over both
+// A preference: Settings value ("" = none), default, and .env value (wins over both)
 export interface Preference { value: string; default: string; env: string }
 export type PrefKey = "name" | "timezone" | "voice" | "voice_speed" | "speech_gate" | "max_tasks" | "browser" | "browser_window"
   | "speaker_check" | "speaker_threshold" | "injection_check" | "injection_model";
-// A voiceprint, as jarvis.panel shows it: never the embedding. current: made by the speaker model in use
+// Voiceprint metadata (never the embedding). current: made by the speaker model in use
 export interface Voiceprint { name: string; seconds: number; consistency: number; via: string; created: number; current: boolean }
 export interface Voiceprints { owner: Voiceprint | null; model: boolean; passage: string; seconds: number }
 export interface Prefs { preferences: Record<PrefKey, Preference>; voices: string[] }
-// The heartbeat's sources, as jarvis.tasks.heartbeat describes them: each setting with what applies now and its default
+// Heartbeat sources, each setting with its current value and default
 export interface SourceSetting { key: string; label: string; default: string; value: string }
 export interface HeartbeatSource {
   id: string; kind: string; title: string; about: string; on: boolean; ready: boolean; added: string; settings: SourceSetting[];
@@ -104,9 +100,9 @@ export interface HeartbeatSource {
 export interface SourceKind { name: string; title: string; about: string; settings: SourceSetting[] }
 export interface Heartbeat { sources: HeartbeatSource[]; kinds: SourceKind[] }
 export interface System { services: Service[]; vault: { state: string; secrets?: number; problem?: string } }
-// A login, as jarvis.panel shows it: never its passcode. this: the one this device connects with
+// A login (never its passcode). this: the one this device uses
 export interface Login { name: string; created: number; used: number | null; this: boolean }
-// One of JARVIS's own keys: where it comes from ("" when it isn't set), never what it is. required: can't be cleared
+// A JARVIS key: its source ("" = unset), never its value. required: can't be cleared
 export interface JarvisKey { name: string; label: string; hint: string; required: boolean; source: "vault" | ".env" | "file" | "" }
 export interface Access { logins: Login[]; keys: JarvisKey[] }
 export interface Activity { id: number; at: number; text: string; kind: "ok" | "bad" | "warn" | "run"; task: number | null }
@@ -114,17 +110,16 @@ export interface Activity { id: number; at: number; text: string; kind: "ok" | "
 export const ACTIVE = ["queued", "running", "waiting"];
 const WIDE = matchMedia("(min-width: 900px)");
 
-// ── Where the panel is ──────────────────────────────────────────
+// ── Layout ──────────────────────────────────────────────────────
 
-export const wide = signal(WIDE.matches);  // desktop: the panel is a column beside the voice screen
+export const wide = signal(WIDE.matches);  // desktop: panel is a column beside the voice screen
 WIDE.addEventListener("change", () => { wide.value = WIDE.matches; });
-export const roomy = signal(false);  // the desktop's panel is wide enough for a list and the open item side by side
-export const sideOff = signal(storage.get(SIDE_KEY) === "off");  // desktop: the panel column is hidden
-export const sheet = signal<"closed" | "full" | "half">("closed");  // phone: the slide-up sheet
+export const roomy = signal(false);  // desktop panel fits list and open item side by side
+export const sideOff = signal(storage.get(SIDE_KEY) === "off");  // desktop: panel column hidden
+export const sheet = signal<"closed" | "full" | "half">("closed");  // phone: slide-up sheet
 export const section = signal<Section>("tasks");
-export const item = signal<string | null>(null);  // the open task's id, or the settings page
-export const shown = computed(() => !!passcode.value && !loginShown.value);  // the panel needs the passcode
-// Whether the panel is on screen at all
+export const item = signal<string | null>(null);  // open task id, job item or settings page
+export const shown = computed(() => !!passcode.value && !loginShown.value);
 export const visible = computed(() => shown.value && (wide.value ? !sideOff.value : sheet.value !== "closed"));
 
 export function setSideOff(off: boolean) {
@@ -132,7 +127,7 @@ export function setSideOff(off: boolean) {
   storage.set(SIDE_KEY, off ? "off" : null);
 }
 
-// Open a section (and an item in it): the sheet on a phone, the panel column on a desktop.
+// Open a section (and optionally an item), revealing the sheet or column.
 export function go(sec: Section, open: string | null = null) {
   section.value = sec;
   item.value = open;
@@ -147,7 +142,7 @@ export function openTask(id: number) {
   go("tasks", String(id));
   flash.value = { id, at: Date.now() };
 }
-export const flash = signal<{ id: number; at: number } | null>(null);  // a task card to draw the eye to
+export const flash = signal<{ id: number; at: number } | null>(null);  // task card to highlight
 
 export function openSchedule(id: number) { go("tasks", jobItem(id)); }
 
@@ -157,9 +152,9 @@ export const tasks = signal<Task[]>([]);
 export const approvals = signal<Approval[]>([]);
 export const runnerDown = signal("");
 export const detail = signal<TaskDetail | null>(null);
-export const schedules = signal<Schedule[]>([]);  // jobs still to run, active or paused, soonest first
+export const schedules = signal<Schedule[]>([]);  // pending jobs (active or paused), soonest first
 export const jobDetail = signal<ScheduleDetail | null>(null);
-export const quiet = signal<Quiet | null>(null);  // do not disturb, and Claude's usage, as the jobs list and Preferences show them
+export const quiet = signal<Quiet | null>(null);  // do-not-disturb and Claude usage
 export const todos = signal<Todo[] | null>(null);
 export const projects = signal<Project[] | null>(null);
 export const memory = signal<Memory | null>(null);
@@ -176,13 +171,13 @@ export const rules = signal<Rule[] | null>(null);
 export const voiceprints = signal<Voiceprints | null>(null);
 export const heartbeat = signal<Heartbeat | null>(null);
 
-// What waits on the user: requests for a yes, and tasks' own questions
+// Waiting on the user: approval requests and task questions
 export const questions = computed(() => tasks.value.filter((t) => t.status === "waiting" && !t.requests_only));
 export const needYou = computed(() => approvals.value.length + questions.value.length);
-// Finished since the user last looked
+// Finished and not yet seen
 export const unseen = computed(() => tasks.value.filter((t) => !t.seen && !ACTIVE.includes(t.status)));
 
-// A panel action, with its failure shown as a toast; null when it failed.
+// Run a panel action; on failure toast the error and return null.
 export async function act<T = any>(action: string, fields: Record<string, unknown> = {}, done?: string): Promise<T | null> {
   try {
     const result = await panelCall<T>(action, fields);
@@ -232,7 +227,7 @@ export async function loadSchedule(id: number) {
   }
 }
 
-// Pause, resume or cancel a job; the list comes back changed.
+// Pause, resume or cancel a job; the server returns the updated list.
 export async function changeSchedule(action: "pause" | "resume" | "cancel", job: Schedule): Promise<boolean> {
   const done = { pause: `Paused ${job.title}`, resume: `Resumed ${job.title}`, cancel: `Cancelled ${job.title}` }[action];
   const r = await act<Schedule[]>(`schedule_${action}`, { id: job.id }, done);
@@ -242,7 +237,7 @@ export async function changeSchedule(action: "pause" | "resume" | "cancel", job:
   return true;
 }
 
-// Do not disturb: on for `minutes`, until a time ("15:00"), or until resumed (neither); off with null.
+// Do not disturb: for `minutes`, `until` a time ("15:00"), or indefinitely (neither); null turns it off.
 export async function setHold(to: { minutes?: number; until?: string } | null): Promise<boolean> {
   const r = await act<Quiet>(to ? "hold_on" : "hold_off", to ?? {}, to ? undefined : "Do not disturb is off");
   if (!r) return false;
@@ -272,20 +267,19 @@ const SETTINGS: Record<SettingsItem, () => Promise<void>> = {
   access: async () => { access.value = await act("access") ?? access.peek(); },
   keys: async () => {},
 };
-// What the Settings list's own lines show: the system's health, the connections, how many skills are on, the
-// voice, voice ID and do not disturb, how many heartbeat sources are on, and the logins and keys
+// Loaded whenever Settings opens, for the summaries on the list itself
 const LISTED: SettingsItem[] = ["system", "conn", "skills", "prefs", "heartbeat", "access"];
 
 async function loadPrefs() { prefs.value = await act<Prefs>("preferences") ?? prefs.peek(); }
 
-// What a section shows, fetched afresh when it opens.
+// Fetch a section's data afresh.
 export function load(sec: Section, open: string | null = item.peek()) {
   if (sec === "tasks") loadTasks();
   else if (sec === "todos") act<Todo[]>("todos").then((r) => { if (r) todos.value = r; });
   else if (sec === "projects") act<Project[]>("projects").then((r) => { if (r) projects.value = r; });
   else if (sec === "history") {
     loadDays();
-    if (open && day.peek()?.date === open) loadDay(open);  // a day already shown, refreshed; DayView loads a new one
+    if (open && day.peek()?.date === open) loadDay(open);  // refresh the shown day; DayView loads new ones
   }
   else {
     for (const k of LISTED) SETTINGS[k]();
@@ -293,7 +287,7 @@ export function load(sec: Section, open: string | null = item.peek()) {
   }
 }
 
-// The user has looked at the tasks section: finished tasks there count as heard about.
+// Viewing the tasks section marks finished tasks as seen.
 let seenTimer: ReturnType<typeof setTimeout> | undefined;
 effect(() => {
   const looking = visible.value && section.value === "tasks", ids = unseen.value.map((t) => t.id);
@@ -304,13 +298,13 @@ effect(() => {
   }, 2500);
 });
 
-// ── The approval card ───────────────────────────────────────────
+// ── Approval card ───────────────────────────────────────────────
 
-export const ask = signal<number | null>(null);  // the request on the card
-export const askGuard = signal(false);  // its buttons wait a moment, so a tap meant for something else can't answer
-const tucked = new Set<number>();  // put off with Later: they wait in Tasks, and don't pop up again
+export const ask = signal<number | null>(null);  // approval id on the card
+export const askGuard = signal(false);  // briefly disables buttons so a stray tap can't answer
+const tucked = new Set<number>();  // deferred with Later: stay in Tasks, never pop up again
 let guardTimer: ReturnType<typeof setTimeout> | undefined, tuckTimer: ReturnType<typeof setTimeout> | undefined;
-const TUCK_AFTER = 60_000;  // left alone this long, the card moves into Tasks
+const TUCK_AFTER = 60_000;  // unanswered card moves into Tasks after this
 
 export function popAsk(id: number) {
   if (tucked.has(id)) return;
@@ -330,8 +324,7 @@ export function tuck() {
 
 const APPROVED: Record<Scope, string> = { once: "Approved once", session: "Approved for this task", always: "Approved, and remembered" };
 
-// A yes or no to a request. A yes can go further (`remember`): for the task's session, or always at a breadth whose
-// rule the card showed beside the button.
+// Approve or deny. A yes may be remembered for the task's session or always, at the given breadth.
 export async function answer(id: number, yes: boolean, remember: Scope = "once", breadth: Breadth = "exact") {
   if (ask.peek() === id) ask.value = null;
   const a = approvals.peek().find((x) => x.id === id);
@@ -353,15 +346,14 @@ export async function forgetRule(rule: Rule) {
   if (r) rules.value = r;
 }
 
-// ── Activity, toasts, the palette ───────────────────────────────
+// ── Activity, toasts, palette ───────────────────────────────────
 
-// The bell: what JARVIS did lately, kept on the Mac (jarvis.state.activity) and shared by every device. Which entries
-// this device has seen is its own: the newest id it showed, in localStorage.
+// Activity bell: shared across devices, stored on the Mac. Read state is per device (newest seen id in localStorage).
 export const activity = signal<Activity[]>([]);
 export const activityOpen = signal(false);
 const seenActivity = signal(Number(storage.get(ACTIVITY_KEY)) || 0);
 export const activityUnread = computed(() => (activity.value[0]?.id ?? 0) > seenActivity.value);
-const MAX_ACTIVITY = 200;  // as many as the Mac lists at once (activity.MOST)
+const MAX_ACTIVITY = 200;  // matches the server's list limit
 
 function sawActivity() {
   const newest = activity.peek()[0]?.id ?? 0;
@@ -383,7 +375,7 @@ function addActivity(entry: Activity) {
   if (activityOpen.peek()) sawActivity();
 }
 
-// Over everything, the panel included. An action (e.g. Open Settings) gives it a button and more time.
+// Toast over everything. An action adds a button and a longer timeout.
 export interface ToastAction { label: string; run: () => void }
 export const toastText = signal("");
 export const toastAction = signal<ToastAction | null>(null);
@@ -397,11 +389,11 @@ export function toast(text: string, action?: ToastAction) {
 
 export const paletteOpen = signal(false);
 
-// ── The runner's events ─────────────────────────────────────────
+// ── Runner events ───────────────────────────────────────────────
 
 let detailTimer: ReturnType<typeof setTimeout> | undefined;
 
-function refreshDetail(id: number) {  // at most once a second, however many events arrive
+function refreshDetail(id: number) {  // debounced to 1 s
   if (item.peek() !== String(id) || section.peek() !== "tasks") return;
   clearTimeout(detailTimer);
   detailTimer = setTimeout(() => loadTask(id), 1000);
@@ -410,7 +402,7 @@ function refreshDetail(id: number) {  // at most once a second, however many eve
 function handle(event: any) {
   switch (event.type) {
     case "hello":
-      build.served(event.build);  // a newer build: the page reloads, or will once the voice session ends
+      build.served(event.build);  // newer build: reload now or after the voice session
       loadTasks();
       loadActivity();
       break;
@@ -429,12 +421,12 @@ function handle(event: any) {
       loadTasks();
       if (event.task) refreshDetail(event.task.id);
       break;
-    case "heartbeat":  // also how a reminder, or a watch's finding, is said: its job's next run has moved on
+    case "heartbeat":  // also sent for reminders and watch findings: the job's next run moved
       if (section.peek() === "tasks") loadTasks();
       break;
     case "progress":
       if (event.task) {
-        // progress is a sign of life, so a task that seemed stuck no longer does
+        // progress clears a stall
         tasks.value = tasks.peek().map((t) => (t.id === event.task.id ? { ...t, activity: event.task.activity, stalled: null } : t));
         refreshDetail(event.task.id);
       }
@@ -445,11 +437,10 @@ function handle(event: any) {
   }
 }
 
-// Follow /api/events while there's a passcode, reconnecting with a growing pause when it drops (lib/retry.ts), and at
-// once when the page comes back on screen or online.
+// Follow /api/events while there's a passcode. Reconnect with backoff, or immediately on return to screen or network.
 let following = false;
 const waiting = napper();
-const SILENT_MS = 60000;  // jarvis.web pings every 25 s: this long without a word, the stream is dead (a sleep, a network change)
+const SILENT_MS = 60000;  // server pings every 25 s; silence this long = dead stream (sleep, network change)
 const STEADY_MS = 10000;
 async function follow() {
   if (following) return;
@@ -479,8 +470,7 @@ async function follow() {
         for (const line of lines) if (line.trim()) { try { handle(JSON.parse(line)); } catch {} }
       }
     } catch {} finally { clearTimeout(quiet); quit.abort(); }
-    // A stream that held a while was a good one: start the pauses over. One that ends at once (the runner down)
-    // waits longer each time.
+    // A stream that held resets the backoff; one that fails at once (runner down) backs off further.
     if (Date.now() - opened > STEADY_MS) attempt = 0;
     await waiting.nap(backoff(attempt++));
   }
@@ -488,13 +478,13 @@ async function follow() {
 }
 
 effect(() => { if (passcode.value) { follow(); loadTasks(); } });
-// Back on screen: whatever happened meanwhile
+// Back on screen: catch up
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && passcode.peek()) { waiting.wake(); load(section.peek()); }
 });
 window.addEventListener("online", () => waiting.wake());
 
-// ── Time, as the panel says it ──────────────────────────────────
+// ── Time formatting ─────────────────────────────────────────────
 
 export function ago(at: number | null | undefined, now = Date.now()): string {
   if (!at) return "";
@@ -516,7 +506,7 @@ export function hhmm(at: number): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-// 11:42 today, Mon 11:42 earlier in the week
+// "11:42" today, "Mon 11:42" otherwise
 export function when(at: number): string {
   const d = new Date(at * 1000), today = new Date().toDateString() === d.toDateString();
   return today ? hhmm(at) : `${d.toLocaleDateString(undefined, { weekday: "short" })} ${hhmm(at)}`;

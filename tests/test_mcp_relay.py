@@ -1,9 +1,4 @@
-"""The relay between a Claude session and each connection (jarvis.integrations.mcp_relay): tools marked read-only as
-JARVIS sorted them, so the CLI runs reads side by side; a tool the server runs as an MCP task called as one and
-followed to its end; progress carried; a call cancelled at the server when the CLI cancels it; and, with a wait, a slow
-call carried on in the background as a connection task of the runner's, said when it ends and cancelled when it's
-stopped. Then the runner's side of connection tasks (jarvis.tasks.connection_jobs), the read-only marking of JARVIS's
-own tools, and one real local server relayed end to end. Run with: make test"""
+"""Tests for mcp_relay and connection_jobs: read-only marks, MCP tasks, progress, cancelling, background calls."""
 
 import asyncio
 import json
@@ -27,12 +22,12 @@ from jarvis.tasks import client, connection_jobs, events as task_events, runner
 SERVER = Server("acme", "Acme", tools={"find": Tool("read"), "report": Tool("read"), "post": Tool("write", "post")})
 LISTED = [{"name": "find", "annotations": {"title": "Find"}},
           {"name": "report", "execution": {"taskSupport": "optional"}},
-          {"name": "post", "annotations": {"readOnlyHint": True}},  # the server's marking: JARVIS sorted it a write
+          {"name": "post", "annotations": {"readOnlyHint": True}},  # server: read-only; JARVIS sorted it a write
           {"name": "other"}]
 
 
 class FakeServer:
-    """The server's side: answers the relay's messages, holding each tools/call until `release`d."""
+    """Fake MCP server: answers relay messages, holding each tools/call until `release`d."""
 
     def __init__(self, relay: Relay, tasks: bool = False, statuses: tuple[str, ...] = ("working", "completed")) -> None:
         self.relay, self.tasks, self.statuses = relay, tasks, list(statuses)
@@ -95,7 +90,7 @@ class FakeRunner:
 
 
 def relay(wait: float = 0.0, runner_=None, **server) -> tuple[Relay, FakeServer, list[dict]]:
-    """A relay with the CLI's side kept in a list."""
+    """A relay whose CLI-side output is collected in a list."""
     said: list[dict] = []
 
     async def to_cli(m):
@@ -138,8 +133,8 @@ def test_tools_are_marked_read_only_as_jarvis_sorted_them_and_tasks_are_kept_fro
     listed = {t["name"]: t for t in said[1]["result"]["tools"]}
     assert listed["find"]["annotations"] == {"title": "Find", "readOnlyHint": True}
     assert listed["report"]["annotations"] == {"readOnlyHint": True} and listed["report"]["execution"] == {}
-    assert listed["post"]["annotations"] == {"readOnlyHint": False}  # held for a yes, so one at a time
-    assert "annotations" not in listed["other"]  # not sorted: refused anyway
+    assert listed["post"]["annotations"] == {"readOnlyHint": False}  # held for approval, so one at a time
+    assert "annotations" not in listed["other"]  # unsorted: refused anyway
     assert r.tasks and r.task_tools == {"report"}
 
 
@@ -233,7 +228,7 @@ def test_a_slow_call_carries_on_as_a_task_said_when_it_ends():
         answered = list(said)
         await asyncio.sleep(0.05)  # the runner hears its progress
         server.release.set()
-        await r.finish()  # the CLI gone: what's in the background ends first
+        await r.finish()  # CLI gone: background work ends first
         return answered
 
     answered = asyncio.run(main())
@@ -331,13 +326,13 @@ def test_the_launcher_relays_a_local_server_and_goes_when_the_cli_does(tmp_path)
             {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, call(2))
 
     async def main():
-        launcher = mcp_servers.launcher("echo", "--wait=5")  # as the voice brain's CLI starts it, detached
+        launcher = mcp_servers.launcher("echo", "--wait=5")  # detached, as the voice brain's CLI starts it
         proc = await asyncio.create_subprocess_exec(
             launcher["command"], *launcher["args"], cwd=config.ROOT, env=os.environ | launcher["env"],
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
         proc.stdin.write(b"".join(json.dumps(m).encode() + b"\n" for m in sent))
         got = [json.loads(await asyncio.wait_for(proc.stdout.readline(), 20)) for _ in range(3)]
-        proc.stdin.close()  # the CLI goes: with nothing in the background, so does the relay
+        proc.stdin.close()  # CLI exits: with nothing in the background, the relay exits too
         await asyncio.wait_for(proc.wait(), 20)
         return got, proc.returncode
 
@@ -352,7 +347,7 @@ def test_the_launcher_relays_a_local_server_and_goes_when_the_cli_does(tmp_path)
 
 @pytest.fixture
 def summed(monkeypatch, tmp_path):
-    """A task database of the test's own, the summing up scripted, and no Mac notification or push."""
+    """Isolated task database, scripted summing up, no Mac notification or push."""
     use_profile(monkeypatch, tmp_path)
     asked = []
 
@@ -404,7 +399,7 @@ def test_a_connection_task_whose_relay_is_gone_fails_and_survives_a_runner_resta
         r = runner.Runner()
         lost = r.start_connection("Acme find", "mcp__acme__find {}", 2 ** 22 + 12345)  # no such process
         kept = r.start_connection("Acme report", "mcp__acme__report {}", os.getpid())
-        assert runner.Runner().store.get(kept["id"])["status"] == "running"  # a restart leaves the relay's call be
+        assert runner.Runner().store.get(kept["id"])["status"] == "running"  # a restart leaves the relay's call alone
         assert connection_jobs.alive(kept) and not connection_jobs.alive(lost)
         r.check_connections()
         assert r.store.get(lost["id"])["status"] == "failed" and r.store.get(kept["id"])["status"] == "running"

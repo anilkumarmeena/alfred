@@ -1,27 +1,14 @@
-"""What JARVIS makes of shell commands, and of the yes or no it hears about them. Shared by the voice
-shell (jarvis.safety.shell) and by background tasks' host commands (jarvis.tasks.worker, jarvis.safety.host).
+"""Shell-command risk rules and spoken yes/no parsing, shared by the voice shell and background tasks.
 
-  risky(command)      why it needs the user's yes first ('deletes files', 'installs software', ...), or ''
-  risky(command, own) the same for a background task, for which deleting its own files and stopping its own
-                      processes (Own) needs no yes
-  describe(command)   that reason with the program it comes from, for speaking: 'installs software (brew install)'
-  refused(command)    why a task may never run it, even with a yes (secrets, JARVIS's own controls, sudo), or ''
-  own_sandbox(command)  whether it's only a package install that sandboxes its own steps (brew install), so a task's
-                      approved one runs outside the host profile
-  names_secret(text)  whether text names a secret: .env files, keys, logins, secrets folders
-  reads_environment(command)  whether it reads other processes' environments (ps eww), where keys are
-  secret_path(path)   whether a (resolved) file path is one
-  approves(said), refuses(said)   whether a spoken reply is a clear yes, or a clear no, from word lists; a reply
-                      they can't read goes to a short model call (jarvis.safety.consent)
-  tells_approve(said), tells_deny(said)   whether the user's words plainly tell JARVIS to approve, or turn down,
-                      a task's waiting command, later in the conversation (tools.tasks.task_approve)
-  ordered(said, command)  whether the user's own words order just what a risky command does ("push it" for git
-                      push), which is their go-ahead for it; agreed_to(asked, said, command) the same for a clear yes
-                      to JARVIS's question asking to do it
-  same_risk(a, b)     whether two command lines do the same risky things in the same folders, so a yes to one does
+  risky / describe        why a command needs a yes ('deletes files'), or ''; `own` exempts a task's own files/pids
+  refused                 why a task may never run it, even with a yes (secrets, JARVIS controls, sudo)
+  own_sandbox             a bare brew/port install, approved to run outside the host profile
+  names_secret / secret_path / reads_environment   secret detection, refused even with a yes
+  approves / refuses / yes_scope                   clear yes / no / how far a yes goes, from word lists
+  tells_approve / tells_deny / ordered / agreed_to the user's words as a later answer or a direct order
+  same_risk               two lines do the same risky things in the same folders
 
-The secret lists here are the one copy: the voice shell's deny rules, the task file tools' checks and
-the host profile (jarvis.safety.host) are all built from them.
+The secret lists here are the single source for the shell deny rules, task file checks and the host profile.
 """
 
 import fnmatch
@@ -36,33 +23,33 @@ from jarvis.core.config import CLAUDE_CONFIG_DIR, DATA_DIR, ROOT, SECRETS_DIR
 
 # ── Secrets ─────────────────────────────────────────────────────
 
-# In the home folder: logins, keys and the keychains
+# Home-folder logins, keys and keychains
 HOME_SECRETS = ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/gh", "~/.netrc", "~/.docker/config.json",
                 "~/Library/Keychains", "~/.git-credentials", "~/.npmrc", "~/.pypirc"]
-# JARVIS's own: its keys and tokens (every profile's sign-ins are inside secrets/), its Claude login (with the voice
-# session logs), its .env, and the owner's web browser profile, whose cookies keep their logins
-# (jarvis.integrations.browser; jarvis.core.profile.Profile.browser_profile)
+# JARVIS's own: keys and sign-ins, Claude login (and voice logs), .env, and the browser profile (cookies = logins)
 JARVIS_SECRETS = [SECRETS_DIR, Path(CLAUDE_CONFIG_DIR), ROOT / ".env", DATA_DIR / "browser/profile"]
-# Folders and files that are secret wherever they are
+# Secret wherever they appear
 SECRET_DIRS = {"secrets", ".ssh", ".aws", ".gnupg", "Keychains"}
 
 
 def secret_file_names(char: str = ".", pem: bool = True) -> str:
-    """The secret file names as one regex alternation. `char` is what a wildcard character matches: '[^/]' keeps
-    a match within one path component. `pem=False` leaves out .pem files, for callers that treat them apart."""
+    """Secret file names as one regex alternation.
+
+    `char` is what a wildcard matches ('[^/]' stays within one path component). `pem=False` omits .pem files.
+    """
     keys = "pem|key" if pem else "key"
     return (rf"\.env(\.{char}*)?|{char}+\.({keys}|p8|p12|pfx|jks|keystore)|id_(rsa|dsa|ecdsa|ed25519)|\.netrc|\.npmrc"
             rf"|\.pypirc|\.git-credentials|credentials(\.json)?|{char}*client_secret{char}*\.json|tokens?\.json")
 
 
 SECRET_FILES = re.compile(secret_file_names(), re.IGNORECASE)
-# The same files as glob patterns, for Claude Code's Read deny rules
+# Same files as globs, for Claude Code's Read deny rules
 SECRET_PATTERNS = ["**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/*.p8", "**/*.p12", "**/*.pfx", "**/id_rsa",
                    "**/id_dsa", "**/id_ecdsa", "**/id_ed25519", "**/.netrc", "**/.npmrc", "**/.pypirc",
                    "**/.git-credentials", "**/credentials", "**/credentials.json", "**/*client_secret*.json",
                    "**/token.json", "**/tokens.json"]
 
-# A command whose text names one of these is refused even with a yes: outside a sandbox, no deny rule covers it
+# Naming one of these refuses a command even with a yes: outside a sandbox no deny rule covers it
 _SECRET_NAMES = re.compile(
     "|".join(re.escape(str(p)) for p in JARVIS_SECRETS)
     + "|" + "|".join(re.escape(p.removeprefix("~/")) for p in HOME_SECRETS)
@@ -72,15 +59,14 @@ _SECRET_NAMES = re.compile(
 
 
 def names_secret(text: str) -> bool:
-    """Whether a command (or any text) names a secret: a secrets folder, a .env file, a key or a login."""
+    """Whether text names a secret: a secrets folder, .env file, key or login."""
     return bool(_SECRET_NAMES.search(text))
 
 
-# Other processes' environments hold their keys: an MCP server gets its token there (jarvis.integrations.mcp_launch). Only the
-# setuid /bin/ps can read another process's environment on macOS (the kernel shows a process only its own), and
-# Linux keeps it in /proc/<pid>/environ.
+# Other processes' environments hold keys (MCP servers get tokens there). On macOS only setuid /bin/ps can read
+# them; Linux exposes /proc/<pid>/environ.
 _ENV_TEXT = re.compile(r"/proc/[^\s/]+/environ|\bprocargs|\blaunchctl\s+procinfo\b")
-_PS_VALUES = set("oOpgGtuUMN")  # ps options that take a value, after which a cluster's letters stop being flags
+_PS_VALUES = set("oOpgGtuUMN")  # ps options taking a value; later letters in the cluster aren't flags
 
 
 def _ps_shows_env(args: list[str]) -> bool:
@@ -95,8 +81,7 @@ def _ps_shows_env(args: list[str]) -> bool:
 
 
 def reads_environment(command: str) -> bool:
-    """Whether a command reads other processes' environments (ps eww, ps -E, /proc/<pid>/environ, ...), where
-    MCP servers' tokens are. Refused even with a yes, like secrets."""
+    """Whether a command reads other processes' environments (ps eww, /proc/<pid>/environ). Refused like secrets."""
     if _ENV_TEXT.search(command):
         return True
     for argv in _simple_commands(command) or []:
@@ -112,7 +97,7 @@ def reads_environment(command: str) -> bool:
 
 
 def secret_path(path: Path) -> bool:
-    """Whether `path` (resolved) is a secret: in a secrets folder or a login's folder, a .env file, a key or a credential."""
+    """Whether a resolved path is a secret: in a secrets/login folder, a .env file, key or credential."""
     if any(path.is_relative_to(Path(d).expanduser().resolve()) for d in (*JARVIS_SECRETS, *HOME_SECRETS)):
         return True
     return bool(SECRET_DIRS.intersection(path.parts)) or bool(SECRET_FILES.fullmatch(path.name))
@@ -120,9 +105,8 @@ def secret_path(path: Path) -> bool:
 
 # ── What counts as a yes, or a no ───────────────────────────────
 
-# A reply is a yes only if, once filler is dropped, it's made up entirely of these phrases.
-# Anything else (a question, a no, a "but", a change of subject) is not a yes by these lists, which are only the fast
-# path: what they can't read goes to the model (jarvis.safety.consent), unless it's a clear no here.
+# A yes only if, minus filler, it consists entirely of these phrases. Fast path only: anything else that isn't a
+# clear no goes to the model (jarvis.safety.consent).
 _AFFIRMATIVE = sorted(
     (tuple(p.split()) for p in """
     yes | yeah | yea | yah | ya | yep | yup | sure | sure thing | ok | okay | okey | okie dokie | alright | all right
@@ -146,27 +130,27 @@ _AFFIRMATIVE = sorted(
     key=len,
     reverse=True,
 )
-_ACTION = re.compile(  # "yes, merge it": an action on what was asked about counts as "go"
+_ACTION = re.compile(  # "yes, merge it" counts as "go"
     r"\b(let's |let it |you can )?(run|merge|do|install|execute|apply|start|restart|launch|open|try|send|fetch|pull|push"
     r"|update|upgrade|kill|commit|deploy|build|delete|remove|stop|allow|render|close|quit|clean|clear|end|wipe|trash|shut)"
     r" (it|them|that|those|this|these|both|all)( up| down| off)?\b"
 )
-# "let's close the hidden Chrome": the same, naming what it acts on in a few plain words, with the verbs a risky
-# command's question is about. Never with "for", "from", "my" and the like, which make it a request of its own.
+# "let's close the hidden Chrome": same, naming the object in a few words. "for", "from", "my" etc. make it a new
+# request instead.
 _ACTION_ON = re.compile(
     r"\b(let's |let it |you can )?(delete|remove|kill|stop|close|quit|clean up|clear|wipe|trash|shut down|install|push"
     r"|merge|run|restart|end) the( (?!(for|from|to|on|in|at|with|my|me|your|about|of|and|then|instead)\b)[a-z']+){1,3}\b"
 )
-# Phrases with a "no" or "not" in them that mean yes
+# Contain "no"/"not" but mean yes
 _YES_IDIOMS = re.compile(r"\b(why not|no problem|not a problem|no worries|no objection|no objections)\b")
-# Sounds speech recognition spells with a hyphen: "Mm-hmm" and "uh-huh" are a yes, "uh-uh" and "mm-mm" a no
+# Hyphenated speech-recognition sounds: "mm-hmm"/"uh-huh" yes, "uh-uh"/"mm-mm" no
 _YES_SOUNDS = re.compile(r"\b(m+-?h+m+|uh-huh)\b")
 _NO_SOUNDS = re.compile(r"\b(uh-uh|mm+-mm+|nuh-uh|unh-unh)\b")
 _FILLER = set("um umm uh uhh uhm er erm ah oh hmm mm well so and then now just sir jarvis please thanks thank you".split())
 _REFUSAL = set("""no nope nah not don't dont never stop wait hold hang cancel abort forget skip leave later instead
 rather but except only if unless actually first before why what how when where who which isn't shouldn't won't
 can't cannot""".split())
-# A clear no: an utterance that opens with one of these (after filler), or a short one containing one
+# A clear no: opens with one of these (after filler), or is short and contains one
 _NO_OPENERS = [tuple(p.split()) for p in """
     no | nope | nah | don't | dont | do not | never | never mind | nevermind | cancel | abort | stop | negative
     | forget it | forget that | not now | not yet | not that | leave it | skip it | hold off | i said no | absolutely not
@@ -186,9 +170,10 @@ def _words(said: str) -> list[str]:
 
 
 def approves(said: str) -> bool:
-    """Whether a spoken reply is a clear yes: "mm-hmm", "I'm sure", "yeah, let's close the hidden Chrome, that's
-    fine". It comes from speech recognition, so it may carry punctuation, filler or "O.K."; anything short of a clear
-    yes isn't one, and nor is a lone "thank you" or "bye"."""
+    """Whether a transcribed reply is a clear yes ("mm-hmm", "yeah, let's close the hidden Chrome").
+
+    Tolerates punctuation, filler and "O.K."; anything less than a clear yes, or a lone "thank you", is not one.
+    """
     if "?" in said:
         return False
     words = _YES_IDIOMS.sub("yes", " ".join(_words(said))).split()
@@ -207,8 +192,7 @@ def approves(said: str) -> bool:
 
 
 def refuses(said: str) -> bool:
-    """Whether a spoken reply is clearly a no, which drops any question still open. A "wait", a
-    question or a change of subject isn't: the question stays open for a yes later."""
+    """Whether a reply is clearly a no. "Wait", a question or a change of subject isn't one."""
     words = _YES_IDIOMS.sub("yes", " ".join(_words(said))).split()
     if len(words) <= 4 and _NO_WORDS.intersection(words):
         return True
@@ -219,8 +203,8 @@ def refuses(said: str) -> bool:
 
 # ── Telling JARVIS to answer a task's request ───────────────────
 
-# Said later in the conversation, not straight after JARVIS's question, so it may name what it's about ("let it
-# close the hidden Chrome"): looser than approves and refuses, but still a short, plain instruction.
+# Said later, not right after the question, so it may name its object ("let it close the hidden Chrome"):
+# looser than approves/refuses but still a short, plain instruction.
 _TELL_MOST_WORDS = 20
 _TELL_APPROVE = re.compile(
     r"\b(approve[ds]?|allow|permit|authori[sz]e|let (it|them|that|task|the task)|go ahead|go for it|green light"
@@ -230,21 +214,22 @@ _TELL_DENY = re.compile(
     r"\b(deny|denied|decline|refuse|reject|block it|say no|tell it no|(don't|dont|do not) (let|allow|approve|run|do)"
     r"|no|nope|nah|not allowed|cancel)\b"
 )
-# Any of these makes it more than a plain yes: a no, a condition, a doubt or a "wait"
+# Any of these (a no, condition, doubt, "wait") disqualifies a plain yes
 _TELL_NOT_YES = set("""no nope nah not don't dont never wait hold hang cancel abort unless if but except deny denied
 decline refuse reject can't cannot won't shouldn't isn't later maybe perhaps""".split())
 
 
 def _told(said: str) -> list[str]:
-    """The words of a short instruction that isn't a question, with "no worries" and the like read as yes; else []."""
+    """Words of a short non-question instruction, yes-idioms normalised; else []."""
     words = _YES_IDIOMS.sub("yes", " ".join(_words(said))).split()
     return [] if "?" in said or len(words) > _TELL_MOST_WORDS else words
 
 
 def tells_approve(said: str) -> bool:
-    """Whether the user's words plainly tell JARVIS to approve a task's waiting command: 'approve it',
-    'let it close the hidden Chrome', 'yes, go ahead with that delete', 'approve it, and don't ask again'. Never a
-    question, a no, an "if" or a "wait"."""
+    """Whether the words plainly approve a waiting command ('approve it', 'let it close the hidden Chrome').
+
+    Never a question, a no, an "if" or a "wait".
+    """
     if "?" in said:
         return False
     found, rest = _scoped(said)
@@ -256,13 +241,11 @@ def tells_approve(said: str) -> bool:
 
 
 # ── How long a yes lasts ────────────────────────────────────────
-# A yes can say how far it goes (jarvis.safety.remembered): just this once, for this session (the rest of the
-# conversation, or of the task that asked), or always for that kind of command. Some phrases are a yes on their own
-# ("always", "for this session"); others only beside one ("yes, and don't ask again"), since "don't ask me again"
-# alone might be a no.
+# once / session / always. Some phrases are a yes alone ("always"); others only beside one ("yes, don't ask again"),
+# since "don't ask me again" alone might be a no.
 
 SCOPES = ("once", "session", "always")  # narrowest first
-_SCOPE_PHRASES = [  # (scope, a yes on its own, the phrase)
+_SCOPE_PHRASES = [  # (scope, is a yes alone, regex)
     ("once", True, r"(just |only )?(this|that) (once|one time|time)|(just |only )?once"),
     ("session", True, r"(for )?(the rest of )?(this|the) (session|conversation|call|task)"),
     ("always", True, r"always( (allow|approve|let) (it|that|them|this))?( for (this|that) kind of (command|commands|thing))?"),
@@ -271,11 +254,11 @@ _SCOPE_PHRASES = [  # (scope, a yes on its own, the phrase)
 ]
 _SCOPE_RE = [(scope, alone, re.compile(rf"\b({phrase})\b")) for scope, alone, phrase in _SCOPE_PHRASES]
 _ALWAYS_ALLOW = re.compile(r"\balways (allow|approve|let) (it|that|them|this)\b")
-_BROAD = re.compile(r"\b(kind|kinds|any|anything|whatever)\b")  # "always, any brew install": the kind, not the one
+_BROAD = re.compile(r"\b(kind|kinds|any|anything|whatever)\b")  # "always, any brew install": the whole kind
 
 
 def _scoped(said: str) -> tuple[list[tuple[str, bool]], str]:
-    """The scope phrases in the user's words, each (scope, whether it's a yes on its own), and the words without them."""
+    """([(scope, is a yes alone)], the words with scope phrases removed)."""
     text, found = " ".join(_words(said)), []
     for scope, alone, phrase in _SCOPE_RE:
         if phrase.search(text):
@@ -285,9 +268,7 @@ def _scoped(said: str) -> tuple[list[tuple[str, bool]], str]:
 
 
 def yes_scope(said: str) -> str | None:
-    """For a clear yes, how far it goes: 'once' (the default, and whenever the words disagree), 'session' or
-    'always'. "Yes, always", "for this session", "just this once", "go ahead, and don't ask again". None for
-    anything that isn't a clear yes."""
+    """For a clear yes: 'once' (default, or on conflict), 'session' or 'always'; None if not a clear yes."""
     if "?" in said:
         return None
     found, rest = _scoped(said)
@@ -300,41 +281,38 @@ def yes_scope(said: str) -> str | None:
 
 
 def said_scope(said: str) -> str:
-    """How far the user's words say a yes goes, from their scope phrases alone: 'once' unless they say more."""
+    """Scope from scope phrases alone; 'once' if none."""
     return _narrowest(_scoped(said)[0])
 
 
 def scopes_said(said: str) -> list[str]:
-    """The scopes the user's words name with a scope phrase ('once', 'session', 'always'), if any."""
+    """Every scope named by a scope phrase."""
     return [scope for scope, _ in _scoped(said)[0]]
 
 
 def _narrowest(found: list[tuple[str, bool]]) -> str:
-    """The narrowest of the scopes said (they may disagree), or 'once' if none was."""
+    """Narrowest scope found, or 'once'."""
     return min((scope for scope, _ in found), key=SCOPES.index, default="once")
 
 
 def said_breadth(said: str) -> str:
-    """For an "always": 'kind' if the user's words say any command of that kind ("always, for anything like
-    that", "always allow this kind of command"), else 'exact', that command as it is."""
+    """For an "always": 'kind' if the words cover any command of that kind, else 'exact'."""
     return "kind" if _BROAD.search(" ".join(_words(said))) else "exact"
 
 
 def tells_deny(said: str) -> bool:
-    """Whether the user's words plainly tell JARVIS to turn a task's waiting command down: 'deny it', 'no, don't
-    let it delete that', 'decline task 5's request'. Never a question."""
+    """Whether the words plainly deny a waiting command ('deny it', 'no, don't let it'). Never a question."""
     words = _told(said)
     return bool(words) and (refuses(said) or bool(_TELL_DENY.search(" ".join(words))))
 
 
 # ── What counts as risky ────────────────────────────────────────
 
-# A command line is split into simple commands at ; & | && || ( ) and newlines, and each is judged by
-# its program and arguments. What a shell, eval or an interpreter would run from a string can't be
-# judged, so those count as risky themselves.
+# A line is split into simple commands at ; & | && || ( ) and newlines, each judged by program and args.
+# Code run from a string (shell -c, eval, interpreters) can't be judged, so it is risky itself.
 _PREFIXES = {"nohup", "time", "exec", "command", "builtin", "env", "nice", "caffeinate", "xargs", "timeout", "gtimeout",
              "stdbuf", "then", "do", "else", "elif", "if", "while", "until", "!", "noglob", "{", "}"}
-_PREFIX_VALUES = {"-I", "-J", "-L", "-n", "-P", "-R", "-s", "-E", "-d", "-u", "-t", "-w"}  # xargs -I {}, nice -n 5, ...
+_PREFIX_VALUES = {"-I", "-J", "-L", "-n", "-P", "-R", "-s", "-E", "-d", "-u", "-t", "-w"}  # xargs -I {}, nice -n 5
 _SUBSTITUTIONS = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
 _FD_NUMBER = re.compile(r"(?<![^\s;&|()])\d+(?=[<>])")
 _ALWAYS = {
@@ -356,11 +334,11 @@ _ALWAYS = {
     "tmutil": "changes the system", "osascript": "controls apps",
     "eval": "runs code it can't see", "watch": "runs code it can't see", "script": "runs code it can't see",
 }
-_READ_ONLY_SUBCOMMANDS = {  # system tools whose other subcommands change things
+_READ_ONLY_SUBCOMMANDS = {  # any other subcommand changes things
     "launchctl": {"list", "print", "print-disabled", "blame", "managername", "version", "getenv", "help"},
     "diskutil": {"list", "info", "activity", "listFilesystems"},
     "defaults": {"read", "read-type", "domains", "find", "help"},
-    # security reads the keychain; listing signing identities and decoding a provisioning profile don't
+    # other security subcommands read the keychain
     "security": {"find-identity", "cms"},
 }
 _READ_ONLY_WHY = {"security": "reads the keychain"}
@@ -381,11 +359,10 @@ _INSTALLS = {
 _GH_WRITES = {"create", "merge", "delete", "close", "edit", "comment", "review", "reopen", "archive", "unarchive", "transfer",
               "rename", "sync", "fork", "lock", "unlock", "set", "remove", "add", "upload", "deploy", "rerun", "cancel",
               "enable", "disable", "pin", "unpin", "ready", "revert"}
-# glab's are gh's, and its own words for approving, commenting on and running things
+# gh's plus glab-specific verbs
 _GLAB_WRITES = _GH_WRITES | {"update", "approve", "revoke", "note", "rebase", "subscribe", "unsubscribe", "retry", "run",
                              "trigger", "mirror", "todo", "publish", "star", "unstar"}
-# Config that makes git run a program later: aliases with !, core.pager, core.fsmonitor, core.sshCommand, hooksPath,
-# included files, filters and diff and merge drivers, credential helpers, ...
+# Config sections that can make git run a program later (! aliases, core.pager, hooks, filters, drivers, helpers)
 _GIT_CODE_CONFIG = {"alias", "core", "include", "includeif", "filter", "diff", "difftool", "merge", "mergetool",
                     "credential", "gpg", "sequence", "pager", "interactive", "uploadpack", "receive"}
 _GIT_CONFIG_VALUES = {"-f", "--file", "--blob", "--type", "--default", "--comment", "--value", "--url"}
@@ -396,13 +373,13 @@ _SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "fish"}
 _INLINE_CODE = {"python": {"-c", "-"}, "node": {"-e", "--eval", "-p", "--print"}, "perl": {"-e", "-E"}, "ruby": {"-e"},
                 "php": {"-r"}, "deno": {"eval"}}
 _CLOBBER_DOTFILE = re.compile(r"(?<![0-9&])>>?\s*(?!/dev/)(\S*/)?\.[A-Za-z]")  # > ~/.zshrc, >> .env
-# The iPhone and its simulators: installing a build onto the phone is ordinary, these aren't
+# devicectl/simctl subcommands that are risky (installing a build is not)
 _DEVICE_CHANGES = {"uninstall", "terminate", "reboot", "shutdown", "unpair", "erase", "signal", "delete"}
 _XCRUN_VALUES = {"--sdk", "-sdk", "--toolchain", "-toolchain"}
 
 
 def _options_then(argv: list[str], takes_value: set[str] = frozenset()) -> list[str]:
-    """argv without its leading options (and the values of those in `takes_value`)."""
+    """argv minus leading options (and the values of those in `takes_value`)."""
     i = 0
     while i < len(argv) and argv[i].startswith("-"):
         i += 2 if argv[i] in takes_value else 1
@@ -410,7 +387,7 @@ def _options_then(argv: list[str], takes_value: set[str] = frozenset()) -> list[
 
 
 def _git_config(args: list[str]) -> str:
-    """Why a git config command is risky: it edits the file in an editor, or writes config that runs code."""
+    """Risk of `git config`: opening an editor, or writing config that runs code."""
     words, i = [], 0
     while i < len(args):
         if args[i] in _GIT_CONFIG_VALUES:
@@ -433,7 +410,7 @@ def _git_config(args: list[str]) -> str:
 
 
 def _git(args: list[str]) -> str:
-    # git -c core.pager=..., -c alias.x='!cmd': config given on the command line can run anything
+    # -c core.pager=..., -c alias.x='!cmd': command-line config can run anything
     leading = args[: len(args) - len(_options_then(args, {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}))]
     if any(a in ("-c", "--config-env") or a.startswith("--config-env=") for a in leading):
         return "runs code it can't see"
@@ -465,7 +442,7 @@ def _git(args: list[str]) -> str:
 
 
 def _code_host(args: list[str], host: str, credentials: set[str], writes: set[str]) -> str:
-    """gh and glab: what a command does to `host`, or to the CLI's own credentials."""
+    """Risk of a gh/glab command: writes to `host`, or touches the CLI's credentials."""
     rest = _options_then(args, {"-R", "--repo"})
     sub = rest[0] if rest else ""
     if sub in credentials:
@@ -501,12 +478,12 @@ def _curl(args: list[str]) -> str:
 
 
 def _strip_prefixes(argv: list[str]) -> list[str]:
-    """argv without what only wraps the real command: nohup, env, VAR=value, xargs -I {}, timeout 5, ..."""
+    """argv minus wrappers (nohup, env, VAR=value, xargs -I {}, timeout 5, xcrun)."""
     while argv and (argv[0] in _PREFIXES or re.fullmatch(r"\w+=.*", argv[0])):
         argv = argv[1:]
         while argv and (argv[0].startswith("-") or re.fullmatch(r"\d+(\.\d+)?[smhd]?", argv[0])):
             argv = argv[2:] if argv[0] in _PREFIX_VALUES else argv[1:]
-    if argv and Path(argv[0]).name == "xcrun":  # xcrun devicectl ...: the tool it finds is the command
+    if argv and Path(argv[0]).name == "xcrun":  # the tool xcrun finds is the command
         return _strip_prefixes(_options_then(argv[1:], _XCRUN_VALUES))
     return argv
 
@@ -571,11 +548,13 @@ def _piece(argv: list[str]) -> str:
 
 
 def _simple_commands(command: str) -> list[list[str]] | None:
-    """Each simple command in a command line, as argv, those in $(...) and `...` included; None if it can't be
-    parsed (unbalanced quotes). Redirections are left out: the word after >, 2>&1 or < isn't an argument."""
+    """Every simple command as argv, including those in $(...) and `...`; None on unbalanced quotes.
+
+    Redirection targets are dropped, not treated as arguments.
+    """
     found: list[list[str]] = []
-    command = _FD_NUMBER.sub(" ", command)  # the 2 in 2>/dev/null says which output, and isn't an argument
-    for inner in _SUBSTITUTIONS.findall(command):  # $(...) and `...` run even inside double quotes
+    command = _FD_NUMBER.sub(" ", command)  # the 2 in 2>/dev/null isn't an argument
+    for inner in _SUBSTITUTIONS.findall(command):  # these run even inside double quotes
         if (more := _simple_commands("".join(inner))) is None:
             return None
         found += more
@@ -591,7 +570,7 @@ def _simple_commands(command: str) -> list[list[str]] | None:
         if redirect:
             redirect = False
         elif token and set(token) <= set("<>") | set(";&|()") and set(token) & set("<>"):
-            redirect = True  # >, 2>&1, <: the next word is where output goes, not an argument
+            redirect = True  # next word is a redirect target
         elif token and set(token) <= set(";&|()"):
             if argv:
                 found.append(argv)
@@ -602,9 +581,10 @@ def _simple_commands(command: str) -> list[list[str]] | None:
 
 
 def risky_pieces(command: str, own: "Own | None" = None) -> list[tuple[list[str], str]]:
-    """Each risky simple command in a command line, as (its argv without what only wraps it, why it's risky), in
-    order; [] if it can simply run. With `own`, deleting a task's own files or stopping its own processes isn't
-    risky. What makes the whole line risky (overwriting a settings file, unbalanced quotes) comes as one ([], why)."""
+    """[(unwrapped argv, why)] for each risky simple command, in order; [] if safe.
+
+    With `own`, a task's own deletes/kills are exempt. Whole-line risks (dotfile clobber, unparsable) come as ([], why).
+    """
     if _CLOBBER_DOTFILE.search(command):
         return [([], "overwrites a settings file")]
     if (pieces := _simple_commands(command)) is None:
@@ -620,8 +600,7 @@ def risky_pieces(command: str, own: "Own | None" = None) -> list[tuple[list[str]
 
 
 def _risk(command: str, own: "Own | None" = None) -> tuple[str, str]:
-    """Why a command is risky, and the program (with its subcommand) that makes it so; ('', '') if it isn't.
-    With `own`, deleting a task's own files or stopping its own processes isn't."""
+    """(why, program) for the first risky piece; ('', '') if safe."""
     if not (found := risky_pieces(command, own)):
         return "", ""
     argv, why = found[0]
@@ -631,7 +610,7 @@ def _risk(command: str, own: "Own | None" = None) -> tuple[str, str]:
 
 
 def program(argv: list[str]) -> str:
-    """'brew install', 'git push', 'rm': the program a simple command runs, with its subcommand if it has one."""
+    """Program plus subcommand, if any: 'brew install', 'git push', 'rm'."""
     argv = _strip_prefixes(argv) or argv
     words = [Path(argv[0].lstrip("\\")).name]
     rest = _options_then(argv[1:], {"-C", "-c", "-R", "--repo"})
@@ -641,16 +620,18 @@ def program(argv: list[str]) -> str:
 
 
 def risky(command: str, own: "Own | None" = None) -> str:
-    """Why a command needs the user's yes before it runs ('deletes files', 'installs software', ...), or ''
-    if it can simply run. Errs on the side of asking: anything it can't read counts as risky. For a background
-    task, `own` is what's its own: deleting in its folders and stopping its processes needs no yes."""
+    """Why a command needs a yes ('deletes files', ...), or ''. Errs toward asking: unreadable means risky.
+
+    `own`: a background task's deletes in its folders and kills of its processes need no yes.
+    """
     return _risk(command, own)[0]
 
 
 def same_risk(a: str, b: str) -> bool:
-    """Whether two command lines do the same risky things, in the same folders, so a yes to one is a yes to the other:
-    only what wraps them may differ (a pipe into tail, 2>&1, a git status before). False for a line that isn't risky,
-    or can't be checked."""
+    """Whether two lines do the same risky things in the same folders, differing only in wrappers (| tail, 2>&1).
+
+    False if either is safe or unparsable.
+    """
     def risk(command: str) -> tuple | None:
         found = risky_pieces(command)
         if not found or any(not argv for argv, _ in found) or (pieces := _simple_commands(command)) is None:
@@ -662,24 +643,23 @@ def same_risk(a: str, b: str) -> bool:
 
 
 def describe(command: str, own: "Own | None" = None) -> str:
-    """A risky command's reason and program, taken from the command itself and never from what a model says
-    about it: 'installs software (brew install)'. '' if it isn't risky."""
+    """'installs software (brew install)', from the command itself (never a model's summary); '' if safe."""
     why, what = _risk(command, own)
     return f"{why} ({what})" if why else ""
 
 
-# Package managers that run some steps (builds, post-install scripts) in a macOS sandbox of their own, which can't start
-# inside another one: Homebrew and MacPorts. A task's approved install with one runs outside the host profile.
+# Package managers that sandbox their own build steps; macOS sandboxes can't nest, so an approved install runs
+# outside the host profile.
 _OWN_SANDBOX = {"brew", "port"}
-_STDIN_FILTERS = {"head", "tail"}  # what may trim their output, when it reads no file
+_STDIN_FILTERS = {"head", "tail"}  # allowed to trim output, if reading no file
 
 
 def own_sandbox(command: str) -> bool:
-    """Whether a command line only installs or removes software with a package manager that sandboxes its own steps
-    (brew install, port upgrade): such a line is always risky, and once approved it runs outside the host profile
-    (jarvis.safety.host), whose walls would stop it. So nothing else may ride along: each simple command is one of
-    those, run by its bare name with no prefix or variable before it, a cd, or a head or tail reading only what they
-    print; no substitution, and no redirect but 2>&1."""
+    """Whether a line is only a brew/port install (plus cd, or head/tail on its output).
+
+    Approved, such a line runs outside the host profile, so nothing may ride along: bare program names, no prefixes,
+    no substitution, no redirect but 2>&1.
+    """
     if (_SUBSTITUTIONS.search(command) or re.search(r"[<>]", command.replace("2>&1", ""))
             or not (pieces := _simple_commands(command))):
         return False
@@ -693,22 +673,18 @@ def own_sandbox(command: str) -> bool:
 
 
 # ── The user's own order ────────────────────────────────────────
-# Words that plainly tell JARVIS to do the very thing a risky command does ("push it", "restart now", "merge and push",
-# "delete the build folder", "install ffmpeg") are the user's go-ahead for that command, so it isn't asked about
-# again: in the turn they're said, for the voice shell, and for a task, in the work they send it on. So is a clear
-# yes to JARVIS's own question that asked to do just that ("Shall I push the changes?" "Yes."). Only these verbs
-# count, each for the commands it plainly names: a delete must name every path, an install every package, a pkill
-# its process. A question, a no, a hedge or a condition ("if", "don't", "before", "should") makes the words no order
-# at all. Everything else that's risky (sending data off the Mac, system settings, code the check can't see into,
-# discarding git work, secrets) has no order words and is still asked about.
+# Words that plainly order what a risky command does ("push it", "delete the build folder") are its go-ahead, as is
+# a clear yes to JARVIS's question proposing it. Only _VERBS count, and each must name its targets: every path for a
+# delete, every package for an install. A question, no, hedge or condition voids the order. Other risks (network,
+# system settings, opaque code, discarding git work, secrets) have no order words and are always asked.
 
 _ORDER_MOST_WORDS = 40
 _ORDER_NOT = set("""no nope nah not don't dont never wait hold hang cancel abort unless if but except later maybe
 perhaps should shall whether might before after until once when first instead without rather tomorrow can't cannot
 won't shouldn't isn't wouldn't didn't haven't""".split())
-# In JARVIS's own question, a choice or a condition: a yes to it doesn't say which
+# A choice or condition in JARVIS's question: a yes doesn't say which
 _QUESTION_NOT = set("""or no not don't dont never without instead unless if before after until once first""".split())
-_VERBS = {  # a word of the user's: what it orders
+_VERBS = {  # user's word -> what it orders
     "push": {"push"}, "restart": {"restart"}, "reload": {"restart"}, "relaunch": {"restart"}, "kickstart": {"restart"},
     "stop": {"stop"}, "kill": {"stop"}, "quit": {"stop"}, "close": {"stop"}, "terminate": {"stop"}, "shut": {"stop"},
     "start": {"start"}, "launch": {"start"}, "install": {"install"}, "reinstall": {"install"},
@@ -716,30 +692,30 @@ _VERBS = {  # a word of the user's: what it orders
     "sync": {"sync"}, "delete": {"delete"}, "trash": {"delete"}, "erase": {"delete"}, "wipe": {"delete"},
     "merge": {"merge"}, "create": {"open"}, "open": {"open"}, "raise": {"open"},
 }
-_SERVICES = {  # what each order lets launchctl, brew services, docker and podman do, by subcommand
+_SERVICES = {  # order -> allowed launchctl / brew services / docker / podman subcommands
     "restart": {"kickstart", "kill", "bootout", "bootstrap", "load", "unload", "stop", "start", "restart"},
     "stop": {"bootout", "unload", "stop", "kill"},
     "start": {"bootstrap", "load", "start", "kickstart", "run"},
 }
-_PACKAGES = {  # what each order lets a package manager do, by subcommand
+_PACKAGES = {  # order -> allowed package-manager subcommands
     "install": {"install", "i", "ci", "add", "reinstall", "sync"},
     "uninstall": {"uninstall", "remove", "rm", "un"},
     "upgrade": {"upgrade", "update", "up"},
     "sync": {"sync"},
 }
 _PULL_REQUEST = {"pr", "prs", "pull", "mr", "request"}
-_PUSH_DELETES = {"-d", "--delete", "--prune", "--mirror"}  # pushes that delete on the remote: never ordered
+_PUSH_DELETES = {"-d", "--delete", "--prune", "--mirror"}  # delete on the remote: never ordered
 _DELETERS = {"rm", "rmdir", "unlink", "trash"}
-_CONTAINER_REMOVES = {"rm", "rmi", "prune", "down", "pause"}  # docker and podman: more than a restart or a stop
+_CONTAINER_REMOVES = {"rm", "rmi", "prune", "down", "pause"}  # beyond a restart or stop
 
 
 def _acts(words: list[str]) -> set[str]:
-    """What these words order done, by their verbs: 'push', 'restart', 'delete', ..."""
+    """Acts ordered by these words' verbs."""
     return {act for w in words for act in _VERBS.get(w, ())}
 
 
 def _order_words(said: str) -> list[str] | None:
-    """The words of an order, or None if they can't be one: a question, a no, a hedge or a condition."""
+    """The words, or None if they can't be an order (question, no, hedge, condition)."""
     if "?" in said:
         return None
     words = _words(said)
@@ -749,19 +725,17 @@ def _order_words(said: str) -> list[str] | None:
 
 
 def orders(said: str) -> set[str]:
-    """What the user's words order done ('push', 'restart', 'delete', ...), if they're an order at all; else {}."""
+    """Acts the words order ('push', 'restart', ...); empty if not an order."""
     return _acts(_order_words(said) or [])
 
 
 def _named(word: str, said: set[str]) -> bool:
-    """Whether the user's words name `word` (a package, a process, a file name): one of its words of 3 letters or
-    more."""
+    """Whether `said` contains one of `word`'s parts of 3+ letters."""
     return any(len(w) >= 3 and w in said for w in re.findall(r"[a-z0-9]+", word.lower()))
 
 
 def _path_named(word: str, said: set[str]) -> bool:
-    """Whether the user's words name the file or folder `word`: its own name, never a home, a top folder or a word the
-    shell could make into something else (a glob, a $VAR)."""
+    """Whether `said` names path `word` by its own name; never home, a top-level folder, a glob or a $VAR."""
     if _NOT_LITERAL & set(word):
         return False
     path = Path(word).expanduser()
@@ -775,7 +749,7 @@ def _operands(args: list[str]) -> list[str]:
 
 
 def _push_as_said(rest: list[str], said: set[str]) -> bool:
-    """A git push (its arguments after "push"): never one that deletes on the remote, and forced only if said."""
+    """git push args: never a remote delete; forced only if "force" was said."""
     if _PUSH_DELETES & set(rest) or any(a.startswith((":", "+:")) for a in rest):
         return False
     forced = any(a in ("-f", "--force") or a.startswith(("--force", "+")) for a in rest)
@@ -783,7 +757,7 @@ def _push_as_said(rest: list[str], said: set[str]) -> bool:
 
 
 def _install_as_said(words: list[str], acts: set[str], said: set[str]) -> bool:
-    """A package manager's command (from its subcommand on): what was ordered, for the packages named, or for none."""
+    """Package-manager words (from the subcommand): the ordered act, on named packages only."""
     i = next((i for i, w in enumerate(words) if any(w in subs for subs in _PACKAGES.values())), None)
     if i is None:
         return False
@@ -792,9 +766,9 @@ def _install_as_said(words: list[str], acts: set[str], said: set[str]) -> bool:
 
 
 def _ordered_piece(argv: list[str], why: str, acts: set[str], said: set[str]) -> bool:
-    """Whether one risky piece of a command line does just what was ordered."""
+    """Whether one risky piece does exactly what was ordered."""
     name, args = Path(argv[0].lstrip("\\")).name, argv[1:]
-    words = _options_then(args, {"-C", "-c", "--git-dir", "--work-tree", "-m", "-R", "--repo"})  # subcommand on
+    words = _options_then(args, {"-C", "-c", "--git-dir", "--work-tree", "-m", "-R", "--repo"})  # from subcommand
     sub, rest = (words or [""])[0], words[1:]
     if name == "git" and sub == "push":
         return "push" in acts and _push_as_said(rest, said)
@@ -802,7 +776,7 @@ def _ordered_piece(argv: list[str], why: str, acts: set[str], said: set[str]) ->
         paths = _operands(args if name in _DELETERS else rest if (name, sub) == ("git", "rm") else [])
         return "delete" in acts and bool(paths) and all(_path_named(p, said) for p in paths)
     if why == "stops a process" and name in ("kill", "pkill", "killall"):
-        targets = _operands(args)  # a process number for kill, which can't be named; a name for the others
+        targets = _operands(args)  # kill takes pids, which can't be named
         return "stop" in acts and (name == "kill" or bool(targets) and all(_named(t, said) for t in targets))
     if why in ("stops a process", "changes the system") and (name in ("launchctl", "docker", "podman")
                                                             or (name, sub) == ("brew", "services")):
@@ -818,7 +792,7 @@ def _ordered_piece(argv: list[str], why: str, acts: set[str], said: set[str]) ->
 
 
 def _does_as_said(command: str, acts: set[str], said: set[str], own: "Own | None") -> bool:
-    """Whether every risky piece of a command does just what `acts` order, with `said` the words that name things."""
+    """Whether every risky piece does just what `acts` order, on things named in `said`."""
     if not acts or names_secret(command) or reads_environment(command):
         return False
     found = risky_pieces(command, own)
@@ -826,17 +800,18 @@ def _does_as_said(command: str, acts: set[str], said: set[str], own: "Own | None
 
 
 def ordered(said: str, command: str, own: "Own | None" = None) -> bool:
-    """Whether the user's own words plainly order what a risky command does, every risky piece of it: 'push it' for
-    git push, 'restart now' for launchctl kickstart, 'delete the build folder' for rm -rf build, 'install ffmpeg' for
-    brew install ffmpeg. Never a question, a no or a condition, and never a kind of command no words order."""
+    """Whether the words plainly order every risky piece ('push it' for git push, 'install ffmpeg' for brew).
+
+    Never a question, no or condition, nor a risk kind with no order words.
+    """
     return _does_as_said(command, orders(said), set(_words(said)), own)
 
 
 def agreed_to(asked: str, said: str, command: str, own: "Own | None" = None, yes: bool | None = None) -> bool:
-    """Whether the user's words are a clear yes to JARVIS's question just before them (the last sentence of `asked`,
-    its reply), which asked to do just what the command does: "Shall I push the changes?" "Yes, go ahead." Never a
-    question that offers a choice or a condition ("restart now, or wait for them to finish?"). `yes` says whether the
-    words are a yes, when that's known otherwise (jarvis.safety.consent); else the word lists decide."""
+    """Whether `said` is a clear yes to the last sentence of `asked`, a question proposing exactly `command`.
+
+    Questions offering a choice or condition don't count. `yes` overrides the word lists when known (consent).
+    """
     question = re.split(r"(?<=[.!?])\s+", asked.strip())[-1]
     if not question.endswith("?") or not (yes_scope(said) is not None if yes is None else yes):
         return False
@@ -847,48 +822,44 @@ def agreed_to(asked: str, said: str, command: str, own: "Own | None" = None, yes
 
 
 # ── A task's own files and processes ────────────────────────────
-# A background task may delete inside its own folders and stop the processes it started without a yes, but only
-# where the command itself proves it: each path is spelled out (or a folder this command just made with mktemp),
-# resolves, symlinks and all, strictly inside one of its folders, never into a .git; each process is one this
-# command started ($!), or one the task's host commands started (Own.process). Anything else is asked about.
+# No yes needed only where the command itself proves ownership: each path is literal (or a fresh mktemp dir) and
+# resolves, symlinks included, strictly inside a task folder and outside .git; each process is $! or Own.process.
 
 @dataclass(frozen=True)
 class Own:
-    """What's a background task's own: where its command starts, the folders it may delete in (its worktree or
-    project folder, and its temp folder), and whether a process is one it started."""
+    """A task's own: start folder, folders it may delete in (worktree/project, temp), and its-process predicate."""
 
     folder: Path
     roots: tuple[Path, ...]
     process: Callable[[int], bool] = lambda pid: False
 
 
-# With any of these in the command, a word may not mean what it says (an alias, a glob option, a cd path), or a
-# link or move may put something else where a path points: nothing in it is taken as the task's own
+# Any of these can change what a word or path means (aliases, glob options, CDPATH, links, moves): nothing is owned
 _UNSURE = re.compile(r"\b(alias|unalias|function|setopt|unsetopt|emulate|hash|enable|disable|CDPATH|IFS|GLOBIGNORE)\b"
                      r"|\(\s*\)|\bset\s+[-+]")
-_UNSURE_PROGRAMS = {"ln", "mv", "xargs", "parallel"}  # the last two add arguments of their own
+_UNSURE_PROGRAMS = {"ln", "mv", "xargs", "parallel"}  # xargs/parallel add their own arguments
 _NOT_LITERAL = set("$`{}[]\\*?")
-_MKTEMP = r"\"?\$\(\s*mktemp((\s+-[dq]+)*(\s+-[dq]*t\s+[\w.-]+)?(\s+-[dq]+)*)\s*\)\"?"  # in $TMPDIR, made just now
+_MKTEMP = r"\"?\$\(\s*mktemp((\s+-[dq]+)*(\s+-[dq]*t\s+[\w.-]+)?(\s+-[dq]+)*)\s*\)\"?"  # fresh dir in $TMPDIR
 _JOB = re.compile(r"%(\d+|%|\+|-)")
-_DELETE_FLAGS = {"rm": set("dfiIPRrvWx"), "rmdir": {"v"}, "unlink": set()}  # the options each may take
+_DELETE_FLAGS = {"rm": set("dfiIPRrvWx"), "rmdir": {"v"}, "unlink": set()}  # allowed options
 
 
 class _Mine:
-    """What one command line does to a task's own files and processes."""
+    """Ownership check for one command line against a task's `Own`."""
 
     def __init__(self, command: str, pieces: list[list[str]], own: Own) -> None:
         self.own = own
         self.roots = [r.resolve() for r in own.roots]
-        self.guarded = [*self.roots, ROOT.resolve()]  # never deleted whole, nor anything holding them
-        words = {Path(w).name for argv in pieces for w in argv}  # as a program, or run by one (find -exec mv)
+        self.guarded = [*self.roots, ROOT.resolve()]  # never deleted whole, nor anything containing them
+        words = {Path(w).name for argv in pieces for w in argv}  # incl. programs run by others (find -exec mv)
         self.sure = not _UNSURE.search(command) and not words & _UNSURE_PROGRAMS
-        self.pids = self._reads(self._set_only(command, r"\$!"))  # $NAMEs only ever set to $!: processes it started
-        self.temps = self._reads(self._set_only(command, _MKTEMP))  # those only ever set to a folder mktemp just made
+        self.pids = self._reads(self._set_only(command, r"\$!"))  # vars only ever set to $!
+        self.temps = self._reads(self._set_only(command, _MKTEMP))  # vars only ever set to a fresh mktemp dir
         self.cwds = self._cwds(pieces)
 
     @staticmethod
     def _set_only(command: str, value: str) -> set[str]:
-        """The shell variables that this command sets only ever to `value`, and otherwise just reads as $NAME."""
+        """Variables only ever set to `value` and otherwise only read as $NAME."""
         names = set()
         for name in {m.group(1) for m in re.finditer(rf"(?<![\w$])([A-Za-z_]\w*)=(?:{value})(?=[\s;&|)]|$)", command)}:
             sets = len(re.findall(rf"(?<![\w$]){name}=(?:{value})(?=[\s;&|)]|$)", command))
@@ -899,12 +870,12 @@ class _Mine:
 
     @staticmethod
     def _reads(names: set[str]) -> set[str]:
-        """How the command reads these variables: $NAME or ${NAME}."""
+        """$NAME and ${NAME} forms of these variables."""
         return {f"${n}" for n in names} | {f"${{{n}}}" for n in names}
 
     @staticmethod
     def _literal(word: str) -> Path | None:
-        """A word as the path it names, if the shell leaves it as it is (but for a leading ~); else None."""
+        """The path a word names if the shell won't expand it (except a leading ~); else None."""
         if word == "~" or word.startswith("~/"):
             word = str(Path.home()) + word[1:]
         if not word or _NOT_LITERAL & set(word) or word[0] in "=~":
@@ -912,13 +883,13 @@ class _Mine:
         return Path(word)
 
     def _cwds(self, pieces: list[list[str]]) -> set[Path] | None:
-        """Every folder the command might be in when it runs a piece, or None if one can't be known."""
+        """Every folder a piece might run in; None if unknowable."""
         start = self.own.folder.resolve()
         cds = [a for a in (_strip_prefixes(p) for p in pieces) if a and a[0] in ("cd", "pushd", "popd", "chdir")]
         found = {start}
         for argv in cds:
             if argv[0] == "popd":
-                continue  # back where it was, which is counted already
+                continue  # already counted
             args = [a for a in argv[1:] if not re.fullmatch(r"-[LPqs]+", a)]
             if not args:
                 found.add(Path.home().resolve())
@@ -927,21 +898,21 @@ class _Mine:
                 return None
             if not target.is_absolute():
                 if len(cds) > 1:
-                    return None  # which folder it's relative to depends on the order they run in
+                    return None  # base depends on run order
                 target = start / target
             found.add(target.resolve())
         return found
 
     def _inside(self, path: Path, strictly: bool = True) -> bool:
-        """Whether a resolved path is in one of the task's folders (strictly: not the folder itself), outside any
-        .git, and holds none of the others, or JARVIS's own."""
+        """Whether a resolved path is inside a task folder (strictly: not the root), outside .git, and contains no
+        guarded folder."""
         for root in self.roots:
             if path.is_relative_to(root) and ".git" not in path.relative_to(root).parts:
                 return not any(g.is_relative_to(path) and (strictly or g != path) for g in self.guarded)
         return False
 
     def _where(self, path: Path) -> list[Path] | None:
-        """Where a path from the command resolves, from each folder the command might be in."""
+        """The path resolved from each possible cwd; None if cwds are unknown."""
         if path.is_absolute():
             return [path.resolve()]
         return None if self.cwds is None else [(cwd / path).resolve() for cwd in self.cwds]
@@ -951,7 +922,7 @@ class _Mine:
             return True
         head, tail = os.path.split(word.rstrip("/") if word.strip("/") else word)
         if set("*?") & set(tail) and not _NOT_LITERAL & set(tail.replace("*", "").replace("?", "")):
-            # a glob, in the last part only: never one that could match .git, or a dotfile
+            # glob in the last part only; never one that could match .git or a dotfile
             if "**" in tail or tail.startswith(".") or fnmatch.fnmatchcase(".git", tail):
                 return False
             return self._owned_literal(head or ".", strictly=False)
@@ -970,7 +941,7 @@ class _Mine:
         return word.isdigit() and self.own.process(int(word))
 
     def covers(self, argv: list[str]) -> bool:
-        """Whether a risky simple command only deletes the task's own files, or stops its own processes."""
+        """Whether a risky simple command only deletes the task's own files or stops its own processes."""
         if not self.sure or not (argv := _strip_prefixes(argv)):
             return False
         program, args = argv[0], argv[1:]
@@ -1010,19 +981,18 @@ class _Mine:
 
 # ── What a task may never run ───────────────────────────────────
 
-# JARVIS's own controls: the runner's socket, and the endpoint that answers approvals
+# JARVIS's controls: the runner socket and the approvals endpoint
 _CONTROLS = re.compile(r"runner\.sock|/api/approvals|/approvals/\d")
 _KEYCHAIN_DUMPS = re.compile(r"find-(generic|internet)-password|dump-keychain|export|unlock-keychain|set-key-partition-list"
                              r"|add-(generic|internet)-password|delete-(generic|internet)-password")
 _ROOT = {"sudo", "su", "doas"}
-# In-place tasks share the user's own checkout: git commands that commit, push, move branches or drop changes there
+# Refused for in-place tasks, which share the user's checkout
 IN_PLACE_GIT = ("commit", "push", "reset", "checkout", "switch", "restore", "stash", "clean", "rebase", "merge",
                 "pull", "cherry-pick", "revert", "am", "branch", "tag", "worktree", "update-ref", "gc", "prune", "init")
 
 
 def refused(command: str, in_place: bool = False) -> str:
-    """Why a background task may never run a command on the Mac, even with the user's yes, or ''.
-    `in_place`: the task works in the user's own checkout, where git is left to them."""
+    """Why a task may never run this on the Mac, even with a yes, or ''. `in_place`: git writes are left to the user."""
     if names_secret(command):
         return "it touches secrets, which stay out of reach even with a yes"
     if reads_environment(command):

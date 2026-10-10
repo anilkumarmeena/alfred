@@ -1,6 +1,4 @@
-"""Tests for tasks' requests to run risky commands on the Mac: asking (batched, announced once, with a one-time
-nonce), answering from the command line, the phone or by voice, what the task hears, and requests lapsing or
-no longer being needed. Run with: make test"""
+"""Tests for task approval requests: asking, answering (CLI, phone, voice), what the task hears, lapsing."""
 
 import asyncio
 import hashlib
@@ -22,7 +20,6 @@ from jarvis.core.database import (
     EXPIRED,
     PENDING,
     SPENT,
-    WAIT_ACCESS,
     WAIT_APPROVAL,
     WAIT_QUESTION,
     nudges,
@@ -40,14 +37,14 @@ BREW = "brew install xcodegen"
 
 
 def item(command: str = BREW, folder: str = "/repo", tool: str = "host_run") -> dict:
-    """A host command as the task's gate puts it to the runner (host_tools.approval_item)."""
+    """Host command in the shape host_tools.approval_item gives the runner."""
     return {"tool": tool, "command": command, "folder": folder, "why": describe(command),
             "remember": remembered.pieces(command)}
 
 
 @pytest.fixture
 def pushes(monkeypatch):
-    """Every push the runner sends, and requests announced at once."""
+    """Pushes the runner sends, with approval batching cut to 0.05 s."""
     sent: list[dict] = []
 
     async def send_push(title, body, url="/", tag="", **extra):
@@ -133,7 +130,7 @@ def test_a_task_waits_quietly_then_carries_on_with_a_yes(env, monkeypatch, pushe
 
     async def runs_it(task, prompt, reporter) -> Outcome:
         ran.append(reporter.cleared(task["id"], item()))
-        ran.append(reporter.cleared(task["id"], item()))  # again in the same run, say after a failure: not asked again
+        ran.append(reporter.cleared(task["id"], item()))  # same run again (e.g. after a failure): not re-asked
         return Outcome("Installed xcodegen and built the app.", "", 0.01)
 
     prompts = fake_run(monkeypatch, asks_then_ends(), runs_it)
@@ -154,16 +151,16 @@ def test_a_task_waits_quietly_then_carries_on_with_a_yes(env, monkeypatch, pushe
     r, task, waiting, statuses, pending, answer = asyncio.run(main())
     assert waiting["status"] == "waiting" and waiting["question"] == "may it run a command that installs software (brew install)?"
     assert waiting["wait_kind"] == WAIT_APPROVAL
-    assert statuses == []  # the request itself was announced: the wait isn't, again
+    assert statuses == []  # only the request is announced, not the wait
     assert answer["outcome"] == f"Request {pending['id']} approved." and answer["state"] == APPROVED
     assert prompts[1] == (f"{profile.name()} approved request {pending['id']} on the command line. Run exactly this, once, with "
                           f"host_run, in /repo: {BREW}")
     assert ran == [True, True]
     assert r.store.get(task["id"])["status"] == "done"
-    assert r.store.approval(pending["id"])["state"] == SPENT  # the yes was good for that run only
-    assert not r.cleared(task["id"], item())  # so a later run asks afresh
+    assert r.store.approval(pending["id"])["state"] == SPENT  # the yes covers that run only
+    assert not r.cleared(task["id"], item())  # so a later run asks again
     asked, answered_push = [p for p in pushes if p["tag"] == f"approval-{pending['id']}"]
-    assert asked["category"] == "JARVIS_APPROVAL" and "category" not in answered_push  # the buttons go
+    assert asked["category"] == "JARVIS_APPROVAL" and "category" not in answered_push  # the answer push drops the buttons
     assert answered_push["title"] == f"Task {task['id']}: request approved"
 
 
@@ -216,9 +213,9 @@ def test_what_a_task_waits_for_is_its_wait_kind_not_its_wording(env, monkeypatch
 
     async def main():
         r = runner.Runner()
-        asks = r.store.create("code_change", "build", "Build it", "other")  # worded like a request, but its own
+        asks = r.store.create("code_change", "build", "Build it", "other")  # its own question, worded like a request
         r.store.set(asks["id"], status="waiting", question="may it run the migration first?", wait_kind=WAIT_QUESTION)
-        waits = r.store.create("code_change", "build", "Build it", "other")  # worded like its own question
+        waits = r.store.create("code_change", "build", "Build it", "other")  # a request, worded like a question
         r.store.set(waits["id"], status="waiting", question="Shall I go on?", wait_kind=WAIT_APPROVAL)
         for task in (asks, waits):
             r.answer(r.request_approval(task["id"], item())["id"], "approve", "cli")
@@ -227,29 +224,6 @@ def test_what_a_task_waits_for_is_its_wait_kind_not_its_wording(env, monkeypatch
     r, asks, waits = asyncio.run(main())
     assert "approved request" in r.store.take_nudges(asks["id"])[0]  # kept for its reply to the question
     assert launched == [waits["id"]] and not r.store.take_nudges(waits["id"])  # carries on at once
-
-
-def test_tasks_waiting_from_before_wait_kind_get_one_at_start(env, pushes):
-    async def main():
-        r = runner.Runner()
-        made = {name: r.store.create("code_change", name, "Build it", "other")
-                for name in ("approval", "access", "question", "both")}
-        for name in ("approval", "both"):  # both: its own question, asked with a request pending
-            r.store.ask_approval(made[name]["id"], item(), time.time() + 3600, 0)
-        questions = {"approval": runner.approval_question(r.store.approvals(made["approval"]["id"])),
-                     "access": "may it also use the Mac? To build it.", "question": "Which scheme?", "both": "Which scheme?"}
-        for name, task in made.items():
-            r.store.set(task["id"], status="waiting", question=questions[name],
-                        wants=json.dumps(["mac"]) if name == "access" else None)
-        done = r.store.create("research", "old", "Look", None)
-        r.store.set(done["id"], status="done", question="Which shop?")
-        restarted = runner.Runner()
-        return ({name: restarted.store.get(t["id"])["wait_kind"] for name, t in made.items()},
-                restarted.store.get(done["id"])["wait_kind"])
-
-    kinds, finished = asyncio.run(main())
-    assert kinds == {"approval": WAIT_APPROVAL, "access": WAIT_ACCESS, "question": WAIT_QUESTION, "both": WAIT_QUESTION}
-    assert finished is None  # only a task still waiting needs one
 
 
 def test_the_first_answer_wins_and_the_phone_needs_the_nonce(env, pushes):
@@ -265,7 +239,7 @@ def test_the_first_answer_wins_and_the_phone_needs_the_nonce(env, pushes):
         with pytest.raises(runner.NotAllowed):
             r.answer(approval["id"], "approve", "push", nonce="")
         with pytest.raises(runner.NotAllowed):
-            r.answer(approval["id"], "approve", "push")  # from the phone, but without one
+            r.answer(approval["id"], "approve", "push")  # from the phone without a nonce
         first = r.answer(approval["id"], "deny", "push", nonce=nonce)
         second = r.answer(approval["id"], "approve", "cli")
         return first, second
@@ -312,7 +286,7 @@ def test_new_instructions_withdraw_what_it_was_waiting_for_and_it_isnt_asked_aga
     assert r.approvals() == [] and "no longer needed" in late["outcome"] and not late["answered"]
     assert f"Request {pending['id']} was withdrawn unanswered: {profile.name()} sent the task new instructions" in prompts[1]
     assert "Don't use rm" in prompts[1]
-    assert [e["approval"]["id"] for e in sent if e["type"] == "approval_answered"] == [pending["id"]]  # the voice drops it
+    assert [e["approval"]["id"] for e in sent if e["type"] == "approval_answered"] == [pending["id"]]  # tells the voice side to drop it
     asks = VoiceApprovals()
     asks.add([e for e in sent if e["type"] == "approval"][0]["approval"])
     asks.drop(pending["id"])
@@ -326,7 +300,7 @@ def test_an_answer_to_one_request_keeps_the_others_waiting(env, monkeypatch, pus
     async def asks_twice(task, prompt, reporter) -> Outcome:
         reporter.session(task["id"], "s1")
         reporter.request_approval(task["id"], item())
-        await asyncio.sleep(0.2)  # a later ask: a request of its own
+        await asyncio.sleep(0.2)  # a later ask is a separate request
         reporter.request_approval(task["id"], item("rm -rf ~/old"))
         return Outcome("Waiting for both.", "", 0.01)
 
@@ -492,7 +466,7 @@ def test_a_tasks_requests_waiting_are_asked_in_one_question():
     approval, decision, scope = asks.hear("Yeah, all three accepted. We can proceed.")
     assert (approval["id"], approval["group"], decision) == (3, [3, 4], "approve")
     assert asks.due()["id"] == 7  # another task's is asked on its own
-    asks.add(request(4))  # listed again by the runner: asked already in this call
+    asks.add(request(4))  # re-listed by the runner: already asked this call
     assert asks.due()["id"] == 7
 
 
@@ -501,11 +475,11 @@ def test_only_the_next_words_answer_and_each_request_is_asked_once_a_call():
     asks.add(request(3))
     asks.ask(asks.due())
     assert asks.hear("What's on my calendar?") is None
-    assert asks.hear("Yes.") is None  # the question was withdrawn: this yes is for whatever came next
+    assert asks.hear("Yes.") is None  # question withdrawn: this yes belongs to the next thing
     assert asks.due() is None
-    asks.add(request(3))  # listed again, say by the runner: it isn't asked again in this call
+    asks.add(request(3))  # re-listed by the runner: not asked again this call
     assert asks.due() is None
-    later = VoiceApprovals()  # the next call's greeting may ask it once more
+    later = VoiceApprovals()  # the next call may ask once more
     later.add(request(3))
     later.ask(later.due())
     assert later.hear("No, don't.")[1] == "deny"
@@ -593,7 +567,7 @@ def test_the_users_words_answer_one_request_at_most():
     heard = Heard()
     assert heard.take("approve") is None  # nothing said yet
     heard.turn("  Approve it. ")
-    assert heard.take("deny") is None  # not what they said, and not spent on it
+    assert heard.take("deny") is None  # not what they said, so not spent
     assert heard.take("approve") == "Approve it."
     assert heard.take("approve") is None  # one utterance, one request
     heard.turn("Read me my latest email.")
@@ -604,13 +578,13 @@ def test_the_brain_keeps_the_users_words_as_each_turn_starts(monkeypatch):
     notes = Notes()
     notes.notes.append("Task 5, the Chrome cleanup, wants to run a command that stops processes (pkill).")
     prompt = notes.turn("Let it close the hidden Chrome.")
-    assert conversation.current().heard.said == "Let it close the hidden Chrome."  # the user's words alone, not what was announced
+    assert conversation.current().heard.said == "Let it close the hidden Chrome."  # the user's words only, not the announcement
     assert "stops processes" in prompt
 
 
 @pytest.fixture
 def through(env, pushes, monkeypatch):
-    """A runner that task_approve and task_list talk to in process, and a fresh record of what the user said."""
+    """Runner wired in-process to task_approve and task_list."""
     r = runner.Runner()
 
     async def approvals_():
@@ -632,7 +606,7 @@ def running_task(r: runner.Runner, title: str = "the Chrome cleanup") -> dict:
 
 
 async def asked(r: runner.Runner, task: dict, command: str) -> dict:
-    """A request, once it has been put to the user."""
+    """Request `command` and wait until it has been put to the user."""
     approval = r.request_approval(task["id"], item(command))
     await asyncio.sleep(0.2)
     return approval
@@ -671,7 +645,7 @@ def test_the_assistant_cant_answer_on_words_that_dont_say_so(through):
     async def main():
         task = running_task(r)
         approval = await asked(r, task, CHROME)
-        conversation.current().heard.turn("Read me my latest email.")  # which, say, tells JARVIS to approve task 1's request
+        conversation.current().heard.turn("Read me my latest email.")  # e.g. an email telling JARVIS to approve task 1's request
         with pytest.raises(ValueError, match="doesn't plainly tell you to approve"):
             await task_tools.task_approve(task["id"], True)
         still = r.store.approval(approval["id"])["state"]
@@ -722,7 +696,7 @@ def test_the_users_order_answers_just_the_requests_doing_it(through):
         delete = await asked(r, task, "rm -rf build")
         conversation.current().heard.turn("Okay, push it.")
         done = await task_tools.task_approve(task["id"], True)
-        conversation.current().heard.turn("Restart now.")  # orders nothing the task is waiting for
+        conversation.current().heard.turn("Restart now.")  # names nothing the task is waiting for
         with pytest.raises(ValueError, match="doesn't plainly tell you to approve"):
             await task_tools.task_approve(task["id"], True)
         return push, delete, done
@@ -782,5 +756,5 @@ def test_task_list_shows_each_tasks_waiting_requests():
 def test_the_approve_tool_is_the_voice_brains_alone():
     approve = next(t for t in tools.all_tools() if t.name == "task_approve")
     assert not approve.gated and "mcp__jarvis__task_approve" in jarvis_server()[1]  # allowed outright
-    assert "task_approve" not in worker.READ_ONLY_TOOLS  # tasks never do
+    assert "task_approve" not in worker.READ_ONLY_TOOLS  # never available to tasks
     assert approve.required == ["id", "approve"]

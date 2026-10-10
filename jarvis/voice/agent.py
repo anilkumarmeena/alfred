@@ -1,13 +1,10 @@
-"""JARVIS voice entry point.
+"""JARVIS voice entry point (LiveKit side; per-call state lives in VoiceSession).
 
-  uv run python -m jarvis.voice.agent console   talk through the Mac's mic and speakers, in the terminal
+  uv run python -m jarvis.voice.agent console   talk via the Mac's mic and speakers in the terminal
   uv run python -m jarvis.voice.agent dev       serve rooms on the local LiveKit server, with reload
-  uv run python -m jarvis.voice.agent start     serve rooms on the local LiveKit server (what launchd runs 24/7)
+  uv run python -m jarvis.voice.agent start     serve rooms on the local LiveKit server (launchd, 24/7)
 
-Everything runs on this Mac: LiveKit server for audio transport, Whisper for
-speech-to-text, LiveKit's local turn detector, Kokoro for the voice, and the
-brain (the local claude CLI) for thinking. Each call's own parts and state are one VoiceSession (jarvis.voice.session);
-this module is LiveKit's side of it.
+All local: LiveKit server, Whisper STT, LiveKit's turn detector, Kokoro TTS, claude CLI brain.
 """
 
 import asyncio
@@ -33,14 +30,14 @@ log = logging.getLogger("jarvis")
 
 
 class BrainPlaceholder(llm.LLM):
-    """AgentSession only runs its text pipeline when it has an LLM; JarvisAgent.llm_node replaces it."""
+    """AgentSession needs an LLM to run its text pipeline; JarvisAgent.llm_node does the real work."""
 
     def chat(self, **kwargs):
         raise NotImplementedError("JARVIS answers through jarvis.brain")
 
 
 class JarvisAgent(Agent):
-    """Each finished turn handed to the call's VoiceSession, and its reply back to LiveKit."""
+    """Bridges finished turns to the call's VoiceSession and streams replies back to LiveKit."""
 
     def __init__(self, voice: VoiceSession) -> None:
         super().__init__(instructions="Answers come from jarvis.brain.")
@@ -59,27 +56,26 @@ class JarvisAgent(Agent):
 
 
 def prewarm(proc: JobProcess) -> None:
-    """Each job process's setup. Whisper and Kokoro aren't loaded here: they live in the shared process (speech)."""
-    import jarvis.brain.cli  # noqa: F401  (the tools, persona and Agent SDK load here, not when a user connects)
+    """Per-job-process setup. Whisper and Kokoro live in the shared speech process, not here."""
+    import jarvis.brain.cli  # noqa: F401  (preload tools, persona, Agent SDK before a user connects)
 
-    # A click or breath no longer starts an utterance (config.VAD_MIN_SPEECH); barge-in's 0.5 s is unchanged
+    # VAD_MIN_SPEECH keeps clicks and breaths from starting an utterance; barge-in keeps its own 0.5 s
     proc.userdata["vad"] = silero.VAD.load(min_speech_duration=config.VAD_MIN_SPEECH,
                                            min_silence_duration=config.VAD_MIN_SILENCE,
                                            activation_threshold=config.VAD_THRESHOLD)
-    proc.userdata["denoise"] = denoise.load()  # None when JARVIS_DENOISE=off or the model won't load: the original mic
+    proc.userdata["denoise"] = denoise.load()  # None (raw mic) if JARVIS_DENOISE=off or the model fails
     whisper = WhisperSTT()
     whisper.warm_up()  # loads the speech gate's VAD
     proc.userdata["stt"] = whisper
     proc.userdata["tts"] = KokoroTTS()
-    proc.userdata["tts_stream"] = speech.streaming(proc.userdata["tts"])  # what the session speaks through
+    proc.userdata["tts_stream"] = speech.streaming(proc.userdata["tts"])  # the session's TTS
 
 
-# Whisper and Kokoro load once, in LiveKit's inference process, which the worker starts before taking calls and every
-# job process shares (jarvis.voice.speech). Each job process loading its own copy, a warm spare included, made an
-# 8 GB Mac swap; now a spare (JARVIS_VOICE_IDLE_PROCESSES, default 1) holds only the small VAD and noise filter.
+# Whisper and Kokoro load once, in LiveKit's shared inference process: a copy per job process (spares included)
+# makes an 8 GB Mac swap. Spares hold only the VAD and noise filter.
 speech.register_runners()
-os.environ["LIVEKIT_URL"] = config.LIVEKIT_URL  # the worker reads it from here; .env needn't say it
-# The LiveKit keys from the vault (or, on a first setup, .env: jarvis.core.credentials)
+os.environ["LIVEKIT_URL"] = config.LIVEKIT_URL  # the worker reads it from env
+# LiveKit keys from the vault (or .env on first setup)
 server = AgentServer(setup_fnc=prewarm, num_idle_processes=config.VOICE_IDLE_PROCESSES, initialize_process_timeout=120,
                      api_key=credentials.get(credentials.LIVEKIT_KEY),
                      api_secret=credentials.get(credentials.LIVEKIT_SECRET))
@@ -87,42 +83,41 @@ server = AgentServer(setup_fnc=prewarm, num_idle_processes=config.VOICE_IDLE_PRO
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
-    talk = conversation.begin()  # this conversation's own state, and the profile it runs as
+    talk = conversation.begin()  # conversation state and profile
     stt = ctx.proc.userdata["stt"]
-    barge = BargeIn(stt.speaker)  # while JARVIS replies, only the user's voice interrupts it
-    # The local mini turn detector, with a fast model deciding when it's unsure (jarvis.voice.turn)
+    barge = BargeIn(stt.speaker)  # while replying, only the user's voice interrupts
+    # Local mini turn detector; a fast model breaks ties when it's unsure
     turns = turn.JudgedTurns(inference.TurnDetector(version="v1-mini", local_fallback=True),
                              turn.Judge() if config.TURN_JUDGE else None)
-    pacing = turn.Pacing()  # each user's own end-of-turn delays, the owner's to start with
+    pacing = turn.Pacing()  # per-user end-of-turn delays, owner's at start
     session = AgentSession(
         stt=stt,
         llm=BrainPlaceholder(),
         tts=ctx.proc.userdata["tts_stream"],
         vad=BargeInVAD(denoise.session_vad(ctx.proc.userdata["vad"], ctx.proc.userdata["denoise"]), barge),
         turn_handling={
-            # Local models only, and VAD-based barge-in (the "adaptive" interruption model runs on LiveKit Cloud)
+            # Local only: VAD barge-in (the "adaptive" interruption model needs LiveKit Cloud)
             "turn_detection": turns,
             "endpointing": await asyncio.to_thread(pacing.options),
             "interruption": {"mode": "vad"},
-            # Speculative replies would write half-heard turns into the brain's history.
+            # Speculative replies would put half-heard turns into the brain's history.
             "preemptive_generation": {"enabled": False},
         },
     )
     pacing.attach(session)
-    # Voice, speed, the speech gate, the speech vocabulary and the speaker check as Settings and the database have them
-    # now, so a change there (or a new voiceprint) needs no restart
+    # Read per call so Settings changes (or a new voiceprint) need no restart
     ctx.proc.userdata["tts"].use(config.tts_voice(), config.tts_speed())
     mode = config.speech_gate()
     stt.gate.use(mode, config.speech_gate_save_audio(mode))
     stt.use_vocabulary(await asyncio.to_thread(vocabulary.load), config.STT_PROMPT)
-    stt.take_clips()  # none of the last conversation's
+    stt.take_clips()  # drop the last conversation's clips
     stt.speaker.use(config.speaker_check(), await asyncio.to_thread(voiceprints.load), config.speaker_threshold())
     speaker_ready = asyncio.create_task(asyncio.to_thread(stt.speaker.warm_up))  # while the room connects
     voice = VoiceSession(make_brain(), talk, stt=stt, turns=turns, pacing=pacing,
                          router=Router(config.VOICE_QUICK_MODEL) if config.VOICE_QUICK_MODEL else None,
-                         moment=Moment() if config.PROACTIVE_JUDGE else None,  # when to bring things up
-                         timings=timing.Timings(written=pacing.learn),  # each turn's stages, in logs/voice-turns.jsonl
-                         push=_to_phone)  # what isn't said goes to the phone
+                         moment=Moment() if config.PROACTIVE_JUDGE else None,  # when to raise things
+                         timings=timing.Timings(written=pacing.learn),  # logs/voice-turns.jsonl
+                         push=_to_phone)  # unspoken announcements go to the phone
     voice.open()
 
     @session.on("user_input_transcribed")
@@ -132,7 +127,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
     @session.on("agent_state_changed")
     def speaking(ev) -> None:
-        stt.speaker.jarvis_speaking(ev.new_state == "speaking")  # a short clip just after it is likely a reply
+        stt.speaker.jarvis_speaking(ev.new_state == "speaking")  # a short clip right after is likely a reply
         barge.replying(ev.new_state)
 
     @session.on("conversation_item_added")
@@ -146,33 +141,33 @@ async def entrypoint(ctx: JobContext) -> None:
     await session.start(
         room=ctx.room,
         agent=JarvisAgent(voice),
-        room_options=denoise.room_options(ctx.proc.userdata["denoise"]),  # the mic through DeepFilterNet
+        room_options=denoise.room_options(ctx.proc.userdata["denoise"]),  # mic through DeepFilterNet
     )
-    quiet.follow(session, ctx.room)  # speaker off: replies as text only, with no speech made
-    quiet.apply(session, (await ctx.wait_for_participant()).attributes)  # as the user joined, before the greeting
+    quiet.follow(session, ctx.room)  # speaker off: text-only replies
+    quiet.apply(session, (await ctx.wait_for_participant()).attributes)  # initial switch, before the greeting
     hello = await greeting
-    voice.floor.said(hello)  # it may end by asking about a task's request
+    voice.floor.said(hello)  # it may end with a task's question
     await session.say(hello)
     voice.start(session)
     await asyncio.gather(warmup, speaker_ready)
 
 
 async def _to_phone(text: str) -> None:
-    """An announcement the conversation didn't take, as a push to the phone."""
+    """Push an announcement the conversation didn't take to the phone."""
     if config.PUSH_ENABLED:
         await push.send_push("JARVIS", text, "/", "voice-" + hashlib.sha256(text.encode()).hexdigest()[:16])
 
 
 def _child_memory() -> None:
-    """Have the worker's child processes hand freed memory back to macOS (JARVIS_VOICE_MALLOC_LARGE_CACHE). Its malloc
-    otherwise keeps large freed blocks cached, still counted against the process: Kokoro's buffers for one long
-    sentence kept the speech process 1 GB bigger. Read when each process starts, so it's set before the worker starts
-    any; this process has its own malloc already, and is small."""
+    """Make child processes return freed memory to macOS (unless JARVIS_VOICE_MALLOC_LARGE_CACHE).
+
+    macOS malloc caches large freed blocks; Kokoro's buffers for one long sentence kept the speech process 1 GB bigger.
+    Read at process start, so it must be set before the worker spawns children."""
     if not config.VOICE_MALLOC_LARGE_CACHE:
         os.environ.setdefault("MallocLargeCache", "0")
 
 
 if __name__ == "__main__":
     _child_memory()
-    ram.watch(config.VOICE_MEMORY_LOG_MINUTES)  # one line in logs/agent.log for all the voice processes
+    ram.watch(config.VOICE_MEMORY_LOG_MINUTES)  # periodic memory line in logs/agent.log
     cli.run_app(server)

@@ -1,31 +1,12 @@
-"""Scheduled jobs: reminders, repeating background tasks and "watch this for me" loops, kept in the schedules table of
-data/tasks.db, so they survive restarts. The voice agent's schedule tools (jarvis.tools.schedules) add, change and
-cancel them; the task runner's scheduler (jarvis.tasks.scheduler) runs them when they're due.
+"""Scheduled jobs (schedules table in data/tasks.db). Voice tools add/change/cancel; the runner's scheduler runs them.
 
-  reminder  says `text` when due: a Mac notification, a push to the phone and, in a live session, aloud
-  task      starts a background task with `text` as its instruction (`task_kind`, research unless said)
-  watch     checks every `every` minutes whether `text` has happened, until it has or `until` passes. The check is a
-            background task (probe "task"), or, with no model and next to no memory: a web page answering, and
-            showing `expect` if given ("url"); mail matching a Gmail search arriving ("gmail"); or a new Chat
-            message from someone ("chat")
-  command   runs `text`, a shell command, in `folder` at its times, with no model while it runs: each run is a command
-            task (jarvis.tasks.command_jobs), as the voice shell's start_job starts, in the task list like any task.
-            `timeout_minutes` stops a run that goes on too long, and a run still going holds back the next. Only its
-            end wakes a model: a short call sums up a success (unless `summarize` is off), and one reads a failure
-            and, with `auto_fix`, decides whether a code_change task in `project` fixes it at once, waits for the
-            user's yes, or there's nothing to fix; a fixed command runs once more. `log_file` is a file the command
-            writes its own log to, read beside its output; `run` is how its latest run went, and `last_task` that run
-
-A one-off job runs once, at `next_run`. A repeating one runs at a time of day (`at`) on some days of the week (`days`),
-or every `every` minutes. Times are local, in the profile's time zone (jarvis.core.profile).
-
-A task keeps a notepad: what its latest run noted for the next (job memory, JSON {"at", "text"}); with `only_changes`
-it stays silent unless something changed since. `retries` and `failing` are the scheduler's: how many times a run that
-failed on a passing error has been tried again, and the kind of failure last said.
-
-A command job is made, or its command or folder changed, only through the voice brain's schedule tools, whose calls
-meet the shell's gate (jarvis.safety.shell.ShellGate) exactly as a command run there would: a risky one needs the
-user's yes, and one touching secrets is refused.
+  reminder  say `text` (Mac notification, phone push, aloud in a live session)
+  task      start a background task with `text` as instruction (`task_kind`, default research)
+  watch     every `every` minutes until `text` happens or `until`: probe task (model), or cheap url/gmail/chat probes
+  command   run shell `text` in `folder` as a model-free command task; a model only summarises or (auto_fix) fixes it
+Timing: one-off at `next_run`, or `at` on `days`, or every `every` minutes; local profile time zone.
+Task jobs keep a `notepad` for the next run. Command jobs are only made or changed through voice tools whose calls
+pass the shell gate (risky needs a yes, secrets refused).
 """
 
 import json
@@ -45,63 +26,57 @@ ACTIVE, PAUSED, DONE, CANCELLED, EXPIRED = "active", "paused", "done", "cancelle
 LIVE = (ACTIVE, PAUSED)
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 REPEATS = {"daily": DAYS, "weekdays": DAYS[:5], "weekends": DAYS[5:]}
-# Minutes between a watch's checks: the least, and what it is unless said. A check by a background task starts a
-# Claude session, so it's spaced out more than the cheap ones.
+# Watch check interval in minutes: minimum and default per probe. Task probes start a Claude session, so are sparser.
 MIN_EVERY = {"task": 10, "url": 1, "gmail": 5, "chat": 5}
 EVERY = {"task": 15, "url": 5, "gmail": 10, "chat": 10}
-MIN_TASK_EVERY = 30  # a background task repeating by the clock, not by the day
+MIN_TASK_EVERY = 30  # for task jobs repeating by interval
 MIN_REMINDER_EVERY = 5
 MIN_COMMAND_EVERY = 10
-WATCH_HOURS, WATCH_MAX_DAYS = 24, 7  # how long a watch lasts unless said, and at most
-MAX_LIVE, MAX_TASK_WATCHES = 30, 5  # jobs active or paused at once, and of them watches checked by background tasks
+WATCH_HOURS, WATCH_MAX_DAYS = 24, 7  # default and max watch lifetime
+MAX_LIVE, MAX_TASK_WATCHES = 30, 5  # live jobs; of those, task-probe watches
 TASK_KINDS = ("research", "code_question", "code_change")
-WATCH_TASK_KINDS = ("research", "code_question")  # a check only reads
+WATCH_TASK_KINDS = ("research", "code_question")  # read-only
 
 _SCHEMA = """
 create table schedules (
-    id integer primary key autoincrement,  -- never reused, so an old number never names a new job
+    id integer primary key autoincrement,  -- never reused
     kind text not null,         -- reminder, task, watch, command
     title text not null,
-    text text not null,         -- what a reminder says, a task's instruction, what a watch waits for, or the command
-    task_kind text,             -- task, and watch probe task: the background task's kind
-    project text,               -- for the code kinds, and the project a command belongs to
-    at text,                    -- HH:MM, for a job repeating on days of the week
-    days text,                  -- those days, e.g. mon,tue,wed,thu,fri
-    every integer,              -- minutes between runs, for a job repeating by the clock (every watch)
-    until real,                 -- when it stops; null: never
+    text text not null,         -- reminder text, task instruction, watch condition or command
+    task_kind text,             -- background task kind (task, watch probe task)
+    project text,               -- code task kinds and commands
+    at text,                    -- HH:MM, with days
+    days text,                  -- e.g. mon,tue,wed,thu,fri
+    every integer,              -- minutes between runs (all watches)
+    until real,                 -- null: never
     probe text,                 -- watch: task, url, gmail or chat
-    target text,                -- watch: the URL, the Gmail search, or the person
-    expect text,                -- watch url: text the page must show
+    target text,                -- watch: URL, Gmail search or person
+    expect text,                -- watch url: required page text
     status text not null,       -- active, paused, done, cancelled, expired
-    next_run real,              -- null once there's no run to come
+    next_run real,              -- null: no further runs
     last_run real,
     runs integer not null default 0,
-    fails integer not null default 0,   -- checks in a row that couldn't be made
-    last_task integer,          -- the background task of its latest run
-    last_result text,           -- what its latest run found, in a sentence
-    baseline text,              -- watch chat: JSON list of the messages already there at its first check
+    fails integer not null default 0,   -- consecutive failed checks
+    last_task integer,          -- task id of the latest run
+    last_result text,           -- one-sentence latest result
+    baseline text,              -- watch chat: JSON keys of messages present at first check
     created real not null,
     updated real not null,
-    notepad text,               -- task: what its latest run noted for the next one (job memory)
-    only_changes integer not null default 0,  -- task: 1 stays silent unless something changed since the last run
-    retries integer not null default 0,       -- task: retries so far of a run that failed on a passing error
-    failing text,               -- task: the kind of failure last said (passing, limit, error), till a run succeeds
-    folder text,                -- command: the folder it runs in
-    timeout_minutes integer,    -- command: a run is stopped after this long; null: never
-    summarize integer not null default 1,  -- command: 1 sums up a run that succeeds with a short model call
-    auto_fix integer not null default 0,   -- command: 1 lets a task fix a run that fails, then reruns it once
-    log_file text,              -- command: the log it writes itself, a path or pattern in its folder
-    run text                    -- command: JSON of its latest run: its command task, and once it ends how it went
+    notepad text,               -- task: JSON {at, text} for the next run
+    only_changes integer not null default 0,  -- task: 1 = silent unless changed
+    retries integer not null default 0,       -- task: retries after transient failure
+    failing text,               -- task: last failure kind announced, cleared on success
+    folder text,                -- command: working dir
+    timeout_minutes integer,    -- command: null: no limit
+    summarize integer not null default 1,  -- command: 1 = model summary on success
+    auto_fix integer not null default 0,   -- command: 1 = fix failures via a task, rerun once
+    log_file text,              -- command: own log path/pattern in folder
+    run text                    -- command: JSON of the latest run (see run_of)
 )"""
-# Columns added before versions were kept, for databases made before them (database.migrate)
-_ADDED = {"notepad": "text", "only_changes": "integer not null default 0", "retries": "integer not null default 0",
-          "failing": "text", "folder": "text", "timeout_minutes": "integer",
-          "summarize": "integer not null default 1", "auto_fix": "integer not null default 0", "log_file": "text",
-          "run": "text"}
 
 
 def _db() -> AbstractContextManager[sqlite3.Connection]:
-    return database.table("schedules", _SCHEMA, added=_ADDED)
+    return database.table("schedules", _SCHEMA)
 
 
 def _now(now: datetime | None) -> datetime:
@@ -112,7 +87,7 @@ def _now(now: datetime | None) -> datetime:
 
 
 def parse_time(text: str, now: datetime | None = None) -> datetime:
-    """A local time: '17:00' (its next occurrence, today or tomorrow) or a date and time, '2026-10-06T17:00'."""
+    """Parse local '17:00' (next occurrence) or '2026-10-06T17:00'."""
     now, text = _now(now), text.strip()
     if re.fullmatch(r"\d{1,2}:\d{2}", text):
         t = clock_time.fromisoformat(text.zfill(5))
@@ -126,7 +101,7 @@ def parse_time(text: str, now: datetime | None = None) -> datetime:
 
 
 def parse_days(repeat: str) -> str:
-    """'weekdays' -> 'mon,tue,wed,thu,fri'; also daily, weekends, or days named like 'mon, wed, friday'."""
+    """'weekdays' -> 'mon,tue,wed,thu,fri'; also daily, weekends, or 'mon, wed, friday'."""
     repeat = repeat.strip().lower()
     if repeat in REPEATS:
         return ",".join(REPEATS[repeat])
@@ -137,8 +112,7 @@ def parse_days(repeat: str) -> str:
 
 
 def _on_days(at: str, days: str, moment: datetime, step: int) -> datetime:
-    """The nearest `at` o'clock on one of `days`: strictly after `moment` going forward (`step` 1), at or before it
-    going back (-1)."""
+    """Nearest `at` on one of `days`: strictly after `moment` (step 1) or at/before it (step -1)."""
     t, wanted = clock_time.fromisoformat(at), {DAYS.index(d) for d in days.split(",")}
     moment = moment.astimezone(profile.tz())
     for i in range(8):
@@ -146,7 +120,7 @@ def _on_days(at: str, days: str, moment: datetime, step: int) -> datetime:
         when = datetime.combine(day, t, profile.tz())
         if day.weekday() in wanted and (when > moment if step > 0 else when <= moment):
             return when
-    raise ValueError(f"no day in {days}")  # unreachable with at least one day
+    raise ValueError(f"no day in {days}")  # unreachable
 
 
 def next_on_days(at: str, days: str, after: datetime) -> datetime:
@@ -158,7 +132,7 @@ def last_on_days(at: str, days: str, before: datetime) -> datetime:
 
 
 def following(job: dict, after: float) -> float | None:
-    """When a job runs next after a run at `after`; None for a one-off job, or once that would be past its end."""
+    """Next run time after a run at `after`; None for one-offs or past `until`."""
     if job["every"]:
         at = after + job["every"] * 60
     elif job["days"]:
@@ -169,7 +143,7 @@ def following(job: dict, after: float) -> float | None:
 
 
 def clock(ts: float, now: datetime | None = None) -> str:
-    """'17:00', 'tomorrow 09:00' or 'Mon 12 Oct 09:00', as near as it is."""
+    """'17:00', 'tomorrow 09:00' or 'Mon 12 Oct 09:00', depending on distance."""
     at, today = datetime.fromtimestamp(ts, profile.tz()), _now(now).date()
     if at.date() == today:
         return f"{at:%H:%M}"
@@ -183,7 +157,7 @@ _DAYS_SAID = {",".join(REPEATS["daily"]): "every day", ",".join(REPEATS["weekday
 
 
 def describe(job: dict, now: datetime | None = None) -> str:
-    """When the job runs, in words: 'every weekday at 09:00', 'once, at 17:00', 'every 15 minutes until 18:00'."""
+    """Schedule in words, e.g. 'every weekday at 09:00', 'every 15 minutes until 18:00'."""
     if n := job["every"]:
         said = f"every {n} minutes" if n % 60 else ("every hour" if n == 60 else f"every {n // 60} hours")
     elif job["days"]:
@@ -198,14 +172,14 @@ CHECKS = {"task": "a background task checks", "url": "JARVIS checks the page", "
 
 
 def check_text(job: dict) -> str:
-    """How a watch checks, in words: 'JARVIS checks the page: https://..., for "v2"'; empty for other jobs."""
+    """How a watch checks, in words; "" for other kinds."""
     if job["kind"] != "watch":
         return ""
     said = CHECKS[job["probe"]] + (f": {job['target']}" if job["target"] else "")
     return said + (f", for \"{job['expect']}\"" if job["expect"] else "")
 
 
-# ── The jobs ────────────────────────────────────────────────────
+# ── Jobs ────────────────────────────────────────────────────────
 
 
 _IN_LIVE = f"status in ({', '.join('?' * len(LIVE))})"
@@ -227,13 +201,13 @@ def find(job_id: int) -> dict:
 
 
 def titles(ids: set[int]) -> dict[int, str]:
-    """The titles of these jobs, by id, finished ones included."""
+    """Titles by id, finished jobs included."""
     found = _rows(f"select id, title from schedules where id in ({', '.join('?' * len(ids))})", tuple(ids))
     return {r["id"]: r["title"] for r in found}
 
 
 def items(finished_days: float = 0) -> list[dict]:
-    """Active and paused jobs, soonest first; and those finished in the last `finished_days`, latest first."""
+    """Live jobs soonest first, then those finished in the last `finished_days`, latest first."""
     live = _rows(f"select * from schedules where {_IN_LIVE} order by next_run is null, next_run", LIVE)
     if not finished_days:
         return live
@@ -242,17 +216,17 @@ def items(finished_days: float = 0) -> list[dict]:
 
 
 def due(now: float) -> list[dict]:
-    """Active jobs whose next run has come, earliest first."""
+    """Active jobs due by `now`, earliest first."""
     return _rows("select * from schedules where status = ? and next_run <= ? order by next_run", (ACTIVE, now))
 
 
 def lapsed(now: float) -> list[dict]:
-    """Active or paused jobs whose end has passed."""
+    """Live jobs past their `until`."""
     return _rows(f"select * from schedules where {_IN_LIVE} and until <= ?", (*LIVE, now))
 
 
 def update(job_id: int, **fields) -> dict:
-    """Set fields on a job (their names come from code, never from input); returns it."""
+    """Set fields on a job and return it. Field names are interpolated: callers must never pass user input."""
     columns = ", ".join(f"{k} = ?" for k in fields)
     with _db() as db:
         db.execute(f"update schedules set {columns} where id = ?", (*fields.values(), job_id))
@@ -264,7 +238,7 @@ def baseline(job: dict) -> set[str]:
 
 
 def notepad(job: dict) -> dict | None:
-    """A task job's notepad, {"at", "text"}: what its latest run noted for the next; None if there's none."""
+    """A task job's notepad {"at", "text"}, or None."""
     try:
         found = json.loads(job.get("notepad") or "null")
     except ValueError:
@@ -273,7 +247,7 @@ def notepad(job: dict) -> dict | None:
 
 
 def prune(days: float) -> int:
-    """Forget jobs that finished more than `days` ago; returns how many."""
+    """Delete jobs finished more than `days` ago; returns the count."""
     with _db() as db:
         return db.execute(f"delete from schedules where not {_IN_LIVE} and updated < ?",
                           (*LIVE, time.time() - days * 86400)).rowcount
@@ -285,7 +259,7 @@ def _clean(text: str) -> str:
 
 def _timing(job: dict, when: str, in_minutes: int, repeat: str, every_minutes: int, until: str,
             now: datetime) -> dict:
-    """The job's at, days, every, until and next_run, checked. A job being changed keeps its end unless given one."""
+    """Validated at/days/every/until/next_run. A changed job keeps its `until` unless a new one is given."""
     kind, probe = job["kind"], job.get("probe") or "task"
     if repeat and every_minutes:
         raise ValueError("Give repeat (days of the week) or every_minutes, not both.")
@@ -301,7 +275,7 @@ def _timing(job: dict, when: str, in_minutes: int, repeat: str, every_minutes: i
         if not when:
             raise ValueError("A job repeating on days of the week needs when: the time of day, as HH:MM.")
         out["at"], out["days"] = f"{start:%H:%M}", parse_days(repeat)
-        # A bare time of day starts from now; a date and time from that moment
+        # Bare HH:MM counts from now; a full datetime from that moment
         from_ = now if re.fullmatch(r"\s*\d{1,2}:\d{2}\s*", when) else max(now, start - timedelta(seconds=1))
         first = next_on_days(out["at"], out["days"], from_)
     elif every_minutes or kind == "watch":
@@ -311,7 +285,7 @@ def _timing(job: dict, when: str, in_minutes: int, repeat: str, every_minutes: i
         if every < least:
             raise ValueError(f"Every {least} minutes at most often for this kind of job.")
         out["every"] = every
-        # A watch looks straight away; a repeating reminder or task first runs one interval from now
+        # Watches check at once; other repeating jobs first run one interval from now
         first = start or (now if kind == "watch" else now + timedelta(minutes=every))
     else:
         if not start:
@@ -325,8 +299,7 @@ def _timing(job: dict, when: str, in_minutes: int, repeat: str, every_minutes: i
 
 
 def _end(job: dict, until: str, now: datetime, kept: float | None = None) -> float | None:
-    """When a job stops: `until`, else the end it had (`kept`), else a watch's default; checked against its timing
-    and its next run."""
+    """End time: `until`, else `kept`, else a watch's default. Must follow the next run; only for repeating jobs."""
     end = parse_time(until, now) if until else datetime.fromtimestamp(kept, profile.tz()) if kept else None
     if job["kind"] == "watch":
         end = end or now + timedelta(hours=WATCH_HOURS)
@@ -342,7 +315,7 @@ def _end(job: dict, until: str, now: datetime, kept: float | None = None) -> flo
 
 
 def _what(kind: str, task_kind: str, project: str, probe: str, target: str, expect: str) -> dict:
-    """The job's task_kind, project, probe, target and expect, checked."""
+    """Validated task_kind, project, probe, target and expect."""
     out = {"task_kind": None, "project": None, "probe": None, "target": None, "expect": None}
     if kind == "watch":
         probe = probe or "task"
@@ -374,9 +347,10 @@ def _what(kind: str, task_kind: str, project: str, probe: str, target: str, expe
 
 
 def place(folder: str, project: str = "") -> tuple[str, str | None]:
-    """Where a command runs, as a full path, and the project it belongs to (None if none): `folder` (~ allowed;
-    relative to the project's folder if a project is named), else the project's own folder. Its project is the one
-    whose folder holds it most closely, the one named first."""
+    """(absolute folder, owning project or None) for a command job.
+
+    `folder` may use ~ or be relative to the named project; defaults to the project's folder. Secret folders refused.
+    """
     from jarvis.safety.commands import secret_path
     from jarvis.tasks import projects
     from jarvis.tasks.command_jobs import project_of
@@ -401,16 +375,15 @@ def place(folder: str, project: str = "") -> tuple[str, str | None]:
 
 
 def command_line(command: str, folder: str) -> str:
-    """A command job's command as the shell's gate weighs it: run in its folder."""
+    """Command as the shell gate evaluates it: prefixed with a cd into its folder."""
     return f"cd {shlex.quote(folder)} && {command.strip()}"
 
 
-COMMAND_TOOLS = ("schedule_add", "schedule_change")  # the voice tools that can keep a command (jarvis.tools.schedules)
+COMMAND_TOOLS = ("schedule_add", "schedule_change")  # voice tools that can store a command
 
 
 def command_called(tool: str, args: dict) -> str | None:
-    """The command a schedule_add or schedule_change call would keep for JARVIS to run, put as command_line() puts it,
-    for the voice shell's gate to weigh before the call goes ahead; None for a call that keeps none."""
+    """Command line a schedule_add/schedule_change call would store, for the shell gate to check first; else None."""
     command, folder, project = (str(args.get(k) or "").strip() for k in ("text", "folder", "project"))
     if tool == "schedule_change":
         job = get(args["id"]) if (command or folder) and isinstance(args.get("id"), int) else None
@@ -421,7 +394,7 @@ def command_called(tool: str, args: dict) -> str | None:
         return None
     try:
         folder = place(folder, project)[0]
-    except ValueError:  # the call fails on it anyway: weighed as given
+    except ValueError:  # the call will fail anyway; gate the raw folder
         pass
     return command_line(command, folder)
 
@@ -441,8 +414,7 @@ def _log_file(log_file: str) -> str | None:
 
 def _command(job: dict, folder: str | None, project: str, timeout_minutes: int | None, summarize: bool | None,
              auto_fix: bool | None, log_file: str | None) -> dict:
-    """A command job's folder, project, timeout_minutes, summarize, auto_fix and log_file, checked: those given, over
-    what `job` has (nothing, for a new one). Auto-fix is on unless said, once there's a project to fix it in."""
+    """Validated command fields given, layered over `job` ({} for new). auto_fix defaults on when there's a project."""
     out: dict = {}
     if folder is not None:
         out["folder"], out["project"] = place(folder, project)
@@ -455,7 +427,7 @@ def _command(job: dict, folder: str | None, project: str, timeout_minutes: int |
     if log_file is not None:
         out["log_file"] = _log_file(log_file)
     project = out["project"] if "project" in out else job.get("project")
-    if auto_fix is None and not job:  # a new job
+    if auto_fix is None and not job:  # new job
         auto_fix = bool(project)
     if auto_fix is not None:
         if auto_fix and not project:
@@ -463,13 +435,15 @@ def _command(job: dict, folder: str | None, project: str, timeout_minutes: int |
                              "code_change task there.")
         out["auto_fix"] = int(auto_fix)
     elif not project and job.get("auto_fix"):
-        out["auto_fix"] = 0  # moved out of its project: nothing to fix in
+        out["auto_fix"] = 0  # no project left to fix in
     return out
 
 
 def run_of(job: dict) -> dict | None:
-    """A command job's latest run, or None before its first: {"task", "started", "attempt"}, its command task's id
-    (jarvis.tasks.command_jobs), and once it has ended "ended", "outcome", "code", "summary" and any "fix_task"."""
+    """Latest run of a command job, or None.
+
+    {"task", "started", "attempt"}, plus "ended", "outcome", "code", "summary" and optional "fix_task" once done.
+    """
     try:
         found = json.loads(job.get("run") or "null")
     except ValueError:
@@ -493,7 +467,7 @@ def add(kind: str, title: str, text: str, when: str = "", in_minutes: int = 0, r
         target: str = "", expect: str = "", only_changes: bool = False, folder: str = "", timeout_minutes: int = 0,
         summarize: bool | None = None, auto_fix: bool | None = None, log_file: str = "",
         now: datetime | None = None) -> dict:
-    """A new job, checked and saved; returns it."""
+    """Validate and save a new job; returns it."""
     now = _now(now)
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {', '.join(KINDS)}.")
@@ -525,10 +499,11 @@ def change(job_id: int, title: str = "", text: str = "", when: str = "", in_minu
            only_changes: bool | None = None, folder: str = "", timeout_minutes: int | None = None,
            summarize: bool | None = None, auto_fix: bool | None = None, log_file: str | None = None,
            now: datetime | None = None) -> dict:
-    """Change an active or paused job: what's given replaces what it had. A new time (when, in_minutes, repeat or
-    every_minutes) replaces its whole timing; paused pauses or resumes it; only_changes turns staying silent when
-    nothing has changed on or off. A command job's folder (a relative one is in its project's), timeout_minutes (0:
-    none), summarize, auto_fix and log_file ("": none) are changed the same way."""
+    """Change a live job; given fields replace existing ones.
+
+    Any new time (when, in_minutes, repeat, every_minutes) replaces the whole timing. `paused` pauses or resumes.
+    For commands: timeout_minutes 0 and log_file "" mean none.
+    """
     now, job = _now(now), find(job_id)
     if job["status"] not in LIVE:
         raise ValueError(f"Job {job_id} has {job['status'] if job['status'] != DONE else 'finished'}; schedule a new one.")
@@ -555,7 +530,7 @@ def change(job_id: int, title: str = "", text: str = "", when: str = "", in_minu
         fields["until"] = _end(job, until, now)
     if paused is not None:
         fields["status"] = PAUSED if paused else ACTIVE
-        if not paused and "next_run" not in fields:  # resumed: what came due while paused runs no more than once
+        if not paused and "next_run" not in fields:  # resumed: runs missed while paused run at most once
             nxt = job["next_run"] or now.timestamp()
             if job["days"] and nxt < now.timestamp():
                 nxt = next_on_days(job["at"], job["days"], now).timestamp()

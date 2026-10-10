@@ -1,5 +1,4 @@
-"""pyproject's dependency sources: a task's worktree (data/worktrees/jarvis-N) must build JARVIS's environment the same
-way the main checkout does."""
+"""Tests for pyproject dependency sources: a task worktree must build the environment like the main checkout."""
 
 import tomllib
 from pathlib import Path

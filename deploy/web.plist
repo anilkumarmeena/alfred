@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Web app and token endpoint for the phone and browsers. Installed by make services-install (jarvis.setup_local), which fills in the label and the folders. -->
+<!-- Web app and token endpoint for the phone and browsers. Label and folders are filled in by jarvis.setup_local. -->
 <plist version="1.0">
 <dict>
     <key>Label</key><string>${LABEL}</string>

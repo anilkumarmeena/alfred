@@ -1,5 +1,4 @@
-"""Tests for the end of a turn judged on meaning and each user's pace (jarvis.voice.turn), the warm fast-model session
-it judges with (jarvis.brain.quick), and what the brain is told about how a turn was heard. Run with: make test"""
+"""Tests for jarvis.voice.turn and brain.quick: meaning-based turn ends, per-user pace, and what the brain hears."""
 
 import asyncio
 import json
@@ -24,7 +23,7 @@ def result(text: str) -> ResultMessage:
 
 
 class Client:
-    """Stands in for a CLI session: answers each query with the next reply, after `delay` seconds."""
+    """Fake CLI session: answers each query with the next reply after `delay` seconds."""
 
     def __init__(self, replies: list[str], delay: float = 0.0) -> None:
         self.replies, self.delay = list(replies), delay
@@ -74,7 +73,7 @@ def test_a_slow_answer_is_none_and_the_session_is_read_to_its_end_not_reused_mid
 
     async def main():
         first = await q.ask("one", 0.05)
-        second = await q.ask("two", 1.0)  # waits for the first call to end, on the same session
+        second = await q.ask("two", 1.0)  # waits for the first call, on the same session
         return first, second
 
     slow.replies.append("on time")
@@ -153,7 +152,7 @@ def test_an_unsure_detector_waits_for_the_words_and_the_model_decides():
     turns.said("Your build passed. Anything else?")
 
     async def main():
-        deciding = asyncio.ensure_future(turns.decide(0.5, 0.36, 0))  # the pause began before its words were in
+        deciding = asyncio.ensure_future(turns.decide(0.5, 0.36, 0))  # the pause began before its words arrived
         await asyncio.sleep(0.01)
         assert not deciding.done()
         turns.heard("Okay, great. So")

@@ -1,4 +1,4 @@
-// To-dos: the same list JARVIS keeps by voice. Add, tick off, edit and delete; the done ones fold away.
+// To-dos (shared with voice): add, tick, edit, delete; done items collapse.
 import { useSignal } from "@preact/signals";
 import { act, todos, type Todo } from "../../state/panel";
 import { CheckIcon, ChevronIcon, EditIcon, PlusIcon, TrashIcon } from "../icons";

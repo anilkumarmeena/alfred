@@ -1,7 +1,6 @@
-"""JARVIS, a personal voice assistant that runs on one Mac. Each folder here is one part; README.md maps them."""
+"""JARVIS: a personal voice assistant that runs on one Mac. docs/development.md maps the packages."""
 
 import os
 
-# onnxruntime otherwise sends Microsoft telemetry once a model loads. Set before any does, so every JARVIS process and
-# the job processes it starts inherit it; ORT_DISABLE_TELEMETRY=0 in the environment turns it back on.
+# Opt out of onnxruntime telemetry before any model loads; children inherit it. ORT_DISABLE_TELEMETRY=0 re-enables.
 os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")

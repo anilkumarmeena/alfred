@@ -1,16 +1,12 @@
-"""Fetching skills from elsewhere: a GitHub repo, a folder in one, or a link to a zip.
+"""Fetch skills from a GitHub repo, a folder in one, or an https zip link.
 
-`stage` downloads the archive into a staging folder (data/skills/.staging/<id>), which no session ever loads. It unpacks
-only the part asked for, refusing anything that would land outside the folder (absolute paths, ..), leaving out links,
-and stopping at MAX_DOWNLOAD, MAX_FILES and MAX_UNPACKED. Then it finds the skills in it (each folder with a SKILL.md)
-and says what each holds: its files, which are scripts or other programs, the frontmatter JARVIS takes out, and what a
-first scan of the files flags (jarvis.skills.review.scan). Nothing is installed until the user says yes; then
-`install` moves the one skill into the skills folder (jarvis.skills.home.install), switched on only if it's
-instructions alone. Staged fetches are cleared after STAGING_HOURS.
+`stage` downloads into data/skills/.staging/<id> (never loaded by sessions), unpacking only the requested folder:
+paths escaping the folder are refused, symlinks left out, size capped (MAX_DOWNLOAD, MAX_FILES, MAX_UNPACKED). It
+reports each skill found: files, scripts, frontmatter to be stripped, and review.scan flags. Nothing is installed
+until the user says yes; `install` then hands one skill to home.install. Stale stages are cleared after STAGING_HOURS.
 
-Only https, and never this Mac or its local network, also after a redirect (the browser's own checks,
-jarvis.integrations.browser). GitHub links become codeload.github.com archives, of the default branch unless the link
-names one.
+https only, never local addresses, redirects included (browser's checks). GitHub links map to codeload.github.com
+archives of the default branch unless the link names one.
 """
 
 import io
@@ -33,10 +29,10 @@ from jarvis.skills import home, review
 
 log = logging.getLogger("jarvis.skills.install")
 
-MAX_DOWNLOAD = 25 * 1024 * 1024  # bytes of archive
-MAX_UNPACKED = 50 * 1024 * 1024  # bytes of the files unpacked from it
+MAX_DOWNLOAD = 25 * 1024 * 1024  # archive bytes
+MAX_UNPACKED = 50 * 1024 * 1024  # unpacked bytes
 MAX_FILES = 2000
-MAX_DEPTH = 6  # folders deep a SKILL.md is looked for
+MAX_DEPTH = 6  # max folder depth searched for SKILL.md
 TIMEOUT = 60
 STAGING_HOURS = 24
 SKIPPED = {".git", "__MACOSX", "node_modules", "__pycache__", ".DS_Store"}  # never unpacked
@@ -46,24 +42,24 @@ _SHORT = re.compile(r"([A-Za-z0-9][\w.-]*)/([\w.-]+)")  # owner/repo
 
 @dataclass
 class Source:
-    """Where a skill comes from: the link as given, and the archives (with the folder in each) to try in order."""
+    """The link as given and the (archive URL, folder) pairs to try in order."""
 
     shown: str
-    tries: list[tuple[str, str]]  # (archive URL, folder inside it, "" for all of it)
+    tries: list[tuple[str, str]]  # (archive URL, folder inside; "" for all)
 
 
 @dataclass
 class Found:
     """A skill found in a fetch."""
 
-    rel: str  # its folder, relative to the fetch's root ("" for the root itself)
-    name: str  # what it would be installed as
+    rel: str  # folder relative to the fetch root ("" for the root)
+    name: str  # install name
     description: str
     files: list[str]
     scripts: list[str]
-    dropped: list[str] = field(default_factory=list)  # frontmatter JARVIS takes out
+    dropped: list[str] = field(default_factory=list)  # frontmatter to be stripped
     problems: list[str] = field(default_factory=list)
-    flags: list[str] = field(default_factory=list)  # what the scan flags
+    flags: list[str] = field(default_factory=list)  # review.scan findings
 
     def brief(self) -> dict:
         out = {"name": self.name, "description": self.description, "files": len(self.files)}
@@ -77,9 +73,9 @@ class Found:
 class Staged:
     id: str
     origin: str
-    root: Path  # what was unpacked
+    root: Path  # unpacked files
     skills: list[Found]
-    left_out: list[str] = field(default_factory=list)  # links in the archive, never unpacked
+    left_out: list[str] = field(default_factory=list)  # symlinks skipped while unpacking
 
 
 def staging() -> Path:
@@ -89,7 +85,7 @@ def staging() -> Path:
 
 
 def clear_old(now: float | None = None) -> None:
-    """Fetches staged more than STAGING_HOURS ago."""
+    """Delete stages older than STAGING_HOURS."""
     now = time.time() if now is None else now
     for old in staging().iterdir():
         try:
@@ -110,14 +106,13 @@ def _github(owner: str, repo: str, rest: list[str], shown: str) -> Source:
     if rest[0] == "blob" and rest[-1] != home.SKILL_FILE:
         raise ValueError(f"That's a link to a file; give the link to the skill's folder, or to its {home.SKILL_FILE}.")
     path = rest[1:-1] if rest[0] == "blob" else rest[1:]
-    # A branch name can hold slashes (feature/x), so the folder starts after one, two or three parts of it.
+    # Branch names may contain slashes (feature/x): try splitting after 1, 2 or 3 path parts
     tries = [(archive + quote("/".join(path[:i]), safe=""), "/".join(path[i:])) for i in range(1, min(len(path), 3) + 1)]
     return Source(shown, tries)
 
 
 def parse(text: str) -> Source:
-    """Where to fetch from: owner/repo, a GitHub repo's link or a folder's (…/tree/<branch>/<folder>, or a SKILL.md's
-    …/blob/ link), or an https link to a zip. ValueError otherwise."""
+    """Parse owner/repo, a GitHub repo/tree/blob(SKILL.md) link, or an https .zip link. Raises ValueError otherwise."""
     text = text.strip().strip("<>")
     if m := _SHORT.fullmatch(text):
         return _github(m[1], m[2], [], f"github.com/{text}")
@@ -142,7 +137,7 @@ def parse(text: str) -> Source:
 
 
 async def _guard(request: httpx.Request) -> None:
-    """Each request, redirects included: only https, never this Mac or its network."""
+    """httpx hook for every request incl. redirects: https only, no local addresses."""
     if request.url.scheme != "https":
         raise browser.Refused("A redirect left https.")
     browser.check_url(str(request.url))
@@ -154,7 +149,7 @@ class NotFound(Exception):
 
 
 async def download(url: str, transport: httpx.AsyncBaseTransport | None = None) -> bytes:
-    """The archive at `url`, at most MAX_DOWNLOAD bytes. NotFound for a 404; ValueError for anything else wrong."""
+    """Download up to MAX_DOWNLOAD bytes. Raises NotFound on 404, ValueError on other failures."""
     hooks = {"request": [_guard]} if transport is None else {}
     async with httpx.AsyncClient(follow_redirects=True, timeout=TIMEOUT, transport=transport, event_hooks=hooks,
                                  max_redirects=5, headers={"User-Agent": "JARVIS skills"}) as client:
@@ -177,14 +172,14 @@ async def download(url: str, transport: httpx.AsyncBaseTransport | None = None) 
 
 
 def _top(names: list[str]) -> str:
-    """The one folder everything in an archive sits in (GitHub's repo-branch/), with its slash; '' if there isn't one."""
+    """Common top folder with trailing slash (GitHub's repo-branch/), or ''."""
     tops = {n.split("/", 1)[0] for n in names}
     return f"{tops.pop()}/" if len(tops) == 1 and all("/" in n for n in names) else ""
 
 
 def unpack(data: bytes, into: Path, inside: str = "") -> tuple[int, list[str]]:
-    """Unpack the archive's folder `inside` ('' for all of it) into `into`. Returns how many files, and the links it
-    left out. ValueError for an archive that isn't a zip, is too big, or would write outside `into`."""
+    """Unpack folder `inside` ('' = all) into `into`. Returns (file count, skipped symlinks). Raises ValueError if not
+    a zip, too big, or a path escapes `into`."""
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
     except zipfile.BadZipFile:
@@ -231,7 +226,7 @@ def unpack(data: bytes, into: Path, inside: str = "") -> tuple[int, list[str]]:
 
 
 def find(root: Path) -> list[Path]:
-    """The skill folders under `root`: itself if it has a SKILL.md, else each folder with one (not inside another)."""
+    """Skill folders: `root` if it has SKILL.md, else each outermost folder with one."""
     if (root / home.SKILL_FILE).is_file():
         return [root]
     found: list[Path] = []
@@ -240,12 +235,12 @@ def find(root: Path) -> list[Path]:
         dirs[:] = sorted(d for d in dirs if not d.startswith(".") and depth < MAX_DEPTH)
         if home.SKILL_FILE in names and Path(where) != root:
             found.append(Path(where))
-            dirs[:] = []  # a skill's own subfolders hold its files, not more skills
+            dirs[:] = []  # don't look for skills nested inside a skill
     return found
 
 
 def describe(where: Path, rel: str, left_out: list[str]) -> Found:
-    """What a fetched skill holds, and what would stop it being installed."""
+    """Summarise a fetched skill and anything that blocks installing it."""
     meta: dict = {}
     problems: list[str] = []
     try:
@@ -270,8 +265,7 @@ def describe(where: Path, rel: str, left_out: list[str]) -> Found:
 
 
 async def stage(text: str, transport: httpx.AsyncBaseTransport | None = None) -> Staged:
-    """Fetch what `text` points at into a new staging folder and find the skills in it. ValueError, saying why, if it
-    can't be fetched or holds none."""
+    """Fetch `text` into a new stage and find its skills. Raises ValueError if the fetch fails or finds none."""
     source = parse(text)
     clear_old()
     sid = secrets.token_hex(4)
@@ -301,7 +295,7 @@ async def stage(text: str, transport: httpx.AsyncBaseTransport | None = None) ->
 
 
 def staged_skill(sid: str, rel: str) -> Path:
-    """A staged skill's folder, checked to be inside that fetch. ValueError once it's been cleared away."""
+    """Path of a staged skill, confined to its stage. Raises ValueError if the stage is gone."""
     if not re.fullmatch(r"[0-9a-f]{8}", sid):
         raise ValueError("That fetch isn't one of JARVIS's.")
     root = (staging() / sid / "files").resolve()
@@ -312,7 +306,7 @@ def staged_skill(sid: str, rel: str) -> Path:
 
 
 def install(sid: str, rel: str, name: str, origin: str) -> home.Skill:
-    """Install a staged skill as `name`, its frontmatter cleaned (home.sanitize) and named, then clear the fetch."""
+    """Sanitize and rename the staged SKILL.md, install it as `name`, then delete the stage."""
     where = staged_skill(sid, rel)
     skill_md = where / home.SKILL_FILE
     text, _ = home.sanitize(skill_md.read_text(encoding="utf-8"), name)

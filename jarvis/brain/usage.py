@@ -1,18 +1,13 @@
-"""How close JARVIS's Claude login is to its usage limits, as the CLI last reported them.
+"""Claude usage-limit state, as last reported by the CLI's rate-limit events, shared in data/usage.json.
 
-The CLI reports the limit with a rate_limit_event (the SDK's RateLimitEvent) whenever its state changes: allowed,
-allowed_warning (getting close) or rejected (used up), for one window (five_hour, seven_day, seven_day_opus,
-seven_day_sonnet or overage), with when that window resets and, when it says, the fraction used. The voice brain and
-the task runner record what they see here, in data/usage.json, so both processes, the scheduler and the heartbeat
-share the latest word. Nothing here asks Claude anything: what's known is as fresh as the last call either process
-made, and a window past its reset counts as fresh again.
+Events arrive only on state change (allowed / allowed_warning / rejected) per window, with reset time and sometimes
+utilization. Never queries Claude; a window past its reset is treated as fresh.
 
-  windows()    what's known now, by window
-  out()        a window that's used up for every model (so a lighter model won't help), or None
-  available()  the model to use: a lighter one while the model's own weekly window is used up
-  hold_until() when scheduled runs that need a model should wait until: the reset of a window that's used up, or of
-               the five-hour window once USAGE_HOLD of it is used
-  said()       all of it in a sentence or two, for usage_left
+  windows()    known state by window
+  out()        a window used up for every model, or None
+  available()  the model to use (lighter while its family's weekly window is used up)
+  hold_until() when scheduled model runs should wait until (used-up window, or five-hour past USAGE_HOLD)
+  said()       a one- or two-sentence summary, for usage_left
 """
 
 import json
@@ -29,11 +24,11 @@ log = logging.getLogger("jarvis.brain.usage")
 
 NAMES = {"five_hour": "five-hour", "seven_day": "weekly", "seven_day_opus": "weekly Opus",
          "seven_day_sonnet": "weekly Sonnet", "overage": "extra-usage", "unknown": "usage"}
-OWN = {"seven_day_opus": "opus", "seven_day_sonnet": "sonnet"}  # windows that hold back one family of models only
-LIGHTER = {"opus": HELPER_MODEL, "sonnet": FAST_MODEL}  # what to use instead while a family's window is used up
-UNKNOWN_RESET = 30 * 60  # a window reported used up with no reset time is taken as used up for this long
-FORGET = 6 * 3600  # a window with no reset time is forgotten this long after it was last reported
-# For when no rate-limit event arrived: the CLI's own wording for the limit, in a failed call's error
+OWN = {"seven_day_opus": "opus", "seven_day_sonnet": "sonnet"}  # windows limiting one model family only
+LIGHTER = {"opus": HELPER_MODEL, "sonnet": FAST_MODEL}  # fallback while a family's window is used up
+UNKNOWN_RESET = 30 * 60  # seconds a used-up window with no reset time stays used up
+FORGET = 6 * 3600  # seconds before a window with no reset time is forgotten
+# Fallback when no rate-limit event arrived: CLI limit wording in an error
 LIMIT_TEXT = re.compile(r"usage limit|rate.?limit|hit your limit|limit reached", re.IGNORECASE)
 
 
@@ -49,7 +44,7 @@ def _read() -> dict[str, dict]:
 
 
 def record(info, now: float | None = None) -> None:
-    """Keep what a RateLimitEvent's rate_limit_info says, for its window. Never raises: it's only bookkeeping."""
+    """Store a RateLimitEvent's rate_limit_info under its window. Never raises."""
     now = now or time.time()
     try:
         data = _read()
@@ -62,24 +57,24 @@ def record(info, now: float | None = None) -> None:
 
 
 def _ends(w: dict) -> float:
-    """When what's known of a window stops being true."""
+    """When a window's known state expires."""
     if w.get("resets_at"):
         return float(w["resets_at"])
     return w.get("seen", 0) + (UNKNOWN_RESET if w.get("status") == "rejected" else FORGET)
 
 
 def windows(now: float | None = None) -> dict[str, dict]:
-    """What's known of each window now, leaving out windows that have reset since."""
+    """Known state of each window that hasn't reset yet."""
     now = now or time.time()
     return {k: w for k, w in _read().items() if isinstance(w, dict) and _ends(w) > now}
 
 
 def _used_up(w: dict) -> bool:
-    return w.get("status") == "rejected" and w.get("overage") != "allowed"  # extra usage, if on, carries on past it
+    return w.get("status") == "rejected" and w.get("overage") != "allowed"  # extra usage carries on past it
 
 
 def out(now: float | None = None) -> tuple[str, dict] | None:
-    """The window used up for every model, with its details (the one that resets last, if several); None if none."""
+    """(name, details) of a window used up for every model (latest reset if several), or None."""
     found = [(k, w) for k, w in windows(now).items() if k not in OWN and _used_up(w)]
     return max(found, key=lambda kw: _ends(kw[1]), default=None)
 
@@ -89,12 +84,12 @@ def family(model: str) -> str:
 
 
 def _named(model: str) -> str:
-    """'Sonnet' for claude-sonnet-5, as it's said."""
+    """Spoken family name, e.g. 'Sonnet' for claude-sonnet-5."""
     return next((f.capitalize() for f in ("opus", "sonnet", "haiku") if f in model.lower()), model)
 
 
 def available(model: str, now: float | None = None) -> str:
-    """`model`, or a lighter one while its own family's weekly window is used up (Opus to Sonnet, Sonnet to Haiku)."""
+    """`model`, or a lighter one while its family's weekly window is used up (Opus->Sonnet->Haiku)."""
     seen = set()
     for _ in range(len(LIGHTER)):
         used = {OWN[k] for k, w in windows(now).items() if k in OWN and _used_up(w)}
@@ -107,9 +102,11 @@ def available(model: str, now: float | None = None) -> str:
 
 
 def hold_until(now: float | None = None) -> float | None:
-    """When scheduled runs that need a model should wait until, or None to run them now: a window used up for every
-    model holds them until it resets, and so does the five-hour window once USAGE_HOLD of it is used, leaving the rest
-    for the voice and tasks started by hand."""
+    """Timestamp scheduled model runs should wait until, or None to run now.
+
+    Holds on an all-model window used up, or the five-hour window past USAGE_HOLD (leaving the rest for voice and
+    manual tasks).
+    """
     now = now or time.time()
     if found := out(now):
         return _ends(found[1])
@@ -147,7 +144,7 @@ def _window(name: str, w: dict, now: float) -> str:
 
 
 def said(now: float | None = None) -> str:
-    """What's known, in a sentence or two."""
+    """Known state in a sentence or two."""
     now = now or time.time()
     known = windows(now)
     if not known:
@@ -161,8 +158,7 @@ def said(now: float | None = None) -> str:
 
 
 def alerts(now: float | None = None) -> list[tuple[str, str]]:
-    """What to warn the user about now, as (key, sentence): each key stays the same for one window until it resets,
-    so the heartbeat says each once."""
+    """Warnings as (key, sentence); a key is stable per window until reset, so the heartbeat says each once."""
     now = now or time.time()
     out_ = []
     for name, w in windows(now).items():

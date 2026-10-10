@@ -1,42 +1,29 @@
-"""The MCP servers JARVIS plugs into its Claude sessions (GitHub, GitLab, Notion, whatever the user connects), kept in
-the mcp_servers and mcp_tools tables of data/tasks.db beside the tasks, the to-do list and the Google accounts.
+"""MCP servers plugged into JARVIS's Claude sessions, stored in the mcp_servers and mcp_tools tables of data/tasks.db.
 
-A server is a local program over stdio, or an HTTP endpoint, which the launcher bridges to stdio
-(jarvis.integrations.mcp_bridge) with its key in a header or its sign-in (jarvis.integrations.mcp_oauth). Either way
-the CLI starts it through jarvis.integrations.mcp_launch, which alone decrypts its secrets (jarvis.core.vault), so no
-token is ever on the CLI's command line, and which stays between them as a relay (jarvis.integrations.mcp_relay):
-reads run side by side, MCP tasks are followed, and in a conversation a slow call carries on in the background as a
-task, so it doesn't hold up the reply. Each of its tools is listed
-with its access: read and own (changing only the user's own inbox) run freely; write (anything that reaches other
-people or changes something) waits for the user's spoken yes (jarvis.safety.mcp_gate), which JARVIS asks after
-reading out what the call would do, from the tool's `says` phrase and the call's arguments; blocked is never offered.
-A tool not listed is refused.
+A server is a local stdio program or an HTTP endpoint (bridged with a header key or OAuth sign-in). The CLI always
+starts it via mcp_launch, the only place its secrets are decrypted, which then relays (mcp_relay). Tool access:
+  read, own   run freely (own = changes only the user's own inbox)
+  write       needs the user's spoken yes (safety.mcp_gate), read out from the tool's `says` phrase
+  blocked     never offered; unlisted tools are refused too
+Servers added by voice start disabled and unreviewed until the user approves the `sort` of their tools.
 
-Servers are found and connected by voice (jarvis.tools.connections, from the official MCP registry:
-jarvis.integrations.mcp_registry): each is put in off and unsorted (`reviewed` false), then switched on once the user
-has said yes to how its tools are sorted, from the server's own readOnlyHint and destructiveHint (`sort`). The
-control panel lists them, switches them on and off, takes their keys and removes them (jarvis.panel).
+Sessions read the tables at start, so changes need no restart. Voice gets every enabled server; research tasks get
+the for_research ones, read-only; code tasks none. Servers missing their program or secrets are skipped. With tool
+search on, their tools are deferred until looked up via ToolSearch.
 
-Sessions read the table as they start, so a change applies from the next conversation or task, with no restart:
-the voice brain gets every enabled server, research tasks the ones marked for research, read-only and with only their
-reads, and code tasks none. A server whose program isn't installed, or whose secrets aren't set, is left out. Their
-tools load on demand: each is marked deferred (alwaysLoad false), so only their names are in a session's context until
-the model looks one up with the CLI's ToolSearch (jarvis.brain.sdk.on_demand), and adding servers doesn't slow
-every reply. Which tools are allowed, gated or blocked is the same either way.
-
-    uv run python -m jarvis.integrations.mcp_servers                         list them (make servers does the same)
+    uv run python -m jarvis.integrations.mcp_servers                         list (same as make servers)
     uv run python -m jarvis.integrations.mcp_servers add NAME --label L --command C [--arg A ...] [--env K=V ...]
                                         [--secret-env VAR=SECRET ...] [--research] [--prompt TEXT]
-    uv run python -m jarvis.integrations.mcp_servers add NAME --label L --url https://...   an HTTP server, without secrets
+    uv run python -m jarvis.integrations.mcp_servers add NAME --label L --url https://... [--header NAME=VALUE ...]
     uv run python -m jarvis.integrations.mcp_servers set NAME [the same options]
     uv run python -m jarvis.integrations.mcp_servers enable|disable|remove NAME
-    uv run python -m jarvis.integrations.mcp_servers tools NAME [--read T ...] [--own T ...] [--write T=SAYS ...] [--block T ...]
-    uv run python -m jarvis.integrations.mcp_servers set-secret NAME [VAR]   typed in (hidden), or from stdin; never an argument
+    uv run python -m jarvis.integrations.mcp_servers tools NAME [--sort] [--read T ...] [--own T ...]
+                                        [--write T=SAYS ...] [--block T ...] [--forget T ...]
+    uv run python -m jarvis.integrations.mcp_servers set-secret NAME [VAR]   typed (hidden) or stdin, never an argument
     uv run python -m jarvis.integrations.mcp_servers clear-secret NAME [VAR]
-    uv run python -m jarvis.integrations.mcp_servers test NAME [--read-only] starts it and lists what it offers, with
-                                        the access its own markings suggest
+    uv run python -m jarvis.integrations.mcp_servers test NAME [--read-only] start it and list its tools
 
-Kept light (no SDK, no tools), since the launcher imports it each time a session starts a server.
+Kept import-light (no SDK): the launcher imports it every time a server starts.
 """
 
 import argparse
@@ -63,55 +50,51 @@ from jarvis.safety import host
 
 log = logging.getLogger("jarvis.integrations.mcp_servers")
 
-NAME = re.compile(r"[a-z][a-z0-9_]{0,31}")  # tools are mcp__<name>__<tool>, so no double underscore either
-RESERVED = {"jarvis", "shell", "task", "host"}  # JARVIS's own in-process servers
+NAME = re.compile(r"[a-z][a-z0-9_]{0,31}")  # tools are mcp__<name>__<tool>, so no "__" either
+RESERVED = {"jarvis", "shell", "task", "host"}  # JARVIS's in-process servers
 TRANSPORTS = ("stdio", "http")
 ACCESS = ("read", "own", "write", "blocked")
 TOOL = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-_FIELD = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")  # a secret's place in a header's value: Bearer {API_KEY}
-# Programs that fetch a package each time they run, so the version must be pinned in its argument
+_FIELD = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")  # secret placeholder in a header: Bearer {API_KEY}
+# Package runners that fetch on every run, so the version must be pinned
 _FETCHERS = {"npx": "@", "pnpx": "@", "bunx": "@", "uvx": "==", "pipx": "=="}
 APPLIES = "It applies from the next conversation or task; no restart needed."
-# Their tools wait for ToolSearch (config.TOOL_SEARCH). Off, they're left unmarked: marked deferred with the search off,
-# the CLI leaves them unloaded with nothing to load them.
+# Defer MCP tools to ToolSearch. Only when search is on: deferred tools with search off could never load.
 ON_DEMAND = TOOL_SEARCH != "false"
 
 _SCHEMA = ("""
 create table mcp_servers (
-    name text primary key,               -- its tools are mcp__<name>__<tool>
-    label text not null,                 -- as said aloud: "GitHub"
+    name text primary key,               -- tools are mcp__<name>__<tool>
+    label text not null,                 -- spoken name: "GitHub"
     position integer not null,
     enabled integer not null default 1,
-    transport text not null default 'stdio',   -- stdio, through jarvis.integrations.mcp_launch; or http
-    command text not null default '',    -- stdio: the program, found on PATH
+    transport text not null default 'stdio',   -- stdio or http
+    command text not null default '',    -- stdio: program on PATH
     args text not null default '[]',     -- JSON list, versions pinned
-    read_only_args text not null default '[]',  -- added for research tasks
+    read_only_args text not null default '[]',  -- appended for research tasks
     url text not null default '',        -- http
-    env text not null default '{}',      -- JSON: settings that aren't secret
-    read_only_env text not null default '{}',   -- JSON: over env, for research tasks
-    secret_env text not null default '{}',      -- JSON: variable -> the vault secret it gets
+    env text not null default '{}',      -- JSON: non-secret settings
+    read_only_env text not null default '{}',   -- JSON: env overrides for research tasks
+    secret_env text not null default '{}',      -- JSON: variable -> vault secret name
     for_research integer not null default 0,
-    prompt text not null default '',     -- what the brain is told about it, beyond the tools' own descriptions
+    prompt text not null default '',     -- extra guidance for the brain
     created real not null,
-    updated real not null
+    updated real not null,
+    source text not null default '',     -- registry name, or web page it was found on
+    verified integer not null default 0, -- from the official registry
+    version text not null default '',    -- registry version installed
+    headers text not null default '{}',  -- JSON, http: header -> value; {VAR} from secret_env
+    sign_in integer not null default 0,  -- http: uses OAuth (mcp_oauth)
+    reviewed integer not null default 1  -- tool access approved by the user; required to enable
 )""", """
 create table mcp_tools (
     server text not null,
     tool text not null,
     access text not null,                -- read, own, write or blocked
-    says text not null default '',       -- write: what it does, read out, with {argument} placeholders
+    says text not null default '',       -- write: phrase read out, with {argument} placeholders
     primary key (server, tool)
 )""")
-# Added before versions were kept; a server put in before them was sorted by hand, so it counts as reviewed
-_ADDED = {
-    "source": "text not null default ''",     # its official MCP registry name, or the web page it was found on
-    "verified": "integer not null default 0",  # from the official MCP registry
-    "version": "text not null default ''",    # the registry version it was set up from
-    "headers": "text not null default '{}'",  # JSON, http: header -> value, with {VAR} filled from its secret_env
-    "sign_in": "integer not null default 0",  # http: signed in with OAuth, through JARVIS's browser (mcp_oauth)
-    "reviewed": "integer not null default 1",  # its tools' access agreed with the user; until then it can't go on
-}
 
 
 @dataclass(frozen=True)
@@ -151,19 +134,19 @@ class Server:
 
     @property
     def oauth_secret(self) -> str:
-        """The vault secret its sign-in is kept in (jarvis.integrations.mcp_oauth)."""
+        """Vault secret holding its OAuth record."""
         return f"{self.name}.oauth"
 
     @property
     def secrets(self) -> list[str]:
-        """Every vault secret it uses."""
+        """All vault secrets it uses."""
         return [*self.secret_env.values(), *([self.oauth_secret] if self.sign_in else [])]
 
 
-# ── Checking a server ───────────────────────────────────────────
+# ── Validation ──────────────────────────────────────────────────
 
 def _unpinned(command: str, args: list[str]) -> str:
-    """Why a package-fetching command isn't pinned to a version, or ''."""
+    """Reason a package-fetching command is unpinned, or ''."""
     mark = _FETCHERS.get(Path(command).name)
     if mark is None:
         return ""
@@ -176,7 +159,7 @@ def _unpinned(command: str, args: list[str]) -> str:
 
 
 def problems(server: Server, taken: list[str] = ()) -> list[str]:
-    """What's wrong with a server, or nothing."""
+    """Validation errors for `server`; empty if fine."""
     said = []
     if not NAME.fullmatch(server.name) or "__" in server.name:
         said.append(f"'{server.name}' can't name a server: up to 32 lowercase letters, digits and single underscores, "
@@ -236,10 +219,10 @@ def problems(server: Server, taken: list[str] = ()) -> list[str]:
     return said
 
 
-# ── The tables ──────────────────────────────────────────────────
+# ── Storage ─────────────────────────────────────────────────────
 
 def _db() -> AbstractContextManager[sqlite3.Connection]:
-    return database.table("mcp_servers", *_SCHEMA, added=_ADDED)
+    return database.table("mcp_servers", *_SCHEMA)
 
 
 def _row(r: sqlite3.Row, tools: dict[str, Tool]) -> Server:
@@ -257,7 +240,7 @@ def _read(db: sqlite3.Connection) -> list[Server]:
 
 
 def load() -> list[Server]:
-    """Every server. A database that can't be read is logged and counts as none, so JARVIS still starts."""
+    """All servers. An unreadable database is logged and yields [] so JARVIS still starts."""
     try:
         with _db() as db:
             return _read(db)
@@ -277,7 +260,7 @@ def need(name: str) -> Server:
 
 
 def save(server: Server, new: bool = False) -> None:
-    """Adds the server (`new`) or replaces it, with its tools. Raises ValueError with what's wrong with it."""
+    """Insert (`new`) or replace the server and its tools. Raises ValueError on validation errors."""
     with _db() as db:
         db.execute("begin immediate")
         names = [r[0] for r in db.execute("select name from mcp_servers")]
@@ -305,7 +288,7 @@ def save(server: Server, new: bool = False) -> None:
 
 
 def remove(name: str) -> list[str]:
-    """Takes the server out, with the secrets only it used; returns their names."""
+    """Delete the server and secrets no other server uses; returns the removed secret names."""
     server = need(name)
     others = {s for other in load() if other.name != name for s in other.secrets}
     with _db() as db:
@@ -317,19 +300,17 @@ def remove(name: str) -> list[str]:
 # ── Sessions ────────────────────────────────────────────────────
 
 def session_env() -> dict[str, str]:
-    """The CLI's environment: the master key, JARVIS's own keys' variables and every server's secret variables
-    blanked, so no session or shell command gets them."""
+    """Env overrides for the CLI blanking the master key, JARVIS's keys and all server secret vars."""
     return dict.fromkeys([vault.VAR, *credentials.VARS, logins.VAR, *(var for s in load() for var in s.secret_env)], "")
 
 
 def lacking(server: Server) -> list[str]:
-    """The variables of its secrets that aren't set yet, which the user enters in the control panel."""
+    """Secret variables not yet set (entered in the control panel)."""
     return [var for var, secret in server.secret_env.items() if not vault.has(secret)]
 
 
 def missing(server: Server, reviewed: bool = True) -> str:
-    """Why the server can't be started now, or ''. With `reviewed` false, whether its tools are sorted isn't asked,
-    as when listing them to sort."""
+    """Reason the server can't start now, or ''. `reviewed=False` skips the review check (used when sorting)."""
     if server.transport == "stdio" and not which(server.command):
         return f"{server.command} isn't installed"
     if unset := lacking(server):
@@ -352,14 +333,14 @@ def for_research() -> list[Server]:
 
 
 def launcher(name: str, *flags: str) -> dict:
-    """The CLI's stdio config that starts a server through the launcher, naming only the server."""
+    """CLI stdio config that starts a server via the launcher; names only the server."""
     return {"type": "stdio", "command": sys.executable, "args": ["-m", "jarvis.integrations.mcp_launch", name, *flags],
             "env": {"PYTHONPATH": str(ROOT), "PATH": os.environ.get("PATH", "")}}
 
 
 @dataclass
 class Session:
-    """What a session gets: the CLI's MCP configs, the tools allowed outright, and those never allowed."""
+    """A session's MCP configs plus tools allowed outright and tools denied."""
     servers: list[Server] = field(default_factory=list)
     configs: dict[str, dict] = field(default_factory=dict)
     allowed: list[str] = field(default_factory=list)
@@ -367,10 +348,8 @@ class Session:
 
 
 def session(servers: list[Server], read_only: bool = False, wait: float = 0.0) -> Session:
-    """The servers that can start, as the CLI takes them, each through the launcher and its relay
-    (jarvis.integrations.mcp_relay). Their reads are allowed, and with `read_only` false their own-inbox tools too;
-    writes meet the session's gate; blocked ones are denied outright. With a `wait`, a call still running after that
-    many seconds carries on in the background."""
+    """Session config for the startable `servers`. Reads are allowed (plus `own` unless `read_only`), writes go
+    through the gate, blocked are denied. `wait` > 0 moves calls running longer than that to the background."""
     got = Session()
     flags = [*(["--read-only"] if read_only else []), *([f"--wait={wait:g}"] if wait else [])]
     for server in servers:
@@ -378,7 +357,7 @@ def session(servers: list[Server], read_only: bool = False, wait: float = 0.0) -
             log.warning("MCP server %s left out: %s", server.name, why)
             continue
         got.configs[server.name] = launcher(server.name, *flags)
-        if ON_DEMAND:  # found with ToolSearch when needed, even tools their server marks to load up front
+        if ON_DEMAND:  # defer even tools the server marks to load up front
             got.configs[server.name]["alwaysLoad"] = False
         got.servers.append(server)
         got.allowed += [server.tool(t) for t in server.named("read", *(() if read_only else ("own",)))]
@@ -387,7 +366,7 @@ def session(servers: list[Server], read_only: bool = False, wait: float = 0.0) -
 
 
 def prompt(servers: list[Server]) -> str:
-    """The voice brain's guidance on the servers it has, or ''."""
+    """Voice brain prompt section for `servers`, or ''."""
     if not servers:
         return ""
     labels = [s.label for s in servers]
@@ -413,7 +392,7 @@ def prompt(servers: list[Server]) -> str:
     return f"\n\n{names}:\n" + "\n".join(lines)
 
 
-# ── The command ─────────────────────────────────────────────────
+# ── CLI ─────────────────────────────────────────────────────────
 
 def _pairs(items: list[str] | None, what: str) -> dict[str, str]:
     out = {}
@@ -441,7 +420,7 @@ def show(servers: list[Server]) -> str:
         where = s.url or " ".join([s.command, *s.args])
         counts = ", ".join(f"{len(s.named(a))} {a}" for a in ACCESS if s.named(a))
         secrets = ", ".join(f"{var} ({'set' if vault.has(sec) else 'not set'})" for var, sec in s.secret_env.items())
-        urls = ", ".join(f"{k}={v}" for k, v in s.env.items() if k.endswith("_URL"))  # where it reaches, e.g. GitLab's
+        urls = ", ".join(f"{k}={v}" for k, v in s.env.items() if k.endswith("_URL"))  # e.g. GitLab's host
         lines.append(f"  {s.name}  {s.label}  [{', '.join(flags)}]\n      {where[:120]}\n      tools: {counts or 'none listed'}"
                      + (f"\n      {urls}" if urls else "") + (f"\n      secrets: {secrets}" if secrets else ""))
     return "\n".join(lines)
@@ -453,27 +432,26 @@ def _secret_value(var: str) -> str:
     return sys.stdin.read().strip()
 
 
-LIST_TIMEOUT = 90  # seconds for a server to start and list its tools: npx or uvx may fetch it first
-MAX_TOOLS = 300  # more than any sane server offers; pages past it aren't asked for
+LIST_TIMEOUT = 90  # seconds to start and list tools; npx/uvx may download first
+MAX_TOOLS = 300  # stop paging tools/list past this
 
 
 def offered(server: Server, read_only: bool = False, timeout: float = LIST_TIMEOUT) -> list[dict]:
-    """Starts the server through the launcher, as a session would (even while it's off or unsorted), and returns the
-    tools it offers: each one's name, title, description and annotations, as it gives them. Raises RuntimeError, with
-    the end of what it said, if it doesn't list them."""
+    """Probe-start the server via the launcher (even if disabled or unreviewed) and return its tools as
+    {name, title, description, annotations}. Raises RuntimeError with the tail of its stderr if listing fails."""
     hello = {"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
         "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "jarvis", "version": "1"}}}
     proc = subprocess.Popen([sys.executable, "-m", "jarvis.integrations.mcp_launch", server.name, "--probe",
                              *(["--read-only"] * read_only)],
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                             env=os.environ | session_env() | launcher(server.name)["env"],
-                            start_new_session=True)  # its own group, so the kill below reaches what npx starts too
+                            start_new_session=True)  # own process group, so killpg reaches npx's children
     lines: queue.Queue[str] = queue.Queue()
     threading.Thread(target=lambda: [lines.put(l) for l in proc.stdout] + [lines.put("")], daemon=True).start()
 
     def send(*messages: dict) -> None:
         proc.stdin.write("".join(json.dumps(m) + "\n" for m in messages))
-        proc.stdin.flush()  # and left open: some servers stop at the end of their input, before answering
+        proc.stdin.flush()  # keep stdin open: some servers exit on EOF before answering
 
     found: list[dict] = []
     done, asked, deadline = False, 0, time.monotonic() + timeout
@@ -491,7 +469,7 @@ def offered(server: Server, read_only: bool = False, timeout: float = LIST_TIMEO
             except ValueError:
                 continue
             if not isinstance(reply, dict) or "id" not in reply or "method" in reply:
-                continue  # its notifications and requests: logging, pings
+                continue  # server notifications/requests (logging, pings)
             if reply.get("error"):
                 raise RuntimeError(f"{server.label} refused: {str(reply['error'].get('message', ''))[:300]}")
             result = reply.get("result") or {}
@@ -508,8 +486,8 @@ def offered(server: Server, read_only: bool = False, timeout: float = LIST_TIMEO
                     done = True
     finally:
         try:
-            os.killpg(proc.pid, signal.SIGKILL)  # a lone kill left npx's node holding stderr open, hanging the read
-        except (ProcessLookupError, PermissionError):  # it had already ended (macOS says EPERM for a lone zombie)
+            os.killpg(proc.pid, signal.SIGKILL)  # killing only npx leaves node holding stderr, hanging the read
+        except (ProcessLookupError, PermissionError):  # already gone (macOS gives EPERM for a zombie)
             pass
         err = proc.stderr.read()
         proc.wait()
@@ -521,22 +499,21 @@ def offered(server: Server, read_only: bool = False, timeout: float = LIST_TIMEO
 
 
 def changes(tool: dict) -> bool:
-    """Whether a tool changes anything, by its own markings: only one marked read-only (readOnlyHint) doesn't. One
-    with no markings counts as changing, as MCP itself takes it."""
+    """True unless the tool sets readOnlyHint (unmarked tools change things, per MCP)."""
     return (tool.get("annotations") or {}).get("readOnlyHint") is not True
 
 
 def destructive(tool: dict) -> bool:
-    """Whether a changing tool says it may delete or overwrite (destructiveHint), as MCP takes it when unmarked."""
+    """Changing tool not marked destructiveHint=false (MCP default is destructive)."""
     return changes(tool) and (tool.get("annotations") or {}).get("destructiveHint") is not False
 
 
 def sort(tools: list[dict], reading: list[str] = (), changing: list[str] = (), off: list[str] = ()) -> dict[str, Tool]:
-    """Each tool's access, from its own markings: read, or write (which waits for the user's yes, read out from its
-    title and the call's arguments). `reading`, `changing` and `off` (blocked) are the user's own choices, over them."""
+    """Access per tool from its annotations: read or write (says = title). User choices `reading`, `changing` and
+    `off` (blocked) override."""
     said = {}
     for t in tools:
-        # Its title, as the phrase read out before a yes: never with placeholders of its own (mcp_gate.describe)
+        # Title becomes the spoken phrase; strip braces so it has no placeholders (mcp_gate.describe)
         name, title = t["name"], " ".join(re.sub(r"[{}\[\]]", "", t.get("title", "")).split())[:120]
         if name in off:
             said[name] = Tool("blocked")
@@ -548,8 +525,7 @@ def sort(tools: list[dict], reading: list[str] = (), changing: list[str] = (), o
 
 
 def _test(server: Server, read_only: bool) -> int:
-    """Starts the server through the launcher, as a session would, and lists the tools it offers with their access,
-    and for those it hasn't listed, what their own markings suggest."""
+    """Print the server's offered tools with their access, or the suggested access for unlisted ones."""
     try:
         found = offered(server, read_only)
     except RuntimeError as e:
@@ -664,7 +640,7 @@ def main(argv: list[str] | None = None) -> int:
             for tool in args.forget or []:
                 tools.pop(tool, None)
             if tools != server.tools or not server.reviewed:
-                save(replace(server, tools=tools, reviewed=True))  # sorted by hand, here on the Mac
+                save(replace(server, tools=tools, reviewed=True))  # sorted by hand on the Mac counts as reviewed
                 print(f"Changed the {server.name} server's tools. {APPLIES}")
             for tool, spec in sorted(tools.items()):
                 print(f"  {tool:<40} {spec.access}" + (f"  says: {spec.says}" if spec.says else ""))

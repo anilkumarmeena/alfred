@@ -1,5 +1,4 @@
-"""Tests for background tasks' commands on the Mac itself: which tasks get host_run and the job tools, what the
-gate lets through, refuses or puts to the user, and what the tools do. Run with: make test"""
+"""Tests for tasks' host commands: who gets host_run and job tools, gate decisions, and the tools themselves."""
 
 import asyncio
 import json
@@ -20,7 +19,7 @@ from jarvis.tasks import host_tools, worker
 
 
 class Asking(NullReporter):
-    """Records the approvals a task asks for, and says yes to those in `agreed`."""
+    """Records approvals a task asks for; approves those in `agreed`."""
 
     def __init__(self, agreed: list[str] = ()) -> None:
         self.asked: list[dict] = []
@@ -78,7 +77,7 @@ def test_the_cli_gets_none_of_jarvis_keys(folder):
 
 
 def test_a_big_message_doesnt_end_the_task(folder):
-    """The SDK's 1 MB default read limit killed tasks 6 and 26 with CLIJSONDecodeError."""
+    """The SDK's 1 MB default read limit would fail the task with CLIJSONDecodeError."""
     assert options(folder).max_buffer_size >= 20 * 1024 * 1024
 
 
@@ -212,7 +211,7 @@ def test_a_session_is_known_by_its_leader_and_when_it_started(monkeypatch):
 
 
 def test_sessions_on_this_mac():
-    """The real thing: a command's shell leads a session, and what it leaves behind stays in it."""
+    """Real sessions: a command's shell leads one, and what it leaves behind stays in it."""
     shell = subprocess.Popen(["/bin/sh", "-c", "sleep 30 & sleep 30 & wait"], start_new_session=True)
     at = time.time()
     try:
@@ -244,7 +243,7 @@ def tools(folder, jobs, **fields) -> dict:
 
 @pytest.fixture
 def unwalled(monkeypatch, tmp_path):
-    """host.run and jobs without sandbox-exec, which can't be nested in the sandbox tests may run in."""
+    """host.run and jobs without sandbox-exec, which can't nest inside the test sandbox."""
     real = host.run
 
     async def run(command, cwd, timeout=host.RUN_TIMEOUT, walls=True, shell=host.SHELL, **extra):

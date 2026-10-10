@@ -1,5 +1,4 @@
-"""JARVIS's own keys (jarvis.core.credentials): kept in the vault, .env standing in until then, moved out of .env
-once the vault can take them, and entered in the panel without ever being shown back. Run with: make test"""
+"""Tests for jarvis.core.credentials: vault storage, .env fallback and migration, panel entry that never echoes keys."""
 
 import asyncio
 import json
@@ -21,7 +20,7 @@ SECRET = "a-secret-long-enough-for-the-jwt-signer-0123456789"
 
 @pytest.fixture
 def key(monkeypatch, tmp_path):
-    """A master key, an empty vault, a scratch .env and livekit.yaml, and none of JARVIS's keys in the environment."""
+    """Master key, empty vault, scratch .env and livekit.yaml, no JARVIS keys in the environment."""
     monkeypatch.setattr(config, "MASTER_KEY", vault.new_key())
     monkeypatch.setattr(vault, "ENV_FILE", tmp_path / "dotenv")
     monkeypatch.setattr(config, "GOOGLE_CLIENT_SECRET", "")

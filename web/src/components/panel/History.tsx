@@ -1,6 +1,4 @@
-// History: past conversations, from the full log JARVIS keeps one file a day (jarvis.state.history). The days come
-// newest first; one opens to who said what, newest first too, with the next older (or newer) day a tap away, so the
-// reader can keep scrolling back. A search finds the exchanges that mention some words, across every day.
+// History: day list (newest first), a day's exchanges with prev/next day navigation, and full-text search.
 import { useEffect, useRef } from "preact/hooks";
 import { byDay, dayLabel, marks, span, tally, type Day, type Entry } from "../../lib/history";
 import { clearSearch, day, days, found, loadDay, loadOlderDays, olderBusy, search, searching } from "../../state/history";
@@ -12,7 +10,7 @@ const TASK = /\b([Tt]ask) (\d+)\b/g;
 const today = () => days.value?.today ?? "";
 const openDay = (date: string) => go("history", date);
 
-// Text as said, with the search's words marked and each "task 6" a button that opens it.
+// Text with search hits marked and each "task N" as a button.
 function Said({ text, words = [] }: { text: string; words?: string[] }) {
   const parts: preact.ComponentChildren[] = [];
   let last = 0;
@@ -26,8 +24,7 @@ function Said({ text, words = [] }: { text: string; words?: string[] }) {
   return <>{parts}</>;
 }
 
-// One exchange: the user's words, any commands they said yes to, and JARVIS's reply. Or something JARVIS said
-// between turns.
+// One exchange (user words, approved commands, reply), or a between-turn announcement.
 export function Exchange({ e, words }: { e: Entry; words?: string[] }) {
   const said = <p><Said text={e.said} words={words} /></p>;
   return (
@@ -97,7 +94,7 @@ export function DayList() {
   );
 }
 
-// The days either side, to step through them
+// Adjacent-day navigation
 function Steps({ newer, older }: { newer: string | null; older: string | null }) {
   return (
     <div class="hsteps">
@@ -116,7 +113,7 @@ export function DayView({ date }: { date: string }) {
     top.current?.closest(".col, .pbody")?.scrollTo?.({ top: 0 });
   }, [date]);
   const entries = d?.entries ?? [], exchanges = entries.filter((e) => e.kind === "exchange").length;
-  const label = dayLabel(date, today()), full = dayLabel(date, "");  // "Today", and its date as well
+  const label = dayLabel(date, today()), full = dayLabel(date, "");  // relative label plus full date
   return (
     <div ref={top} class="hday-view">
       <p class="big">{label}</p>

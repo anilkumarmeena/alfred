@@ -1,4 +1,4 @@
-"""Tests for the to-do list, the todos table in data/tasks.db (jarvis.state.todo). Run with: make test"""
+"""Tests for jarvis.state.todo: the to-do list in data/tasks.db."""
 
 import sqlite3
 from datetime import date, datetime

@@ -1,5 +1,4 @@
-"""Tests for jarvis.brain.usage: what the CLI said of Claude's usage limits, shared between processes, and what follows
-from it: a lighter model, holding scheduled runs, warnings and usage_left. Run with: make test"""
+"""Tests for jarvis.brain.usage: shared usage-limit state and its effects: lighter model, held runs, warnings."""
 
 import asyncio
 import json
@@ -13,7 +12,7 @@ from jarvis.brain import sdk, usage
 from jarvis.core import profile
 from jarvis.core.config import FAST_MODEL, HELPER_MODEL
 
-NOW = datetime(2026, 10, 6, 13, 0, tzinfo=profile.tz()).timestamp()  # a Tuesday, at one
+NOW = datetime(2026, 10, 6, 13, 0, tzinfo=profile.tz()).timestamp()  # a Tuesday, 13:00
 
 
 @pytest.fixture(autouse=True)

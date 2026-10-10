@@ -1,23 +1,19 @@
-"""The Google accounts JARVIS uses, kept in the accounts table of data/tasks.db beside the background tasks and the
-to-do list: each with its label, its email, an optional note on what it's for, whether it has Google Chat, and one
-marked default, which gets whatever is made without naming an account.
+"""Google accounts JARVIS uses, stored in the accounts table of data/tasks.db.
 
-The services read them once, at start-up, since the tools' lists of accounts are fixed then; restart them after a
-change. This command changes them:
+Each has a label, email, optional note, a Google Chat flag, and one is the default for anything made without naming an
+account. Services read them at start-up (tool account lists are fixed then), so restart after a change.
 
-    uv run python -m jarvis.integrations.accounts                  list them
+    uv run python -m jarvis.integrations.accounts                  list
     uv run python -m jarvis.integrations.accounts add LABEL [--email E] [--note N] [--chat] [--default] [--no-login]
-    uv run python -m jarvis.integrations.accounts login LABEL      sign it in, or in again
+    uv run python -m jarvis.integrations.accounts login LABEL      sign in (again)
     uv run python -m jarvis.integrations.accounts rename OLD NEW
     uv run python -m jarvis.integrations.accounts remove LABEL [--yes]
     uv run python -m jarvis.integrations.accounts default LABEL
     uv run python -m jarvis.integrations.accounts set LABEL [--email E] [--note N] [--chat | --no-chat]
     uv run python -m jarvis.integrations.accounts check-chat [LABEL]
 
-Several processes use the table, each opening the database for a moment per call; a change reads and writes it in
-one transaction that holds the write lock (`change`), so two at once can't undo each other. Each account's sign-in
-is secrets/google-<label>.json, and what sign-in last found about Chat secrets/google-<label>-chat.json. Renaming
-moves both, and the heartbeat's record of what it has flagged.
+Changes run in one write-locked transaction (`change`) so concurrent processes can't undo each other. Sign-ins live in
+secrets/google-<label>.json and secrets/google-<label>-chat.json; renaming moves both plus the heartbeat history keys.
 """
 
 import argparse
@@ -37,16 +33,16 @@ from jarvis.state.settings import RESTART
 
 log = logging.getLogger("jarvis.integrations.accounts")
 
-LABEL = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")  # it names files and goes into the heartbeat's keys
-HISTORY = ("calendar", "email", "chat")  # heartbeat sources whose keys start with the account's label
+LABEL = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")  # used in file names and heartbeat keys
+HISTORY = ("calendar", "email", "chat")  # heartbeat sources keyed by account label
 
 _SCHEMA = """
 create table accounts (
     label text primary key,
-    position integer not null,           -- the order they're listed in
+    position integer not null,           -- list order
     email text not null default '',
-    note text not null default '',       -- what it's for, which the prompt passes on
-    chat integer not null default 0,     -- 1: a Workspace account whose sign-in also asks for Google Chat
+    note text not null default '',       -- what it's for; passed to the prompt
+    chat integer not null default 0,     -- 1: Workspace account; sign-in also requests Google Chat
     is_default integer not null default 0
 )"""
 _ONE_DEFAULT = "create unique index accounts_one_default on accounts(is_default) where is_default = 1"
@@ -70,7 +66,7 @@ class Account:
 
 @dataclass
 class Accounts:
-    """The accounts in their order, and the default's label ("" with none)."""
+    """Ordered accounts and the default's label ("" if none)."""
     accounts: list[Account] = field(default_factory=list)
     default: str = ""
 
@@ -86,7 +82,7 @@ class Accounts:
         return next((a for a in self.accounts if a.label == label), None)
 
     def resolve(self, name: str) -> str:
-        """The label `name` means: a label in any capitals, or an account's email. Anything else comes back as is."""
+        """Label for `name` (case-insensitive label or email); unknown names are returned unchanged."""
         key = name.strip().lower()
         return next((a.label for a in self.accounts if key in (a.label, a.email.lower())), name)
 
@@ -132,7 +128,7 @@ class Accounts:
 
 
 def label_problem(label: str, taken: list[str]) -> str:
-    """Why `label` can't name an account, or ""."""
+    """Reason `label` is invalid or taken, or ""."""
     if not LABEL.fullmatch(label):
         return (f"'{label}' can't be a label: use up to 32 lowercase letters, digits, dashes and underscores, "
                 "starting with a letter or digit.")
@@ -143,7 +139,7 @@ def label_problem(label: str, taken: list[str]) -> str:
     return ""
 
 
-# ── The table ───────────────────────────────────────────────────
+# ── Storage ─────────────────────────────────────────────────────
 
 def _db() -> AbstractContextManager[sqlite3.Connection]:
     return database.table("accounts", _SCHEMA, _ONE_DEFAULT)
@@ -164,7 +160,7 @@ def _write(db: sqlite3.Connection, accounts: Accounts) -> None:
 
 
 def load() -> Accounts:
-    """The accounts. A database that can't be read is logged and counts as no accounts, so JARVIS still starts."""
+    """All accounts. An unreadable database is logged and yields none so JARVIS still starts."""
     try:
         with _db() as db:
             return _read(db)
@@ -175,9 +171,8 @@ def load() -> Accounts:
 
 @contextmanager
 def change() -> Iterator[Accounts]:
-    """The accounts, to change in place; written back when the block ends without an error. The write lock is held
-    meanwhile, so a change another process makes can't be lost between the reading and the writing. Keep the block
-    short: no sign-ins or network calls in it."""
+    """Yield the accounts to edit in place; written back if the block succeeds. Holds the DB write lock, so keep the
+    block short (no sign-ins or network calls)."""
     with _db() as db:
         db.execute("begin immediate")
         found = _read(db)
@@ -187,7 +182,7 @@ def change() -> Iterator[Accounts]:
 
 
 def describe(accounts: Accounts) -> str:
-    """The persona's line on the Google accounts."""
+    """Prompt sentence describing the Google accounts."""
     if not accounts.accounts:
         return "No Google account is set up yet, so there's no Gmail, Calendar, Chat, Docs or Sheets."
     each = [f'"{a.label}"' + (f" ({a.email})" if a.email else "") + (f": {a.note.rstrip('.')}" if a.note else "")
@@ -199,15 +194,15 @@ def describe(accounts: Accounts) -> str:
     return text
 
 
-# ── Renaming and removing an account's files ────────────────────
+# ── Account files ───────────────────────────────────────────────
 
 def _files(label: str) -> list[Path]:
     return [token_path(label), chat_state_path(label)]
 
 
 def move_files(old: str, new: str, history: Path | None = None) -> list[str]:
-    """Moves the account's sign-in and Chat state to the new label, and the heartbeat's keys for it. Changes
-    nothing if any of the new label's files are already there. Returns what it moved."""
+    """Move sign-in, Chat state and heartbeat keys from `old` to `new`; returns what moved. Raises ValueError (and
+    changes nothing) if `new` files already exist."""
     if clash := [n.name for n in _files(new) if n.exists()]:
         raise ValueError(f"{', '.join(clash)} is already there, from an earlier {new} account. Remove it first.")
     moved = []
@@ -221,8 +216,8 @@ def move_files(old: str, new: str, history: Path | None = None) -> list[str]:
 
 
 def relabel_history(old: str, new: str, path: Path) -> bool:
-    """The heartbeat's keys for the account's alerts (calendar:<label>:..., email:..., chat:...) under the new
-    label, so nothing it has already flagged comes back. False if there was nothing to change."""
+    """Rewrite heartbeat seen-keys (calendar:<label>:..., etc.) to `new` so flagged items don't repeat. False if
+    nothing changed."""
     try:
         data = json.loads(path.read_text())
         seen = data["seen"]
@@ -249,7 +244,7 @@ def remove_files(label: str) -> list[str]:
     return removed
 
 
-# ── The command ─────────────────────────────────────────────────
+# ── CLI ─────────────────────────────────────────────────────────
 
 def show(accounts: Accounts) -> str:
     if not accounts.accounts:
@@ -266,8 +261,7 @@ def show(accounts: Accounts) -> str:
 
 
 def _google(found: Accounts) -> None:
-    """Sets AI Armory's Google sign-in (ai_armory.toolsets.google) up with these accounts and JARVIS's secrets
-    folder, as the tools are (jarvis.tools.google)."""
+    """Configure AI Armory's Google toolset with these accounts, as jarvis.tools.google does."""
     from ai_armory.toolsets.google import configure
 
     from jarvis.tools import google
@@ -276,7 +270,7 @@ def _google(found: Accounts) -> None:
 
 
 def _connect(label: str, client_secret: str) -> int:
-    """Signs the account in through the browser, asking for Google Chat too if it has Chat: 0 if it worked."""
+    """Browser sign-in (with Chat scope if enabled); returns 0 on success."""
     from ai_armory.toolsets.google import auth
 
     _google(load())
@@ -302,8 +296,8 @@ def _signed_in_email(label: str) -> str:
 
 
 def _keep_email(label: str) -> str:
-    """Looks up the account's email from its sign-in and keeps it, unless it's another account's. Says what
-    happened. The lookup comes before the change, so the database isn't locked while Google answers."""
+    """Store the signed-in email unless another account has it; returns a message. Looks it up before taking the
+    DB lock."""
     try:
         email = _signed_in_email(label)
     except Exception as e:
@@ -387,7 +381,7 @@ def main(argv: list[str] | None = None) -> int:
         elif command == "rename":
             with change() as accounts:
                 accounts.rename(args.old, args.new)
-                moved = move_files(args.old, args.new)  # inside the change, so a failed move leaves the label as is
+                moved = move_files(args.old, args.new)  # inside the transaction: a failed move rolls back the rename
             print(f"Renamed the {args.old} account to {args.new}" + (f", moving {', '.join(moved)}." if moved else "."))
         elif command == "remove":
             load().need(args.label)

@@ -1,19 +1,10 @@
-"""Front end for the phone and browsers: uv run python -m jarvis.server
+"""Web front end for the phone and browsers: uv run python -m jarvis.server
 
-Serves the web app's build (web/dist, from `make web-build`) and issues LiveKit tokens to whoever has a login's passcode
-(jarvis.core.logins: each person has their own, hashed in secrets/; the passcode says whose login it is). Reached from
-the iPhone through Tailscale Serve (HTTPS, tailnet devices only), or on the Mac at
-http://localhost:8787. Also takes the phone's Web Push subscription (jarvis.notify.push), or the JARVIS
-app's APNs token (jarvis.notify.apns), with the same passcode, so the task runner can notify it when JARVIS isn't open, and
-logs what the page makes of earphone presses (/api/log), to debug them on the iPhone. The app's
-Approve and Deny buttons on a task's request to run a risky command answer it through
-/api/approvals/ID, with the one-time nonce from the push instead of the passcode. A photo the user sends JARVIS comes
-in on /api/picture and waits for their next turn (jarvis.state.pictures). A file JARVIS made for the phone, such as
-an audio file, is fetched from /api/files/TOKEN, by the link in the push that told of it (jarvis.state.shared_files).
-
-The page's control panel (tasks, to-dos, projects, past conversations, settings) calls /api/panel/ACTION (jarvis.panel), and follows
-the task runner's events, as they happen, on /api/events: a stream of JSON lines, with a ping now and then so
-proxies keep it open.
+Serves web/dist and, for a valid login passcode (jarvis.core.logins), issues LiveKit tokens, stores Web Push and APNs
+registrations, accepts photos (/api/picture), phone debug logs (/api/log) and control panel actions
+(/api/panel/ACTION). /api/events streams runner events and activity as JSON lines. Exceptions to passcode auth:
+/api/approvals/ID uses the push's one-time nonce; /api/files/TOKEN is a capability link. Reached via Tailscale Serve
+(tailnet-only HTTPS) or http://localhost:8787. Wrong passcodes and nonces share one rate limit.
 """
 
 import asyncio
@@ -41,27 +32,27 @@ from jarvis.tasks import client
 from jarvis.voice import quiet
 
 log = logging.getLogger("jarvis.server")
-WEB_DIR = ROOT / "web" / "dist"  # the Vite build of web/
+WEB_DIR = ROOT / "web" / "dist"  # Vite build
 NOT_BUILT = "The JARVIS web app isn't built. Run `make web-build`, then restart the web service."
-MAX_FAILURES, FAILURE_WINDOW = 10, 300  # wrong passcodes allowed per 5 minutes, across all clients
+MAX_FAILURES, FAILURE_WINDOW = 10, 300  # wrong credentials per 5 min, across all clients
 MAX_LOG_LINES = 50  # per /api/log request
 _failures: list[float] = []
 PUSH_OFF = "Notifications are off on the Mac. Remove JARVIS_PUSH=off from .env, then restart JARVIS."
-PING_SECONDS = 25  # how often /api/events sends a ping while nothing happens
-ACTIVITY_SECONDS = 2  # how often /api/events looks for new activity entries, which other processes write
+PING_SECONDS = 25  # /api/events keepalive interval
+ACTIVITY_SECONDS = 2  # /api/events poll interval for activity entries (written by other processes)
 RUNNER_DOWN = "JARVIS's task runner isn't running."
 BUILD_META = re.compile(r'<meta name="jarvis-build" content="([0-9a-f]{1,64})"')
-MAX_REQUEST = pictures.MAX_UPLOAD * 4 // 3 + 64 * 1024  # a photo, in base64, and the rest of its JSON
+MAX_REQUEST = pictures.MAX_UPLOAD * 4 // 3 + 64 * 1024  # base64 photo plus JSON overhead
 
 
 def _locked_out(now: float) -> bool:
-    """Whether too many wrong passcodes (or approval nonces) came in the last FAILURE_WINDOW seconds."""
+    """Too many wrong passcodes or nonces within FAILURE_WINDOW."""
     _failures[:] = [t for t in _failures if now - t < FAILURE_WINDOW]
     return len(_failures) >= MAX_FAILURES
 
 
 async def _json_body(request: web.Request) -> dict:
-    """The request's JSON body, or {} if it isn't a JSON object."""
+    """JSON object body, or {}."""
     try:
         body = await request.json()
     except ValueError:
@@ -70,8 +61,7 @@ async def _json_body(request: web.Request) -> dict:
 
 
 async def _authorised(request: web.Request) -> tuple[dict, web.Response | None]:
-    """The request's JSON body, with "login" set to whose passcode it carries, and an error response unless it carries
-    one."""
+    """(body with "login" set, None) for a valid passcode, else ({}, error response)."""
     now = time.time()
     if _locked_out(now):
         return {}, web.json_response({"error": "Too many wrong passcodes. Try again in a few minutes."}, status=429)
@@ -85,7 +75,7 @@ async def _authorised(request: web.Request) -> tuple[dict, web.Response | None]:
 
 
 def authed(handler: Callable[[web.Request, dict], Awaitable[web.StreamResponse]]):
-    """A handler that runs only for requests carrying a login's passcode, and gets their JSON body, with the login."""
+    """Decorator: require a valid passcode; the handler gets the JSON body with "login"."""
     @wraps(handler)
     async def checked(request: web.Request) -> web.StreamResponse:
         body, denied = await _authorised(request)
@@ -94,8 +84,8 @@ def authed(handler: Callable[[web.Request, dict], Awaitable[web.StreamResponse]]
 
 
 def build_id() -> str:
-    """The web app's build being served, from the <meta name="jarvis-build"> the build puts in index.html, or "".
-    Read each time, as a rebuild changes it under the running server; an open page that sees a new one reloads."""
+    """Build id from index.html's <meta name="jarvis-build">, or "". Read on every call since rebuilds happen under
+    a running server; open pages reload when it changes."""
     try:
         found = BUILD_META.search((WEB_DIR / "index.html").read_text(errors="replace"))
     except OSError:
@@ -114,28 +104,27 @@ def _device(body: dict) -> str:
 @authed
 async def token(request: web.Request, body: dict) -> web.Response:
     device, login = _device(body), body["login"]
-    room = f"jarvis-{secrets.token_hex(4)}"  # a fresh room per connection gets a fresh agent session
+    room = f"jarvis-{secrets.token_hex(4)}"  # fresh room per connection = fresh agent session
     await asyncio.to_thread(logins.used, login)
     jwt = (
         api.AccessToken(credentials.get(credentials.LIVEKIT_KEY), credentials.get(credentials.LIVEKIT_SECRET))
         .with_identity(f"{_slug(login) or 'user'}-{device}-{secrets.token_hex(2)}")
         .with_name(login)
-        # The speaker switch (jarvis.voice.quiet) as the session starts; the page changes it later, hence the metadata grant
+        # Initial speaker switch (voice.quiet); the page updates it later, hence the metadata grant
         .with_attributes({quiet.SPEAKER: "off" if body.get("speaker") == "off" else "on"})
         .with_grants(api.VideoGrants(room_join=True, room=room, can_publish=True, can_subscribe=True,
                                      can_update_own_metadata=True))
         .with_ttl(timedelta(hours=12))
         .to_jwt()
     )
-    # Browsers on the Mac talk to LiveKit directly; everything else comes through
-    # Tailscale Serve, which proxies /rtc on the same HTTPS host to the LiveKit server.
+    # Local browsers hit LiveKit directly; others go via Tailscale Serve, which proxies /rtc to LiveKit
     host = request.headers.get("X-Forwarded-Host") or request.host
     url = LIVEKIT_URL if host.split(":")[0] in ("localhost", "127.0.0.1") else f"wss://{host}"
     return web.json_response({"token": jwt, "url": url, "build": build_id()}, headers={"Cache-Control": "no-store"})
 
 
 async def push_key(_: web.Request) -> web.Response:
-    """Whether push is on and, if so, the VAPID public key the page subscribes with. Public by nature."""
+    """Push status and VAPID public key (public, no auth)."""
     body = {"enabled": True, "key": push.public_key()} if PUSH_ENABLED else {"enabled": False, "error": PUSH_OFF}
     return web.json_response(body, headers={"Cache-Control": "no-store"})
 
@@ -160,8 +149,8 @@ async def push_unsubscribe(_: web.Request, body: dict) -> web.Response:
 
 @authed
 async def push_native(_: web.Request, body: dict) -> web.Response:
-    """The JARVIS app's APNs token: {"passcode", "device", "token", "environment", "topic"}. Kept even before
-    APNs is set up on the Mac, so the app's notifications start once it is; `sending` says whether they do."""
+    """Register the app's APNs token {"passcode", "device", "token", "environment", "topic"}. Stored even before APNs
+    is configured; `sending` says whether pushes will go out."""
     if not PUSH_ENABLED:
         return web.json_response({"error": PUSH_OFF}, status=409)
     try:
@@ -175,7 +164,7 @@ async def push_native(_: web.Request, body: dict) -> web.Response:
 
 @authed
 async def phone_log(_: web.Request, body: dict) -> web.Response:
-    """Lines the page traces about earphone presses and the mic, written to this log (logs/web.log)."""
+    """Write the page's earphone/mic debug lines to logs/web.log."""
     lines = body.get("lines")
     if not isinstance(lines, list):
         return web.json_response({"error": "No lines."}, status=400)
@@ -186,10 +175,8 @@ async def phone_log(_: web.Request, body: dict) -> web.Response:
 
 
 async def approval(request: web.Request) -> web.Response:
-    """The JARVIS app's answer to a task's request to run a risky command, from the Approve or Deny button on its
-    push: {"nonce", "decision": "approve" | "deny", "device"}. The app doesn't keep the passcode, so the nonce the
-    push carried is the credential: one per request, checked by the runner, which keeps only its hash. Wrong ones
-    count towards the same lockout as wrong passcodes."""
+    """Approve/Deny from a push button: {"nonce", "decision", "device"}. The one-time nonce (runner stores only its
+    hash) is the credential, since the app doesn't keep the passcode. Wrong nonces count toward the lockout."""
     now = time.time()
     if _locked_out(now):
         return web.json_response({"error": "Too many wrong answers. Try again in a few minutes."}, status=429)
@@ -213,9 +200,7 @@ async def approval(request: web.Request) -> web.Response:
 
 @authed
 async def picture(_: web.Request, body: dict) -> web.Response:
-    """A photo the user sends JARVIS: {"passcode", "data": base64 of the picture}. It waits for their next turn,
-    spoken or typed, which shows it to Claude (jarvis.state.pictures). Returns its id, to take it back with
-    /api/picture/drop."""
+    """Queue a photo {"passcode", "data": base64} for the user's next turn; returns its id for /api/picture/drop."""
     try:
         data = base64.b64decode(str(body.get("data", "")), validate=True)
     except ValueError:
@@ -230,7 +215,7 @@ async def picture(_: web.Request, body: dict) -> web.Response:
 
 @authed
 async def picture_drop(_: web.Request, body: dict) -> web.Response:
-    """Take back a photo still waiting for the next turn: {"passcode", "id"}."""
+    """Withdraw a queued photo: {"passcode", "id"}."""
     try:
         dropped = await asyncio.to_thread(pictures.drop, str(body.get("id", "")))
     except ValueError as e:
@@ -240,7 +225,7 @@ async def picture_drop(_: web.Request, body: dict) -> web.Response:
 
 @authed
 async def panel_action(request: web.Request, body: dict) -> web.Response:
-    """One of the control panel's actions (jarvis.panel), with the request's body."""
+    """Run a control panel action (jarvis.panel) with the request body."""
     name = request.match_info["action"]
     if name not in panel.ACTIONS:
         return web.json_response({"error": f"There's no {name} in the panel."}, status=404)
@@ -248,17 +233,15 @@ async def panel_action(request: web.Request, body: dict) -> web.Response:
         result = await panel.call(name, body)
     except client.RunnerUnavailable:
         return web.json_response({"error": RUNNER_DOWN}, status=503)
-    except (ValueError, PermissionError) as e:  # what the runner refused (NotAllowed too), or a bad request
+    except (ValueError, PermissionError) as e:  # bad request or runner refusal (incl. NotAllowed)
         return web.json_response({"error": str(e)}, status=400)
     return web.json_response({"result": result}, headers={"Cache-Control": "no-store"})
 
 
 @authed
 async def events(request: web.Request, _: dict) -> web.StreamResponse:
-    """The task runner's events as JSON lines, as they happen, and new entries for the bell ("activity", from
-    jarvis.state.activity, which the voice agent and the runner add to), with a ping every PING_SECONDS while there's
-    nothing else. Starts with a "hello" line saying which build of the web app is served, so a page left open across a
-    rebuild reloads. Ends with an "error" line if the runner goes away; the page then tries again."""
+    """NDJSON stream: "hello" (build id, so stale pages reload), then runner events, "activity" entries and "ping"
+    every PING_SECONDS when idle. Ends with an "error" line if the runner goes away; the page reconnects."""
     resp = web.StreamResponse(headers={"Content-Type": "application/x-ndjson", "Cache-Control": "no-store",
                                        "X-Accel-Buffering": "no"})
     await resp.prepare(request)
@@ -292,7 +275,7 @@ async def events(request: web.Request, _: dict) -> web.StreamResponse:
                 break
             await resp.write(json.dumps(event).encode() + b"\n")
     except ConnectionResetError:
-        pass  # the page went away
+        pass  # client disconnected
     finally:
         for task in (reader, watcher):
             task.cancel()
@@ -302,8 +285,7 @@ async def events(request: web.Request, _: dict) -> web.StreamResponse:
 
 
 async def shared_file(request: web.Request) -> web.StreamResponse:
-    """A file JARVIS made and shared with the phone, such as an audio file (jarvis.state.shared_files), to whoever has
-    its link, which only JARVIS's pushes carry. aiohttp answers range requests, which the phone's player makes."""
+    """Serve a shared file by capability token (sent only in pushes). aiohttp handles the player's range requests."""
     path = shared_files.shared(request.match_info["token"])
     if path is None:
         return web.Response(status=404, text="That file isn't shared any more.")
@@ -312,7 +294,7 @@ async def shared_file(request: web.Request) -> web.StreamResponse:
 
 
 def _built(name: str, headers: dict[str, str]) -> web.StreamResponse:
-    """A file from the web app's build, or a page saying to build it."""
+    """File from the web build, or 503 asking to build it."""
     if not (WEB_DIR / name).is_file():
         return web.Response(status=503, text=NOT_BUILT)
     return web.FileResponse(WEB_DIR / name, headers=headers)
@@ -323,7 +305,7 @@ async def index(_: web.Request) -> web.StreamResponse:
 
 
 async def service_worker(_: web.Request) -> web.StreamResponse:
-    # Served from the root, not /static/, so its scope covers the whole app
+    # Served from / so its scope covers the whole app
     return _built("sw.js", {"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
 
 
@@ -343,7 +325,7 @@ def app() -> web.Application:
     a.router.add_post("/api/panel/{action:[a-z_]+}", panel_action)
     a.router.add_post("/api/events", events)
     a.router.add_get(f"/api/files/{{token:{shared_files.TOKEN}}}", shared_file)
-    if WEB_DIR.is_dir():  # aiohttp refuses a missing folder; the page then says to build it
+    if WEB_DIR.is_dir():  # aiohttp rejects a missing folder
         a.router.add_static("/static/", WEB_DIR)
     else:
         log.warning(NOT_BUILT)
@@ -352,12 +334,12 @@ def app() -> web.Application:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    # What .env still holds moves into the vault, and its passcode becomes the user's login
+    # Move remaining .env credentials into the vault; JARVIS_PASSCODE becomes the first login
     for label in credentials.adopt():
         log.warning("moved the %s from .env into the vault", label)
     logins.adopt()
     if not logins.ready():
         raise SystemExit("Nobody can log in: run make setup, which makes the first login.")
     if PUSH_ENABLED:
-        push.vapid()  # make the key pair now, not on the first page load
+        push.vapid()  # generate now rather than on first page load
     web.run_app(app(), host="127.0.0.1", port=WEB_PORT)

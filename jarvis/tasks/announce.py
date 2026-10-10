@@ -1,17 +1,11 @@
-"""How a background task's end is said: in a sentence or two, worded by a short model call from what happened.
+"""Spoken announcement of a task's end: a sentence or two worded by one tool-less ANNOUNCE_MODEL call.
 
-The runner gathers the facts of an ending (`Ending`): how the task ended and what it reported, what JARVIS's check of
-the work found still missing or waiting on the user (jarvis.tasks.goal), what JARVIS did about it already (a to-do
-ticked off), and the edits it suggests that wait for the user's word (jarvis.tasks.data_edits). One call to
-ANNOUNCE_MODEL, with no tools, words them as JARVIS would say them in person (prompts/task_announcement.md): the
-outcome, then what the user needs to decide, without task numbers, file names or internal terms, and each thing once.
-The model decides the wording; nothing here matches words. Words a run already has fit to say (`lead`: a scheduled
-run's result, a command's fix) are kept as they are, the rest added after them, and an ending with nothing more to say
-needs no call. With the call off (JARVIS_ANNOUNCE=off), failing, slower than ANNOUNCE_SECONDS, or Claude's usage
-limit reached, `plain` says the same facts in fixed words.
+Input is an `Ending`: outcome and report, what the goal check found missing, what JARVIS already did, and pending
+suggested edits. `lead` (words already fit to say) is kept verbatim and the rest appended. Falls back to `plain`
+fixed wording when JARVIS_ANNOUNCE=off, on error, past ANNOUNCE_SECONDS, or at the usage limit.
 
-What's said is only what's said: the facts stay structured on the task (its summary, log and suggested edits) for the
-tools, and `context` gives the voice brain the task's number and its pending edits beside the words, unsaid.
+Only the spoken text is produced here; structured facts stay on the task. `context` gives the voice brain the task
+number and pending edits, unspoken.
 """
 
 import asyncio
@@ -29,32 +23,32 @@ log = logging.getLogger("jarvis.tasks.announce")
 
 def system() -> str:
     return prompts.load("task_announcement", user_name=profile.name())
-REPORT_MOST = 4000  # of the task's report, what the wording reads
-SAID_MOST = 600  # what's said, at most: a few sentences
+REPORT_MOST = 4000  # chars of the report the model reads
+SAID_MOST = 600  # max chars spoken
 DONE, FAILED, STOPPED, QUESTION = "done", "failed", "stopped", "question"
 
 
 @dataclass
 class Ending:
-    """What's known of how a task ended, for saying it."""
+    """Facts about a task's end, for wording it."""
     title: str
     status: str  # DONE, FAILED, STOPPED or QUESTION
-    report: str = ""  # its summary, its error, or its question
-    lead: str = ""  # words already fit to say, said first as they are
-    left: str = ""  # what JARVIS's check found still missing, or needing the user
-    needs_user: bool = False  # what's `left` is for the user, not the task
-    done: list[str] = field(default_factory=list)  # what JARVIS did about it already: "ticked off your to-do ..."
-    suggested: list[tuple[str, str]] = field(default_factory=list)  # its pending edits: what, in plain words, and why
-    undelivered: bool = False  # a message the user sent it went undelivered: it goes with their next reply
+    report: str = ""  # summary, error, or question
+    lead: str = ""  # said first, verbatim
+    left: str = ""  # what the goal check found missing
+    needs_user: bool = False  # `left` is for the user, not the task
+    done: list[str] = field(default_factory=list)  # already done: "ticked off your to-do ..."
+    suggested: list[tuple[str, str]] = field(default_factory=list)  # pending edits: (what, why)
+    undelivered: bool = False  # a user message missed the task; it goes with their next reply
 
 
 def suggestions(task: dict) -> list[tuple[str, str]]:
-    """The task's edits waiting for the user's word: what each does, in a few plain words, and why."""
+    """Pending edits as (plain description, reason)."""
     return [(data_edits.describe(e), e.get("reason", "")) for e in data_edits.pending(task)]
 
 
 def facts(e: Ending) -> str:
-    """What the wording model reads."""
+    """The prompt for the wording model."""
     parts = [f"<task>{e.title}</task>",
              f"<ended>{'asked a question and waits for the answer' if e.status == QUESTION else e.status}</ended>"]
     if e.lead:
@@ -81,7 +75,7 @@ def _and(items: list[str]) -> str:
 
 
 def plain(e: Ending) -> str:
-    """The ending in fixed words, for when the model can't word it."""
+    """Fixed-wording fallback."""
     name = f"Your task, {e.title},"
     head = e.lead or {DONE: f"{name} is done. {headline(e.report)}",
                       FAILED: f"{name} failed: {sentence(e.report)}",
@@ -101,7 +95,7 @@ def plain(e: Ending) -> str:
 
 
 async def ask_model(text: str) -> str:
-    """One short call to ANNOUNCE_MODEL with no tools: its reply."""
+    """One tool-less ANNOUNCE_MODEL call; returns its reply."""
     from jarvis.brain.sdk import ask
 
     reply, _ = await ask(text, system(), ANNOUNCE_MODEL, effort="low")
@@ -109,14 +103,14 @@ async def ask_model(text: str) -> str:
 
 
 async def spoken(e: Ending) -> str:
-    """What to say of the ending: worded by the model from its facts, or in fixed words (plain)."""
+    """The words to speak: model-worded, or `plain` on any fallback."""
     if not (e.report or e.left or e.done or e.suggested or e.undelivered):
-        return plain(e)  # nothing to word: its own words, or a bare stop
+        return plain(e)  # nothing to word
     if not ANNOUNCE_ENABLED or usage.out():
         return plain(e)
     try:
         worded = " ".join((await asyncio.wait_for(ask_model(facts(e)), ANNOUNCE_SECONDS)).split())
-    except Exception as ex:  # the type alone: nothing of the task's reaches the log
+    except Exception as ex:  # log the type only: no task content
         log.warning("announcement wording failed: %s", type(ex).__name__)
         return plain(e)
     if not worded:
@@ -127,8 +121,9 @@ async def spoken(e: Ending) -> str:
 
 
 def context(task: dict) -> str:
-    """For the voice brain beside an announcement, unsaid: which task it was, and each edit it still has pending, by
-    number, for task_edits. Its edits aren't listed while it waits for an answer, as they wait for the end too."""
+    """Unspoken note for the voice brain: task id and numbered pending edits (for task_edits).
+
+    Edits are omitted while the task is waiting on a question."""
     said = f"[That was task {task['id']}, \"{task['title']}\"."
     if task["status"] != "waiting" and (waiting := data_edits.pending(task)):
         said += " Its suggested edits, pending: " + "; ".join(

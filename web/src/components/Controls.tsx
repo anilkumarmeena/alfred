@@ -1,5 +1,5 @@
-// The footer: the message box, then Mute, Connect (or End during a session) and the speaker switch (the
-// stylesheet picks by body[data-live]). Before a session, Mute and the speaker say how the next one starts.
+// Footer: message box, Mute, Connect/End (CSS picks by body[data-live]) and the speaker switch.
+// Before a session, Mute and speaker set how the next one starts.
 import { activate, hangup, pressMute, toggleSpeaker } from "../state/session";
 import { canSilence, connected, joinMuted, muted, speakerOff } from "../state/store";
 import { Composer } from "./Composer";

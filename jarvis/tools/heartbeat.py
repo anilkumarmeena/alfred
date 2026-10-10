@@ -1,6 +1,4 @@
-"""The heartbeat's sources (jarvis.tasks.heartbeat): which ones the user has on, and their settings, kept per user and
-read afresh at every beat. The voice brain switches them and changes their settings as the control panel does, and
-adds another of a kind that allows more (another Gmail search to flag), for the user, a skill or a watch."""
+"""Voice tools for heartbeat sources: list, toggle, change settings, add and remove (per user, re-read each beat)."""
 
 from jarvis.tasks import heartbeat
 

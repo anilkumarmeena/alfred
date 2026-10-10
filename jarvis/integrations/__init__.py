@@ -1,1 +1,1 @@
-"""Outside services: Google accounts, MCP servers (GitHub, GitLab and any others) and JARVIS's own web browser."""
+"""Outside services: Google accounts, MCP servers and JARVIS's own web browser."""

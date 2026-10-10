@@ -1,14 +1,10 @@
-"""Short judgements on a fast model during a voice session, from a CLI session kept warm so each one waits only for the
-model: whether the user has finished their thought (jarvis.voice.turn), and whether now is the moment to bring
-something up (jarvis.voice.floor).
+"""Short timing judgements on a fast model from a warm CLI session (end of turn, when to speak up).
 
-Unlike the yes-or-no check (jarvis.safety.consent), which starts a session per check so nothing carries from one
-reply to the next, these judge only timing, never whether anything may happen, so one session serves many calls:
-starting a CLI takes longer than a judgement may. It's replaced after USES calls, so its history stays short, and
-whenever a call fails or runs out of time mid-answer. The system prompt says each message stands alone.
+Unlike jarvis.safety.consent (one session per check), these judge only timing, never permission, so one session
+serves many calls. It's replaced after USES calls and after any failure or timeout. Each message stands alone.
 
-A caller that gives up (its timeout, or LiveKit cancelling a turn's wait because the user went on) never leaves the
-session mid-answer: the call already sent is read to its end in the background, and one still queued is skipped.
+A caller that gives up never leaves the session mid-answer: a sent call is drained in the background, a queued one
+is skipped.
 """
 
 import asyncio
@@ -23,12 +19,12 @@ from jarvis.core.config import FAST_MODEL
 log = logging.getLogger("jarvis.brain.quick")
 
 USES = 30  # calls on one session before it's replaced
-LIMIT_SECONDS = 20  # a call still unanswered after this has hung: its session is dropped
+LIMIT_SECONDS = 20  # unanswered after this: hung, drop the session
 _background: set[asyncio.Task] = set()
 
 
 class Quick:
-    """One warm session on `model` with `prompt` as its system prompt, one call at a time."""
+    """One warm session on `model` with system prompt `prompt`; one call at a time."""
 
     def __init__(self, label: str, prompt: str, model: str = FAST_MODEL,
                  connect: Callable[[], Awaitable[object]] | None = None) -> None:
@@ -44,12 +40,11 @@ class Quick:
         from jarvis.brain.sdk import short_options
 
         client = ClaudeSDKClient(short_options(self.prompt, self.model))
-        await client.connect()  # on failure the SDK closes what it started
+        await client.connect()  # SDK cleans up on failure
         return client
 
     def warm(self) -> None:
-        """Start the session now if none is starting or ready, so the next call doesn't wait for it. Nothing happens
-        outside a running event loop."""
+        """Start a session if none is starting or ready. No-op outside a running loop."""
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -63,9 +58,9 @@ class Quick:
             log.warning("starting the %s session failed: %s", self.label, type(e).__name__)
 
     async def ask(self, text: str, timeout: float) -> str | None:
-        """The model's reply to `text`, or None if it failed or took longer than `timeout` seconds."""
+        """The reply to `text`, or None on failure or after `timeout` seconds."""
         started = time.monotonic()
-        gone = asyncio.Event()  # set when the caller stops waiting: a call not yet sent is skipped
+        gone = asyncio.Event()  # caller stopped waiting: skip if not yet sent
         call = asyncio.ensure_future(self._ask(text, gone))
         _keep(call)
         try:
@@ -73,7 +68,7 @@ class Quick:
         except TimeoutError:
             log.info("%s: no answer within %.1f s", self.label, timeout)
             return None
-        except Exception as e:  # the type alone: what the user said stays out of the log
+        except Exception as e:  # type only: keep user words out of the log
             log.warning("%s failed after %.1f s: %s", self.label, time.monotonic() - started, type(e).__name__)
             return None
         finally:
@@ -89,7 +84,7 @@ class Quick:
                 async with asyncio.timeout(LIMIT_SECONDS):
                     reply = await _exchange(client, text)
             except BaseException:
-                self._drop()  # it may still be answering: the next call gets a fresh one
+                self._drop()  # may still be answering; next call gets a fresh one
                 raise
             self._used += 1
             if self._used >= USES:
@@ -103,12 +98,12 @@ class Quick:
             task.add_done_callback(lambda t: None if _failed(t) else _close(t.result()))
 
     async def close(self) -> None:
-        """The conversation is over: the session goes."""
+        """Close the session."""
         task, self._session = self._session, None
         if task is None:
             return
         if not task.done():
-            task.cancel()  # still starting: the SDK closes what it started
+            task.cancel()  # still starting; SDK cleans up
         elif not _failed(task):
             _close(task.result())
 
@@ -130,12 +125,12 @@ async def _exchange(client, text: str) -> str:
 
 
 def untagged(text: str) -> str:
-    """Spoken words for a prompt, on one line, with no < or > to close the tags they're quoted in."""
+    """Spoken words on one line with < and > removed, safe to quote inside tags."""
     return " ".join(text.replace("<", " ").replace(">", " ").split())
 
 
 def found(reply: str | None) -> dict:
-    """The one JSON object a reply holds, or {} if it holds none."""
+    """The first JSON object in a reply, or {}."""
     if not reply or not (m := re.search(r"\{.*?\}", reply, re.DOTALL)):
         return {}
     try:

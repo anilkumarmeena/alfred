@@ -1,7 +1,4 @@
-"""Scheduled jobs: reminders, repeating background tasks, "watch this for me" loops and shell commands run on a schedule
-(jarvis.tasks.schedules), which
-the task runner's scheduler runs when they're due (jarvis.tasks.scheduler); do not disturb, which holds them all
-(jarvis.tasks.hold); and how much of Claude's usage is left, which scheduled runs wait on (jarvis.brain.usage)."""
+"""Voice tools for scheduled jobs (reminders, tasks, watches, commands), do-not-disturb, and usage left."""
 
 import time
 from datetime import datetime
@@ -41,14 +38,14 @@ def _brief(job: dict) -> dict:
         out["notepad"] = f"{schedules.clock(note['at'])}: {_clip(note['text'], 400)}"
     if job["only_changes"]:
         out["only_changes"] = True
-    if job["kind"] == "command":  # its command in full, rather than clipped as text
+    if job["kind"] == "command":  # full command, not clipped text
         del out["text"]
         out |= _command(job)
     return out
 
 
 def _command(job: dict) -> dict:
-    """A command job's settings, and its latest run: how it went or, while it goes, how far it has got."""
+    """A command job's settings plus its latest run (outcome, or progress while running)."""
     out = {"command": job["text"], "folder": job["folder"], "summarize": bool(job["summarize"]),
            "auto_fix": bool(job["auto_fix"])}
     if job["timeout_minutes"]:
@@ -57,7 +54,7 @@ def _command(job: dict) -> dict:
         out["log_file"] = job["log_file"]
     if not (run := schedules.run_of(job)):
         return out
-    if "ended" not in run:  # its command task, still running (or waiting for a yes to fix it)
+    if "ended" not in run:  # still running, or awaiting a yes to fix
         out["running"] = {"task": run.get("task"), "since": schedules.clock(run["started"]),
                           "minutes": round((time.time() - run["started"]) / 60),
                           "output_tail": _clip(command_jobs.Runs().output(run.get("task") or 0, 800), 400)}
@@ -74,7 +71,7 @@ def _command(job: dict) -> dict:
 
 
 def _held() -> dict:
-    """Do not disturb, when it's on: a note for the lists."""
+    """A do-not-disturb note for listings, if on."""
     h = hold.status()
     return {"do_not_disturb": hold.describe(h) + "; nothing scheduled runs meanwhile"} if h else {}
 

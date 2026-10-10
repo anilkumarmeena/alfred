@@ -1,7 +1,4 @@
-"""The brain: Claude with tools and memory, streaming its reply as text.
-
-cli.py runs the local `claude` CLI on its own login, speaking as the persona in persona.py.
-"""
+"""The brain: Claude with tools and memory, streaming its reply as text (cli.py, persona in persona.py)."""
 
 from collections.abc import AsyncIterator
 from typing import Protocol
@@ -27,8 +24,7 @@ class VoiceBrain(Protocol):
         """Lines about how the next turn was heard, for that turn only."""
 
     def question_open(self) -> bool:
-        """Whether its shell has a question of its own about a risky command open, which a task's request mustn't be
-        put to the user over."""
+        """Whether a risky-command question is open; a task's request must not be put to the user over it."""
 
 
 def make_brain() -> VoiceBrain:

@@ -1,13 +1,11 @@
-// Which build of the page this is, and reloading once jarvis.web serves a newer one (after `make web-build` and a
-// restart), rather than running stale code. The build adds <meta name="jarvis-build"> (vite.config.ts); jarvis.web
-// says what it serves now in /api/events' hello and /api/token's reply. Under the dev server there's no meta, so
-// nothing here reloads.
+// Reload into a newer build when the server serves one. This build's id is <meta name="jarvis-build">
+// (vite.config.ts); the served id arrives in /api/events' hello and /api/token's reply. Dev server: no meta, no reloads.
 
-const RELOADED_KEY = "jarvis.reloadedFor";  // sessionStorage: the build this tab last reloaded to get
-const RESUME_KEY = "jarvis.resume";  // sessionStorage: a voice session to bring back after the reload, "muted" or "open"
+const RELOADED_KEY = "jarvis.reloadedFor";  // sessionStorage: build this tab last reloaded for
+const RESUME_KEY = "jarvis.resume";  // sessionStorage: session to resume after reload, "muted" | "open"
 
 export interface Page {
-  build: string;  // this page's build, "" if it doesn't know
+  build: string;  // this page's build, "" if unknown
   storage: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null;
   reload(): void;
 }
@@ -21,8 +19,8 @@ const browser = (): Page => ({
 
 type Resume = { muted: boolean } | null;
 export interface Session {
-  busy(): boolean;  // a voice session is going, which a reload would cut off: wait for it to end
-  resume(): Resume;  // a lost one is coming back, which the reloaded page should carry on with
+  busy(): boolean;  // voice session running: defer the reload
+  resume(): Resume;  // session being reconnected, to carry across the reload
 }
 
 export function builds(page: Page = browser()) {
@@ -33,8 +31,8 @@ export function builds(page: Page = browser()) {
     try { v == null ? page.storage?.removeItem(k) : page.storage?.setItem(k, v); } catch {}
   };
 
-  // Now, if newer than this page and not one this tab already reloaded for (if the reload didn't take, don't loop),
-  // bringing the voice session back after it if `resume` (or the session) says how. True if reloading.
+  // Reload now if a newer build is pending and not already tried by this tab (avoids loops), carrying `resume`
+  // across. True if reloading.
   function reload(resume: Resume = session.resume()): boolean {
     if (!page.build || !served || served === page.build || get(RELOADED_KEY) === served) return false;
     set(RELOADED_KEY, served);
@@ -44,15 +42,14 @@ export function builds(page: Page = browser()) {
   }
 
   return {
-    // What jarvis.web serves now (a build id, or anything else to leave it as it was): reloads at once into a newer
-    // build unless a voice session is going. True if reloading.
+    // Record the served build id (non-strings keep the last) and reload unless a voice session runs. True if reloading.
     served(id: unknown, resume?: { muted: boolean }): boolean {
       if (typeof id === "string" && id) served = id;
       return !session.busy() && reload(resume);
     },
     follow(s: Session) { session = s; },
     reload,
-    // The session the page was running when it reloaded for a new build, once: bring it back.
+    // Session to resume after a build reload; returned once.
     takeResume(): Resume {
       const v = get(RESUME_KEY);
       set(RESUME_KEY, null);

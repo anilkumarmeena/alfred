@@ -1,10 +1,8 @@
-"""Speaker off (jarvis.voice.agent): for a crowd, a meeting or a call, JARVIS still hears the user, or reads what they
-type, and replies only in the chat transcript. No speech is made at all: with the session's audio output off, LiveKit
-skips text-to-speech and sends the reply's text straight to the captions.
+"""Speaker off: JARVIS still listens but replies only as text in the transcript (for meetings, calls, crowds).
 
-The switch is the user's participant attribute SPEAKER, "off" or "on". The page or the app asks for it in /api/token
-(jarvis.server), so a session can start silent, greeting included, and changes it during the session; announcements and
-tasks' questions follow it like replies.
+With audio output off, LiveKit skips TTS and sends reply text straight to captions. The switch is the user's
+participant attribute SPEAKER ("off"/"on"), set via /api/token so a session can start silent (greeting included) and
+changed mid-session. Announcements and task questions follow it too.
 """
 
 import logging
@@ -19,7 +17,7 @@ def speaker_on(attributes: dict[str, str]) -> bool:
 
 
 def apply(session, attributes: dict[str, str]) -> None:
-    """Turn JARVIS's voice on or off as the user's attributes ask."""
+    """Turn JARVIS's voice on or off per the user's attributes."""
     on = speaker_on(attributes)
     if on != session.output.audio_enabled:
         session.output.set_audio_enabled(on)
@@ -27,10 +25,9 @@ def apply(session, attributes: dict[str, str]) -> None:
 
 
 def follow(session, room) -> None:
-    """Keep the session's voice following the user's speaker switch for as long as the room lasts. The switch they
-    joined with is applied once they're in (agent.entrypoint), before the greeting."""
+    """Track the user's speaker switch for the room's lifetime. The initial value is applied in agent.entrypoint."""
 
     @room.on("participant_attributes_changed")
     def changed(attributes: dict[str, str], participant) -> None:
-        if SPEAKER in attributes:  # only the user sets it: the agent's own attributes are lk.agent.*
+        if SPEAKER in attributes:  # only the user sets it; the agent's are lk.agent.*
             apply(session, participant.attributes)

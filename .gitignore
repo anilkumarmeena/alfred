@@ -7,5 +7,5 @@ models/
 web/node_modules/
 web/dist/
 .env
-# onnxruntime's telemetry SDK writes its session here, in whatever folder imports it, if turned on (jarvis/__init__.py)
+# onnxruntime telemetry session file, written if telemetry is turned on
 :memory:.ses

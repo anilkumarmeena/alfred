@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
-// Tests for showing JARVIS a photo: src/lib/photo.ts fitting it, and src/state/photo.ts sending it to the Mac, where it
-// waits for the next turn, with the Mac's endpoints faked. Run with: make test (or npm test in web/)
+// Photo attach: lib/photo.ts (fit) and state/photo.ts (upload, consume), endpoints faked. Run: make test (or npm test in web/)
 import assert from "node:assert/strict";
 import { beforeEach, test, vi } from "vitest";
 
@@ -54,14 +53,14 @@ test("a photo picked goes to the Mac at once, and waits for the next turn", asyn
   assert.equal(photo.value?.state, "ready");
   const [path, fields] = fake.posts[0]!;
   assert.equal(path, "/api/picture");
-  assert.equal(fields.data, btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 1, 2, 3)));  // jsdom can't draw it: sent as it is
+  assert.equal(fields.data, btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 1, 2, 3)));  // jsdom can't decode: sent as is
   assert.ok(photo.value?.id);
 });
 
 test("the next thing the user says or types takes it", async () => {
   attach(file());
   await photoReady();
-  addLine("jarvis").value = "Hello.";  // JARVIS talking doesn't
+  addLine("jarvis").value = "Hello.";  // JARVIS lines don't consume it
   assert.equal(photo.value?.state, "ready");
   addLine("you").value = "What's this?";
   assert.equal(photo.value, null);
@@ -79,7 +78,7 @@ test("removing it before asking takes it back off the Mac", async () => {
 test("picking another replaces it, and one removed while sending is dropped when it lands", async () => {
   attach(file());
   const first = photoReady();
-  discard();  // still sending: nothing to drop yet
+  discard();  // still uploading: nothing to drop yet
   assert.equal(await first, false);
   assert.equal(fake.posts.at(-1)![0], "/api/picture/drop");
   attach(file());

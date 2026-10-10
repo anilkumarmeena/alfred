@@ -1,14 +1,11 @@
-"""Do not disturb: "pause all", which holds what JARVIS would otherwise say unasked, until a time or until resumed.
+"""Do not disturb ("pause all"): hold unasked output until a time or until resumed.
 
-While it's on, the scheduler runs nothing (reminders, scheduled tasks and watches all stay due), the heartbeat checks
-nothing, and the runner's task updates make no Mac notification or phone push (they're still said in a live session,
-and stay unheard for the next one's greeting). Requests for a yes still come through, since a task waits on them.
-When it ends, at its time or on resume, the held reminders are said, saying when they were due; each held task or
-watch runs once; and the heartbeat flags what turned up meanwhile. The heartbeat's quiet hours stay as they are.
+While on: the scheduler runs nothing (items stay due), the heartbeat checks nothing, and task updates skip Mac
+notifications and phone pushes (still said in a live session). Approval requests still come through.
+On end: held reminders are said with their due time, each held task/watch runs once, the heartbeat catches up.
 
-It's kept in the settings table (jarvis.state.settings) under "hold", as {"since", "until", "ended"}, so the voice
-agent's tools, the control panel and the task runner share it. The last hold is kept once it's over, so the
-scheduler can tell a run held on purpose from one missed while JARVIS was off (covered).
+Stored in settings under "hold" as {"since", "until", "ended"}. The last hold is kept after it ends so the
+scheduler can tell a deliberately held run from one missed while JARVIS was off (`covered`).
 """
 
 import json
@@ -20,7 +17,7 @@ from jarvis.state import settings
 from jarvis.tasks import schedules
 
 KEY = "hold"
-MAX_DAYS = 7  # the furthest a hold's end can be
+MAX_DAYS = 7  # longest allowed hold
 
 
 def _read() -> dict:
@@ -32,7 +29,7 @@ def _read() -> dict:
 
 
 def _over(h: dict, now: float) -> float | None:
-    """When the hold ended (or ends, if that's passed), or None while it's on."""
+    """End time if the hold is over, else None."""
     if h.get("ended"):
         return h["ended"]
     if h.get("until") and h["until"] <= now:
@@ -41,7 +38,7 @@ def _over(h: dict, now: float) -> float | None:
 
 
 def status(now: float | None = None) -> dict | None:
-    """The hold under way, {"since", "until"} (until None: till resumed), or None."""
+    """Active hold as {"since", "until"} (until None: till resumed), or None."""
     now = now or time.time()
     h = _read()
     if not h.get("since") or _over(h, now) is not None:
@@ -54,15 +51,14 @@ def held(now: float | None = None) -> bool:
 
 
 def covered(ts: float, now: float | None = None) -> bool:
-    """Whether `ts` fell in the hold under way, or in the last one."""
+    """Whether `ts` fell in the active or most recent hold."""
     now = now or time.time()
     h = _read()
     return bool(h.get("since")) and h["since"] <= ts <= (_over(h, now) or now)
 
 
 def start(until: str = "", minutes: int = 0, now: datetime | None = None) -> dict:
-    """Hold everything until `until` (HH:MM or a local date and time), for `minutes`, or with neither till resumed.
-    Starting it while it's on changes its end."""
+    """Hold until `until` (HH:MM or local datetime), for `minutes`, or till resumed. Re-starting changes the end."""
     now = now or datetime.now(profile.tz())
     if until and minutes:
         raise ValueError("Give until or minutes, not both.")
@@ -79,7 +75,7 @@ def start(until: str = "", minutes: int = 0, now: datetime | None = None) -> dic
 
 
 def end(now: float | None = None) -> dict | None:
-    """End the hold under way; returns it, with when it ended, or None if there was none."""
+    """End the active hold; return it with "ended" set, or None if none."""
     now = now or time.time()
     if not (h := status(now)):
         return None

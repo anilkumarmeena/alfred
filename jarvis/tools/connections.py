@@ -1,21 +1,11 @@
-"""Connections by voice: finding new tools (MCP servers), connecting them, sorting their tools, signing in, updating,
-listing, switching off and on, and removing (jarvis.integrations.mcp_servers).
+"""Voice tools for MCP connections: find, add, sign in, review, update, list, enable/disable, remove.
 
-Finding searches the official MCP registry (jarvis.integrations.mcp_registry); when it has nothing, the brain searches
-the web itself, and a server found there is connected as unverified, with the page it came from. Whatever installs,
-updates, sorts or removes one is drafted first and done by connection_confirm, which takes only the draft's id and is
-gated: the brain's gate (jarvis.safety.draft_gate) reads the draft's own summary aloud, worked out here from what
-would be saved rather than from the model's words, and lets the call through only after the user's spoken yes. The
-drafts are kept with the Google tools' and the skills' (AI Armory's drafts), on the same terms.
-
-A connection goes in off. It takes its keys in the control panel (jarvis.panel: never by voice, so never in a
-transcript), or a sign-in through JARVIS's own browser (jarvis.integrations.mcp_oauth); then its tools are listed and
-sorted into reading and changing, from the server's own markings (readOnlyHint, destructiveHint), and saying yes to
-that switches it on. Its changing tools wait for a yes each time they're used (jarvis.safety.mcp_gate), and background
-research tasks get its reading tools.
-
-Switching one off needs no yes; switching it back on needs none either once its tools are sorted. Changes reach
-sessions as they start: the voice brain from the next conversation, tasks from their next run.
+- Find: official MCP registry first; web finds are marked unverified with their source page.
+- Add/review/update/remove are drafted, then applied by gated connection_confirm (draft id only). The spoken summary
+  is built from what would be saved, never from the model's words.
+- New connections start off. Keys go in via the control panel only (never voice/transcripts); sign-in via JARVIS's
+  browser. Review sorts tools into read/write from server hints; the yes switches it on. Writes need a yes per use.
+- Enable/disable need no yes. Changes apply from the next session.
 """
 
 import asyncio
@@ -40,7 +30,7 @@ REMAKE = "connection_add, connection_review, connection_update or connection_rem
 NEXT = ("Nothing changed yet. Call connection_confirm with this draft_id straight away: JARVIS reads the summary aloud "
         "and asks for the yes itself, so don't describe it or ask.")
 LATER = "from the next conversation"
-NAMED = 12  # tools named in a spoken summary, per kind, before "and N more"
+NAMED = 12  # tools named per kind in a spoken summary before "and N more"
 PANEL = "the control panel's Connections page"
 
 
@@ -71,7 +61,7 @@ def _draft(action: str, summary: str, short: str, **payload) -> dict:
 
 
 def _server(name: str) -> Server:
-    """A connection by its name or label, as spoken."""
+    """Look up a connection by spoken name or label."""
     wanted = name.strip().lower()
     found = mcp_servers.load()
     for s in found:
@@ -146,7 +136,7 @@ async def connection_find(query: str) -> dict:
 
 
 def _needs_said(server: Server) -> str:
-    """What it needs before its tools can be listed, said aloud."""
+    """Spoken list of keys/sign-in needed before its tools can be listed."""
     parts = []
     if server.secret_env:
         keys = list(server.secret_env)
@@ -254,7 +244,7 @@ async def _signing_in(server: Server) -> None:
         await asyncio.to_thread(activity.add, f"{said} Its tools can be sorted now.")
     except TimeoutError:
         await asyncio.to_thread(activity.add, f"The sign-in to {server.label} wasn't finished in time.", "warn")
-    except Exception as e:  # the browser, the network, the service: each said, none fatal
+    except Exception as e:  # browser, network or service: report, not fatal
         log.warning("signing in to %s failed: %s", server.name, e)
         said = str(e) if isinstance(e, mcp_oauth.SignInError) else type(e).__name__
         await asyncio.to_thread(activity.add, f"The sign-in to {server.label} didn't work: {said}", "bad")
@@ -393,7 +383,7 @@ async def connection_update(name: str) -> dict | str:
 
 
 def impact(server: Server) -> str:
-    """What removing it takes with it, said aloud and shown in the control panel."""
+    """Spoken summary of what removal takes with it (also shown in the panel)."""
     from jarvis.tasks import schedules
 
     n = len(server.tools)
@@ -407,7 +397,7 @@ def impact(server: Server) -> str:
         parts.append("JARVIS's sign-in to it is forgotten.")
     try:
         jobs = schedules.items()
-    except Exception:  # the schedules can't be read: say nothing of them
+    except Exception:  # schedules unreadable: omit them
         jobs = []
     research = [j for j in jobs if j["kind"] in ("task", "watch") and (j.get("task_kind") or "research") == "research"
                 and (j["kind"] == "task" or j.get("probe") == "task")]

@@ -1,13 +1,9 @@
-"""A bridge from a Claude session's stdio to an HTTP MCP server (MCP's streamable HTTP transport), run by the launcher
-(jarvis.integrations.mcp_launch) for an HTTP server with a key in a header or a sign-in, so neither is ever on the
-CLI's command line or in its environment.
+"""Bridge from a Claude session's stdio to an HTTP MCP server (streamable HTTP), so keys never reach the CLI.
 
-Each JSON-RPC message the CLI writes, one per line, is POSTed to the server's URL with its headers filled in from the
-vault (`{VAR}` in a header's value takes the secret its secret_env names) and, for a signed-in server, its access
-token (jarvis.integrations.mcp_oauth), refreshed once if the server refuses it. The answer, plain JSON or a stream of
-server-sent events, goes back to the CLI a line per message. The session id the server gives at the start goes with
-every later request, as does the protocol version agreed then. Requests are sent side by side, so a slow call doesn't
-hold up the rest. The server's own stream of messages outside replies (a GET) isn't opened: tools don't need it.
+Each JSON-RPC line from the CLI is POSTed with headers filled from the vault (`{VAR}` in a header value) and, for
+signed-in servers, an OAuth token (refreshed once on 401). JSON or SSE replies go back one line per message. The
+session id and protocol version from `initialize` ride on every later request. Requests run concurrently; the
+server-initiated GET stream isn't opened (tools don't need it).
 """
 
 import asyncio
@@ -25,16 +21,16 @@ from jarvis.integrations.mcp_servers import _FIELD, Server
 
 log = logging.getLogger("jarvis.integrations.mcp_bridge")
 
-LINE_LIMIT = 64 * 1024 * 1024  # a message the CLI writes: a file's content can be long
+LINE_LIMIT = 64 * 1024 * 1024  # one CLI message; may carry a whole file
 ERROR = -32000
 
 
 def headers(server: Server) -> dict[str, str]:
-    """Its headers with their secrets filled in. Raises vault.VaultError if one isn't set."""
+    """Headers with secrets filled in. Raises vault.VaultError if one isn't set."""
     out = {}
     for name, value in server.headers.items():
         filled = _FIELD.sub(lambda m: vault.get(server.secret_env[m.group(1)]).strip(), value)
-        out[name] = re.sub(r"^(Bearer\s+)+", "Bearer ", filled, flags=re.IGNORECASE)  # a key pasted with its Bearer
+        out[name] = re.sub(r"^(Bearer\s+)+", "Bearer ", filled, flags=re.IGNORECASE)  # key pasted with "Bearer"
     return out
 
 
@@ -59,7 +55,7 @@ class Bridge:
         return out
 
     async def _fail(self, message: dict | list, why: str) -> None:
-        """Each request in the message answered with an error, so the CLI isn't left waiting."""
+        """Answer each request in `message` with an error so the CLI isn't left waiting."""
         for m in message if isinstance(message, list) else [message]:
             if isinstance(m, dict) and "id" in m and "method" in m:
                 await self.write({"jsonrpc": "2.0", "id": m["id"], "error": {"code": ERROR, "message": why}})
@@ -73,7 +69,7 @@ class Bridge:
             await self.write(m)
 
     async def send(self, message: dict | list) -> None:
-        """One message from the CLI to the server, and whatever it answers back to the CLI."""
+        """Forward one CLI message and relay the replies."""
         initialize = isinstance(message, dict) and message.get("method") == "initialize"
         label = self.server.label
         try:
@@ -81,7 +77,7 @@ class Bridge:
                 async with self.client.stream("POST", self.server.url, json=message,
                                               headers=await self._headers(refresh=attempt == 1)) as r:
                     if r.status_code == 401 and self.server.sign_in and attempt == 0:
-                        continue  # its token refreshed, once
+                        continue  # retry once with a refreshed token
                     if initialize and (sid := r.headers.get("mcp-session-id")):
                         self.session_id = sid
                     if r.status_code == 401:
@@ -135,8 +131,7 @@ async def _stdin() -> asyncio.StreamReader:
 
 async def serve(server: Server, reader: asyncio.StreamReader | None = None,
                 out=None, transport: httpx.AsyncBaseTransport | None = None) -> int:
-    """Bridges stdin to the server and its answers to stdout until stdin ends. Raises vault.VaultError if a secret
-    isn't set."""
+    """Bridge stdin to the server and replies to stdout until EOF. Raises vault.VaultError if a secret isn't set."""
     reader = reader or await _stdin()
     out = out or sys.stdout
     lock = asyncio.Lock()
@@ -155,7 +150,7 @@ async def serve(server: Server, reader: asyncio.StreamReader | None = None,
             except ValueError:
                 continue
             if isinstance(message, dict) and message.get("method") == "initialize":
-                await bridge.send(message)  # first, so what follows carries its session
+                await bridge.send(message)  # awaited so later requests carry its session
                 continue
             task = asyncio.create_task(bridge.send(message))
             running.add(task)

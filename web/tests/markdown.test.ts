@@ -1,17 +1,17 @@
 // @vitest-environment jsdom
-// Tests for src/lib/markdown.ts: Markdown the panel shows, rendered and made safe. Run with: make test (or npm test in web/)
+// lib/markdown.ts: rendering and sanitising. Run: make test (or npm test in web/)
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { markdown, markdownInline } from "../src/lib/markdown";
 
-// Parsed back into a page, so checks see what a browser would make of it
+// Parse into a DOM so checks see what a browser would
 function page(html: string): HTMLElement {
   const box = document.createElement("div");
   box.innerHTML = html;
   return box;
 }
 
-// ── What it renders ─────────────────────────────────────────────
+// ── Rendering ───────────────────────────────────────────────────
 
 test("headings, emphasis, code and lists come out as HTML", () => {
   const box = page(markdown("# Done\n\nMade **two** _small_ changes in `panel.ts`:\n\n- one\n- two\n\n1. first\n2. second"));
@@ -67,7 +67,7 @@ test("without links, for a line inside a task's card, a link's text stays as tex
   assert.equal(box.textContent, "Asks about the PR");
 });
 
-// ── What it keeps out ───────────────────────────────────────────
+// ── Sanitising ──────────────────────────────────────────────────
 
 const HOSTILE = [
   "<script>alert(1)</script>",

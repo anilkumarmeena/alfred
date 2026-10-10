@@ -1,7 +1,8 @@
-"""How a run of a task (jarvis.tasks.worker) and the runner talk while it works: the Reporter, which the runner is; the
-task's own tools, through which it reports (report_progress, ask_user, propose_data_edit and request_access); and
-nudges, the messages sent to a running task, which reach the session after its next tool call through a PostToolUse
-hook (`_nudge_hook`).
+"""Channel between a task run (worker) and the runner.
+
+  Reporter   protocol the runner implements for run callbacks
+  task tools report_progress, ask_user, propose_data_edit, request_access (MCP server "task")
+  nudges     user messages to a running task, injected after its next tool call by a PostToolUse hook
 """
 
 from typing import Protocol
@@ -15,12 +16,12 @@ from jarvis.tasks.host_tools import TaskJobs
 
 
 class Reporter(Protocol):
-    """What a run tells the runner as it goes, and the runner's long jobs on the Mac, which its host tools start."""
+    """Runner callbacks a run uses, plus the host job registry its host tools start jobs in."""
 
     host_jobs: TaskJobs
 
     def session(self, task_id: int, session_id: str) -> None: ...
-    def alive(self, task_id: int, msg: object) -> None: ...  # every message from the session (jarvis.tasks.stall)
+    def alive(self, task_id: int, msg: object) -> None: ...  # every session message, for stall detection
     def activity(self, task_id: int, text: str) -> None: ...
     def progress(self, task_id: int, text: str) -> None: ...
     def subagent(self, task_id: int, text: str) -> None: ...
@@ -114,11 +115,11 @@ def _task_server(task_id: int, reporter: Reporter):
 
 
 REQUEST_ACCESS = "mcp__task__request_access"
-PAUSES = {"mcp__task__ask_user", REQUEST_ACCESS}  # the task waits for an answer once it calls one
+PAUSES = {"mcp__task__ask_user", REQUEST_ACCESS}  # tools after which the task waits for an answer
 
 
 def nudge_text(messages: list[str], finished: bool = False) -> str:
-    """How messages sent to a running task reach its session."""
+    """Prompt text delivering user messages to a running session."""
     said = "\n".join(f"- {m}" for m in messages)
     if finished:
         return f"{profile.name()} sent this as you were finishing:\n{said}\nDo what it asks, then end with a summary of the whole task as before."
@@ -127,7 +128,7 @@ def nudge_text(messages: list[str], finished: bool = False) -> str:
 
 
 def with_nudges(prompt: str, messages: list[str], started: bool) -> str:
-    """A run's prompt plus the messages that were waiting when it began."""
+    """Append messages queued before the run began to its prompt."""
     if not messages:
         return prompt
     lead = f"Also from {profile.name()}, sent while you were busy:" if started else f"Added by {profile.name()} before you started:"
@@ -135,13 +136,13 @@ def with_nudges(prompt: str, messages: list[str], started: bool) -> str:
 
 
 def _nudge_hook(task_id: int, reporter: Reporter) -> list[HookMatcher]:
-    """After each tool call, hands the session any messages sent since the last one."""
+    """PostToolUse hook delivering pending nudges after each tool call."""
 
     async def deliver(data: dict, _tool_use_id, _ctx) -> dict:
         if data.get("agent_id"):
-            return {}  # a subagent's tool call: the messages wait for the task's own session
+            return {}  # subagent call: deliver to the main session only
         if data["tool_name"] in PAUSES:
-            return {}  # it's pausing for an answer: the messages go with the reply
+            return {}  # pausing for an answer: messages go with the reply
         if not (messages := reporter.take_nudges(task_id)):
             return {}
         return {"hookSpecificOutput": {"hookEventName": data["hook_event_name"], "additionalContext": nudge_text(messages)}}

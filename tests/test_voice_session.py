@@ -1,6 +1,4 @@
-"""One voice call's object (jarvis.voice.session): where each turn goes (a rule offered, a task's request, or the
-brain), tasks' requests put to the user as they come rather than on a timer, and what the call holds and lets go.
-Everything here stands in for LiveKit, the runner and Claude. Run with: make test"""
+"""Tests for jarvis.voice.session: turn routing (rule offer, request, brain), prompt requests, what a call holds."""
 
 import asyncio
 
@@ -19,7 +17,7 @@ OTHER = {"id": 14, "task": 118, "summary": "a command that stops a process",
 
 
 class Brain:
-    """Stands in for the CLI brain (jarvis.brain.VoiceBrain)."""
+    """Fake CLI brain (jarvis.brain.VoiceBrain)."""
 
     def __init__(self, *reply: str) -> None:
         self.reply = reply or ("Sure.",)
@@ -54,7 +52,7 @@ class Brain:
 
 
 class Runner:
-    """Stands in for the task runner's client: what it was sent, and the events and lists it gives."""
+    """Fake task runner client: records what it was sent; returns canned events and lists."""
 
     def __init__(self, *events: dict, pending: list[dict] = (), unseen: list[dict] = ()) -> None:
         self._events = events
@@ -90,7 +88,7 @@ class Runner:
 
 
 class Session:
-    """Stands in for LiveKit's AgentSession."""
+    """Fake LiveKit AgentSession."""
 
     agent_state = user_state = "listening"
 
@@ -108,8 +106,7 @@ class Router:
 
 @pytest.fixture(autouse=True)
 def quiet(monkeypatch):
-    """Nothing written to the conversation log, and a floor that's quick to look. Each test has a conversation of its
-    own (conftest)."""
+    """No conversation logging and a fast-polling floor (each test gets its own conversation via conftest)."""
     monkeypatch.setattr(voice_session.memory, "log_exchange", lambda *a, **k: None)
     monkeypatch.setattr(floor_module, "POLL_SECONDS", 0.001)
 
@@ -184,7 +181,7 @@ def test_a_yes_to_a_rule_offered_saves_it_before_anything_else():
     async def main():
         voice = call()
         voice.asks.add(REQUEST)
-        voice.asks.ask(voice.asks.due())  # a request open too: the offer, put after it, comes first
+        voice.asks.ask(voice.asks.due())  # a request is open too: the offer, put after it, comes first
         voice.talk.offer.put([], approval=13, breadth="kind")
         return voice, await reply(voice, "Yes.")
 
@@ -228,7 +225,7 @@ def test_a_request_is_put_to_the_user_as_soon_as_it_comes_not_on_a_timer():
         await settle()
         assert session.said == []
         voice.asks.add(REQUEST)
-        await settle()  # far less than the old two-second look
+        await settle()  # well under two seconds
         asking.cancel()
         return voice, session
 
@@ -331,6 +328,6 @@ def test_the_call_lends_its_speaker_check_and_lookups_to_the_tools_through_its_c
 
     voice, talk = asyncio.run(main())
     assert talk.speaker is None and talk.lookups is None and voice.stt.speaker.cancelled
-    assert conversation.current() is not talk  # the process's goes back to one of its own
+    assert conversation.current() is not talk  # the process goes back to its own conversation
     assert voice.brain.ended and voice.runner.ended
     assert all(loop.done() for loop in voice._loops)

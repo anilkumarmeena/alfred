@@ -1,6 +1,4 @@
-"""Tests for reading a spoken yes or no (jarvis.safety.consent): the word lists first, then, for a reply they can't
-read, one short model call that sees only the user's words, the kind of question and what's waiting as the gate
-describes it. The model is faked throughout. Run with: make test"""
+"""Tests for jarvis.safety.consent: word lists first, then a (faked) model call for replies they can't read."""
 
 import asyncio
 import json
@@ -21,7 +19,7 @@ from jarvis.voice.floor import Floor
 
 INSTALL = "brew install jq"
 PUSH = "git push"
-ASK_MODEL = consent.ask_model  # the real one, which the `model` fixture fakes
+ASK_MODEL = consent.ask_model  # the real one; the `model` fixture fakes it
 
 
 def says(answer: str, scope: str = "once") -> str:
@@ -29,7 +27,7 @@ def says(answer: str, scope: str = "once") -> str:
 
 
 class Model:
-    """The yes-or-no model, faked: every prompt is kept, and it gives `answer`, raises `error` or takes `delay`."""
+    """Fake yes/no model: records prompts; returns `answer`, raises `error` or sleeps `delay`."""
 
     def __init__(self) -> None:
         self.prompts: list[str] = []
@@ -49,7 +47,7 @@ class Model:
 @pytest.fixture
 def model(monkeypatch):
     fake = Model()
-    monkeypatch.setattr(consent, "CONSENT_ENABLED", True)  # conftest turns it off for every other test
+    monkeypatch.setattr(consent, "CONSENT_ENABLED", True)  # conftest disables it for other tests
     monkeypatch.setattr(consent, "ask_model", fake)
     monkeypatch.setattr(consent, "_kept", {})
     monkeypatch.setattr(consent, "_standby", None)
@@ -61,7 +59,7 @@ def reply(said: str, kind: str = consent.COMMAND) -> Verdict:
 
 
 def turn(gate: ShellGate, said: str, before: str = "") -> list[str]:
-    """A turn as the brain starts one: the verdict on the words, the shell's turn, then the words kept apart."""
+    """Start a turn as the brain does: verdict on the words, the shell's turn, then the words."""
     agreed = gate.new_turn(said, asyncio.run(gate.judge(said)))
     conversation.current().heard.replied(before)
     conversation.current().heard.turn(said)
@@ -69,7 +67,7 @@ def turn(gate: ShellGate, said: str, before: str = "") -> list[str]:
 
 
 def asked(gate: ShellGate, command: str = COMMAND) -> None:
-    """A turn that asked about `command` and got as far as the question."""
+    """A turn that asked about `command` and reached the question."""
     turn(gate, "clear out the old renders")
     assert isinstance(ask(gate, command), PermissionResultDeny)
     assert gate.question("") == QUESTION
@@ -77,7 +75,7 @@ def asked(gate: ShellGate, command: str = COMMAND) -> None:
 
 
 def asked_task() -> VoiceApprovals:
-    """A task's request put to the user by voice, which their next words answer."""
+    """Put a task's request to the user by voice; their next words answer it."""
     asks = VoiceApprovals()
     asks.add({"id": 7, "task": 3, "spoken": "Okay to go ahead?"})
     asks.ask(asks.due())
@@ -87,7 +85,7 @@ def asked_task() -> VoiceApprovals:
 
 
 def test_yes_lets_proceed_is_a_yes_without_asking_the_model(model):
-    # "Yes, let's proceed." was turned down on 2026-10-07: the lists now read it, and the model isn't asked
+    # the lists read this one; the model isn't asked
     model.error = AssertionError("not called")
     assert reply("Yes, let's proceed.") == Verdict("yes", "once")
     gate = ShellGate(Clock())
@@ -117,7 +115,7 @@ def test_a_no_in_the_words_wins_over_a_model_yes_when_telling_jarvis():
     assert heard.take("deny", [], NO) == "Nahin, rehne do."
 
 
-# ── The model, for what the lists can't read ────────────────────
+# ── Model fallback ──────────────────────────────────────────────
 
 
 @pytest.mark.parametrize("said", ["Yes, let's proceed with the restart.", "Haan, kar do.", "Oui, vas-y.",
@@ -130,7 +128,7 @@ def test_a_yes_the_lists_cant_read_is_the_models_to_judge(model, said):
     assert isinstance(ask(gate, COMMAND), PermissionResultAllow)
     [prompt] = model.prompts
     assert said in prompt and KINDS[consent.COMMAND] in prompt
-    assert COMMAND not in prompt and "renders" not in prompt  # only the reply and the kind of question
+    assert COMMAND not in prompt and "renders" not in prompt  # only the reply and the question kind
 
 
 @pytest.mark.parametrize("said", ["Yes, but only after the tests pass.", "Haan, lekin abhi nahin.",
@@ -236,11 +234,11 @@ def test_a_model_always_is_still_offered_as_a_rule_and_never_widened(model):
     gate = ShellGate(Clock())
     asked(gate, INSTALL)
     assert turn(gate, "Haan, hamesha.") == [INSTALL]
-    _, request, breadth, example = gate.offer  # put to the user to save; nothing is kept yet
+    _, request, breadth, example = gate.offer  # offered for saving; nothing kept yet
     assert request is None and breadth == "exact" and example == INSTALL
     assert gate.kept == []
     gate = ShellGate(Clock())
-    asked(gate)  # deleting files can't be remembered, whatever the model says
+    asked(gate)  # file deletes can't be remembered, whatever the model says
     assert turn(gate, "Haan, hamesha.") == [COMMAND]
     assert gate.question("Deleted.") == " That yes was just for this once: a command that deletes files asks every time."
 
@@ -276,7 +274,7 @@ def test_a_yes_in_other_words_to_jarvis_asking_to_push_lets_it_run(model):
     turn(gate, "Haan, kar do.", "I've committed the fix. Shall I push the changes?")
     assert isinstance(ask(gate, PUSH), PermissionResultAllow)
     gate = ShellGate(Clock())
-    turn(gate, "Haan, kar do.", "Shall I restart the agent?")  # it asked something else: the model isn't consulted
+    turn(gate, "Haan, kar do.", "Shall I restart the agent?")  # a different question: the model isn't consulted
     assert isinstance(ask(gate, PUSH), PermissionResultDeny)
     assert len(model.prompts) == 1
 
@@ -301,10 +299,9 @@ def test_a_yes_to_looking_at_the_screen_in_other_words(model):
     assert not asyncio.run(screen.agreed("Hmm, dekhte hain.", "Want me to look at your screen?"))
 
 
-# ── The stuck yeses of 2026-10-09 ───────────────────────────────
-# Every model check that day ran out of time (3 seconds, while starting the CLI alone took longer), so each yes the
-# lists couldn't read counted as unclear; and a stray "Okay, so..." two exchanges after the question let the command
-# run.
+# ── Slow checks and stray okays ─────────────────────────────────
+# A model check that times out must not drop a yes, and a stray "Okay, so..." exchanges after the question
+# must not release the command.
 
 STOP = 'pkill -f "/Users/me/.vscode-server/"; pkill -f "/Users/me/.codex/"'
 
@@ -338,7 +335,7 @@ def test_a_stray_okay_exchanges_after_the_question_doesnt_release_it(model):
     asked(gate, STOP)
     assert turn(gate, "Can you check why Nifty is down today?") == []
     assert turn(gate, "Thank you.") == []
-    assert turn(gate, "Okay, so...") == []  # the lists alone would have taken it as a yes
+    assert turn(gate, "Okay, so...") == []  # the lists alone would read it as a yes
     assert gate.question_open()
     assert "a while ago" in model.prompts[-1]
     assert isinstance(ask(gate, STOP), PermissionResultDeny)  # run again, it's asked about once more...
@@ -384,7 +381,7 @@ def test_a_check_that_runs_out_of_time_doesnt_hold_up_the_turn(model, monkeypatc
     async def slow(prompt: str) -> str:
         try:
             await asyncio.sleep(5)
-        finally:  # closing a CLI session takes a while, and isn't cut short
+        finally:  # closing a CLI session is slow and isn't cut short
             await asyncio.shield(asyncio.sleep(0.5))
             closed.append(True)
         return says("yes")
@@ -399,12 +396,12 @@ def test_a_check_that_runs_out_of_time_doesnt_hold_up_the_turn(model, monkeypatc
         return verdict, took
 
     verdict, took = asyncio.run(check())
-    assert verdict == UNCLEAR and took < 0.4  # it used to wait for the session to close
+    assert verdict == UNCLEAR and took < 0.4  # doesn't wait for the session to close
     assert closed == [True]
 
 
 class Session:
-    """A CLI session for the check, faked: what it was asked, and whether it was closed."""
+    """Fake CLI session: records prompts and whether it was closed."""
 
     def __init__(self, made: list) -> None:
         self.prompts: list[str] = []

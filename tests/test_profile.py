@@ -1,8 +1,6 @@
-"""Tests for profiles (jarvis.core.profile): the owner's made from what the install already had, others added, and code
-running as one of them, its data and database included. Run with: make test"""
+"""Tests for core.profile: the owner's profile, adding profiles, running as one."""
 
 import asyncio
-import sqlite3
 
 import pytest
 
@@ -13,8 +11,7 @@ from jarvis.state import settings
 
 @pytest.fixture
 def install(tmp_path, monkeypatch):
-    """An install of the test's own, its database holding the settings an install had before profiles, with no profile
-    given to the process, so the owner's is read from the database."""
+    """A fresh install with no process profile: the owner's is read from the DB."""
     monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(config, "DB_FILE", tmp_path / "data" / "tasks.db")
     monkeypatch.setattr(config, "SECRETS_DIR", tmp_path / "secrets")
@@ -29,19 +26,12 @@ def install(tmp_path, monkeypatch):
     profile.forget()
 
 
-def old_settings(**kept: str) -> None:
-    with sqlite3.connect(config.DB_FILE) as db:
-        db.execute("create table settings (key text primary key, value text not null)")
-        db.executemany("insert into settings values (?, ?)", kept.items())
-
-
-def test_the_owner_is_made_from_the_settings_an_install_already_had(install):
-    old_settings(name="Priya", timezone="Asia/Kolkata", voice="bm_lewis")
+def test_the_owner_uses_the_install_s_own_folders(install):
     owner = profile.current()
-    assert (owner.id, owner.name, owner.timezone) == ("owner", "Priya", "Asia/Kolkata")
-    assert (owner.data, owner.db, owner.secrets) == (config.DATA_DIR, config.DB_FILE, config.SECRETS_DIR)  # nothing moves
+    assert owner.id == "owner"
+    assert (owner.data, owner.db, owner.secrets) == (config.DATA_DIR, config.DB_FILE, config.SECRETS_DIR)
     assert owner.memory_file == config.DATA_DIR / "memory.md" and owner.skills == config.DATA_DIR / "skills"
-    assert profile.stored() | {"created": 0} == {"id": "owner", "name": "Priya", "timezone": "Asia/Kolkata",
+    assert profile.stored() | {"created": 0} == {"id": "owner", "name": "", "timezone": "",
                                                   "data_dir": None, "db_file": None, "created": 0}
 
 

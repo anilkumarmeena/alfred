@@ -1,7 +1,7 @@
-"""The web front end's passcode check and its LiveKit tokens (jarvis.server): which endpoints need a login's passcode,
-what a wrong one, a missing one or a body that isn't JSON gets, the lockout after too many and its end, and the token's
-room, identity, grants and LiveKit URL. The handlers are called directly: the sandboxed test run can't open a port.
-Run with: make test"""
+"""Tests for jarvis.server: passcode-protected endpoints, bad input, lockout, and LiveKit token contents.
+
+Handlers are called directly; the sandboxed test run can't open a port.
+"""
 
 import asyncio
 import json
@@ -16,15 +16,15 @@ from jarvis.core import logins
 from jarvis.voice import quiet
 
 KEY, SECRET = "devkey", "a-livekit-secret-long-enough-to-sign-with"
-LOGIN, RIGHT, WRONG = "Robin", "123456", "000000"  # the one login, hashed in a scratch logins.json, and its passcode
-# Each endpoint that takes the passcode, and the public ones (each guarded otherwise, or with nothing to guard)
+LOGIN, RIGHT, WRONG = "Robin", "123456", "000000"  # one login, hashed in a scratch logins.json, and its passcode
+# Passcode endpoints, and public ones (guarded otherwise or with nothing to guard)
 AUTHED = {"/api/token", "/api/push/subscribe", "/api/push/unsubscribe", "/api/push/native", "/api/log",
           "/api/picture", "/api/picture/drop", "/api/panel/{action}", "/api/events"}
 PUBLIC = {"/", "/sw.js", "/api/push/key", "/api/approvals/{id}", "/api/files/{token}"}
 
 
 class Request:
-    """Just enough of aiohttp's request for the handlers. A `body` that's an exception is raised as reading it."""
+    """Minimal aiohttp request; a `body` that is an exception is raised on read."""
 
     remote = "100.64.0.2"
 

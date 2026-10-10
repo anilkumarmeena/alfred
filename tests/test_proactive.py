@@ -1,6 +1,4 @@
-"""Tests for JARVIS raising things itself at a moment a model judges (jarvis.voice.floor): items held while the user is
-deep in something, urgent ones cutting in after an apology, what the conversation doesn't take going to the phone,
-and follow-ups the learning review finds coming back as reminders. Run with: make test"""
+"""Tests for proactive speech (jarvis.voice.floor): judged timing, urgent cut-ins, phone fallback, follow-ups."""
 
 import asyncio
 from datetime import datetime, timedelta
@@ -41,7 +39,7 @@ class Brain:
 
 
 class Choices:
-    """Stands in for Moment: answers each call with the next list of choices."""
+    """Fake Moment: answers each call with the next list of choices."""
 
     def __init__(self, *answers) -> None:
         self.answers = list(answers)
@@ -79,8 +77,8 @@ def test_an_item_held_for_a_better_moment_is_judged_again_after_the_next_exchang
     session = Session()
     announcements.add(Announcement("The Chat fix is done."))
     assert turn(announcements, session) is None and session.said == []
-    assert turn(announcements, session) is None and len(moment.asked) == 1  # nothing new: not asked again
-    floor.turn()  # they spoke, and JARVIS replied
+    assert turn(announcements, session) is None and len(moment.asked) == 1  # nothing new, so not asked again
+    floor.turn()  # they spoke and JARVIS replied
     assert turn(announcements, session).text == "The Chat fix is done."
     assert session.said == ["The Chat fix is done."] and not announcements.queue
 
@@ -214,6 +212,6 @@ def test_a_follow_up_the_review_finds_becomes_a_reminder_on_the_users_yes():
     said = data_edits.apply(checked)
     assert said.startswith("I'll remind") and any(j["text"] == "Check the build" for j in schedules.items())
     with pytest.raises(ValueError):
-        data_edits.check(edit, "")  # only the review suggests them
+        data_edits.check(edit, "")  # only the review may suggest them
     with pytest.raises(ValueError):
         data_edits.check(edit | {"when": "2020-01-01T09:00"}, "review")  # already past

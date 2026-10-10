@@ -1,5 +1,4 @@
-"""What the task runner's parts (jarvis.tasks.runner) share: the state Runner.__init__ sets up, and the methods each part
-calls on the others, made in the part named beside each."""
+"""Shared base for the task runner's parts: common state, plus stubs for methods each part defines (module noted)."""
 
 import asyncio
 from typing import TYPE_CHECKING
@@ -11,7 +10,7 @@ SHUTTING_DOWN = "JARVIS's task runner is shutting down; try again once it's back
 
 
 class RunnerBase:
-    """The state the runner's parts share (Runner.__init__ says what each is), and what they all use."""
+    """Shared runner state (documented in Runner.__init__) and helpers."""
 
     store: Store
     jobs: dict[int, asyncio.Task]
@@ -45,7 +44,7 @@ class RunnerBase:
         return task
 
     def _open(self) -> None:
-        """RuntimeError once a shutdown has begun: nothing new starts."""
+        """Raise RuntimeError once shutdown has begun."""
         if self.closing:
             raise RuntimeError(SHUTTING_DOWN)
 

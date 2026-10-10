@@ -1,7 +1,4 @@
-"""JARVIS's tests run before one of its own task branches is merged (jarvis.tasks.merge_check, Runner._merge): a
-test failing on the branch refuses the merge, named, unless it fails on the branch merged into too or is known to fail
-only for want of what a worktree lacks. Other projects' branches merge untested. The suite itself is stood in for,
-but for one real pytest run on a tiny project. Run with: make test"""
+"""Tests for jarvis.tasks.merge_check: branch test failures block a self-merge unless pre-existing or worktree-only."""
 
 import asyncio
 import shutil
@@ -21,8 +18,10 @@ ENV_ONLY = sorted(merge_check.ENV_ONLY)[0]
 
 @pytest.fixture
 def suite(monkeypatch, env):
-    """Stands in for running the tests: the failures each folder gives (the worktree's under "branch", the main
-    checkout's under "main"), and each run noted as (folder, files asked for)."""
+    """Fake test suite: failures per folder ("branch" = worktree, "main" = main checkout).
+
+    Records each run as (folder, files asked for).
+    """
     fake = {"branch": set(), "main": set(), "runs": []}
     monkeypatch.setattr(merge_check, "WORKTREES_DIR", env["tmp"] / "worktrees")
 
@@ -49,12 +48,12 @@ def test_a_test_newly_failing_on_the_branch_refuses_the_merge_naming_it(jarvis, 
 
 def test_failures_that_main_shares_or_the_environment_explains_dont_block(jarvis, suite, monkeypatch):
     (jarvis / "tests").mkdir()
-    (jarvis / "tests" / "test_old.py").write_text("")  # in the main checkout too, so run again there
+    (jarvis / "tests" / "test_old.py").write_text("")  # also in the main checkout, so rerun there
     r, task = run_worktree_task(monkeypatch, add_new_file, project="jarvis")
     suite["branch"], suite["main"] = {OLD, ENV_ONLY}, {OLD}
     merged = asyncio.run(r.merge(task["id"]))
     assert "merged into main, its tests passing" in merged["spoken"] and (jarvis / "new.py").exists()
-    assert suite["runs"][1] == (jarvis, ["tests/test_old.py"])  # only the failing file, and not the one env-only
+    assert suite["runs"][1] == (jarvis, ["tests/test_old.py"])  # only the failing file, not the env-only one
 
 
 def test_a_refusal_names_a_few_and_counts_the_rest(jarvis, suite, monkeypatch):

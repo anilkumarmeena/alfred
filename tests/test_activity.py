@@ -1,6 +1,4 @@
-"""Tests for the bell's list of what JARVIS did lately (jarvis.state.activity): the voice brain's tools that changed
-something, MCP server writes once they've run, and the task runner's events, kept for a week and sent to open pages.
-Run with: make test"""
+"""Tests for jarvis.state.activity: which tools count as changes, the post-tool hook, retention, runner events."""
 
 import asyncio
 import sqlite3
@@ -39,7 +37,7 @@ def test_the_registry_marks_what_changes_something():
     assert {"remember", "memory_replace", "forget", "todo_add", "todo_done", "project_register", "calendar_create_event", "chat_send",
             "sheets_write", "docs_insert", "gmail_modify"} <= changes
     assert not changes & {"todo_list", "calendar_events", "gmail_search", "docs_read", "chat_draft", "task_list",
-                          "task_start"}  # reads, drafts, and tasks (the runner notes those itself)
+                          "task_start"}  # reads, drafts and tasks (the runner logs tasks itself)
     assert tools.get("remember").said == "Remembered: {fact}"
 
 
@@ -47,7 +45,7 @@ def test_the_registry_marks_what_changes_something():
 
 
 def ran(name: str, args: dict, response, gate: mcp_gate.Gate | None = None) -> None:
-    """The voice brain's PostToolUse hook, as the CLI calls it after a tool call that ran."""
+    """Run the voice brain's PostToolUse hook for a tool call that ran."""
     gate = gate or mcp_gate.Gate()
     hook = cli._bell_hook(gate)[0].hooks[0]
     asyncio.run(hook({"tool_name": name, "tool_input": args, "tool_response": response}, None, None))
@@ -69,10 +67,10 @@ def test_only_tools_that_changed_something_are_kept_in_their_own_words(db):
 
 
 def test_a_memory_replaced_is_kept_and_a_save_refused_as_full_is_not(db, tmp_path, monkeypatch):
-    profile.current().memory_file.write_text("## User\n" + "".join(f"- Fact {n} {'x' * 375} (2026-09-01)\n" for n in range(5)))  # 1,985
+    profile.current().memory_file.write_text("## User\n" + "".join(f"- Fact {n} {'x' * 375} (2026-09-01)\n" for n in range(5)))  # 1,985 chars
 
     def called(name: str, args: dict) -> None:
-        """The tool run as the SDK runs it, then the hook with its response."""
+        """Run the tool as the SDK does, then the hook with its response."""
         content, is_error = asyncio.run(tools.run(name, args))
         ran(f"mcp__jarvis__{name}", args, {"is_error": is_error, "content": [{"type": "text", "text": content}]})
 
@@ -110,7 +108,7 @@ def test_entries_are_trimmed_and_old_ones_go_now_and_then(db, monkeypatch):
     now = time.time()
     monkeypatch.setattr(time, "time", lambda: now + activity.KEEP_DAYS * 86400 + 60)
     monkeypatch.setattr(activity, "PRUNE_EVERY", 2)
-    activity.add("new")  # the second entry: the week-old one goes
+    activity.add("new")  # adding prunes the week-old entry
     assert texts() == ["new"]
     assert [e["text"] for e in activity.recent(after=activity.latest_id() - 1)] == ["new"]
 

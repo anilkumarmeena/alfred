@@ -1,5 +1,4 @@
-// Tests for src/lib/record.ts: the voiceprint recording's conversion to what the panel takes, 16 kHz 16-bit PCM in
-// base64. Run with: make test (or npm test in web/)
+// lib/record.ts: conversion to base64 16 kHz 16-bit PCM. Run: make test (or npm test in web/)
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { downsample, join, level, RATE, toBase64, toPcm16 } from "../src/lib/record";
@@ -14,7 +13,7 @@ test("44.1 kHz comes out at the right length, and 16 kHz unchanged", () => {
   assert.equal(downsample(new Float32Array(44100), 44100).length, RATE);
   const same = new Float32Array([0.1, 0.2]);
   assert.deepEqual(Array.from(downsample(same, RATE)), Array.from(same));
-  assert.notEqual(downsample(same, RATE), same);  // a copy
+  assert.notEqual(downsample(same, RATE), same);  // returns a copy
 });
 
 test("samples become 16-bit, clipped to full scale", () => {
@@ -26,7 +25,7 @@ test("PCM goes as base64 of its little-endian bytes, however long", () => {
   const pcm = toPcm16(new Float32Array([0.5, -1]));
   assert.equal(toBase64(new Uint8Array(pcm.buffer)), btoa(String.fromCharCode(0x00, 0x40, 0x01, 0x80)));
   const long = new Uint8Array(100_000).fill(65);
-  assert.equal(atob(toBase64(long)).length, 100_000);  // in chunks, past what one fromCharCode call takes
+  assert.equal(atob(toBase64(long)).length, 100_000);  // chunked: exceeds one fromCharCode call's limit
 });
 
 test("chunks join in order, and the level meter rises with loudness", () => {

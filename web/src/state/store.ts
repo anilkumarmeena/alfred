@@ -1,5 +1,4 @@
-// The page's state, as signals. App.tsx mirrors the ones the stylesheet keys on to body[data-*]; the
-// session (session.ts) and push (push.ts) write them, and components read them.
+// Page state as signals. App.tsx mirrors the ones CSS keys on to body[data-*].
 import { computed, signal } from "@preact/signals";
 import type { AgentState, Focus, Link, Paused } from "../types";
 import type { BeforeCall, MicMode, Permission } from "../lib/native";
@@ -21,40 +20,39 @@ const PAUSED: Record<Exclude<Paused, "">, string> = {
 };
 
 export const agentState = signal<AgentState>("idle");  // body[data-state]
-export const link = signal<Link>("off");  // body[data-link]: the header's LED
-export const connected = signal(false);  // a LiveKit room exists, live or still connecting
-export const live = signal(false);  // body[data-live]: connected, with audio going
-export const muted = signal(false);  // body[data-muted]: the user's mute choice, while connected
-export const joinMuted = signal(false);  // the Mute button before a session: the next one starts with the mic off
-// body[data-speaker="off"]: JARVIS replies only in the transcript, making no sound at all. Kept on this device, so a
-// session started in a meeting is silent from its first word.
+export const link = signal<Link>("off");  // body[data-link]: header LED
+export const connected = signal(false);  // session exists, live or connecting
+export const live = signal(false);  // body[data-live]: connected with audio flowing
+export const muted = signal(false);  // body[data-muted]: user's mute choice, while connected
+export const joinMuted = signal(false);  // pre-session Mute: next session starts with the mic off
+// body[data-speaker="off"]: text-only replies. Persisted per device so a session starts silent.
 export const speakerOff = signal(storage.get(SPEAKER_KEY) === "off");
-export const canSilence = signal(true);  // false in an app build whose plugin has no speaker switch
-export const afterCall = signal<BeforeCall | null>(null);  // the iPhone app: a call ended, offer to put these back
-export const phoneMuted = signal(false);  // iOS muted the mic on an earphone press, without Safari saying
-export const micPaused = signal<Exclude<Paused, "resuming">>("");  // micGuard getting the mic back
-export const resuming = signal(false);  // a lost session is coming back (a restart, the network, iOS's background)
+export const canSilence = signal(true);  // false in app builds without the speaker switch
+export const afterCall = signal<BeforeCall | null>(null);  // iPhone app: call ended, offer to restore
+export const phoneMuted = signal(false);  // iOS muted the mic on an unreported earphone press
+export const micPaused = signal<Exclude<Paused, "resuming">>("");  // micGuard state
+export const resuming = signal(false);  // auto-reconnecting a lost session
 export const paused = computed<Paused>(() => micPaused.value || (resuming.value ? "resuming" : ""));  // body[data-paused]
 export const loginShown = signal(false);  // body[data-view="login"]
-export const captions = signal(storage.get(CAPTIONS_KEY) !== "off");  // body[data-captions="off"] when not
+export const captions = signal(storage.get(CAPTIONS_KEY) !== "off");  // body[data-captions="off"] when false
 export const passcode = signal(storage.get(PASSCODE_KEY));
-export const audioBlocked = signal(false);  // the browser wants a tap before it plays JARVIS
-export const quality = signal<string | null>(null);  // LiveKit's connection quality, once it has one
-export const micMode = signal<MicMode | null>(null);  // the iOS app's Mic Mode, during a session there
-export const startedAt = signal(0);  // when the live session began
-export const now = signal(Date.now());  // the clock, ticked every second
+export const audioBlocked = signal(false);  // autoplay blocked until a tap
+export const quality = signal<string | null>(null);  // LiveKit connection quality
+export const micMode = signal<MicMode | null>(null);  // iOS app Mic Mode, during a session
+export const startedAt = signal(0);  // live session start, ms
+export const now = signal(Date.now());  // ticks every second
 export const error = signal("");
 export const notice = signal("");
 export const focus = signal<Focus | null>(null);
-export const reading = signal(false);  // scrolled back up the transcript: the core shrinks to give it the room
-// Room for the core and the transcript side by side: body[data-layout="split"] (App.tsx, styles.css)
+export const reading = signal(false);  // transcript scrolled back: the core shrinks to make room
+// Core and transcript side by side: body[data-layout="split"]
 const SIDE_BY_SIDE = matchMedia("(min-width: 960px) and (min-height: 560px)");
 export const sideBySide = signal(SIDE_BY_SIDE.matches);
 SIDE_BY_SIDE.addEventListener("change", () => { sideBySide.value = SIDE_BY_SIDE.matches; });
-export const loginPrompt = signal({ shake: false });  // a new object each time the passcode card asks again
+export const loginPrompt = signal({ shake: false });  // new object per prompt, so effects re-run
 
-// Push notifications (push.ts): the Mac has a key to subscribe with, this device is subscribed, or the
-// user put it off. In the iPhone app, appNotify is what iOS says instead ("" anywhere else).
+// Push: server VAPID key, this device's subscription, user deferral. In the iPhone app appNotify holds the iOS
+// permission instead ("" elsewhere).
 export const pushKey = signal("");
 export const pushSub = signal<PushSubscription | null>(null);
 export const appNotify = signal<Permission | "">("");
@@ -91,7 +89,7 @@ export const linkText = computed(() => {
 setInterval(() => { now.value = Date.now(); }, 1000);
 
 export function setState(state: AgentState): void {
-  agentState.value = connected.value && state === "idle" ? "listening" : state;  // a live agent that's idle is waiting for you
+  agentState.value = connected.value && state === "idle" ? "listening" : state;  // idle while connected = listening
 }
 export function setLink(value: Link): void { link.value = value; now.value = Date.now(); }
 export function showError(msg?: string): void { error.value = msg || ""; }

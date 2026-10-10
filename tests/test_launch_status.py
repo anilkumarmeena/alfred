@@ -1,5 +1,4 @@
-"""Tests for what task_start and task_reply say of a task they start or carry on: started or queued, as the runner
-has it, never what it said before. Run with: make test"""
+"""Tests for what task_start and task_reply report: started or queued per the runner, never a stale status."""
 
 import asyncio
 
@@ -15,7 +14,7 @@ from jarvis.tools import tasks as task_tools
 
 
 def gated_run(monkeypatch, gate: asyncio.Event) -> list[str]:
-    """Stands in for worker.run: each run waits on `gate`. Returns the titles of the runs that began."""
+    """Fake worker.run: each run waits on `gate`. Returns the titles of runs that began."""
     began: list[str] = []
 
     async def run(task: dict, prompt: str, reporter) -> Outcome:
@@ -98,7 +97,6 @@ def test_a_reply_to_a_waiting_task_says_how_it_stands_now_not_what_it_asked(env,
 
 
 def test_a_folder_freed_task_waiting_for_a_slot_says_so(env, monkeypatch):
-    """A task that waited for its folder, then finds the slots taken, says it now waits for a slot."""
     gate = asyncio.Event()
     began = gated_run(monkeypatch, gate)
 

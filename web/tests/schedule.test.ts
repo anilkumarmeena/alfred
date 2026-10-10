@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
-// Tests for the panel's scheduled jobs: src/lib/schedule.ts, and the Scheduled section and a job's view in Tasks
-// (src/components/panel/Tasks.tsx). Run with: make test (or npm test in web/)
+// Scheduled jobs: lib/schedule.ts and their views in panel/Tasks.tsx. Run: make test (or npm test in web/)
 import assert from "node:assert/strict";
 import { h, render } from "preact";
 import { act } from "preact/test-utils";
@@ -11,7 +10,7 @@ import { at, jobItem, jobOf, kindLabel, nextRun, type Schedule, type ScheduleDet
 const NOW = new Date(2026, 9, 6, 9, 15).getTime();
 const ts = (d: Date) => d.getTime() / 1000;
 
-// ── The helpers ─────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────
 
 test("when a job runs next is said as near as it is", () => {
   assert.equal(at(ts(new Date(2026, 9, 6, 9, 0)), NOW), "now");
@@ -27,11 +26,11 @@ test("when a job runs next is said as near as it is", () => {
 test("kinds and items", () => {
   assert.deepEqual(["reminder", "task", "watch"].map(kindLabel), ["Reminder", "Scheduled task", "Watch"]);
   assert.equal(jobOf(jobItem(12)), 12);
-  assert.equal(jobOf("12"), null);  // a task's item
+  assert.equal(jobOf("12"), null);  // task item, not a job
   assert.equal(jobOf(null), null);
 });
 
-// ── The Tasks page ──────────────────────────────────────────────
+// ── Tasks page ──────────────────────────────────────────────────
 
 const JOB: Schedule = {
   id: 3, kind: "task", title: "Morning brief", text: "Give me a **morning brief**.", status: "active",
@@ -47,7 +46,7 @@ let ui: typeof import("../src/components/panel/Tasks");
 let state: typeof import("../src/state/panel");
 
 beforeAll(async () => {
-  // What the panel's module needs from a browser that jsdom lacks
+  // Browser APIs the panel module needs that jsdom lacks
   (globalThis as any).matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
   (globalThis as any).confirm = () => true;
   Element.prototype.scrollIntoView = () => {};
@@ -61,7 +60,7 @@ beforeAll(async () => {
 });
 
 let box: HTMLElement;
-afterEach(() => { render(null, box); });  // what one test drew doesn't follow the signals into the next
+afterEach(() => { render(null, box); });  // unmount so signals don't leak between tests
 beforeEach(() => {
   calls = [];
   answers = {};
@@ -102,7 +101,7 @@ test("with nothing scheduled it says how to schedule something, and there's no f
   await act(() => { render(h(ui.TaskList, {}), box); });
   assert.match(box.querySelector(".empty")!.textContent!, /Nothing scheduled\. Ask JARVIS/);
   assert.equal(box.querySelector(".scheds"), null);
-  assert.equal(box.querySelector("form, input, textarea"), null);  // jobs are set by voice only
+  assert.equal(box.querySelector("form, input, textarea"), null);  // jobs are created by voice only
 });
 
 test("tasks a job started are tagged with its name in the task list", async () => {
@@ -145,13 +144,13 @@ test("a job opens to its runs and results, Markdown rendered", async () => {
   await act(() => { render(h(ui.ScheduleView, { id: 3 }), box); });
   await flush();
   assert.equal(box.querySelector(".big")?.textContent, "Morning brief");
-  assert.equal(box.querySelector(".summary strong")?.textContent, "morning brief");  // its instruction, rendered
+  assert.equal(box.querySelector(".summary strong")?.textContent, "morning brief");  // instruction rendered as Markdown
   const runs = [...box.querySelectorAll("button.task.run")];
   assert.equal(runs.length, 3);
   assert.equal(runs[0]!.querySelector(".meta strong")?.textContent, "one");
   assert.deepEqual(runs.map((r) => r.querySelector(".tag")?.textContent), ["done", "nothing new", "failed"]);
   await act(() => { (runs[0] as HTMLButtonElement).click(); });
-  assert.equal(state.item.value, "21");  // a run opens as its task
+  assert.equal(state.item.value, "21");  // a run opens its task
 });
 
 test("a task job's view shows its notepad for the next run, and when it speaks", async () => {

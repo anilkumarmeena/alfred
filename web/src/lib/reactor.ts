@@ -1,38 +1,36 @@
-// The core's canvas: tick rings, arcs and a mirrored spectrum around a glowing centre, tinted by state.
-// Drawn every frame while the page is visible; wakeReactor() restarts it on return.
+// The core's canvas animation, tinted by agent state. Runs while visible; wakeReactor() restarts it on return.
 import type { Tap } from "./audio";
 
 export interface ReactorInput {
-  state: string;  // the agent state, as on body[data-state]
-  connected: boolean;  // a room exists: full brightness
+  state: string;  // as on body[data-state]
+  connected: boolean;  // full brightness
   muted: boolean;
   paused: boolean;
-  agent: Tap | null;  // JARVIS's voice
-  mic: Tap | null;  // a copy of the mic
+  agent: Tap | null;
+  mic: Tap | null;
 }
 
-const TINT: Record<string, number[]> = {  // states not listed take idle's
+const TINT: Record<string, number[]> = {  // unlisted states use idle
   idle: [79, 209, 255],
   thinking: [255, 181, 71], speaking: [150, 234, 255], reconnecting: [255, 181, 71], muted: [255, 95, 109],
 };
 const SPIN: Record<string, number> = { thinking: 2.4, connecting: 1.5, initializing: 1.5, reconnecting: 1.5 };
 const IDLE_LEVEL: Record<string, number> = { idle: .05, connecting: .12, initializing: .14, listening: .07, thinking: .2, speaking: .3, reconnecting: .1 };
 const BARS = 56, HALF = BARS / 2, TAU = Math.PI * 2;
-const IDLE_FRAME = 1000 / 30;  // ms between frames with no audio to follow: the idle wave looks the same at half the work
+const IDLE_FRAME = 1000 / 30;  // frame interval (ms) with no audio: idle wave at half the cost
 
 let wake: (() => void) | null = null;
 
 export function wakeReactor(): void { wake?.(); }
 
-// Starts drawing on cv, reading what to show from read() each frame. Returns a function that stops it.
+// Draw on cv from read() each frame. Returns a stop function.
 export function mountReactor(cv: HTMLCanvasElement, read: () => ReactorInput): () => void {
   const g = cv.getContext("2d")!;
   const still = matchMedia("(prefers-reduced-motion: reduce)");
   const bars = new Float32Array(HALF), col = [79, 209, 255];
   let size = 0, bitmap = 0, level = 0, spin = 0, last = 0, raf = 0, shown = 1;
 
-  // The bitmap only ever grows: resizing it clears it, so a core that's changing size (the passcode card coming or
-  // going) would blink on every frame it isn't redrawn in. Drawing is in CSS pixels, scaled to whatever it is.
+  // Bitmap only grows: resizing clears it, so a resizing core would blink. Drawing is in CSS pixels, scaled.
   function fit() {
     size = cv.clientWidth;
     if (!size) return;
@@ -40,7 +38,7 @@ export function mountReactor(cv: HTMLCanvasElement, read: () => ReactorInput): (
     const grew = want > bitmap;
     if (grew) { bitmap = want; cv.width = cv.height = want; }
     g.setTransform(bitmap / size, 0, 0, bitmap / size, 0, 0);
-    if (grew) frame(performance.now(), true);  // straight away, rather than show it cleared
+    if (grew) frame(performance.now(), true);  // redraw now rather than show it cleared
   }
   const resize = new ResizeObserver(fit);
   resize.observe(cv);
@@ -49,9 +47,9 @@ export function mountReactor(cv: HTMLCanvasElement, read: () => ReactorInput): (
     if (!forced) raf = document.hidden ? 0 : requestAnimationFrame(frame);
     const { state: s, connected, agent, mic, paused, muted: wantsMuted } = read();
     const muted = connected && wantsMuted;
-    // What we're hearing: JARVIS while it speaks, your mic while it listens, otherwise a gentle idle wave.
+    // Source: JARVIS while speaking, the mic while listening, else an idle wave.
     const src = s === "speaking" ? agent : connected && !muted && !paused && s === "listening" ? mic : null;
-    if (!src && !forced && now - last < IDLE_FRAME - 2) return;  // - 2: a 60 Hz frame that lands a hair early still counts
+    if (!src && !forced && now - last < IDLE_FRAME - 2) return;  // -2 ms tolerates slightly early 60 Hz frames
 
     const dt = Math.min((now - last) / 1000 || 0, .05); last = now;
     const t = now / 1000, calm = still.matches;
@@ -78,8 +76,7 @@ export function mountReactor(cv: HTMLCanvasElement, read: () => ReactorInput): (
     const rgb = `${col[0]! | 0},${col[1]! | 0},${col[2]! | 0}`, c = (a: number) => `rgba(${rgb},${a})`;
     const on = connected ? 1 : .6;
     spin += (calm ? 0 : SPIN[s] ?? .1) * dt;
-    // Folded into the strip while reading back, the core is this drawing scaled down (lib/fold.ts): keep its fine lines
-    // as many screen pixels wide as they'd be drawn at that size, following the fold as it eases in and out
+    // When folded (reading back) the core is scaled down by --fs: keep hairlines 1 screen px through the transition.
     const fold = document.body.dataset.reading != null ? Number(cv.parentElement?.style.getPropertyValue("--fs")) || 1 : 1;
     shown = calm ? fold : shown + (fold - shown) * Math.min(1, dt * 9);
     const px = 1 / shown;
@@ -130,8 +127,7 @@ export function mountReactor(cv: HTMLCanvasElement, read: () => ReactorInput): (
     g.strokeStyle = c(.45 * on); g.lineWidth = px;
     g.beginPath(); g.arc(0, 0, R * .255, 0, TAU); g.stroke();
 
-    // Bright centre, in a halo of the tint. The halo is a gradient shaped like the canvas shadow it replaces (a shadowBlur
-    // of b fades over b, half gone at the edge): a shadow is blurred on the CPU every frame, a gradient isn't.
+    // Bright centre with a halo. A radial gradient mimics shadowBlur=b, which would be CPU-blurred every frame.
     const w = col.map((v) => (v + (255 - v) * .72) | 0);
     const r = R * (.07 + .045 * level), b = R * .12 * (.6 + level), span = r / 2 + b;
     const halo = g.createRadialGradient(0, 0, r / 2, 0, 0, r + b);

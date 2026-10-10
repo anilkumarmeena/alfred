@@ -1,5 +1,4 @@
-"""The phone's mic and earphone handling: runs the web app's tests (web/tests/, for web/src/lib/mic.ts)
-with vitest, and checks the endpoint the page traces earphone presses to. Run with: make test"""
+"""Tests for phone mic and earphone handling: runs web/tests with vitest; checks the earphone trace endpoint."""
 
 import asyncio
 import json
@@ -23,7 +22,7 @@ def test_web_mic():
 
 
 class Request:
-    """Just enough of aiohttp's request for the handler (the sandboxed test run can't open a port)."""
+    """Minimal aiohttp request (the sandboxed test run can't open a port)."""
 
     remote = "100.64.0.2"
 

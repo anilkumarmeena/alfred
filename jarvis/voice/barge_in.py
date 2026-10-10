@@ -1,22 +1,15 @@
-"""Barge-in by the user's voice only. LiveKit cuts JARVIS's reply off once its VAD has heard 0.5 s of speech, anyone's:
-a TV, a video or someone across the room stopped JARVIS mid-sentence as well as the user did. Once the user has a
-voiceprint (jarvis.voice.speaker), the session's VAD goes through BargeInVAD, whose events tell LiveKit there's no
-speech yet while JARVIS replies (thinking or speaking), until the speaker check has heard that it's the user's; then
-they carry the real amount again, and LiveKit interrupts on the very next one, 32 ms later.
+"""Barge-in by the user's voice only, so a TV or another person can't cut JARVIS off mid-reply.
 
-  when    from SPEAKER_BARGE_IN_MIN_SECONDS of speech (0.5 s: LiveKit's own barge-in waits that long anyway), so the
-          user's own barge-in waits only for the check, about 15 ms on the CPU; again every STEP of speech more,
-          judged on the latest MAX_SECONDS of it, until it matches or the speech ends
-  needs   what a clip as short needs outside a conversation (0.25 at 1 s of speech and under, by default): nothing is
-          let off as too short, as replies to JARVIS are
-  else    the reply carries on. The whole utterance is still judged when it ends, as every clip is: if it's the
-          user's after all, its transcript interrupts JARVIS then, as it always has, only later
+LiveKit interrupts after 0.5 s of any VAD speech. BargeInVAD zeroes speech_duration while JARVIS is replying until the
+speaker check matches the user's voiceprint; LiveKit then interrupts on the next event (32 ms later).
 
-Only the VAD's speech windows are judged, the very audio its events carry. With the speaker check off, no voiceprint
-enrolled or JARVIS_SPEAKER_BARGE_IN off, events pass through untouched and any voice interrupts as before. In shadow
-mode they pass through too, but each barge-in is judged and logged with what it would have done. Every judged
-barge-in goes in logs/speaker-check.jsonl ("kind": "barge-in") and the agent log: interrupted or ignored, the score
-of its best check, how many checks, and how long it held the reply.
+  when    from SPEAKER_BARGE_IN_MIN_SECONDS (0.5 s, LiveKit's own wait) so a check (~15 ms CPU) adds little; again
+          every STEP, on the latest MAX_SECONDS, until a match or speech ends
+  needs   the normal short-clip threshold (0.25 at <= 1 s); no reply-to-JARVIS leniency
+  else    the reply continues; the full utterance is still checked at its end and can interrupt then
+
+Pass-through when the check is off, no voiceprint is enrolled or JARVIS_SPEAKER_BARGE_IN is off. Shadow mode passes
+through but logs what it would have done. Judged barge-ins go to logs/speaker-check.jsonl ("kind": "barge-in").
 """
 
 import asyncio
@@ -41,29 +34,29 @@ from jarvis.voice.speech import _to_whisper_audio
 
 log = logging.getLogger("jarvis.voice.barge_in")
 
-REPLYING = ("thinking", "speaking")  # the agent states in which speech cuts JARVIS's reply off
+REPLYING = ("thinking", "speaking")  # agent states where speech interrupts
 
 
 @dataclasses.dataclass
 class _Episode:
-    """One stretch of speech, from its first speech window to the VAD's end of it."""
-    speech: collections.deque = dataclasses.field(default_factory=collections.deque)  # its latest speech windows
+    """One stretch of speech, first speech window to VAD end."""
+    speech: collections.deque = dataclasses.field(default_factory=collections.deque)  # latest speech windows
     kept: float = 0.0  # seconds of speech in `speech`
-    heard: float = 0.0  # seconds of speech in all
-    replying: bool = False  # JARVIS replied while it went on
-    allowed: bool = False  # it may interrupt: the user's, or the check failed
+    heard: float = 0.0  # total speech seconds
+    replying: bool = False  # JARVIS was replying during it
+    allowed: bool = False  # may interrupt: user matched, or check errored
     busy: bool = False  # a check is running
     checked: float | None = None  # `heard` at the last check
     since: float | None = None  # when it could first have interrupted
     checks: int = 0
-    best: tuple | None = None  # (score, needed, speech seconds, reference) of the check closest to passing
+    best: tuple | None = None  # (score, needed, seconds, reference) of the closest check
     why: str = ""
     ended: bool = False
 
 
 class BargeIn:
-    """Whether speech while JARVIS replies may interrupt it, for one conversation. Told the agent's state
-    (replying), shown each event of BargeInVAD's streams (hear), which pass on what it returns."""
+    """Per-conversation gate on whether speech may interrupt a reply. Fed agent state (`replying`) and VAD events
+    (`hear`)."""
 
     def __init__(self, check: SpeakerCheck, enabled: bool = SPEAKER_BARGE_IN,
                  min_seconds: float = SPEAKER_BARGE_IN_MIN_SECONDS, max_seconds: float = SPEAKER_BARGE_IN_MAX_SECONDS,
@@ -71,26 +64,25 @@ class BargeIn:
                  clock: Callable[[], float] = time.monotonic) -> None:
         self.check, self.enabled = check, enabled
         self.min_seconds, self.max_seconds, self.step = min_seconds, max_seconds, step
-        self.threshold = threshold  # a window counts as speech from this probability, as for the session's VAD
+        self.threshold = threshold  # speech probability cutoff, as the session VAD
         self._clock = clock
         self._replying = False
-        self._owner: object | None = None  # the stream whose speech is judged; the others only follow its verdict
+        self._owner: object | None = None  # stream whose speech is judged; others follow its verdict
         self._episode = _Episode()
         self._warned = False
         self._tasks: set[asyncio.Future] = set()
 
     def replying(self, state: str) -> None:
-        """The agent's state changed (agent_state_changed)."""
+        """Handle agent_state_changed."""
         self._replying = state in REPLYING
 
     @property
     def judging(self) -> bool:
-        """Barge-ins are judged: the speaker check is on, or in shadow mode, with a voiceprint."""
+        """True when the speaker check is on or in shadow mode (with a voiceprint)."""
         return self.enabled and self.check.on
 
     def hear(self, stream: object, ev: vad.VADEvent) -> vad.VADEvent:
-        """An event of `stream`'s; returns what to pass on. All the session's VAD streams hear the same audio, so only
-        one of them (the first) has its speech judged."""
+        """Return the event to pass on. All streams hear the same audio, so only the first one is judged."""
         try:
             if not self.judging:
                 if self._episode.heard:
@@ -100,7 +92,7 @@ class BargeIn:
                 self._owner = stream
             if stream is self._owner:
                 self._observe(ev)
-            # LiveKit hears of no speech while JARVIS replies, until it's known to be the user's: it interrupts from 0.5 s
+            # Hide speech from LiveKit while replying until it's known to be the user's
             holding = self._replying and not self._episode.allowed and self.check.mode == "on"
             if holding and ev.type == vad.VADEventType.INFERENCE_DONE and ev.speech_duration > 0:
                 return dataclasses.replace(ev, speech_duration=0.0)
@@ -111,7 +103,7 @@ class BargeIn:
         return ev
 
     def release(self, stream: object) -> None:
-        """`stream` closed: another one's speech is judged from now on."""
+        """`stream` closed; another becomes the judged one."""
         if stream is self._owner:
             self._owner = None
             self._end()
@@ -124,7 +116,7 @@ class BargeIn:
         if ev.type != vad.VADEventType.INFERENCE_DONE:
             return
         if ev.probability < self.threshold:
-            if not ev.speaking and e.heard:  # a sound too short to start speech, or the speech is over
+            if not ev.speaking and e.heard:  # too short to start speech, or speech over
                 self._end()
             return
         for frame in ev.frames:
@@ -161,7 +153,7 @@ class BargeIn:
             self._log(e, True)
 
     def _match(self, frames: list[rtc.AudioFrame]) -> tuple[float | None, float, float, str]:
-        """(score, needed, speech seconds, reference) for the latest MAX_SECONDS of speech. Runs in a thread."""
+        """(score, needed, seconds, reference) for the latest MAX_SECONDS of speech. Runs in a thread."""
         audio = _to_whisper_audio(frames)[-int(self.max_seconds * RATE):]
         score, needed, reference = self.check.match(audio)
         return score, needed, round(len(audio) / RATE, 3), reference
@@ -173,7 +165,7 @@ class BargeIn:
             self._settle(e)
 
     def _settle(self, e: _Episode, why: str = "") -> None:
-        """An ended stretch of speech that was judged but never let through: logged as ignored."""
+        """Log an ended, judged, never-allowed episode as ignored."""
         if e.checks and not e.allowed:
             e.why = why or e.why
             self._log(e, False)
@@ -198,13 +190,12 @@ def _seconds(frame: rtc.AudioFrame) -> float:
 
 
 def _margin(score: float | None, needed: float) -> float:
-    """How far a check's score cleared what it needed; a check without a score is the furthest off."""
+    """Score minus threshold; -inf without a score."""
     return float("-inf") if score is None else score - needed
 
 
 class BargeInVAD(vad.VAD):
-    """The session's VAD, each of its events shown to `gate` on the way: LiveKit's barge-in hears of speech while
-    JARVIS replies only once the gate lets it."""
+    """Wraps the session VAD, passing each event through `gate`."""
 
     def __init__(self, inner: vad.VAD, gate: BargeIn) -> None:
         super().__init__(capabilities=inner.capabilities)
@@ -219,7 +210,7 @@ class BargeInVAD(vad.VAD):
         return self._inner.provider
 
     @property
-    def min_silence_duration(self) -> float | None:  # the session checks it against the turn detector
+    def min_silence_duration(self) -> float | None:  # session checks it against the turn detector
         return getattr(self._inner, "min_silence_duration", None)
 
     def stream(self) -> "BargeInStream":

@@ -1,13 +1,11 @@
-"""The speech vocabulary (jarvis.state.vocabulary): kept per user in data/vocabulary.md, given to Whisper as its prompt
-with the project list's names, used to put known mishearings right, learned by the learning review without asking,
-and changed in the control panel and by voice. Run with: make test"""
+"""Tests for jarvis.state.vocabulary: storage, Whisper prompt, fixing mishearings, review learning, panel and voice."""
 
 import asyncio
 import json
 from datetime import date
 
 import pytest
-from test_in_place import env  # noqa: F401  (a fixture)
+from test_in_place import env  # noqa: F401  (fixture)
 from test_learning import Reviewer, data, suggesting, talk, watcher  # noqa: F401  (fixtures and helpers)
 
 from conftest import use_profile

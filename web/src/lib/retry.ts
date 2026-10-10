@@ -1,22 +1,21 @@
-// Trying again after JARVIS goes away (a restart, the network): quickly at first, then every few seconds, for as
-// long as the page is open. The voice session (state/session.ts) and the panel's event stream (state/panel.ts) use it.
+// Reconnect backoff for the voice session and the panel event stream: fast at first, then every few seconds, forever.
 
-// The pause before try number `attempt` (0 for the first): 0.5 s, 1 s, 2 s, 4 s, then 5 s each time.
+// Delay before attempt `attempt` (0-based): 0.5 s, 1 s, 2 s, 4 s, then 5 s.
 export const backoff = (attempt: number): number => Math.min(500 * 2 ** attempt, 5000);
 
 export function retrier(run: () => void) {
   let timer: ReturnType<typeof setTimeout> | undefined, attempt = 0;
   return {
-    schedule() {  // run again after the next pause, unless already waiting to
+    schedule() {  // no-op if already scheduled
       if (timer !== undefined) return;
       timer = setTimeout(() => { timer = undefined; run(); }, backoff(attempt++));
     },
-    cancel() { clearTimeout(timer); timer = undefined; attempt = 0; },  // stop waiting, and start the pauses over
-    reset() { attempt = 0; },  // it worked: the next drop starts with the shortest pause
+    cancel() { clearTimeout(timer); timer = undefined; attempt = 0; },  // also resets the backoff
+    reset() { attempt = 0; },  // after success
   };
 }
 
-// A pause that something can cut short: the event stream's wait before following again.
+// A sleep that wake() can cut short.
 export function napper() {
   let wake: (() => void) | null = null;
   return {

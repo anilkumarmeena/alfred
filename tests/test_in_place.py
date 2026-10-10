@@ -1,4 +1,4 @@
-"""Tests for in-place code tasks, the default (a project with in_place false opts out). Run with: make test"""
+"""Tests for in-place code tasks (the default; in_place false opts out): config, runs, worker, merging."""
 
 import asyncio
 import functools
@@ -34,7 +34,7 @@ def listed(name: str, path: Path | str, in_place: bool = True) -> None:
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    """Hermetic git, a temporary task database and worktree folder, and two projects: one opted out of in place."""
+    """Hermetic git, temp task DB and worktree folder, and two projects (one not in place)."""
     gitconfig = tmp_path / "gitconfig"
     gitconfig.write_text("")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
@@ -356,7 +356,7 @@ def test_brief_describes_in_place_tasks_without_a_task_branch():
 
 @pytest.fixture
 def jarvis(env, monkeypatch):
-    """env, plus JARVIS's own repo marked in place in the list, as an old entry might be."""
+    """env plus JARVIS's own repo listed as an in-place project."""
     repo = make_repo(env["tmp"] / "jarvis")
     monkeypatch.setattr(projects, "JARVIS_REPO", repo)
     listed("jarvis", repo)

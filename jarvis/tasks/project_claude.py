@@ -1,33 +1,14 @@
-"""A project's own Claude Code setup, for the background tasks that work in it.
+"""Load a project's own Claude Code setup (CLAUDE.md, agents, skills, commands) into a code task's session.
 
-A code task loads the project's CLAUDE.md, its subagents (.claude/agents), its skills (.claude/skills)
-and its slash commands (.claude/commands), so a workflow like video-agent's scout-ideas, which
-launches the project's own scout, claim-checker and evaluator agents, runs as it would in Claude Code.
-
-It never loads the project's settings (.claude/settings.json, settings.local.json). Their allow rules
-would let tool calls past the task's gate, their sandbox settings and extra directories would widen
-the sandbox, their env could point the CLI's login at another server, and their hooks and helper
-commands (apiKeyHelper and the like) run outside the sandbox, with the runner's own rights. Claude
-Code's lockdown switches (allowManagedPermissionRulesOnly and friends) only count in managed settings,
-so the settings can't be loaded and then tamed. The CLI keeps setting_sources=[] and gets the rest
-another way:
-
-  CLAUDE.md       the project folder is also an additional directory, and
-                  CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD has the CLI read its CLAUDE.md.
-  subagents       read here into AgentDefinitions, under their own names. Their hooks, MCP servers and
-                  permission modes are dropped, as Claude Code does for plugin agents.
-  skills and      a small plugin made for the run, linking to the project's own folders. The CLI names
-  commands        what's in it after the plugin: video-agent:scout-ideas.
-
-Each of these files, AGENTS.md too, is scanned for hidden instructions first (jarvis.safety.scan): text that tries to
-override the assistant's rules, keep things from the user or send data away, or invisible Unicode. One that looks
-tampered with is left out (a CLAUDE.md, by not loading any; a skill or command, by linking the others one by one),
-and the task and the user are told (Setup.flagged).
-
-Project hooks don't run, wherever they're declared: settings aren't loaded, agents lose theirs here, and
-the session's disableAllHooks turns off those in skills and commands. SDK callback hooks, which carry the
-task's own gate and nudges, still run. Skills' and commands' allowed-tools do become allow rules, so the
-task worker checks its gate again in a PreToolUse hook, ahead of them (worker.TaskGate).
+Project settings (.claude/settings*.json) are never loaded: allow rules would bypass the task gate, sandbox/dirs
+would widen the sandbox, env could redirect login, and hooks/apiKeyHelper run unsandboxed. Lockdown switches only
+apply in managed settings, so setting_sources=[] and the rest is loaded explicitly:
+  CLAUDE.md          project folder is an additional dir + CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD
+  agents             parsed into AgentDefinitions; hooks, MCP servers, permission modes dropped
+  skills, commands   a per-run plugin symlinking the project folders (named e.g. video-agent:scout-ideas)
+Every file (and AGENTS.md) is scanned for hidden instructions first; tampered ones are left out and reported
+(Setup.flagged). No project hooks run (disableAllHooks). Skills' allowed-tools become allow rules, so the worker
+re-checks its gate in a PreToolUse hook (worker.TaskGate).
 """
 
 import json
@@ -45,11 +26,11 @@ from jarvis.safety import scan
 
 log = logging.getLogger("jarvis.tasks.project_claude")
 
-# What a task keeps from an agent's frontmatter. The rest (hooks, mcpServers, permissionMode, memory,
-# isolation, background, color) is dropped: it would run commands, add servers or change permissions.
+# Agent frontmatter kept; everything else (hooks, mcpServers, permissionMode, ...) could run commands,
+# add servers or change permissions.
 _AGENT_FIELDS = ("tools", "disallowedTools", "model", "skills", "maxTurns", "effort")
 _LISTS = {"tools", "disallowedTools", "skills"}
-_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")  # what can ride in a Skill(name) rule, or name an agent
+_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")  # safe in a Skill(name) rule or as an agent name
 _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*(?:\n|\Z)(.*)", re.DOTALL)
 _LOOSE_LINE = re.compile(r"([A-Za-z][\w-]*):(?:\s+(.*)|$)")
 CLAUDE_MD_ENV = {"CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD": "1"}
@@ -59,23 +40,22 @@ CLAUDE_MD_ENV = {"CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD": "1"}
 class Setup:
     """What a task session loads from its project."""
 
-    name: str  # what the skills and commands go under
+    name: str  # plugin name prefixing skills and commands
     agents: dict[str, AgentDefinition] = field(default_factory=dict)
     skills: list[str] = field(default_factory=list)  # plugin-qualified: video-agent:scout-ideas
-    plugin: Path | None = None  # the run's plugin, holding the skills and commands
-    claude_md: bool = True  # whether its CLAUDE.md may load: not when one looks like hidden instructions
-    flagged: list[str] = field(default_factory=list)  # files left out as hidden instructions: 'AGENTS.md (it ...)'
+    plugin: Path | None = None  # per-run plugin dir
+    claude_md: bool = True  # False if any CLAUDE.md looked tampered
+    flagged: list[str] = field(default_factory=list)  # 'AGENTS.md (reason)' for files left out
 
 
-# Read as the project's context: the CLI loads the CLAUDE.md files, and a task may read AGENTS.md on its own
+# Project context files: the CLI loads the CLAUDE.md ones; a task may read AGENTS.md itself
 CLAUDE_MD_FILES = ("CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md")
 CONTEXT_FILES = (*CLAUDE_MD_FILES, "AGENTS.md")
-MAX_SKILL_FILES = 50  # of a skill's markdown files scanned; one with more is left out
+MAX_SKILL_FILES = 50  # a skill with more .md files than this is left out
 
 
 def tampered(path: Path) -> str:
-    """Why one of the project's files looks like hidden instructions (jarvis.safety.scan), or '' if it doesn't, or
-    can't be read."""
+    """Why `path` looks like hidden instructions, or '' (also if unreadable)."""
     try:
         found = scan.scan_file(path, scan.INSTRUCTIONS)
     except OSError:
@@ -84,8 +64,8 @@ def tampered(path: Path) -> str:
 
 
 def _loose(text: str) -> dict:
-    """Frontmatter that isn't valid YAML, read as Claude Code does: one `key: value` per line, the value
-    everything after the first colon (so a description may hold colons of its own), indented lines joined on."""
+    """Parse non-YAML frontmatter like Claude Code: `key: value` per line (value may contain colons), indented lines
+    continue the previous value."""
     meta: dict = {}
     key = None
     for line in text.splitlines():
@@ -98,7 +78,7 @@ def _loose(text: str) -> dict:
 
 
 def _front(path: Path) -> tuple[dict, str] | None:
-    """A markdown file's frontmatter and body, or None if it has none."""
+    """(frontmatter, body) of a markdown file, or None without frontmatter."""
     try:
         m = _FRONTMATTER.match(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError) as e:
@@ -146,7 +126,7 @@ def _agent(path: Path) -> tuple[str, AgentDefinition] | None:
 
 
 def agents(folder: Path, keep: Callable[[Path], bool] = lambda path: True) -> dict[str, AgentDefinition]:
-    """The project's own subagents, by name, from .claude/agents (subfolders included): those `keep` lets through."""
+    """Project subagents from .claude/agents (recursive), by name, filtered by `keep`."""
     found: dict[str, AgentDefinition] = {}
     root = folder / ".claude" / "agents"
     for path in sorted(root.rglob("*.md")) if root.is_dir() else []:
@@ -168,14 +148,16 @@ def _commands(folder: Path) -> list[str]:
 
 
 def plugin_name(project: str) -> str:
-    """The name the project's skills and commands go under, as in video-agent:scout-ideas."""
+    """Plugin name for a project, e.g. the "video-agent" in video-agent:scout-ideas."""
     return re.sub(r"[^a-z0-9]+", "-", project.lower()).strip("-") or "project"
 
 
 def _make_plugin(folder: Path, name: str, where: Path, only: dict[str, list[str] | None]) -> None:
-    """A plugin at `where` that is just the project's skills and commands folders, linked in, or where some were left
-    out (`only` lists the rest, by name), each one kept. No hooks, MCP servers or settings: those would come from files
-    a plugin can hold that aren't made here."""
+    """Create a plugin at `where` symlinking the project's skills and commands.
+
+    Whole folders are linked unless `only[sub]` names the kept items, then each is linked individually.
+    Holds no hooks, MCP servers or settings.
+    """
     if where.is_symlink() or where.is_file():
         where.unlink()
     elif where.exists():
@@ -191,15 +173,16 @@ def _make_plugin(folder: Path, name: str, where: Path, only: dict[str, list[str]
             (where / sub).symlink_to(source, target_is_directory=True)
             continue
         (where / sub).mkdir()
-        for n in kept:  # a skill is a folder, a command a file
+        for n in kept:  # skills are folders, commands files
             item = source / n if sub == "skills" else source / f"{n}.md"
             (where / sub / item.name).symlink_to(item, target_is_directory=item.is_dir())
 
 
 def load(folder: Path, project: str, plugin_dir: Path) -> Setup:
-    """The project's subagents, skills and commands, with its plugin made at `plugin_dir` if it has any. Each file
-    is scanned for hidden instructions first (jarvis.safety.scan), its CLAUDE.md and AGENTS.md too; any that look
-    tampered with are left out, and listed in `flagged` for the user to hear about."""
+    """Load the project's agents, skills and commands, building the plugin at `plugin_dir` if needed.
+
+    Tampered files are left out and listed in `flagged`.
+    """
     flagged: list[str] = []
 
     def keep(path: Path) -> bool:
@@ -209,7 +192,7 @@ def load(folder: Path, project: str, plugin_dir: Path) -> Setup:
             return False
         return True
 
-    claude_md = all([keep(folder / f) for f in CLAUDE_MD_FILES if (folder / f).is_file()])  # each is scanned
+    claude_md = all([keep(folder / f) for f in CLAUDE_MD_FILES if (folder / f).is_file()])  # list: scan all
     for f in set(CONTEXT_FILES) - set(CLAUDE_MD_FILES):
         if (folder / f).is_file():
             keep(folder / f)

@@ -1,5 +1,4 @@
-"""Tests for the stall watchdog (jarvis.tasks.stall): a running task gone quiet is flagged once, never stopped.
-Run with: make test"""
+"""Tests for tasks.stall: a running task gone quiet is flagged once, never stopped."""
 
 import asyncio
 import time

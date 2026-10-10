@@ -1,10 +1,7 @@
-"""The launcher that starts one MCP server for a Claude session (jarvis.integrations.mcp_launch), beyond
-tests/test_mcp_servers.py: an HTTP server relayed or probed through the bridge, the read-only flag, a server off but
-probed, and what stops one starting (no program, no secret, no name). Nothing is started: the relay, the bridge and
-exec are stood in for. Run with: make test"""
+"""Tests for jarvis.integrations.mcp_launch beyond test_mcp_servers: HTTP relay/probe, read-only, start failures."""
 
 import pytest
-from test_mcp_servers import fresh, github, seeded  # noqa: F401  (fresh: the fixture)
+from test_mcp_servers import fresh, github, seeded  # noqa: F401  (fixture)
 
 from jarvis.core import vault
 from jarvis.integrations import mcp_bridge, mcp_launch, mcp_relay, mcp_servers
@@ -15,7 +12,7 @@ WIKI = Server("wiki", "Wiki", transport="http", url="https://mcp.wiki.example/mc
 
 @pytest.fixture
 def started(monkeypatch):
-    """What the launcher starts, by way of: ("relay", server, wait, how), ("bridge", server) or ("exec", argv)."""
+    """Records launches: ("relay", server, wait, how), ("bridge", server) or ("exec", argv)."""
     ran: list[tuple] = []
 
     async def relay(server, wait, how):

@@ -1,18 +1,11 @@
-"""Reading files for the model: a PDF, Word or Excel file, a CSV or other text as text, and a picture (or a PDF's
-pages, when it has no text to read) as images it can look at. Used by the tools that read email attachments and files
-on the Mac (jarvis.tools.files). An audio or video recording isn't read here but transcribed (jarvis.core.transcribe).
+"""File reading for the model: documents as text, pictures (and textless PDF pages) as images.
 
-  read(data, name, mime, pages)   a Document: its text, how many pages a PDF has and which have no text, and any
-                                  pictures; `pages` ("3", "2-5") asks for those PDF pages as pictures too
-  answer(doc, start)              what a tool returns: MAX_CHARS of the text from `start`, a note saying where to read
-                                  on, and a warning if the text reads like instructions to the assistant
+  read(data, name, mime, pages)   -> Document (text, PDF page count/blank pages, pictures; `pages` renders PDF pages)
+  answer(doc, start)              -> tool result: MAX_CHARS from `start`, continuation note, injection warning
 
-What a file says comes from whoever wrote it: it's scanned like anything else JARVIS takes in (jarvis.safety.scan),
-and the tools that return it say never to follow instructions in it.
-
-PDFs are read with pypdfium2 and Excel with openpyxl, imported only when such a file is read; Word files are read
-from their XML, older formats (.doc, .rtf, .odt) with macOS's textutil, and pictures are made to fit as photos the
-user sends are (jarvis.state.pictures.fit: HEIC, TIFF and big ones become JPEGs with macOS's sips).
+File content is untrusted: it is scanned (jarvis.safety.scan) and never to be followed as instructions.
+Readers: pypdfium2 (PDF) and openpyxl (Excel), imported lazily; .docx XML; textutil for .doc/.rtf/.odt; pictures via
+jarvis.state.pictures.fit. Recordings are transcribed instead (jarvis.core.transcribe).
 """
 
 from __future__ import annotations
@@ -36,10 +29,10 @@ from jarvis.core import profile
 from jarvis.safety import scan
 from jarvis.state import pictures as images
 
-MAX_CHARS = 20_000  # characters returned at once, as docs_read does
-MAX_BYTES = 50_000_000  # files larger than this aren't read
-MAX_PAGES = 5  # PDF pages returned as pictures at once
-TEXT_PER_PAGE = 25  # fewer characters than this on a PDF page means it's a scan or a picture
+MAX_CHARS = 20_000  # characters per call, as docs_read
+MAX_BYTES = 50_000_000  # larger files are refused
+MAX_PAGES = 5  # PDF pages rendered per call
+TEXT_PER_PAGE = 25  # below this, a PDF page counts as a scan
 
 PDF, WORD, EXCEL, OLD_WORD, HTML, IMAGE, RECORDING, TEXT = "PDF", "Word document", "spreadsheet", "document", \
     "web page", "picture", "recording", "text"
@@ -51,7 +44,7 @@ _EXTENSIONS = {
                 ".amr", ".3gp", ".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi", ".mpeg", ".mpg"},
     TEXT: {".txt", ".md", ".csv", ".tsv", ".json", ".xml", ".log", ".ics", ".vcf", ".yaml", ".yml", ".eml"},
 }
-# Recordings are transcribed, which takes a while, by tools of their own (jarvis.core.transcribe)
+# Recordings go to the (slow) transcription tools instead
 TRANSCRIBE = ("It's a recording: transcribe it with audio_transcribe (a file on the Mac) or "
               "gmail_attachment_transcribe (an email's attachment).")
 _TYPES = {
@@ -64,10 +57,10 @@ _TYPES = {
 
 
 class Unreadable(ValueError):
-    """A file these readers can't read, saying why."""
+    """File can't be read; the message says why."""
 
 
-class Picture(NamedTuple):  # as tools.WithPictures takes them
+class Picture(NamedTuple):  # shape tools.WithPictures expects
     mime: str
     data: bytes
 
@@ -77,14 +70,14 @@ class Document:
     name: str
     kind: str
     text: str = ""
-    pages: int | None = None  # a PDF's
-    blank: list[int] = field(default_factory=list)  # PDF pages with no text: scans or pictures
+    pages: int | None = None  # PDFs only
+    blank: list[int] = field(default_factory=list)  # textless PDF pages
     pictures: list[Picture] = field(default_factory=list)
-    shown: list[int] = field(default_factory=list)  # the PDF pages in `pictures`
+    shown: list[int] = field(default_factory=list)  # PDF page numbers rendered in `pictures`
 
 
 def kind_of(name: str, mime: str = "") -> str:
-    """What sort of file it is, by its name's extension, else its media type; TEXT for anything else to try."""
+    """File kind by extension, else media type; TEXT as the fallback."""
     ext = Path(name).suffix.lower()
     for kind, extensions in _EXTENSIONS.items():
         if ext in extensions:
@@ -98,14 +91,15 @@ def kind_of(name: str, mime: str = "") -> str:
 
 
 def check_size(size: int) -> None:
-    """Unreadable if a file of `size` bytes is too big for these readers."""
+    """Raise Unreadable if `size` bytes exceeds MAX_BYTES."""
     if size > MAX_BYTES:
         raise Unreadable(f"It's {size / 1e6:.0f} MB, over the {MAX_BYTES // 1_000_000} MB these tools read.")
 
 
 def read(data: bytes, name: str, mime: str = "", pages: str = "") -> Document:
-    """The file's text and pictures. `pages` ("3", "2-5") also gives those pages of a PDF as pictures. Unreadable
-    if it's a kind these readers don't know, too big, or damaged."""
+    """Read text and pictures; `pages` ("3", "2-5") also renders those PDF pages.
+
+    Raises Unreadable for recordings, oversized or damaged files, or `pages` on a non-PDF."""
     kind = kind_of(name, mime)
     if kind == RECORDING:
         raise Unreadable(TRANSCRIBE)
@@ -121,8 +115,8 @@ def read(data: bytes, name: str, mime: str = "", pages: str = "") -> Document:
 
 
 def answer(doc: Document, start: int = 0) -> dict:
-    """What a tool says of the document: MAX_CHARS of its text from `start`, ending at a line break where one is near,
-    and notes on where to read on and on PDF pages that have no text. Its pictures go alongside, apart from this."""
+    """Tool result: up to MAX_CHARS from `start` (cut at a nearby line break), plus notes on continuing and on
+    textless PDF pages. Pictures are returned separately by the caller."""
     found = scan.scan(doc.text)
     text, start = found.clean, max(0, start)
     rest = text[start:]
@@ -156,7 +150,7 @@ def answer(doc: Document, start: int = 0) -> dict:
 
 
 def _runs(numbers: list[int]) -> list[str]:
-    """Page numbers in order, as runs: [1, 2, 3, 7] is ['1-3', '7']."""
+    """Collapse sorted page numbers into runs: [1, 2, 3, 7] -> ['1-3', '7']."""
     runs: list[list[int]] = []
     for n in numbers:
         if runs and n == runs[-1][-1] + 1:
@@ -173,7 +167,7 @@ def _pages(numbers: list[int]) -> str:
 # ── PDFs ────────────────────────────────────────────────────────
 
 def page_range(pages: str, count: int) -> list[int]:
-    """The page numbers `pages` asks for ("3", "2-5"), within the document; at most MAX_PAGES."""
+    """Parse "3" / "2-5" into page numbers, clipped to the document and MAX_PAGES."""
     m = re.fullmatch(r"\s*(\d+)\s*(?:[-–to]+\s*(\d+)\s*)?", pages)
     if not m:
         raise Unreadable(f"pages should be a page or a range, such as '3' or '2-5', not '{pages}'.")
@@ -204,7 +198,7 @@ def _pdf(data: bytes, name: str, pages: str) -> Document:
             if len(re.sub(r"\s", "", text)) < TEXT_PER_PAGE:
                 blank.append(i + 1)
             texts.append(f"[Page {i + 1}]\n{text}" if count > 1 else text)
-        # Pictures of the pages asked for, or of the first pages if none has text to read
+        # Render requested pages, or the first ones if the whole PDF is textless
         shown = page_range(pages, count) if pages.strip() else blank[:MAX_PAGES] if len(blank) == count else []
         pictures = [_render(pdf[n - 1]) for n in shown]
     finally:
@@ -214,12 +208,12 @@ def _pdf(data: bytes, name: str, pages: str) -> Document:
 
 
 def _render(page) -> Picture:
-    width, height = page.get_size()  # in points, 72 to the inch
+    width, height = page.get_size()  # points (1/72 in)
     bitmap = page.render(scale=min(3.0, images.MAX_EDGE / max(width, height, 1)), rev_byteorder=True)
     w, h, stride, channels = bitmap.width, bitmap.height, bitmap.stride, bitmap.n_channels
     raw = bytes(bitmap.buffer)
     rows = (raw[y * stride:y * stride + w * channels] for y in range(h))
-    if channels == 4:  # with an alpha channel, which is dropped
+    if channels == 4:  # drop alpha
         rows = (_rgb(row) for row in rows)
     return Picture("image/png", png(w, h, b"".join(b"\x00" + row for row in rows)))
 
@@ -232,7 +226,7 @@ def _rgb(row: bytes) -> bytes:
 
 
 def png(width: int, height: int, scanlines: bytes) -> bytes:
-    """An RGB PNG from its scanlines, each a filter byte (0) and the row's pixels."""
+    """Encode an RGB PNG; each scanline is a 0 filter byte followed by the row's pixels."""
     def chunk(kind: bytes, body: bytes) -> bytes:
         return pack(">I", len(body)) + kind + body + pack(">I", zlib.crc32(kind + body))
 
@@ -243,8 +237,7 @@ def png(width: int, height: int, scanlines: bytes) -> bytes:
 # ── Pictures ────────────────────────────────────────────────────
 
 def picture(data: bytes) -> Picture:
-    """The picture as the model can take it, made fit as a photo the user sends is (jarvis.state.pictures.fit): as it
-    is if it can be, else a JPEG made with macOS's sips (HEIC from an iPhone, TIFF, or one too big)."""
+    """Picture in a model-ready format via pictures.fit (HEIC, TIFF or oversized become JPEG via sips)."""
     with tempfile.TemporaryDirectory() as tmp:
         given = Path(tmp) / "given"
         given.write_bytes(data)
@@ -260,7 +253,7 @@ _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
 def _unzipped(data: bytes, member: str) -> bytes | None:
-    """One file from an Office document's zip, if it's there; refused if it would unpack to something huge."""
+    """One member of an Office zip, or None; refuses zip bombs."""
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as z:
             try:
@@ -287,7 +280,7 @@ def _paragraph(p: ElementTree.Element) -> str:
 
 
 def _docx(data: bytes, _name: str) -> str:
-    """A Word file's text, in order: headings as #, list items as -, tables as | rows."""
+    """Word text as Markdown-ish lines: # headings, - list items, | table rows."""
     xml = _unzipped(data, "word/document.xml")
     if xml is None:
         raise Unreadable("It isn't a Word file that can be read: it has no document in it.")
@@ -325,7 +318,7 @@ def _cell(value) -> str:
 
 
 def _xlsx(data: bytes, _name: str) -> str:
-    """Each sheet of an Excel file under its name, its rows as | rows, with values as last calculated."""
+    """Each sheet as | rows under its name, using cached formula values."""
     try:
         import openpyxl
     except ImportError:
@@ -351,7 +344,7 @@ def _xlsx(data: bytes, _name: str) -> str:
 
 
 def _textutil(data: bytes, name: str) -> str:
-    """An older document's text (.doc, .rtf, .odt), by macOS's textutil."""
+    """Text of .doc/.rtf/.odt via macOS textutil."""
     if not shutil.which("textutil"):
         raise Unreadable(f"Can't read {Path(name).suffix or 'this kind of'} files here: macOS's textutil isn't here.")
     with tempfile.TemporaryDirectory() as tmp:
@@ -365,7 +358,7 @@ def _textutil(data: bytes, name: str) -> str:
 
 
 def _html(data: bytes, _name: str) -> str:
-    from ai_armory.toolsets.google.gmail import _html_text  # as gmail_read reads an HTML email: nothing hidden
+    from ai_armory.toolsets.google.gmail import _html_text  # same as gmail_read: hidden text dropped
 
     return re.sub(r"\n{3,}", "\n\n", _html_text(_decoded(data))).strip()
 
@@ -378,7 +371,7 @@ def _decoded(data: bytes) -> str:
 
 
 def _text(data: bytes, name: str) -> str:
-    """A text file as it is; anything with NUL bytes near the start is taken for a binary file and refused."""
+    """Decode text; NUL bytes in the first 8 KB mean binary and are refused."""
     if b"\x00" in data[:8192]:
         raise Unreadable(f"It's a kind of file these tools can't read ({Path(name).suffix or 'no extension'}): "
                          "PDFs, Word, Excel, CSV, text and pictures they can.")

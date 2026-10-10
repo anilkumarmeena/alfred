@@ -1,4 +1,4 @@
-"""Client for the task runner's API on its Unix socket (see jarvis.tasks.runner)."""
+"""Client for the task runner's Unix-socket API."""
 
 import json
 from collections.abc import AsyncIterator
@@ -14,7 +14,7 @@ class RunnerUnavailable(RuntimeError):
 
 
 class NotAllowed(ValueError):
-    """The runner refused a request for who was asking (403): a wrong nonce."""
+    """Runner answered 403: nonce or assistant details didn't match."""
 
 
 def _session(timeout: float | None) -> aiohttp.ClientSession:
@@ -40,9 +40,9 @@ async def call(method: str, path: str, body: dict | None = None, timeout: float 
 
 async def start(kind: str, title: str, instruction: str, project: str | None = None,
                 access: list[str] | None = None, order: str = "", todo: str = "") -> dict:
-    """A new task, granted `access` beyond its kind's (jarvis.tasks.access). `order` is the user's own words, when
-    they order what the task may then do without asking ("and push it": jarvis.safety.commands.ordered). `todo` is the
-    open to-do item it works on, ticked off when it's finished (jarvis.tasks.goal)."""
+    """Start a task with extra `access`.
+
+    `order`: the user's words authorising risky actions without asking ("and push it"). `todo`: linked to-do id."""
     return await call("POST", "/tasks", {"kind": kind, "title": title, "instruction": instruction, "project": project,
                                          "access": access or []} | ({"order": order} if order else {})
                       | ({"todo": todo} if todo else {}))
@@ -50,42 +50,41 @@ async def start(kind: str, title: str, instruction: str, project: str | None = N
 
 async def start_command(command: str, title: str, folder: str, timeout_minutes: int | None = None,
                         summarize: bool = True, auto_fix: bool = True, report: bool = False) -> dict:
-    """A new command task (jarvis.tasks.command_jobs): `command` run in `folder`, a full path, with no model while it
-    works. As it ends, a success is summed up (`summarize`) or, for one that `report`s, said with its last line; a
-    failure is looked into, and fixed in its project if `auto_fix` lets it."""
+    """Start a command task: run `command` in absolute `folder` with no model while it runs.
+
+    On success: summarised (`summarize`) or its last line said (`report`). On failure: diagnosed, fixed if `auto_fix`."""
     return await call("POST", "/commands", {"command": command, "title": title, "folder": folder,
                                             "timeout_minutes": timeout_minutes, "summarize": summarize,
                                             "auto_fix": auto_fix, "report": report})
 
 
 async def start_connection(title: str, instruction: str, pid: int) -> dict:
-    """A call on a connection still running after the voice brain's wait, as a connection task
-    (jarvis.tasks.connection_jobs) that the relay making it, process `pid`, reports to."""
+    """Track a slow connection call as a task; the relay process `pid` reports to it."""
     return await call("POST", "/connections", {"title": title, "instruction": instruction, "pid": pid})
 
 
 async def connection_update(task_id: int, activity: str) -> dict:
-    """What a connection task's call last said of how it's going."""
+    """Report a connection task's latest progress."""
     return await call("POST", f"/connections/{int(task_id)}", {"activity": activity})
 
 
 async def end_connection(task_id: int, outcome: str, result: str) -> dict:
-    """A connection task's call has ended, "done" or "failed", with what it returned."""
+    """End a connection task: `outcome` is "done" or "failed"."""
     return await call("POST", f"/connections/{int(task_id)}", {"outcome": outcome, "result": result})
 
 
 async def rerun(task_id: int) -> dict:
-    """Run a finished command task's command again, as a command task of its own."""
+    """Rerun a finished command task as a new command task."""
     return await call("POST", f"/tasks/{int(task_id)}/rerun")
 
 
 async def tasks(unseen: bool = False) -> list[dict]:
-    """Every active task plus any that changed in the last day; or only those the user hasn't heard about."""
+    """Active tasks plus those changed in the last day; or only unseen ones."""
     return await call("GET", "/tasks?unseen=1" if unseen else "/tasks")
 
 
 async def runs(job_id: int) -> list[dict]:
-    """A scheduled job's latest runs (jarvis.tasks.schedules), newest first, silent ones included."""
+    """A scheduled job's latest runs, newest first, silent ones included."""
     return await call("GET", f"/tasks?job={int(job_id)}")
 
 
@@ -95,13 +94,12 @@ async def task(task_id: int) -> dict:
 
 
 async def log(task_id: int, lines: int | None = None) -> dict:
-    """One task, with the latest `lines` of its log (the runner's default if None), every step included."""
+    """One task with the last `lines` log entries (runner default if None), steps included."""
     return await call("GET", f"/tasks/{int(task_id)}/log" + (f"?lines={int(lines)}" if lines else ""))
 
 
 async def reply(task_id: int, message: str, access: list[str] | None = None, order: str = "") -> dict:
-    """A message for the task, granting it `access` too. `order` is the user's own words, when they order what the
-    task may then do without asking ("merge and push")."""
+    """Send the task a message, optionally granting `access`; `order` as in `start`."""
     return await call("POST", f"/tasks/{int(task_id)}/reply", {"message": message, "access": access or []}
                       | ({"order": order} if order else {}))
 
@@ -111,7 +109,7 @@ async def stop(task_id: int) -> dict:
 
 
 async def merge(task_id: int) -> dict:
-    # JARVIS's own branches run its tests first (jarvis.tasks.merge_check): twice over at worst
+    # JARVIS's own branches run its tests first, up to twice
     return await call("POST", f"/tasks/{int(task_id)}/merge", timeout=2 * merge_check.TIMEOUT + 360)
 
 
@@ -120,23 +118,23 @@ async def discard(task_id: int) -> dict:
 
 
 async def edits(task_id: int, action: str, numbers: list[int]) -> dict:
-    """Apply or dismiss edits to JARVIS's data files that the task suggested, by number."""
+    """Apply or dismiss the task's suggested data edits, by number."""
     return await call("POST", f"/tasks/{int(task_id)}/edits", {"action": action, "edits": numbers})
 
 
 async def approvals() -> list[dict]:
-    """Tasks' requests to run risky commands that are still waiting for an answer, oldest first."""
+    """Pending approval requests, oldest first."""
     return await call("GET", "/approvals")
 
 
 async def answer(approval_id: int, decision: str, via: str, nonce: str | None = None, task: int | None = None,
                  commands: list[dict] | None = None, said: str | None = None, remember: str = "once",
                  breadth: str = "exact", whole_task: bool = False) -> dict:
-    """Approve or deny a request ("approve" or "deny"), saying how the answer came (push, web, voice, cli,
-    assistant). One from the phone carries the nonce its push had; one through the assistant, the request's
-    task, its exact commands and the user's words. A yes can be remembered for the task's session or always
-    (jarvis.safety.remembered), once the user has been shown what that covers. `whole_task`: the answer goes for the
-    task's other requests waiting too, which come back as `also`."""
+    """Answer an approval request ("approve"/"deny") via push, web, voice, cli or assistant.
+
+    Phone answers need the push's nonce; assistant answers need task, exact commands and the user's words.
+    `remember` (session/always) only after showing the user what it covers. `whole_task` also answers the task's
+    other pending requests, returned in `also`."""
     body = {"decision": decision, "via": via} | ({"nonce": nonce} if nonce is not None else {})
     if via == "assistant":
         body |= {"task": task, "commands": commands, "said": said}
@@ -148,13 +146,14 @@ async def answer(approval_id: int, decision: str, via: str, nonce: str | None = 
 
 
 async def remember(approval_id: int, breadth: str, via: str, scope: str = "always") -> dict:
-    """Remember an approved request's commands as rules, once the user has heard what they cover and said yes:
-    {"rules": [...]}, or {"rules": [], "never": why} for commands that always ask."""
+    """Save rules from an approved request, after the user agreed to what they cover.
+
+    Returns {"rules": [...]}, or {"rules": [], "never": why} for always-ask commands."""
     return await call("POST", f"/approvals/{int(approval_id)}/remember", {"breadth": breadth, "via": via, "scope": scope})
 
 
 async def mark_seen(ids: list[int]) -> None:
-    """The user has heard these tasks' latest updates."""
+    """Mark these tasks' latest updates as heard."""
     await call("POST", "/tasks/seen", {"ids": ids})
 
 
@@ -168,16 +167,16 @@ async def git_init(name: str) -> dict:
 
 
 async def session_ended() -> None:
-    """A voice session has ended: the learning review (jarvis.tasks.learning) reads it shortly."""
+    """Signal a voice session ended so the learning review picks it up."""
     await call("POST", "/learn", timeout=5)
 
 
 async def events() -> AsyncIterator[dict]:
-    """Task events as they happen, until the connection drops."""
+    """Stream task events; RunnerUnavailable if the connection fails."""
     try:
         async with _session(None) as s, s.get("http://runner/events") as r:
             async for line in r.content:
                 if line.strip():
                     yield json.loads(line)
-    except (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError) as e:  # payload: the runner stopped mid-stream
+    except (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError) as e:  # payload error: runner stopped mid-stream
         raise RunnerUnavailable(DOWN) from e

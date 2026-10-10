@@ -1,4 +1,4 @@
-// The passcode card, shown until a passcode is saved or after one is refused.
+// Passcode card, shown until a passcode is saved or after one is refused.
 import { useRef } from "preact/hooks";
 import { useSignalEffect } from "@preact/signals";
 import { unlock } from "../state/session";
@@ -7,7 +7,7 @@ import { loginPrompt, loginShown, showLogin } from "../state/store";
 export function Login() {
   const form = useRef<HTMLFormElement>(null), input = useRef<HTMLInputElement>(null);
 
-  // Each time the card asks again: shake it if it says why, and put the cursor in the field.
+  // On each prompt: shake if there's an error, and focus the field.
   useSignalEffect(() => {
     const { shake } = loginPrompt.value;
     if (!loginShown.peek()) return;

@@ -1,12 +1,11 @@
-"""Noise suppression on the mic: DeepFilterNet 3, streaming, through onnxruntime on the CPU. Nothing leaves the Mac.
+"""Mic noise suppression: streaming DeepFilterNet 3 via onnxruntime on CPU, fully local.
 
-JARVIS_DENOISE picks where the filtered audio goes (config.DENOISE_MODES):
-  on    the room's mic input goes through a LiveKit frame processor, so the VAD, barge-in and Whisper all hear it
-  vad   only the VAD hears it (turn-taking, barge-in, where each utterance starts and ends); Whisper gets the
-        original audio of the same stretch, to compare recognition with and without the filter
-  off   the original audio everywhere
-The model is a single-file streaming export of DeepFilterNet 3 (make models): 10 ms of 48 kHz audio per call, with
-the network's state passed in and out. If it doesn't load, JARVIS logs a warning and uses the original audio.
+JARVIS_DENOISE modes:
+  on    filter the room mic input (VAD, barge-in and Whisper all hear it)
+  vad   only the VAD hears filtered audio; Whisper gets the original, to compare recognition
+  off   original audio everywhere
+Model: single-file streaming export (make models), 10 ms of 48 kHz per call, state passed in and out.
+Load failure logs a warning and falls back to original audio.
 """
 
 import asyncio
@@ -24,17 +23,17 @@ from jarvis.core.config import DENOISE, DENOISE_ATTEN_DB, DENOISE_MODEL
 
 log = logging.getLogger("jarvis.voice.denoise")
 
-RATE = 48000  # the model's only sample rate
-HOP = 480  # samples per model call: 10 ms
-STATE_SIZE = 45304  # the flattened network state the export passes in and out
-MODEL_DELAY = 1440  # samples its output lags its input: the STFT's 480 plus two frames of lookahead
-# The export's own attenuation limit, left off: its mix-in of the noisy input is a frame out of step (Denoiser has ours)
+RATE = 48000  # model's only sample rate
+HOP = 480  # samples per call (10 ms)
+STATE_SIZE = 45304  # flattened network state size
+MODEL_DELAY = 1440  # output lag in samples: STFT 480 + two lookahead frames
+# Export's own attenuation limit disabled: its dry mix is a frame out of step (Denoiser does it instead)
 _FULL = np.array(0, np.float32)
-HISTORY_SECONDS = 75  # original audio the VAD-only mode keeps: Silero's 60 s speech buffer plus its padding, and slack
+HISTORY_SECONDS = 75  # vad mode history: Silero's 60 s buffer + padding + slack
 
 
 def load(path: Path = DENOISE_MODEL, mode: str = DENOISE):
-    """The model's onnxruntime session, or None when the filter is off or the model won't load (then raw audio)."""
+    """onnxruntime session, or None if off or unloadable (raw audio is used)."""
     if mode == "off":
         return None
     if not path.is_file():
@@ -50,7 +49,7 @@ def load(path: Path = DENOISE_MODEL, mode: str = DENOISE):
         session = ort.InferenceSession(str(path), options, providers=["CPUExecutionProvider"])
         if [i.name for i in session.get_inputs()] != ["input_frame", "states", "atten_lim_db"]:
             raise ValueError("not the streaming DeepFilterNet 3 export")
-        # A first run, with sound in it (the model skips silent hops), so the first real frame isn't slow
+        # Warm up with noise (silent hops are skipped) so the first real frame isn't slow
         sound = np.random.default_rng(0).standard_normal(HOP).astype(np.float32) * 0.1
         _run(session, sound, np.zeros(STATE_SIZE, np.float32))
     except Exception as e:
@@ -67,27 +66,27 @@ def _run(session, hop: np.ndarray, state: np.ndarray) -> tuple[np.ndarray, np.nd
 
 
 class Denoiser:
-    """DeepFilterNet over one stream of mono int16 audio at any sample rate. Each call returns as many samples as it
-    was given, `delay` samples behind: silence while the pipeline fills, then the filtered audio."""
+    """DeepFilterNet over one mono int16 stream at any rate. Each call returns len(input) samples, `delay` behind
+    (silence while filling)."""
 
     def __init__(self, session, atten_db: float = DENOISE_ATTEN_DB) -> None:
         self._session = session
-        # How much of the original to mix back in, so no sound drops by more than atten_db (0 = no limit)
+        # Dry mix so nothing drops more than atten_db (0 = no limit)
         self._keep = np.float32(10 ** (-atten_db / 20) if atten_db > 0 else 0)
         self._state = np.zeros(STATE_SIZE, np.float32)
-        self._dry = np.zeros(MODEL_DELAY, np.float32)  # the input's last MODEL_DELAY samples, in step with the output
+        self._dry = np.zeros(MODEL_DELAY, np.float32)  # last MODEL_DELAY input samples, aligned with output
         self._rate = 0
-        self.delay = 0  # samples, at the input's rate
+        self.delay = 0  # samples at the input rate
 
     def _start(self, rate: int) -> None:
-        """A new sample rate (the first frame, or pre-connect audio then the live track). The network keeps its state."""
+        """Reset resamplers for a new input rate (e.g. pre-connect audio then live track). Network state is kept."""
         self._rate = rate
-        # QUICK: the better qualities hand audio back in bursts of ~36 ms, and every burst late adds to the delay
+        # QUICK: higher qualities emit ~36 ms bursts, adding latency
         quick = rtc.AudioResamplerQuality.QUICK
         self._up = rtc.AudioResampler(rate, RATE, quality=quick) if rate != RATE else None
         self._down = rtc.AudioResampler(RATE, rate, quality=quick) if rate != RATE else None
-        self._pending = np.zeros(0, np.float32)  # 48 kHz input short of a whole hop
-        self._ready = np.zeros(0, np.int16)  # filtered output waiting to go out
+        self._pending = np.zeros(0, np.float32)  # 48 kHz remainder short of a hop
+        self._ready = np.zeros(0, np.int16)  # filtered output not yet returned
         self.delay = round(MODEL_DELAY * rate / RATE)
 
     def process(self, pcm: np.ndarray, rate: int) -> np.ndarray:
@@ -102,21 +101,21 @@ class Denoiser:
         if self._down and len(y):
             y = _pcm(self._down.push(_frame(y, RATE)))
         ready = np.concatenate([self._ready, y])
-        if len(ready) < n:  # still filling: pad, and the output falls that much further behind
+        if len(ready) < n:  # still filling: pad and grow the delay
             self.delay += n - len(ready)
             ready = np.concatenate([np.zeros(n - len(ready), np.int16), ready])
         out, self._ready = ready[:n], ready[n:]
         return out
 
     def _filter(self, x: np.ndarray) -> np.ndarray:
-        """Whole hops of 48 kHz float audio, filtered, MODEL_DELAY behind, with the attenuation limit applied."""
+        """Filter whole 48 kHz float hops (MODEL_DELAY behind), applying the attenuation limit."""
         out = np.empty_like(x)
         for i in range(0, len(x), HOP):
             out[i:i + HOP], self._state = _run(self._session, x[i:i + HOP], self._state)
         if self._keep and len(x):
             dry = np.concatenate([self._dry, x])
             self._dry = dry[len(x):]
-            out += self._keep * (dry[:len(x)] - out)  # in step with the output, unlike the export's own mix-in
+            out += self._keep * (dry[:len(x)] - out)  # aligned, unlike the export's mix
         return out
 
 
@@ -129,8 +128,9 @@ def _pcm(frames: list[rtc.AudioFrame]) -> np.ndarray:
 
 
 class DeepFilterNet(rtc.FrameProcessor[rtc.AudioFrame]):
-    """LiveKit's hook on the room's mic input: every frame goes through here before the VAD and Whisper see it.
-    It runs on the event loop, so it must keep up: about 8 ms of CPU per 50 ms frame on the Mac."""
+    """LiveKit frame processor on the room mic input, before VAD and Whisper.
+
+    Runs on the event loop, so must stay real-time: ~8 ms CPU per 50 ms frame on the Mac."""
 
     def __init__(self, session, atten_db: float = DENOISE_ATTEN_DB) -> None:
         self._denoiser = Denoiser(session, atten_db)
@@ -147,7 +147,7 @@ class DeepFilterNet(rtc.FrameProcessor[rtc.AudioFrame]):
         self._enabled = value
 
     def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
-        if frame.num_channels != 1:  # the room input is mono; anything else passes through
+        if frame.num_channels != 1:  # room input is mono; pass anything else through
             return frame
         start = time.perf_counter()
         try:
@@ -174,22 +174,20 @@ class DeepFilterNet(rtc.FrameProcessor[rtc.AudioFrame]):
 
 
 def room_options(session, mode: str = DENOISE) -> room_io.RoomOptions:
-    """The session's room options: the mic through DeepFilterNet in "on" mode, as it comes otherwise.
-    Automatic gain control stays on as it is without a filter, so the modes differ only by the filter."""
+    """Room options: mic through DeepFilterNet in "on" mode. AGC stays on in all modes so only the filter differs."""
     audio = room_io.AudioInputOptions(auto_gain_control=True)
     if session is not None and mode == "on":
-        audio.noise_cancellation = lambda _params: DeepFilterNet(session)  # one per mic track, each with its own state
+        audio.noise_cancellation = lambda _params: DeepFilterNet(session)  # one per mic track, own state
     return room_io.RoomOptions(audio_input=audio)
 
 
 def session_vad(silero: vad.VAD, session, mode: str = DENOISE) -> vad.VAD:
-    """The session's VAD: in "vad" mode, one that hears the filtered mic and hands on the original."""
+    """Session VAD; in "vad" mode, decides on filtered audio but emits the original."""
     return FilteredVAD(silero, session) if session is not None and mode == "vad" else silero
 
 
 class FilteredVAD(vad.VAD):
-    """Silero decides on denoised audio, but the speech in its events is the original audio. The session's own VAD
-    stream drives turn-taking and barge-in; the STT adapter's cuts utterances for Whisper out of those events."""
+    """Silero decides on denoised audio; events carry the original audio (which the STT adapter cuts for Whisper)."""
 
     def __init__(self, inner: vad.VAD, session, atten_db: float = DENOISE_ATTEN_DB) -> None:
         super().__init__(capabilities=inner.capabilities)
@@ -204,7 +202,7 @@ class FilteredVAD(vad.VAD):
         return self._inner.provider
 
     @property
-    def min_silence_duration(self) -> float | None:  # the session checks it against the turn detector
+    def min_silence_duration(self) -> float | None:  # session checks it against the turn detector
         return getattr(self._inner, "min_silence_duration", None)
 
     def stream(self) -> "FilteredVADStream":
@@ -212,11 +210,11 @@ class FilteredVAD(vad.VAD):
 
 
 class _History:
-    """The last `size` samples of original audio, looked up by absolute sample index (a ring buffer)."""
+    """Ring buffer of the last `size` original samples, indexed by absolute sample number."""
 
     def __init__(self, size: int) -> None:
         self._ring = np.zeros(size, np.int16)
-        self.end = 0  # samples added so far
+        self.end = 0  # total samples added
 
     def add(self, pcm: np.ndarray) -> None:
         size = len(self._ring)
@@ -225,7 +223,7 @@ class _History:
         self.end += len(pcm)
 
     def span(self, start: int, end: int) -> np.ndarray:
-        """Samples start..end; silence for any part not kept (before the stream began, or too long ago)."""
+        """Samples [start, end); zeros where not retained."""
         out = np.zeros(end - start, np.int16)
         lo, hi = max(start, self.end - len(self._ring), 0), min(end, self.end)
         if hi > lo:
@@ -235,16 +233,16 @@ class _History:
 
 @dataclasses.dataclass
 class _Segment:
-    """One inner Silero stream, from the stream's start or a flush to the next; `origin` is where it began."""
+    """One inner Silero stream between flushes; `origin` is its first absolute sample."""
     stream: vad.VADStream
     origin: int
-    consumed: int = 0  # samples Silero has run inference over, reported by its inference_done events
+    consumed: int = 0  # samples inferred (from inference_done)
 
 
 class FilteredVADStream(vad.VADStream):
     def __init__(self, vad_: FilteredVAD, inner: vad.VAD, denoiser: Denoiser) -> None:
         self._inner, self._denoiser = inner, denoiser
-        self._history: _History | None = None  # sized by the first frame's rate (the room input's never changes)
+        self._history: _History | None = None  # sized from the first frame's rate
         self._rate = 0
         self._failed = False
         super().__init__(vad_)  # starts _main_task
@@ -258,7 +256,7 @@ class FilteredVADStream(vad.VADStream):
         try:
             async for item in self._input_ch:
                 if isinstance(item, self._FlushSentinel):
-                    # Silero drops what it holds on a flush; a fresh stream per stretch keeps the sample count exact
+                    # Silero drops buffered audio on flush; a fresh stream keeps sample counts exact
                     segment.stream.end_input()
                     segment = _Segment(self._inner.stream(), self._history.end if self._history else 0)
                     segments.put_nowait(segment)
@@ -286,13 +284,13 @@ class FilteredVADStream(vad.VADStream):
                 await s.stream.aclose()
 
     async def _forward(self, segments: "asyncio.Queue[_Segment | None]") -> None:
-        """Pass each inner stream's events on in order, with their audio swapped for the original."""
+        """Forward inner events in order, with frames replaced by original audio."""
         while (segment := await segments.get()) is not None:
             async for ev in segment.stream:
                 n = sum(f.samples_per_channel for f in ev.frames)
                 if ev.type == vad.VADEventType.INFERENCE_DONE:
                     segment.consumed += n
-                # The frames end where Silero has read up to; the original for that lies `delay` further back
+                # Frames end at Silero's read position; the matching original is `delay` earlier
                 end = segment.origin + segment.consumed - self._denoiser.delay
                 frames = [_frame(self._history.span(end - n, end), self._rate)] if n else []
                 self._event_ch.send_nowait(dataclasses.replace(ev, frames=frames))

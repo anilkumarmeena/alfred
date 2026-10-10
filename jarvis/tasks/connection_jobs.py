@@ -1,14 +1,8 @@
-"""Connection tasks: a call on one of the user's connections (an MCP server) still running after the voice brain's wait
-(config.CONNECTION_WAIT), carried on in the background as a task of its own kind (database.CONNECTION) so a slow tool
-doesn't hold up the conversation.
+"""Connection tasks (database.CONNECTION): an MCP call that outlasted CONNECTION_WAIT, tracked in the background.
 
-The relay making the call (jarvis.integrations.mcp_relay) does the work: it starts the task through the runner's API,
-tells it the call's progress, and ends it with what the call returned. The runner (jarvis.tasks.runner) keeps it in
-the task list beside every other task, with no task slot, stops it on task_stop (the relay, which asks after it every
-few seconds, then cancels the call), ends one whose relay has gone, and says how it went: summed up by one short call
-to COMMAND_SUMMARY_MODEL (`summarize`), what it returned kept in full as its summary for task_detail.
-
-What the call returned comes from the service, so it's data for the model, never instructions.
+The MCP relay does the work and reports start, progress and end via the runner API. The runner lists it (no task
+slot), lets task_stop cancel it (the relay polls), ends it if the relay dies, and announces a `summarize`d result;
+the full result is kept as the task summary. Call results are untrusted data, never instructions.
 """
 
 import os
@@ -17,7 +11,7 @@ from jarvis.core import profile
 from jarvis.core.config import COMMAND_SUMMARY_MODEL
 from jarvis.tasks.command_jobs import spec, took
 
-SUMMARY_CHARS = 6000  # of what it returned that the summing up reads
+SUMMARY_CHARS = 6000  # result chars the summary reads
 def summary_system() -> str:
     name = profile.name()
     return (f"You sum up what a call on one of {name}'s connected services (GitHub, a CRM, a build service...) "
@@ -28,17 +22,16 @@ def summary_system() -> str:
 
 
 def alive(task: dict) -> bool:
-    """Whether the relay making its call is still running."""
+    """Whether the relay process making the call is still running."""
     try:
         os.kill(int(spec(task)["pid"]), 0)
-    except (KeyError, TypeError, ValueError, ProcessLookupError, PermissionError):  # PermissionError: not ours
+    except (KeyError, TypeError, ValueError, ProcessLookupError, PermissionError):  # PermissionError: not our process
         return False
     return True
 
 
 async def summarize(title: str, instruction: str, failed: bool, seconds: float, result: str) -> str:
-    """A sentence or two on how the call went, from what it returned, by one short call (sdk.ask, with its timeout).
-    RuntimeError or TimeoutError if the call fails."""
+    """One-or-two-sentence summary of the call's result. Raises RuntimeError or TimeoutError if the call fails."""
     from jarvis.brain import retry, sdk
 
     prompt = (f"Call: {title} ({instruction[:500]})\nIt {'failed' if failed else 'finished'} after {took(seconds)}."

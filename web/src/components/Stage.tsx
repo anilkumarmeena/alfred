@@ -1,4 +1,4 @@
-// The middle of the screen: the core, what JARVIS is doing, and anything that needs a tap or a word.
+// Centre stage: the core, status readout, and prompts that need user action.
 import { useLayoutEffect, useRef } from "preact/hooks";
 import { mountFold } from "../lib/fold";
 import { enablePush } from "../state/push";
@@ -9,7 +9,7 @@ import { FocusCard } from "./FocusCard";
 import { Login } from "./Login";
 import { BellIcon, SoundIcon } from "./icons";
 
-// A phone call turned the mic and the speaker off (the iPhone app): now it's over, offer what was on before it.
+// iPhone app: after a phone call turned mic and speaker off, offer to restore them.
 function AfterCall() {
   const was = afterCall.value;
   if (!was) return null;
@@ -26,7 +26,7 @@ function AfterCall() {
 export function Stage() {
   const { label, hint } = readout.value;
   const stage = useRef<HTMLElement>(null);
-  useLayoutEffect(() => mountFold(stage.current!), []);  // before the first paint, so the transcript starts below it
+  useLayoutEffect(() => mountFold(stage.current!), []);  // before first paint, so the transcript starts below it
   return (
     <section class="stage" ref={stage}>
       <Core />

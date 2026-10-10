@@ -1,4 +1,4 @@
-// Tests for src/lib/native.ts: the JARVIS app's native voice session. Run with: npm test in web/
+// lib/native.ts: the native app voice session bridge. Run: make test (or npm test in web/)
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { APP_SETTINGS, appNotifications, bindNative, levelTap, nativeAudio, nativePlatform, type NativeAudio, type NativePage } from "../src/lib/native";
@@ -113,7 +113,7 @@ test("adopt puts right a stale Mic paused or mute: the page missed the plugin's 
   emit("interruption", { state: "began" });
   emit("mute", { muted: true, source: "earphone" });
   assert.deepEqual(log.slice(-2), ["paused recovering", "muted true"]);
-  status = { ...status, muted: false, interrupted: false };  // the call ended and the user unmuted meanwhile
+  status = { ...status, muted: false, interrupted: false };  // call ended and user unmuted meanwhile
   await s.adopt();
   assert.ok(log.includes("paused "));
   assert.ok(log.includes("muted false"));
@@ -158,7 +158,7 @@ test("the iOS Mic Mode follows the session: from start, its events, and gone whe
   const modes: unknown[] = [], { page } = fakePage();
   page.setMicMode = (m) => modes.push(m);
   const s = bindNative(plugin, page);
-  emit("micMode", { active: "voiceIsolation", preferred: "voiceIsolation" });  // no session yet: not shown
+  emit("micMode", { active: "voiceIsolation", preferred: "voiceIsolation" });  // no session: ignored
   assert.deepEqual(modes, []);
   await s.connect({ passcode: "pw" });
   assert.deepEqual(modes.at(-1), { active: "standard", preferred: "standard" });
@@ -185,14 +185,14 @@ test("the speaker switch: asked for at the start, changed through the plugin, an
   const { plugin, calls, emit, started, speaker, page } = speakerPlugin();
   const s = bindNative(plugin, page);
   assert.ok(s.canSilence);
-  await s.setSpeakerOff(true);  // no session: the page keeps the choice for the next one
+  await s.setSpeakerOff(true);  // no session: page keeps the choice
   assert.deepEqual(calls, []);
   await s.sendText("hi", "pw", true);
-  assert.deepEqual(started, [true]);  // a typed message's session starts silent too
+  assert.deepEqual(started, [true]);  // typed-message session also starts silent
   await s.setSpeakerOff(false);
   assert.equal(calls.at(-1), "setSpeaker false");
   assert.equal(speaker.at(-1), false);
-  emit("speaker", { off: true, source: "call" });  // a phone call came in
+  emit("speaker", { off: true, source: "call" });  // phone call
   assert.equal(speaker.at(-1), true);
 });
 
@@ -208,13 +208,13 @@ test("after a call the page offers to put the mic and speaker back, and the answ
   assert.equal(offers.at(-1), null);
   assert.equal(calls.at(-1), "restoreAfterCall true");
 
-  // Missed while off screen: adopt shows the offer still open, and the speaker as the plugin has it
+  // Missed while hidden: adopt restores the open offer and the plugin's speaker state
   plugin.getStatus = async () => ({ connection: "connected", muted: true, interrupted: false, speakerOff: true, afterCall: { muted: true, speakerOff: false } });
   await s.adopt();
   assert.deepEqual(offers.at(-1), { muted: true, speakerOff: false });
   assert.equal(speaker.at(-1), true);
   await s.hangup();
-  assert.equal(offers.at(-1), null);  // gone with the session
+  assert.equal(offers.at(-1), null);  // cleared with the session
 });
 
 test("an app build without the speaker switch says so, and the page leaves it alone", async () => {
@@ -241,7 +241,7 @@ test("the switch reads iOS's answer, and an older build asks through requestPerm
   plugin.requestPermissions = async (o) => { calls.push(`request ${o?.permissions}`); answer = "granted"; return { notifications: answer }; };
   const n = appNotifications(plugin, "https://jarvis.test");
   assert.equal(await n.state(), "prompt");
-  assert.deepEqual(await n.request("pw"), { state: "granted", registered: false });  // the token goes when a session starts
+  assert.deepEqual(await n.request("pw"), { state: "granted", registered: false });  // token deferred to next session
   assert.deepEqual(calls, ["request notifications"]);
   assert.equal(await n.state(), "granted");
 });
@@ -274,7 +274,7 @@ test("openSettings uses the plugin's, else follows the app-settings: link that C
   await n.openSettings();
   assert.deepEqual(calls, ["openSettings"]);
   assert.deepEqual(went, [APP_SETTINGS]);
-  plugin.openSettings = async () => { throw new Error("not implemented"); };  // an old build's bridge refusing it
+  plugin.openSettings = async () => { throw new Error("not implemented"); };  // bridge without the method
   await n.openSettings();
   assert.deepEqual(went, [APP_SETTINGS, APP_SETTINGS]);
 });

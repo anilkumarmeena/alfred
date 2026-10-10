@@ -1,16 +1,9 @@
-"""The CLI brain's gate (shell.ShellGate), which also holds the Google tools' sends and deletes for a spoken yes.
+"""The CLI brain's gate: ShellGate plus a spoken yes for Google sends and deletes.
 
-Sending an email, a Google Chat message or calendar invites, changing or answering an event that has guests, and
-deleting a calendar event, parts of a Google Doc or a Google Sheet's tab are each drafted first and done by a second
-tool that takes only the draft's id (DRAFTED_BY pairs them, such as chat_draft then chat_send).
-Those are gated (jarvis.tools.google), so sdk.jarvis_server leaves them out of allowed_tools and every call comes
-here. The first is refused and the draft is put to the user at the end of the turn: JARVIS reads the draft's own
-summary, worked out by the drafting tool rather than taken from the model's words (for an email or a Chat message,
-everyone it goes to, cc and bcc included, and the exact text), then asks. The same yes and no rules and time limits
-as risky shell commands apply (new_turn), and a reply the word lists can't read goes to the model as a reply to a send
-or a delete (`WHAT` the draft's kind does: "sending a Google Chat message"), never with the draft. After a clear yes,
-the draft is approved, so AI Armory lets the identical call through once, and only for the draft just read out: a
-newer draft replaces an older one still waiting.
+Gated Google actions are drafted first, then done by a second tool taking only the draft id (DRAFTED_BY). The first
+call is refused; at turn end JARVIS reads the drafting tool's own summary (all recipients incl. bcc, exact text) and
+asks. Yes/no rules match risky shell commands; the consent model sees only `WHAT` the kind does, never the draft.
+A clear yes approves that draft once in AI Armory. Only the latest draft can be approved; a newer one replaces it.
 """
 
 import logging
@@ -24,16 +17,16 @@ from jarvis.safety import consent, shell
 
 log = logging.getLogger("jarvis.safety.draft_gate")
 
-PREFIX = "draft:"  # a draft's key among the commands the gate asks about
+PREFIX = "draft:"  # marks a draft key among the gate's command keys
 SEND_QUESTION = "Shall I send it?"
 GO_QUESTION = "Shall I go ahead?"
-# What goes to other people, rather than deleting something
+# Sends to other people (the rest are deletes)
 SENDS = {"gmail_send", "chat_send", "calendar_send_invite", "calendar_send_update", "calendar_send_response"}
 DRAFTED_BY = {"gmail_send": "gmail_draft_send or gmail_draft_reply", "chat_send": "chat_draft",
               "calendar_send_invite": "calendar_draft_invite", "calendar_send_update": "calendar_draft_update",
               "calendar_send_response": "calendar_draft_respond", "calendar_delete_event": "calendar_draft_delete",
               "docs_delete": "docs_draft_delete", "sheets_delete_tab": "sheets_draft_delete_tab"}
-# What each does, as consent's model is told it: from the draft's kind, never its text
+# Description given to the consent model: from the kind, never the draft's text
 WHAT = {"gmail_send": "sending an email", "chat_send": "sending a Google Chat message",
         "calendar_send_invite": "sending calendar invites",
         "calendar_send_update": "sending an event's change to its guests",
@@ -42,7 +35,7 @@ WHAT = {"gmail_send": "sending an email", "chat_send": "sending a Google Chat me
 
 
 def gated() -> set[str]:
-    """The full names of the JARVIS tools that wait for a yes."""
+    """Full names of JARVIS tools that need a spoken yes."""
     return {f"mcp__jarvis__{t.name}" for t in tools.all_tools() if t.gated}
 
 
@@ -68,7 +61,7 @@ class DraftGate(shell.ShellGate):
             log.warning("%s for draft %s, as agreed: %s", tool, draft_id, draft.short)
             return PermissionResultAllow()
         if key not in self.asked:
-            # A yes only ever covers the draft read out last: any other still waiting lapses.
+            # A yes covers only the latest draft; older ones lapse
             self.asked = [k for k in self.asked if not k.startswith(PREFIX)] + [key]
             self.pending = {k: t for k, t in self.pending.items() if not k.startswith(PREFIX)}
             self.agreed = {k: t for k, t in self.agreed.items() if not k.startswith(PREFIX)}
@@ -81,14 +74,14 @@ class DraftGate(shell.ShellGate):
         )
 
     def kind_of(self, key: str) -> str:
-        """A draft's send or delete, as a kind: never the draft itself, which may hold an email's text."""
+        """Consent kind for a key; drafts map to GOOGLE so their text never reaches the model."""
         return consent.GOOGLE if key.startswith(PREFIX) else super().kind_of(key)
 
     def question(self, spoken: str = "") -> str:
-        """Reads a held draft out in full, word for word, then asks; otherwise as ShellGate does."""
+        """Read held drafts out verbatim, then ask; else defer to ShellGate."""
         drafts = [d for k in self.asked if k.startswith(PREFIX) and (d := pending(_draft_id(k)))]
         if not drafts:
-            self.asked = [k for k in self.asked if not k.startswith(PREFIX)]  # lapsed ones can't be asked about
+            self.asked = [k for k in self.asked if not k.startswith(PREFIX)]  # drop lapsed drafts
             return super().question(spoken)
         self.put = True
         commands = any(not k.startswith(PREFIX) for k in self.asked)
@@ -100,7 +93,7 @@ class DraftGate(shell.ShellGate):
         return shell.following(spoken, " ".join(d.summary for d in drafts) + " " + ask)
 
     def agreed_hint(self, agreed: list[str]) -> str:
-        """Tells the model exactly what the user's yes now lets it do."""
+        """Tell the model exactly what the user's yes now allows."""
         commands = [k for k in agreed if not k.startswith(PREFIX)]
         hints = [super().agreed_hint(commands)] if commands else []
         for k in agreed:
@@ -112,6 +105,6 @@ class DraftGate(shell.ShellGate):
         return "\n".join(hints)
 
     def described(self, agreed: list[str]) -> list[str]:
-        """What the user said yes to, for the day's log: commands as they are, drafts in a few words."""
+        """What was approved, for the day's log: commands verbatim, drafts briefly."""
         return [k if not k.startswith(PREFIX) else d.short if (d := pending(_draft_id(k)))
                 else f"draft {_draft_id(k)}" for k in agreed]

@@ -1,35 +1,11 @@
-"""The heartbeat: every HEARTBEAT_MINUTES the task runner wakes up and flags what's new, unasked.
+"""Heartbeat: every HEARTBEAT_MINUTES, flag what's new without being asked.
 
-Each beat gathers cheap signals with JARVIS's read-only tools:
+Sources live in KINDS (extend with `register`): calendar, email, github, chat, tasks, usage, signins. Which run and
+their settings are per user (settings key `heartbeat_sources`), re-read each beat.
 
-  calendar  events starting within HEARTBEAT_EVENT_MINUTES
-  email     unread mail that Gmail marks important
-  github    PRs waiting for the user's review; mentions, assignments and security alerts
-  chat      unread Google Chat DMs and @mentions, by who wrote them (only where Chat is set up)
-  tasks     background tasks still waiting for an answer, cut off by a restart, or stuck (jarvis.tasks.stall)
-  usage     Claude's usage limits getting close or used up, once per limit window (jarvis.brain.usage)
-  signins   a Google account, GitHub or GitLab signed out, or its token about to expire (jarvis.integrations.signins)
-
-Those are the built-in kinds of source, in a registry (KINDS) another module adds its own kind to with `register`.
-Which sources a beat checks, and their settings (calendar's lead time, the Gmail search), are the user's: kept in the
-settings table (jarvis.state.settings, key heartbeat_sources) and changed in the control panel or by voice, read
-afresh at every beat. Only what differs from a kind's defaults is kept, so a user who never changed anything gets the
-list above. A kind that allows it (email) can be added more than once, each with its own settings and title: another
-Gmail search to flag, which the user, a skill or a watch asks for (jarvis.tools.heartbeat).
-
-Anything not flagged before becomes a Mac notification, a push to the phone when push is on
-(jarvis.notify.push), and an event on the runner's stream that the voice agent speaks at the next
-pause. Notifications and pushes show on the lock screen, so they carry only an alert's `text`:
-what someone wrote goes only in its `spoken` words, for the voice and triage. What has been
-flagged is kept in data/heartbeat.json, so nothing is flagged twice.
-Nothing is checked in quiet hours, or while do not disturb is on (jarvis.tasks.hold); what turns up
-meanwhile is flagged at the first beat after. An alert about something ongoing (a sign-in that has
-stopped working) is flagged once, and again only if it clears and then comes back.
-The first time mail, GitHub and Chat answer, the items already there are only recorded, rather
-than flagged as a backlog.
-
-Read-only by design: it calls only read tools, and never sends, creates, starts or runs anything.
-A failing source is logged and skipped; the beat goes on without it.
+New items go out as a Mac notification, a phone push and a spoken update. Lock-screen surfaces get only `text`,
+never message content. Seen items live in data/heartbeat.json. Skipped during quiet hours and do-not-disturb.
+Read-only: never sends, creates or runs anything. A failing source is logged and skipped.
 """
 
 import asyncio
@@ -60,30 +36,30 @@ from jarvis.notify.push import Push, task_target
 from jarvis.tasks import hold
 
 log = logging.getLogger("jarvis.tasks.heartbeat")
-MAX_ALERTS = 5  # per beat; the rest wait for the next one
-KEEP_DAYS = 30  # how long a flagged item is remembered
+MAX_ALERTS = 5  # per beat; the rest wait for the next
+KEEP_DAYS = 30  # how long flagged keys are remembered
 SOURCE_TIMEOUT = 60
-MAIL_QUERY = "is:unread is:important newer_than:1d"  # the email source's Gmail search, unless the user sets another
+MAIL_QUERY = "is:unread is:important newer_than:1d"  # default Gmail search for the email source
 GITHUB_REASONS = {
     "mention": "You were mentioned on {repo}: {title}",
     "team_mention": "Your team was mentioned on {repo}: {title}",
     "assign": "You were assigned on {repo}: {title}",
     "security_alert": "Security alert on {repo}: {title}",
 }
-SNIPPET_WORDS = 12  # of a Chat message, in the spoken alert only
+SNIPPET_WORDS = 12  # Chat message words quoted, in `spoken` only
 
 
 @dataclass(frozen=True)
 class Alert:
-    key: str  # stable id, so the same thing is never flagged twice
+    key: str  # stable id for de-duplication
     source: str
-    text: str  # one short sentence, fit to be spoken, and shown on the lock screen
-    soft: bool = False  # a model may overrule it when triage is on
+    text: str  # one short sentence; shown on the lock screen
+    soft: bool = False  # triage may drop it
     task_id: int | None = None
-    spoken: str = ""  # said and shown to triage instead of `text`, never notified or pushed: it may quote someone
-    ongoing: bool = False  # a condition, not an item: forgotten once its source answers without it, so it can recur
-    at: float | None = None  # the time it's about (a meeting's start), so the voice can judge when to mention it
-    urgent: bool = False  # triage found it can't wait: it may cut into a conversation (jarvis.voice.floor)
+    spoken: str = ""  # voice/triage text; may quote people, so never notified or pushed
+    ongoing: bool = False  # a condition: forgotten once it clears, so it can recur
+    at: float | None = None  # time it refers to (e.g. meeting start), for voice timing
+    urgent: bool = False  # set by triage: may interrupt a conversation
 
     @property
     def said(self) -> str:
@@ -91,7 +67,7 @@ class Alert:
 
 
 class SourceFailed(RuntimeError):
-    """A source failure whose message JARVIS wrote itself, so it's safe to log."""
+    """Source failure with a JARVIS-written message, safe to log."""
 
 
 Source = Callable[[datetime], Awaitable[list[Alert]]]
@@ -99,8 +75,7 @@ Notify = Callable[[str, str], Awaitable[object]]
 
 
 def push_target(a: Alert) -> tuple[str, str]:
-    """Where tapping the alert's phone notification opens JARVIS, and the tag that lets a newer
-    notification about the same task replace it."""
+    """(tap URL, notification tag); a shared tag lets newer pushes about the same task replace older ones."""
     if a.task_id is not None:
         return task_target(a.task_id)
     return f"/?alert={a.source}", "alert-" + hashlib.sha256(a.key.encode()).hexdigest()[:16]
@@ -110,7 +85,7 @@ def push_target(a: Alert) -> tuple[str, str]:
 
 
 def parse_quiet_hours(spec: str) -> tuple[clock_time, clock_time] | None:
-    """'23:00-08:00' -> (23:00, 08:00). Empty, or the same start and end, means never quiet."""
+    """'23:00-08:00' -> (23:00, 08:00); None if empty, invalid, or start == end."""
     if not spec.strip():
         return None
     try:
@@ -128,17 +103,17 @@ def in_quiet_hours(now: datetime, quiet: tuple[clock_time, clock_time] | None) -
     return start <= t < end if start < end else t >= start or t < end
 
 
-# ── What has been flagged ───────────────────────────────────────
+# ── Seen state ──────────────────────────────────────────────────
 
 
 class Seen:
-    """Keys already flagged, and the sources that have answered at least once."""
+    """Flagged keys, sources that have answered once, and ongoing alerts per source."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
         self.keys: dict[str, float] = {}
         self.started: set[str] = set()
-        self.ongoing: dict[str, list[str]] = {}  # by source: the ongoing alerts flagged and not yet cleared
+        self.ongoing: dict[str, list[str]] = {}  # source -> flagged ongoing keys not yet cleared
         try:
             data = json.loads(path.read_text())
             self.keys, self.started = dict(data["seen"]), set(data["started"])
@@ -158,8 +133,7 @@ class Seen:
                 self.ongoing[a.source].append(a.key)
 
     def cleared(self, source: str, found: list[Alert]) -> list[str]:
-        """Forget the source's ongoing alerts it no longer reports, so they're flagged again if they come back;
-        returns their keys."""
+        """Forget ongoing alerts `source` no longer reports, so they can re-flag; returns their keys."""
         still = {a.key for a in found}
         gone = [k for k in self.ongoing.get(source, []) if k not in still]
         for k in gone:
@@ -180,7 +154,7 @@ class Seen:
 class Heartbeat:
     def __init__(
         self,
-        sources: dict[str, Source] | Callable[[], dict[str, Source]],  # by name; a function is asked at every beat
+        sources: dict[str, Source] | Callable[[], dict[str, Source]],  # by name; a callable is re-read each beat
         notify: Notify,
         announce: Callable[[dict], None] | None = None,
         state_file: Path | None = None,
@@ -203,7 +177,7 @@ class Heartbeat:
         self.sleep = sleep
 
     async def run(self) -> None:
-        """Beat now, then every `minutes`, for as long as the runner lives."""
+        """Beat now, then every `minutes`, forever."""
         while True:
             try:
                 await self.beat()
@@ -212,7 +186,7 @@ class Heartbeat:
             await self.sleep(self.minutes * 60)
 
     async def beat(self) -> list[Alert]:
-        """One check. Returns what it flagged."""
+        """One beat; returns the alerts flagged."""
         now = self.clock()
         if in_quiet_hours(now, self.quiet):
             log.info("heartbeat: quiet hours, nothing checked")
@@ -232,7 +206,7 @@ class Heartbeat:
             if gone := self.seen.cleared(name, found):
                 log.info("heartbeat: %s cleared %d ongoing alert%s", name, len(gone), "" if len(gone) == 1 else "s")
             unseen = [a for a in found if a.key not in self.seen]
-            if baseline(name) and name not in self.seen.started:  # its first answer: what's there already isn't news
+            if baseline(name) and name not in self.seen.started:  # first answer: existing items aren't news
                 self.seen.add(unseen, stamp)
                 unseen = []
             self.seen.started.add(name)
@@ -254,7 +228,7 @@ class Heartbeat:
                            "pushed": self.push is not None})
         self.seen.add(flagged, stamp)
         self.seen.save(stamp)
-        if self.push:  # after the announcement, together: a slow push service shouldn't hold up the voice
+        if self.push:  # after announcing, so a slow push service doesn't delay the voice
             await asyncio.gather(*(self._push(a) for a in flagged))
         log.info("heartbeat: %s; %d new, %d flagged", ", ".join(report) or "no sources", len(new), len(flagged))
         return flagged
@@ -271,12 +245,12 @@ class Heartbeat:
             return await asyncio.wait_for(source(now), SOURCE_TIMEOUT)
         except SourceFailed as e:
             log.warning("heartbeat source %s failed: %s", name, e)
-        except Exception as e:  # never let one source stop the beat; the type alone keeps secrets out of the log
+        except Exception as e:  # log the type only, to keep secrets out
             log.warning("heartbeat source %s failed: %s", name, type(e).__name__)
         return None
 
     async def _triage(self, alerts: list[Alert], stamp: float) -> list[Alert]:
-        """Let the model drop soft alerts not worth an interruption. Dropped ones count as seen."""
+        """Let the model drop soft alerts and mark urgent ones; dropped ones count as seen. Fails open."""
         soft = [a for a in alerts if a.soft]
         if not (self.triage and soft):
             return alerts
@@ -303,13 +277,12 @@ def _plural(n: int, word: str) -> str:
 
 
 async def _each_account(read: Callable[[str], list[dict]]) -> list[dict]:
-    """`read(label)` on every connected Google account, each in its own thread, all at once.
-    Raises only if all fail."""
+    """Run `read(label)` for every connected Google account concurrently; SourceFailed only if all fail."""
     from ai_armory.toolsets.google.common import connected
 
-    from jarvis.tools import google  # sets AI Armory's Google tool sets up with JARVIS's accounts
+    from jarvis.tools import google  # configures AI Armory's Google toolsets with JARVIS's accounts
 
-    google.fresh()  # and with the profile's name and time zone as they are now
+    google.fresh()  # pick up the current profile name and time zone
     labels = connected()
     results = await asyncio.gather(*(asyncio.to_thread(read, label) for label in labels), return_exceptions=True)
     found, failed = [], []
@@ -354,7 +327,7 @@ async def important_mail(now: datetime, query: str = MAIL_QUERY) -> list[Alert]:
 
 
 async def github_overview() -> dict:
-    """PRs waiting for the user's review and their unread notifications, through the logged-in `gh` CLI."""
+    """Review requests and unread notifications via the logged-in `gh` CLI."""
     reviews, notes = await asyncio.gather(
         run("gh", "search", "prs", "--review-requested=@me", "--state=open", "--limit=20", "--json",
             "repository,title,number,updatedAt,url"),
@@ -380,7 +353,7 @@ async def github_news(now: datetime) -> list[Alert]:
 
 
 async def chat_news(now: datetime) -> list[Alert]:
-    """Unread DMs and @mentions. The alert names who wrote and where, never what: the words go only in `spoken`."""
+    """Unread DMs and @mentions. `text` names who and where only; message words go in `spoken`."""
     from ai_armory.toolsets.google.chat import first_words, news
 
     out = []
@@ -397,9 +370,8 @@ async def chat_news(now: datetime) -> list[Alert]:
 
 def task_changes(store, minutes: int = HEARTBEAT_MINUTES,
                  stalls: Callable[[float], list[dict]] | None = None) -> Source:
-    """Tasks the user should hear about that the runner hasn't announced on its own: a question
-    unanswered for a whole beat, a run cut off by a restart, or one that seems stuck (`stalls`, the runner's
-    jarvis.tasks.stall check): flagged once, and again only if it moves on and then stalls afresh."""
+    """Source for tasks the runner didn't announce: questions unanswered for a beat, runs cut off by a restart, and
+    stalls (`stalls`; ongoing, so re-flagged only after recovering)."""
 
     async def source(now: datetime) -> list[Alert]:
         out = []
@@ -416,7 +388,7 @@ def task_changes(store, minutes: int = HEARTBEAT_MINUTES,
             if t["status"] == "waiting" and not t["seen"] and now.timestamp() - t["updated"] >= minutes * 60:
                 out.append(Alert(key, "tasks", _sentence(f"{name} is still waiting for your answer: {t['question']}"),
                                  task_id=t["id"]))
-            elif t["status"] == "stopped" and t["error"]:  # stopped by the runner, not by the user
+            elif t["status"] == "stopped" and t["error"]:  # stopped by the runner, not the user
                 out.append(Alert(key, "tasks", f"{name} stopped. {t['error']}", task_id=t["id"]))
         return out
 
@@ -424,30 +396,29 @@ def task_changes(store, minutes: int = HEARTBEAT_MINUTES,
 
 
 async def usage_news(now: datetime) -> list[Alert]:
-    """Claude's usage limits getting close or used up, from what the CLI last reported: once per limit window."""
+    """Claude usage limits nearly or fully used, once per limit window."""
     from jarvis.brain import usage
 
     return [Alert(key, "usage", text) for key, text in usage.alerts(now.timestamp())]
 
 
 async def signin_news(now: datetime) -> list[Alert]:
-    """Connections signed out, or whose tokens expire soon: each flagged once, and again only if it clears and
-    comes back."""
+    """Connections signed out or with tokens expiring soon (ongoing alerts)."""
     from jarvis.integrations import signins
 
     return [Alert(p.key, "signins", p.text, ongoing=True) for p in await signins.check(now)]
 
 
-# ── The registry, and the sources the user has on ──────────────
+# ── Registry and user configuration ────────────────────────────
 
-SETTINGS_KEY = "heartbeat_sources"  # in the settings table: what the user changed, by source id, as JSON
+SETTINGS_KEY = "heartbeat_sources"  # settings row: JSON of user overrides by source id
 MAX_ADDED = 10
 TITLE_CHARS = 40
 
 
 @dataclass(frozen=True)
 class Context:
-    """What a source may need from the task runner: its task store, and its check for stuck tasks (Runner.stalls)."""
+    """Runner state a source may need: the task store and Runner.stalls."""
     store: object
     stalls: Callable[[float], list[dict]] | None = None
 
@@ -455,37 +426,36 @@ class Context:
 @dataclass(frozen=True)
 class Setting:
     key: str
-    label: str  # in the control panel
+    label: str  # shown in the control panel
     default: str
-    clean: Callable[[str], str]  # the value as kept; raises ValueError, saying what to change, for one it can't take
+    clean: Callable[[str], str]  # normalise; ValueError explains a bad value
 
 
 @dataclass(frozen=True)
 class Kind:
-    """A kind of source a beat can check. `make` builds the source from the user's settings, each one filled in."""
+    """A source type. `make` builds the source from fully filled-in settings."""
     name: str
-    title: str  # in the control panel, and the phone notification's title
-    about: str  # what it flags, in a few words
+    title: str  # panel label and push title
+    about: str  # what it flags, briefly
     make: Callable[[dict[str, str], Context], Source]
     settings: tuple[Setting, ...] = ()
-    on: bool = True  # unless the user switches it off
-    baseline: bool = False  # its first answer is only recorded, rather than flagged as a backlog
-    ready: Callable[[], bool] = lambda: True  # whether it can run here at all (Chat: only where an account has it)
-    more: bool = False  # the user may add more of it, each with a title and settings of its own
+    on: bool = True  # default state
+    baseline: bool = False  # first answer is recorded, not flagged as backlog
+    ready: Callable[[], bool] = lambda: True  # can it run here at all (Chat needs an account with it)
+    more: bool = False  # user may add extra instances with own title and settings
 
 
 KINDS: dict[str, Kind] = {}
 
 
 def register(kind: Kind) -> Kind:
-    """Adds a kind of source, or replaces the one of its name. From the next beat it's checked unless the user switches
-    it off, and the control panel lists it with its settings."""
+    """Add or replace a source kind; it runs from the next beat unless switched off."""
     KINDS[kind.name] = kind
     return kind
 
 
 def baseline(name: str) -> bool:
-    """Whether source `name` (one the user added is named kind:slug) only records what's there at its first answer."""
+    """Whether source `name` (`kind` or `kind:slug`) baselines its first answer."""
     kind = KINDS.get(name.partition(":")[0])
     return bool(kind and kind.baseline)
 
@@ -533,13 +503,13 @@ for _kind in (
 
 @dataclass(frozen=True)
 class Configured:
-    """A source as the user has it: a kind's own, its id the kind's name, or one they added, its id kind:slug."""
+    """A source as configured: built-in (id = kind name) or user-added (id = kind:slug)."""
     id: str
     kind: Kind
     title: str
     on: bool
-    settings: dict[str, str]  # every setting, the kind's default where the user kept none
-    added: str = ""  # who added it: "" for a kind's own
+    settings: dict[str, str]  # all settings, defaults filled in
+    added: str = ""  # who added it; "" for built-in
 
     def described(self) -> dict:
         return {"id": self.id, "kind": self.kind.name, "title": self.title, "about": self.kind.about, "on": self.on,
@@ -552,7 +522,7 @@ def _described(kind: Kind, values: dict[str, str] | None = None) -> list[dict]:
 
 
 def _stored() -> dict[str, dict]:
-    """What the user changed, by source id. A settings table that can't be read counts as nothing changed."""
+    """User overrides by source id; {} if the settings row is unreadable."""
     from jarvis.state import settings
 
     try:
@@ -571,7 +541,7 @@ def _keep(kept: dict[str, dict]) -> None:
 
 
 def _on_unless_said(id_: str, kind: Kind) -> bool:
-    return ":" in id_ or kind.on  # one the user added is on until they switch it off
+    return ":" in id_ or kind.on  # user-added sources default to on
 
 
 def _configured(id_: str, kind: Kind, entry: dict) -> Configured:
@@ -581,15 +551,14 @@ def _configured(id_: str, kind: Kind, entry: dict) -> Configured:
 
 
 def lineup() -> list[Configured]:
-    """Every source the user has, on or off: each kind's own, then those they added. One added of a kind no longer
-    registered is left out, but kept, for when it's back."""
+    """All sources, on or off: built-ins, then user-added. Added ones of an unregistered kind are hidden but kept."""
     kept = _stored()
     return ([_configured(name, kind, kept.get(name, {})) for name, kind in KINDS.items()]
             + [_configured(id_, KINDS[e["kind"]], e) for id_, e in kept.items() if ":" in id_ and e.get("kind") in KINDS])
 
 
 def described() -> dict:
-    """The user's sources, as the control panel and the voice tools show them, and the kinds more can be added of."""
+    """Sources and addable kinds, as shown by the panel and voice tools."""
     return {"sources": [c.described() for c in lineup()],
             "kinds": [{"name": k.name, "title": k.title, "about": k.about, "settings": _described(k)}
                       for k in KINDS.values() if k.more]}
@@ -602,7 +571,7 @@ def _find(id_: str) -> Configured:
 
 
 def _cleaned(kind: Kind, values: dict) -> dict[str, str | None]:
-    """Each setting given, as kept: None where it goes back to the default."""
+    """Cleaned values by key; None where the value reverts to the default."""
     known = {s.key: s for s in kind.settings}
     out: dict[str, str | None] = {}
     for key, value in values.items():
@@ -614,8 +583,7 @@ def _cleaned(kind: Kind, values: dict) -> dict[str, str | None]:
 
 
 def change_source(id_: str, on: bool | None = None, values: dict | None = None) -> Configured:
-    """Switches source `id_` on or off, and changes its settings: an empty value goes back to the default. Raises
-    ValueError, saying what's wrong, for an unknown source or setting, or a value its kind can't take."""
+    """Toggle source `id_` and/or change settings (empty value resets). ValueError for unknown ids, keys or values."""
     c, kept = _find(id_), _stored()
     entry = kept.setdefault(id_, {})
     for key, value in _cleaned(c.kind, values or {}).items():
@@ -632,8 +600,9 @@ def change_source(id_: str, on: bool | None = None, values: dict | None = None) 
 
 
 def add_source(kind: str, title: str, values: dict, added: str) -> Configured:
-    """Another source of a kind that allows more (another Gmail search), on, with a title and every setting given;
-    `added` says who asked (the user in the panel, by voice, a skill or a watch). Raises ValueError as change_source."""
+    """Add another instance of a `more` kind, with a title and all settings; `added` records who asked.
+
+    Raises ValueError like change_source."""
     k = KINDS.get(kind)
     if not (k and k.more):
         raise ValueError(f"Only these can be added more than once: {', '.join(n for n, x in KINDS.items() if x.more)}.")
@@ -654,7 +623,7 @@ def add_source(kind: str, title: str, values: dict, added: str) -> Configured:
 
 
 def remove_source(id_: str) -> None:
-    """Takes out a source the user added; a kind's own can only be switched off."""
+    """Remove a user-added source; built-ins can only be switched off."""
     kept = _stored()
     if ":" not in id_ or id_ not in kept:
         raise ValueError(f"{id_} is built in: switch it off instead." if id_ in KINDS
@@ -664,7 +633,7 @@ def remove_source(id_: str) -> None:
 
 
 def sources_on(store, stalls: Callable[[float], list[dict]] | None = None) -> dict[str, Source]:
-    """The sources the user has on, by id, each set up as they set it: what one beat checks."""
+    """Enabled, ready sources by id, built from the user's settings."""
     context, out = Context(store, stalls), {}
     for c in lineup():
         if not c.on:
@@ -672,7 +641,7 @@ def sources_on(store, stalls: Callable[[float], list[dict]] | None = None) -> di
         try:
             if c.kind.ready():
                 out[c.id] = c.kind.make(c.settings, context)
-        except Exception as e:  # a kind registered elsewhere mustn't stop the beat
+        except Exception as e:  # an external kind mustn't break the beat
             log.warning("heartbeat source %s couldn't be set up: %s", c.id, type(e).__name__)
     return out
 
@@ -683,7 +652,7 @@ def triage_system() -> str:
     return prompts.load("heartbeat_triage", user_name=profile.name())
 
 
-# The triage's reply: the items kept, by number, each with whether it can't wait
+# Reply: kept items by number, each with an urgent flag
 TRIAGE_SCHEMA = {
     "type": "object",
     "properties": {"keep": {"type": "array", "items": {
@@ -696,8 +665,9 @@ TRIAGE_SCHEMA = {
 
 
 async def model_triage(alerts: list[Alert]) -> dict[str, bool]:
-    """The alerts worth an interruption, by key, each with whether it can't wait, by one short call to HEARTBEAT_MODEL
-    with no tools. ValueError for a reply that isn't JSON matching TRIAGE_SCHEMA, so everything is kept."""
+    """key -> urgent for alerts worth interrupting (one tool-less HEARTBEAT_MODEL call).
+
+    ValueError on an unusable reply, so the caller keeps everything."""
     from jarvis.brain.sdk import ask_json
 
     prompt = "\n".join(f"{i}. [{a.source}] {a.said}" for i, a in enumerate(alerts, 1))
@@ -710,15 +680,13 @@ async def model_triage(alerts: list[Alert]) -> dict[str, bool]:
 
 def make(store, notify: Notify, announce: Callable[[dict], None] | None = None, push: Push | None = None,
          stalls: Callable[[float], list[dict]] | None = None, **settings) -> Heartbeat:
-    """The heartbeat the task runner runs, set up from config, checking the sources the user has on at each beat;
-    `stalls` is the runner's (Runner.stalls), and `settings` override Heartbeat's own."""
+    """The runner's Heartbeat from config. `stalls` is Runner.stalls; `settings` override Heartbeat kwargs."""
     return Heartbeat(lambda: sources_on(store, stalls), notify, announce, triage=model_triage if HEARTBEAT_TRIAGE else None,
                      push=push, **settings)
 
 
 if __name__ == "__main__":
-    # A dry run: one beat, printed rather than notified, as if nothing had been flagged before.
-    # It keeps its state in a throwaway file, so the real heartbeat still flags everything.
+    # Dry run: one beat printed instead of notified, with throwaway state so the real heartbeat is unaffected.
     import tempfile
 
     from jarvis.core.database import Store
@@ -729,5 +697,5 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     with tempfile.TemporaryDirectory() as scratch:
         hb = make(Store(), _show, state_file=Path(scratch) / "heartbeat.json", quiet_hours="")
-        hb.seen.started = set(sources_on(None))  # not a first beat, so existing mail and GitHub items show too
+        hb.seen.started = set(sources_on(None))  # skip baselining so existing items show
         asyncio.run(hb.beat())

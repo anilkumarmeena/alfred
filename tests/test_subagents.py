@@ -1,4 +1,4 @@
-"""Tests for subagents: the helpers background tasks and the voice brain hand side jobs to. Run with: make test"""
+"""Tests for subagents: which helpers tasks get, the gate, progress log, waiting for reports, the voice brain."""
 
 import asyncio
 from pathlib import Path
@@ -158,7 +158,7 @@ def said_by(parent: str | None, *blocks) -> AssistantMessage:
 
 
 def agent_call(id: str, kind: str, description: str, tool: str = "Task", **extra) -> ToolUseBlock:
-    """The bundled CLI calls the subagent tool "Task", its old name; newer ones say "Agent"."""
+    """Subagent tool call; the bundled CLI names the tool "Task", newer CLIs "Agent"."""
     return ToolUseBlock(id=id, name=tool, input={"subagent_type": kind, "description": description, "prompt": "..."} | extra)
 
 
@@ -203,11 +203,11 @@ def test_a_background_subagent_ends_with_its_notification(monkeypatch):
     assert reporter.log == ["web researcher started in the background: prices", "web researcher finished"]
 
 
-# ── Finishing only once they have, with a report ────────────────
+# ── Waiting for their reports ───────────────────────────────────
 
 
 def launched(id: str) -> UserMessage:
-    """The Agent tool's result for a subagent the CLI sent to the background, as it does by default."""
+    """Agent tool result for a subagent the CLI backgrounded (its default)."""
     text = "Async agent launched successfully. (This tool result is internal metadata.)\nagentId: x1"
     return UserMessage(content=[ToolResultBlock(tool_use_id=id, content=[{"type": "text", "text": text}])])
 
@@ -227,7 +227,7 @@ def quick(monkeypatch):
 
 
 def test_a_turn_ending_with_a_subagent_still_running_waits_for_it_and_its_report(monkeypatch, quick):
-    """The CLI wakes the session itself when the subagent is done: the run carries on to that turn's report."""
+    """The CLI wakes the session when the subagent finishes; the run continues to that turn's report."""
     client = FakeClient([*TESTS_IN_BACKGROUND, result("I'll wait for the test runner.", 0.1), 0.1, notified("a1"),
                          said_by(None), result("All 40 tests pass.\nDetails.", 0.3)])
     reporter = Recorder()
@@ -361,7 +361,7 @@ def test_voice_prompt_hands_multi_step_work_to_background_tasks(voice_options):
     for words in ("Anything with several steps goes to a background task", "installing or setting something up",
                   "fixing what a build or test run turned up", "stop after your second step"):
         assert words in prompt
-    # A single build, test run or render still runs in the shell (a long one as a job), as the approval flow allows
+    # single builds, test runs and renders stay in the shell (long ones as jobs)
     assert "single everyday commands such as a build, a test run, a render" in shell.prompt()
     assert "Keep to one or two commands per request" in shell.prompt() and "start_job" in shell.prompt()
 

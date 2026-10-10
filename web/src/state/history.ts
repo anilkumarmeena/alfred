@@ -1,5 +1,4 @@
-// The History view's data: the days with conversations, a page at a time, the open day's exchanges, and a search over
-// all of them, from jarvis.panel (jarvis.state.history). Newest first throughout. The open day is the panel's `item`.
+// History view state: paged day list, the open day's exchanges, and search. Newest first. Open day = panel `item`.
 import { signal } from "@preact/signals";
 import type { DayDetail, Days, Found } from "../lib/history";
 import { act, item, section } from "./panel";
@@ -7,11 +6,10 @@ import { act, item, section } from "./panel";
 export const days = signal<Days | null>(null);
 export const olderBusy = signal(false);
 export const day = signal<DayDetail | null>(null);
-export const found = signal<Found | null>(null);  // the search's hits, shown in place of the days while there's one
+export const found = signal<Found | null>(null);  // search hits; replace the day list while set
 export const searching = signal(false);
 
-// The first page of days, afresh (when History opens, or the page comes back on screen), keeping any older pages
-// already shown, so a refresh doesn't lose the reader's place.
+// Refresh the first page of days, keeping older pages already loaded so the reader keeps their place.
 export async function loadDays() {
   const r = await act<Days>("conversations");
   if (!r) return;
@@ -20,7 +18,7 @@ export async function loadDays() {
   days.value = kept.length ? { ...r, days: [...r.days, ...kept], more: have!.more } : r;
 }
 
-// The next page of older days, after those listed.
+// Load the next page of older days.
 export async function loadOlderDays() {
   const have = days.peek();
   if (!have?.more || olderBusy.peek()) return;
@@ -30,7 +28,7 @@ export async function loadOlderDays() {
   if (r) days.value = { ...r, days: [...have.days, ...r.days] };
 }
 
-// One day's exchanges, kept only if that day is still the one open.
+// Load a day's exchanges; dropped if another day was opened meanwhile.
 export async function loadDay(date: string) {
   const r = await act<DayDetail>("conversation", { date });
   if (r && item.peek() === date && section.peek() === "history") day.value = r;

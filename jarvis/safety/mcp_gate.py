@@ -1,11 +1,9 @@
-"""The CLI brain's gate (draft_gate.DraftGate), which also holds MCP servers' write tools for a spoken yes.
+"""The CLI brain's gate: DraftGate plus a spoken yes for MCP servers' write tools.
 
-The servers come from the registry (jarvis.integrations.mcp_servers), handed over as each session starts (`use`). Their read and
-own-inbox tools are allowed outright, so they never come here. A write tool is refused the first time, and at the end
-of the turn JARVIS reads out what it would do, built from the tool's `says` phrase and the call's own arguments rather
-than the model's words (`describe`), then asks "Okay to go ahead?". The same yes and no rules and time limits as risky
-shell commands apply (ShellGate.new_turn). After a clear yes, the identical call, with the same arguments, goes through
-once. Any other tool of theirs (blocked, or not listed) is refused.
+Read and own-inbox tools are allowed upstream and never reach here. A write is refused first; at turn end JARVIS reads
+out `describe()` (built from the tool's `says` phrase and the call's own args, not the model's words) and asks. Yes/no
+rules match risky shell commands. A clear yes lets the identical call through once. Unlisted or blocked tools
+are refused.
 """
 
 import json
@@ -20,16 +18,16 @@ from jarvis.safety import consent, draft_gate, shell
 
 log = logging.getLogger("jarvis.safety.mcp_gate")
 
-PREFIX = "mcp:"  # an action's key among what the gate asks about
-HINT_ARGS = 2000  # characters of a call's arguments repeated to the model with the user's yes (files can be long)
-TEXT_LIMIT = 300  # characters of a title, comment or message read out; the rest is counted in words
-QUIET = {"jmespath", "encoding"}  # arguments that shape the reply or the transfer, not what's done
+PREFIX = "mcp:"  # marks an MCP action key among the gate's keys
+HINT_ARGS = 2000  # max chars of args echoed back to the model after a yes
+TEXT_LIMIT = 300  # chars of free text read out; the rest is counted in words
+QUIET = {"jmespath", "encoding"}  # shape the reply, not the action: not read out
 _FIELD = re.compile(r"\{(\w+)\}")
 _OPTIONAL = re.compile(r"\[([^\[\]]*)\]")
 
 
 def _text(value: str) -> str:
-    """Text as read out: whole if short, else its start and how much more there is; quoted when it's words."""
+    """Text for reading aloud: truncated with a word count past TEXT_LIMIT, quoted if multi-word."""
     words = " ".join(value.split())
     if len(words) > TEXT_LIMIT:
         head = words[:TEXT_LIMIT].rsplit(" ", 1)[0]
@@ -60,8 +58,7 @@ def _filled(value) -> bool:
 
 
 def describe(server: Server, tool: str, args: dict) -> str:
-    """What a write would do, from its `says` phrase and its own arguments, as JARVIS reads it out: every argument the
-    phrase doesn't name is listed after it, so nothing the call carries goes unsaid."""
+    """Spoken description of a write from its `says` phrase; args the phrase omits are appended so none go unsaid."""
     says = server.tools[tool].says if tool in server.tools else ""
     says = _OPTIONAL.sub(lambda m: m.group(1) if all(_filled(args.get(f)) for f in _FIELD.findall(m.group(1)))
                          else "", says or tool.replace("_", " "))
@@ -81,20 +78,19 @@ class Gate(draft_gate.DraftGate):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.servers: dict[str, Server] = {}
-        self.actions: dict[str, str] = {}  # key -> what it does, as read out
+        self.actions: dict[str, str] = {}  # key -> spoken description
 
     def use(self, servers: list[Server]) -> None:
-        """The servers this session has (jarvis.integrations.mcp_servers.session)."""
+        """Set this session's servers."""
         self.servers = {s.name: s for s in servers}
 
     def _target(self, name: str) -> tuple[Server | None, str]:
-        """The server a tool name's call goes to (None if it isn't one of this session's), and the tool's own name."""
+        """(session server or None, bare tool name) for a full tool name."""
         server_name, _, tool = name.removeprefix("mcp__").partition("__")
         return (self.servers.get(server_name) if name.startswith("mcp__") else None), tool
 
     def change(self, name: str, args: dict) -> str | None:
-        """What a call to an MCP server's write (or own) tool does, said as describe() says it; None for a read, or
-        anything not on a server of this session's."""
+        """describe() for a write/own tool call on a session server; None otherwise."""
         server, tool = self._target(name)
         return describe(server, tool, args) if server and tool in server.named("write", "own") else None
 
@@ -112,7 +108,7 @@ class Gate(draft_gate.DraftGate):
         if k not in self.asked:
             self.asked.append(k)
             self.actions[k] = describe(server, tool, args)
-            self.what[k] = f"a change on {server.label}"  # for consent's model: never the call's own arguments
+            self.what[k] = f"a change on {server.label}"  # for the consent model: never the args
             log.warning("asking: %s", self.actions[k])
         return PermissionResultDeny(
             message=f"Not done yet: it reaches other people or changes something there, so it needs {profile.name()}'s "
@@ -130,7 +126,7 @@ class Gate(draft_gate.DraftGate):
         return agreed
 
     def question(self, spoken: str = "") -> str:
-        """Reads out each write held this turn, then asks; anything else held is asked about as DraftGate does."""
+        """Read out each held write, then ask; other held items go through DraftGate."""
         mine = [k for k in self.asked if k.startswith(PREFIX)]
         if not mine:
             return super().question(spoken)
@@ -143,7 +139,7 @@ class Gate(draft_gate.DraftGate):
         return shell.following(spoken, text)
 
     def agreed_hint(self, agreed: list[str]) -> str:
-        """Tells the model exactly which call the user's yes now lets through."""
+        """Tell the model exactly which call the user's yes now allows."""
         rest = [k for k in agreed if not k.startswith(PREFIX)]
         hints = [super().agreed_hint(rest)] if rest else []
         for k in agreed:
@@ -155,5 +151,5 @@ class Gate(draft_gate.DraftGate):
         return "\n".join(hints)
 
     def described(self, agreed: list[str]) -> list[str]:
-        """What the user said yes to, for the day's log."""
+        """What was approved, for the day's log."""
         return [self.actions.get(k, k) if k.startswith(PREFIX) else super().described([k])[0] for k in agreed]

@@ -1,6 +1,5 @@
-// The buttons that answer a task's request for a yes, on its card and in Tasks: deny, approve once, approve for the
-// rest of the task, or approve and always allow it. "Always" first shows what the rule would cover, with a choice of
-// this exact command or any of its kind, and saves only from the button under that. Some commands always ask.
+// Approval buttons: deny, once, for this task, or always. "Always" first previews the rule (this exact command or
+// its kind) and saves only from the confirm button. Some commands can never be remembered.
 import { useSignal } from "@preact/signals";
 import { answer, type Approval, type Breadth } from "../../state/panel";
 import { CheckIcon } from "../icons";

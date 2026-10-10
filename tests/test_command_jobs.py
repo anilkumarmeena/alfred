@@ -1,9 +1,4 @@
-"""Tests for command tasks (jarvis.tasks.command_jobs): shell commands run as background tasks of their own kind, with
-no model while they work, from the voice shell's start_job and a scheduled command's runs alike. They're in the task
-list, stop like any task, keep running while the runner restarts, and are said as they end: a success summed up by one
-short model call, a failure read by another that decides whether a task fixes it at once (then the command reruns once,
-and that run says what failed, the fix and how it went), waits for the user's yes, or is only said. And the shell's gate
-weighs a command job as it would the command. Run with: make test"""
+"""Tests for tasks.command_jobs: job tasks, stop/limits/restart, failure triage and fixes, schedules, voice shell."""
 
 import asyncio
 import json
@@ -43,9 +38,7 @@ def triage(said: str, action: str, needs: str = "") -> str:
 
 @pytest.fixture
 def env(repos, monkeypatch):  # noqa: F811
-    """A task database and projects of the test's own (test_in_place), the commands' records in a folder of their own,
-    pushes kept, and the model's replies scripted: `triage` is what the failure call says, and `rerun` whether a fix's
-    summary is read as saying the command should run again."""
+    """Runner on test projects; pushes kept; `triage`/`rerun` script the failure and rerun model replies."""
     monkeypatch.setattr(command_jobs, "COMMANDS_DIR", repos["tmp"] / "commands")
     pushed: list[dict] = []
 
@@ -76,7 +69,7 @@ def make() -> runner.Runner:
 
 
 async def ended(r: runner.Runner, task_id: int, seconds: float = 10) -> dict:
-    """Looks after the commands until task `task_id` has ended and been said; the task."""
+    """Pump commands until task `task_id` has ended and been announced; return the task."""
     for _ in range(int(seconds * 20)):
         r.check_commands()
         await r.drain_commands()
@@ -87,7 +80,7 @@ async def ended(r: runner.Runner, task_id: int, seconds: float = 10) -> dict:
 
 
 async def settled(r: runner.Runner, seconds: float = 10) -> None:
-    """Until nothing is running: no task's run, no command, no command's end being said."""
+    """Wait until no task run, command, or command announcement is in flight."""
     for _ in range(int(seconds * 20)):
         r.check_commands()
         await r.drain_commands()
@@ -104,7 +97,7 @@ def triaged(env: dict) -> list[str]:
 
 
 def reread(env: dict) -> list[str]:
-    """What each fix's summary read for whether to run again was."""
+    """Prompts that asked whether a fix summary means rerun."""
     return [prompt for prompt, system, _ in env["asked"] if system.startswith(command_jobs.rerun_system())]
 
 
@@ -123,7 +116,7 @@ def test_a_job_is_a_command_task_in_the_list_said_when_it_ends(env):
         assert (task["kind"], task["status"], task["project"], task["instruction"]) == \
                (COMMAND, "running", "video-agent", "echo 'rendered: 2 videos'")
         assert [t["id"] for t in r.store.recent()] == [task["id"]]  # in the list, beside every other task
-        assert r.view(task)["stalled"] is None  # no model, so no pulse: its quiet is its command at work
+        assert r.view(task)["stalled"] is None  # no model, so no stall pulse
         done = await ended(r, task["id"])
         return r, done, statuses(q)
 
@@ -206,7 +199,7 @@ def test_a_job_runs_in_a_session_of_its_own_without_jarviss_keys(env, monkeypatc
 
 # ── Stopping, time limits, restarts ─────────────────────────────
 
-# A job that leaves its process group (python's setpgid) and one that ignores SIGTERM, which its sleep inherits
+# Escapes its process group (setpgid) and ignores SIGTERM, which its sleep inherits
 STUBBORN = (f"sleep 30 & {sys.executable} -c 'import os, time; os.setpgid(0, 0); time.sleep(30)' & "
             "sh -c 'trap \"\" TERM; sleep 30' & wait")
 
@@ -231,7 +224,7 @@ def test_stopping_a_stubborn_job_stops_every_process_it_started(env):
 
 
 def test_stopping_never_signals_a_process_that_isnt_the_jobs(env):
-    """A job's pid, taken since by some other process: stopping it leaves that process alone."""
+    """Pid reuse: the job's old pid now belongs to an unrelated process."""
     other = subprocess.Popen(["sleep", "30"], start_new_session=True)
     try:
         r = make()
@@ -263,7 +256,7 @@ def test_stopping_a_job_stops_all_of_it_and_isnt_looked_into(env):
         return stopped, statuses(q), r.commands.how(record), r.commands._left(record)
 
     stopped, said, how, left = asyncio.run(main())
-    # A busy Mac can take the stop's grace period to end it, so how long it ran isn't pinned down
+    # a busy Mac may use the whole grace period, so run time isn't asserted
     assert stopped["status"] == "stopped" and len(said) == 1
     assert said[0].startswith(f"Task {stopped['id']}, the long render, stopped after ") and said[0].endswith("seconds.")
     assert how == ("stopped", None) and left == []  # the sleep it started went too
@@ -318,7 +311,7 @@ def test_a_command_takes_no_messages_but_can_run_again(env):
     assert again["id"] != task["id"] and again["instruction"] == "echo hi" and again["status"] == "done"
 
 
-# ── Failures: looked into, and fixed as the model decides ───────
+# ── Failures: triage and fixes ──────────────────────────────────
 
 
 def test_an_ordinary_failure_is_fixed_then_rerun_and_the_rerun_says_it_all(env, monkeypatch):
@@ -353,7 +346,7 @@ def test_an_ordinary_failure_is_fixed_then_rerun_and_the_rerun_says_it_all(env, 
     assert (rerun["kind"], rerun["status"], rerun["instruction"], how["attempt"]) == (COMMAND, "done", command, 2)
     assert how["after"] == {"task": first["id"], "fix": fixer["id"], "failed": "ffmpeg isn't installed.",
                             "fixed": "Pointed the script at Homebrew's ffmpeg."}
-    # Said as it failed, live; the fix quietly; the rerun with all of it, and only that pushed
+    # failure said live, fix quietly, rerun with everything; only the rerun is pushed
     assert said[0] == (f"Task {first['id']}, the produce run, failed (exit code 3), after 0 seconds. ffmpeg isn't "
                        f"installed. Task {fixer['id']} is fixing it, and runs it again after.")
     assert said[1] == (f"Task {rerun['id']}, the produce run, ran again after a fix, and worked, in 0 seconds. It had "
@@ -508,7 +501,7 @@ def test_a_fix_is_rerun_only_when_its_summary_is_read_as_saying_so(monkeypatch):
         assert asyncio.run(command_jobs.wants_rerun("Fixed the path.")) is again
 
 
-# ── Scheduled commands: each run a command task ─────────────────
+# ── Scheduled commands ──────────────────────────────────────────
 
 
 def scheduled(r: runner.Runner, now=EIGHT) -> tuple[Scheduler, dict]:
@@ -679,12 +672,12 @@ def test_a_folder_gone_is_said_once_and_the_job_waits_for_its_next_time(env):
     assert r.store.recent() == []
 
 
-# ── The voice shell's start_job, job_status and stop_job ────────
+# ── Voice shell: start_job, job_status, stop_job ────────────────
 
 
 @pytest.fixture
 def voice(env, monkeypatch):
-    """The voice shell's jobs, reaching a runner in this process as the client would reach it over its socket."""
+    """Voice shell job tools, wired to an in-process runner as the socket client would be."""
     r = make()
 
     async def start_command(command, title, folder, timeout_minutes=None, summarize=True, auto_fix=True, report=False):
@@ -784,7 +777,7 @@ def test_the_runner_being_down_is_said_not_raised(monkeypatch):
     assert asyncio.run(jobs.stop_job(title="build")) == "Not stopped: JARVIS's task runner isn't running."
 
 
-# ── Made only as the shell would run it ─────────────────────────
+# ── Shell gate ──────────────────────────────────────────────────
 
 
 def call(gate: ShellGate, tool: str, **args):

@@ -1,8 +1,4 @@
-"""Tests for transcribing recordings (jarvis.core.transcribe, and the audio_transcribe and gmail_attachment_transcribe
-tools in jarvis.tools.files): any audio or video file decoded to 16 kHz mono, heard in chunks cut at quiet moments,
-the transcript kept in a file with timestamps, each recording transcribed once, a long one carrying on by itself, and
-the tools giving a path and a short preview rather than the whole transcript. Whisper itself is faked: these run
-anywhere, without the Apple GPU. Run with: make test"""
+"""Tests for transcribing recordings (jarvis.core.transcribe, file tools): chunking, transcripts, previews."""
 
 import asyncio
 import base64
@@ -45,7 +41,7 @@ def write_wav(path, audio: np.ndarray, rate: int = RATE, channels: int = 1):
 
 
 class FakeWhisper:
-    """Says what it heard: one segment every 10 s of each chunk, numbered across calls, and records each chunk."""
+    """Fake Whisper: one numbered segment per 10 s of each chunk; records each chunk."""
 
     def __init__(self, said=None):
         self.chunks = []
@@ -64,8 +60,7 @@ LANGUAGES = {"en": "English", "hi": "Hindi"}
 
 @pytest.fixture
 def whisper(monkeypatch):
-    """Transcribing in this process, at once, with a fake Whisper and its languages, in place of the transcriber's
-    own process."""
+    """Transcribe in-process, immediately, with a fake Whisper instead of the transcriber's own process."""
     fake = FakeWhisper()
     spawned = []
 
@@ -93,12 +88,12 @@ def test_any_recording_is_decoded_to_16_khz_mono(tmp_path):
     stereo = write_wav(tmp_path / "call.wav", tone(2.5, rate=44100), rate=44100, channels=2)
     audio = np.concatenate(list(transcribe.decode(stereo)))
     assert audio.dtype == np.float32 and abs(len(audio) - 2.5 * RATE) < RATE // 50
-    assert 0.25 < np.abs(audio).max() < 0.45  # the tone, mixed down at -3 dB a channel, not doubled
+    assert 0.25 < np.abs(audio).max() < 0.45  # the tone mixed down at -3 dB per channel, not doubled
     assert transcribe.length(stereo) == pytest.approx(2.5, abs=0.05)
 
 
 def make_video(path, seconds=2):
-    """An MP4 with a picture track first and a sound track after it, as a phone's video is."""
+    """MP4 with a video track first and audio after, as phone videos have."""
     with av.open(str(path), "w") as out:
         try:
             picture = out.add_stream("mpeg4", rate=10)
@@ -143,7 +138,7 @@ def test_a_file_with_no_sound_or_that_isnt_a_recording_says_so(tmp_path):
 
 
 def test_long_sound_comes_in_chunks_cut_at_its_quietest_moment():
-    # 25 s of speech-loud tone with a gap at 17.0 to 17.5 s, in pieces of odd sizes as a decoder gives them
+    # 25 s of loud tone with a gap at 17.0-17.5 s, in odd-sized pieces like a decoder's
     audio = np.concatenate([tone(17), silence(0.5), tone(7.5)])
     pieces = np.array_split(audio, 37)
     got = list(transcribe.chunks(pieces, size=20 * RATE, window=5 * RATE))
@@ -178,7 +173,7 @@ def test_a_recording_is_transcribed_chunk_by_chunk_into_a_file(tmp_path, monkeyp
     rec = write_wav(tmp_path / "standup.wav", np.concatenate([tone(17), silence(0.5), tone(7.5), silence(30)]))
     job = transcribe.wait(transcribe.start(rec), 1)
     assert job.state == transcribe.DONE and job.heard == "English"
-    # four chunks, cut in the gap at 17 s, then in silence; the last two only silence, which Whisper never hears
+    # 4 chunks (cut in the 17 s gap, then in silence); the 2 silent ones never reach Whisper
     assert len(whisper.chunks) == 2 and 17 * RATE < whisper.chunks[0][0] < 17.5 * RATE
     text = job.text_path.read_text()
     assert text.startswith("Transcript of standup.wav (55 seconds, English), made ")
@@ -188,7 +183,7 @@ def test_a_recording_is_transcribed_chunk_by_chunk_into_a_file(tmp_path, monkeyp
 
 
 def test_the_tool_gives_the_transcripts_path_and_a_preview_then_the_text_on_request(tmp_path, monkeypatch, whisper):
-    whisper.said = "We agreed to ship on the twentieth. " * 80  # long: more than the preview
+    whisper.said = "We agreed to ship on the twentieth. " * 80  # longer than the preview
     rec = write_wav(tmp_path / "Team Sync.m4a.wav", tone(3))
     content, is_error = asyncio.run(tools.run("audio_transcribe", {"path": str(rec)}))
     said = json.loads(content)
@@ -197,7 +192,7 @@ def test_the_tool_gives_the_transcripts_path_and_a_preview_then_the_text_on_requ
     assert said["preview"].startswith("[0:00:00] We agreed") and said["preview"].endswith(" …")
     assert len(said["preview"]) <= transcribe.PREVIEW_CHARS + 2 and said["words"] == 560
     assert "Read the transcript with start=0" in said["note"] and said["length"] == "3 seconds"
-    # The same recording again: the transcript already made, at once, and its text when asked for
+    # Same recording again: reuses the transcript and returns its text on request
     said = json.loads(asyncio.run(tools.run("audio_transcribe", {"path": str(rec), "start": 0}))[0])
     assert said["kind"] == "transcript" and said["text"].count("ship on the twentieth") == 80
     assert len(whisper.spawned) == 1
@@ -221,14 +216,14 @@ def test_a_short_transcript_is_all_in_the_preview(tmp_path, whisper):
 
 def test_a_long_one_carries_on_and_the_tool_says_how_far_it_has_got(tmp_path, monkeypatch):
     rec = write_wav(tmp_path / "allhands.wav", tone(2))
-    monkeypatch.setattr(transcribe, "_spawn", lambda job: os.getpid())  # it never finishes here
+    monkeypatch.setattr(transcribe, "_spawn", lambda job: os.getpid())  # never finishes here
     monkeypatch.setattr(transcribe, "WAIT_SECONDS", 0)
     monkeypatch.setattr(transcribe, "length", lambda path: 3600.0)
     said = files.audio_transcribe(str(rec))
     assert said["status"] == "waiting for another recording to finish first" and said["length"] == "60 minutes"
     assert said["time_left"] == "about 5 minute(s)" and "ask again with the same file later" in said["note"]
     job = transcribe.load(transcribe.start(rec).name)
-    job.state, job.started, job.done = transcribe.RUNNING, time.time() - 60, 900  # a quarter, in a minute
+    job.state, job.started, job.done = transcribe.RUNNING, time.time() - 60, 900  # a quarter done in a minute
     transcribe.save(job)
     said = files.audio_transcribe(str(rec))
     assert said["status"] == "transcribing" and said["done"] == "25%" and said["time_left"] == "about 3 minute(s)"
@@ -328,7 +323,7 @@ def test_an_attached_recording_is_transcribed_and_its_copy_removed(tmp_path, mon
                                                                               "attachment": "note"}))
     said = json.loads(content)
     assert not is_error and said["email"] == "Voice note" and said["preview"] == "[0:00:00] " + whisper.said
-    assert not list(transcribe.sources().glob("*"))  # the saved copy is gone once it's transcribed
+    assert not list(transcribe.sources().glob("*"))  # the saved copy is removed once transcribed
     content, is_error = asyncio.run(tools.run("gmail_attachment_transcribe", {"message_id": "m2",
                                                                               "attachment": "terms.pdf"}))
     assert is_error and "gmail_attachment_read" in content

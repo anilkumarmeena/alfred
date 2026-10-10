@@ -1,5 +1,4 @@
-// Opened from a notification: the task, alert or file it was about, with a button to talk about it. A file plays here
-// if it's audio, and opens on its own, to save it.
+// Card for a tapped notification's task, alert or file, with a "talk about it" button. Audio files play inline.
 import { activate } from "../state/session";
 import { focus } from "../state/store";
 import { CloseIcon } from "./icons";

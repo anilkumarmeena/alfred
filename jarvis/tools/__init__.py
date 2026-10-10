@@ -1,11 +1,8 @@
 """Tool registry.
 
-A tool is a plain function (sync or async) registered with @tool, or a tool from an AI Armory tool set registered
-with register_toolsets (the Google tools: jarvis.tools.google; the Mac tools: jarvis.tools.mac). A tool with a switch
-(`enabled`, such as the web browser's: jarvis.tools.browser) is offered only while it's on, as each session starts. The brain serves
-`all_tools()` to Claude as an MCP server (jarvis.brain.sdk) and calls `run()` for each call. A tool returns text, or
-something sent as JSON; one whose result holds pictures for Claude to look at (a screenshot: jarvis.tools.screen; a
-document's: jarvis.tools.files) returns it as `WithPictures`.
+Tools are plain functions (sync or async) registered with @tool, or AI Armory tool sets via register_toolsets.
+A tool with `enabled` is offered only while on. The brain serves `all_tools()` as an MCP server and calls `run()`.
+Results are text, JSON-able values, or `WithPictures` for images.
 """
 
 import asyncio
@@ -28,20 +25,17 @@ class Tool:
     properties: dict[str, dict]
     required: list[str]
     fn: Callable[..., Any]
-    gated: bool = False  # runs only after the user's spoken yes, which the brain's gate asks for (draft_gate)
-    armory: ai_armory.Tool | None = None  # an AI Armory tool, which checks its own input and fills in its defaults
-    # It changes something, so the control panel's bell lists it once it has run (jarvis.state.activity): as `said`,
-    # filled in from its arguments, or else as its own result says it
+    gated: bool = False  # runs only after the user's spoken yes
+    armory: ai_armory.Tool | None = None  # validates its own input and fills defaults
+    # Listed in the panel's bell after running: as `said` (filled from args), else by its result
     changes: bool = False
     said: str = ""
-    enabled: Callable[[], bool] | None = None  # its setting, read as a session starts (sdk.jarvis_server) and each call
-    # Its calls may carry a shell command (a scheduled command job), so each meets the voice shell's gate, which weighs
-    # it as one run there (jarvis.safety.shell.ShellGate), rather than being allowed outright
+    enabled: Callable[[], bool] | None = None  # checked at session start and on each call
+    # May carry a shell command, so each call goes through the shell gate instead of being allowed outright
     shell: bool = False
-    # It only reads, so the CLI may run it alongside the other calls of the same step (its MCP readOnlyHint, which
-    # jarvis.brain.sdk gives it): a reply needing a few lookups waits for the slowest, not their sum
+    # Read-only (MCP readOnlyHint): the CLI may run it in parallel with other calls in the same step
     reads: bool = False
-    before: Callable[[], None] | None = None  # an AI Armory tool's: brings its tool set's settings up to date first
+    before: Callable[[], None] | None = None  # AI Armory: refresh tool-set settings before each call
 
     def on(self) -> bool:
         return self.enabled is None or self.enabled()
@@ -49,7 +43,7 @@ class Tool:
 
 @dataclass
 class WithPictures:
-    """A tool's result (text, or anything that becomes JSON) with pictures alongside, each (media type, bytes)."""
+    """A tool result plus images, each (media type, bytes)."""
     result: Any
     pictures: list[tuple[str, bytes]]
 
@@ -70,9 +64,10 @@ def tool(name: str, description: str, properties: dict[str, dict] | None = None,
 
 def register_toolsets(toolsets: list[ai_armory.ToolSet], notes: dict[str, str] | None = None,
                       before: Callable[[], None] | None = None) -> None:
-    """AI Armory's tools, under their own names. Those it says need the user's go-ahead are gated, and those it doesn't
-    call read-only change something; the rest only read. `notes` adds JARVIS's own guidance to a tool's description,
-    after AI Armory's; `before` runs ahead of each call."""
+    """Register AI Armory tools: needs_confirmation -> gated, not read_only -> changes, else reads.
+
+    `notes` appends JARVIS guidance to a description; `before` runs ahead of each call.
+    """
     for t in ai_armory.all_tools(toolsets):
         schema = t.input_schema
         description = f"{t.description} {notes[t.name]}" if notes and t.name in notes else t.description
@@ -99,7 +94,7 @@ _TYPES = {"string": str, "integer": int, "number": (int, float), "boolean": bool
 
 
 def _validate(t: Tool, args: Any) -> str | None:
-    """Check inputs against the schema before running anything."""
+    """Check args against the schema; an error message or None."""
     if not isinstance(args, dict):
         return "input must be an object"
     for key in t.required:
@@ -118,7 +113,7 @@ def _validate(t: Tool, args: Any) -> str | None:
 
 
 def _prepare(t: Tool, args: Any) -> Any:
-    """The input with each optional field left out that has a "default" in its schema filled in from it."""
+    """Fill omitted optional fields from their schema defaults."""
     if not isinstance(args, dict):
         return args
     return {k: spec["default"] for k, spec in t.properties.items()
@@ -130,7 +125,7 @@ def _text(result: Any) -> str:
 
 
 async def run(name: str, args: Any) -> tuple[str | list[dict], bool]:
-    """Returns (content, is_error). The content is text, or MCP content blocks when the result has pictures."""
+    """Returns (content, is_error); content is text, or MCP content blocks when the result has pictures."""
     t = _REGISTRY.get(name)
     if t is None:
         return f"Unknown tool: {name}", True
@@ -141,7 +136,7 @@ async def run(name: str, args: Any) -> tuple[str | list[dict], bool]:
             return json.dumps({"INVALID_INPUT": "input must be an object", "input": args}), True
         if t.before:
             t.before()
-        # AI Armory checks the input itself, after taking an account named by its email or in other capitals.
+        # AI Armory validates input itself (and normalizes account names)
         result = await ai_armory.call(t.armory, args)
         if result.is_error:
             log.warning("tool %s failed: %s", name, result.text)
@@ -154,7 +149,7 @@ async def run(name: str, args: Any) -> tuple[str | list[dict], bool]:
             result = await t.fn(**args)
         else:
             result = await asyncio.to_thread(t.fn, **args)
-    except Exception as e:  # tools talk to the outside world; report failures to the model
+    except Exception as e:  # report failures to the model
         log.exception("tool %s failed", name)
         return f"{type(e).__name__}: {e}", True
     if isinstance(result, WithPictures):
@@ -164,11 +159,11 @@ async def run(name: str, args: Any) -> tuple[str | list[dict], bool]:
     return _text(result), False
 
 
-from . import skills  # noqa: E402,F401  (skills: jarvis.skills)
-from . import connections  # noqa: E402,F401  (MCP servers: jarvis.integrations.mcp_servers)
+from . import skills  # noqa: E402,F401
+from . import connections  # noqa: E402,F401
 
-# Importing the modules registers their tools; google registers the Google tools only when there's an account.
+# Importing registers tools; google registers only when an account exists.
 from . import browser, core, google, heartbeat, mac, schedules, screen, tasks  # noqa: E402,F401
-from . import files  # noqa: E402,F401  (after google: its Gmail attachment tools need an account)
-from . import audio  # noqa: E402,F401  (after files, whose way of finding a document it uses)
-from . import side  # noqa: E402,F401  (background_lookup: jarvis.brain.side)
+from . import files  # noqa: E402,F401  (after google: Gmail attachment tools need an account)
+from . import audio  # noqa: E402,F401  (after files: uses its document lookup)
+from . import side  # noqa: E402,F401

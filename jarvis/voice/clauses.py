@@ -1,19 +1,12 @@
-"""What Kokoro is handed to say, one piece at a time: sentences, and long sentences cut at their commas.
+"""Split text for Kokoro into sentences, cutting long ones at natural pauses.
 
-Kokoro renders each piece whole before any of it plays, so a 25-word sentence used to be a second or more of
-silence. A sentence of more than MAX_WORDS words is cut after its commas, semicolons, colons and dashes, and the
-pieces are joined again from the front for as long as they fit in MAX_WORDS: each cut falls where a speaker pauses
-anyway, there are no more cuts than needed (each piece is said with its own intonation), and no piece is left under
-MIN_WORDS. Never cut: inside a number ("1,000", "3:30", "10–20"), between a date's day and year ("May 4, 2026"), or
-at an abbreviation's comma ("e.g., ...", "Smith, Jr."). A long stretch with no pause in it stays whole.
+Kokoro renders a piece whole before playing it, so a 25-word sentence means 1s+ of silence. Sentences over MAX_WORDS
+are cut after , ; : and dashes, then pieces are greedily re-joined up to MAX_WORDS (fewest cuts, none under
+MIN_WORDS). Never cut inside a number ("1,000", "3:30"), a date ("May 4, 2026") or an abbreviation ("e.g.,", "Jr.").
+A trailing piece under MIN_WORDS stays with the previous one, so streamed pieces match what the full sentence gives.
 
-While the brain is still streaming, a sentence's last piece can still grow: a trailing piece under MIN_WORDS is held
-with the one before it, so LiveKit lets a piece go only once the next has MIN_WORDS words. Joining from the front
-starts afresh at each piece, so the pieces let go along the way are the ones the whole sentence would have given.
-
-A reply's first piece is what the user waits for, so it goes sooner: a sentence of FIRST_MIN_CHARS or more goes alone
-("Half past three." isn't held for the next one), and a sentence over FIRST_MAX_WORDS is cut at its first pause.
-After it, pieces are cut as above.
+The first piece of a reply goes sooner: any sentence of FIRST_MIN_CHARS+ goes alone, and one over FIRST_MAX_WORDS is
+cut at its first pause.
 """
 
 import re
@@ -23,17 +16,17 @@ from livekit.agents.tokenize.blingfire import _split_sentences
 
 from jarvis.voice import timing
 
-MAX_WORDS = 12  # a longer sentence is cut, and joined pieces stay within it
-MIN_WORDS = 4  # no piece shorter, unless the whole sentence is
-MIN_SENTENCE_CHARS = 20  # as LiveKit's own sentence tokenizer: shorter sentences go with the next
+MAX_WORDS = 12  # cut longer sentences; joined pieces stay within it
+MIN_WORDS = 4  # no shorter piece unless the whole sentence is
+MIN_SENTENCE_CHARS = 20  # matches LiveKit's tokenizer: shorter sentences merge with the next
 MIN_CONTEXT_CHARS = 10
-FIRST_MAX_WORDS, FIRST_MIN_CHARS = 6, 8  # for a reply's first piece
+FIRST_MAX_WORDS, FIRST_MIN_CHARS = 6, 8  # reply's first piece
 
-# After , ; : followed by a space; after a spaced hyphen; after an en or em dash that isn't inside a number
+# , ; : before a space; a spaced hyphen; an en/em dash not inside a number
 _PAUSE = re.compile(r"[,;:](?=\s)|(?<=\s)-(?=\s)|(?<!\d)[–—]|[–—](?!\d)")
 _BEFORE = re.compile(r"(\S+)$")
 _AFTER = re.compile(r"^\s*(\S+)")
-_NO_CUT_AFTER = {"e.g.", "i.e.", "viz.", "cf.", "vs.", "eg.", "ie."}  # "e.g., apples": the comma belongs with what follows
+_NO_CUT_AFTER = {"e.g.", "i.e.", "viz.", "cf.", "vs.", "eg.", "ie."}  # "e.g., apples": comma binds forward
 _NO_CUT_BEFORE = {"jr", "jr.", "sr", "sr.", "inc", "inc.", "ltd", "ltd.", "esq", "esq.", "ph.d.", "md", "m.d."}
 
 
@@ -46,13 +39,13 @@ def _can_cut(text: str, at: re.Match) -> bool:
         return True
     before = (_BEFORE.search(text, 0, at.start()) or [""])[0]
     after = (_AFTER.search(text[at.end():]) or ["", ""])[1]
-    if before[-1:].isdigit() and after[:1].isdigit():  # "May 4, 2026"; a list of numbers reads as one piece anyway
+    if before[-1:].isdigit() and after[:1].isdigit():  # "May 4, 2026"; number lists read as one piece
         return False
     return before.lower() not in _NO_CUT_AFTER and after.lower() not in _NO_CUT_BEFORE
 
 
 def clause_spans(text: str, max_words: int = MAX_WORDS, min_words: int = MIN_WORDS) -> list[tuple[int, int]]:
-    """Where to cut one sentence: (start, end) spans covering all of `text`, a single one when it's short enough."""
+    """(start, end) spans covering all of one sentence; a single span if it's short enough."""
     if _words(text) <= max_words:
         return [(0, len(text))]
     cuts = [m.end() for m in _PAUSE.finditer(text) if _can_cut(text, m)]
@@ -64,7 +57,7 @@ def clause_spans(text: str, max_words: int = MAX_WORDS, min_words: int = MIN_WOR
             chunks[-1][1], chunks[-1][2] = end, chunks[-1][2] + n
         else:
             chunks.append([start, end, n])
-    if len(chunks) > 1 and chunks[-1][2] < min_words:  # a short tail, or one still being written: join it back
+    if len(chunks) > 1 and chunks[-1][2] < min_words:  # short or still-streaming tail: rejoin
         tail = chunks.pop()
         chunks[-1][1], chunks[-1][2] = tail[1], chunks[-1][2] + tail[2]
     return [(start, end) for start, end, _ in chunks]
@@ -72,7 +65,7 @@ def clause_spans(text: str, max_words: int = MAX_WORDS, min_words: int = MIN_WOR
 
 def split(text: str, max_words: int = MAX_WORDS, min_words: int = MIN_WORDS,
           min_chars: int = MIN_SENTENCE_CHARS) -> list[tuple[str, int, int]]:
-    """LiveKit's sentences, the long ones cut at their pauses: (text, start, end) with whitespace kept, end to end."""
+    """LiveKit sentences with long ones cut: contiguous (text, start, end), whitespace kept."""
     out = []
     for sentence, start, _ in _split_sentences(text, min_chars, retain_format=True):
         for s, e in clause_spans(sentence, max_words, min_words):
@@ -81,7 +74,7 @@ def split(text: str, max_words: int = MAX_WORDS, min_words: int = MIN_WORDS,
 
 
 class ClauseTokenizer(SentenceTokenizer):
-    """A sentence tokenizer for LiveKit's TTS StreamAdapter that also cuts long sentences (see the module's doc)."""
+    """Sentence tokenizer for LiveKit's TTS StreamAdapter that also cuts long sentences."""
 
     def __init__(self, max_words: int = MAX_WORDS, min_words: int = MIN_WORDS) -> None:
         self._max_words, self._min_words = max_words, min_words
@@ -97,8 +90,9 @@ class ClauseTokenizer(SentenceTokenizer):
 
 
 class _FirstSoonerStream(token_stream.BufferedSentenceStream):
-    """LiveKit's buffered stream, letting a reply's first piece go sooner (see the module's doc). LiveKit lets a piece
-    go once the tokenizer finds another after it; the first one found that way, long enough, is the first piece."""
+    """Buffered stream that releases a reply's first piece sooner.
+
+    LiveKit releases a piece once another follows it; the first such piece of FIRST_MIN_CHARS+ is the first piece."""
 
     def __init__(self, rest) -> None:
         super().__init__(tokenizer=self._pieces, min_token_len=FIRST_MIN_CHARS, min_ctx_len=MIN_CONTEXT_CHARS)
@@ -107,11 +101,11 @@ class _FirstSoonerStream(token_stream.BufferedSentenceStream):
 
     def _pieces(self, text: str) -> list[tuple[str, int, int]]:
         if not self._first:
-            self._min_token_len = MIN_SENTENCE_CHARS  # the first piece has gone at its own length
+            self._min_token_len = MIN_SENTENCE_CHARS  # first piece released at its own threshold
             return self._rest(text)
         pieces = split(text, FIRST_MAX_WORDS, MIN_WORDS, FIRST_MIN_CHARS)
         if len(pieces) > 1 and len(pieces[0][0].strip()) >= FIRST_MIN_CHARS:
-            self._first = False  # this one goes now; the rest are cut as usual
+            self._first = False  # release now; the rest are cut normally
             timing.piece(pieces[0][0])
         return pieces
 

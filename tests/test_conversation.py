@@ -1,5 +1,4 @@
-"""Tests for a voice conversation's own state (jarvis.state.conversation): fresh for each conversation, reached by the
-code it runs, its threads included, and the profile it runs as. Run with: make test"""
+"""Tests for state.conversation: fresh state per conversation, visible to its threads, and its profile."""
 
 import asyncio
 import dataclasses

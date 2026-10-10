@@ -1,7 +1,4 @@
-"""Tests for JARVIS's web browser (jarvis.integrations.browser, jarvis.tools.browser): which addresses it opens, how
-page content comes back fenced as untrusted, captchas reported, the on/off and window settings, and that the tools are
-read-only and the voice brain's alone. Most use a fake browser; the last few drive a real one against a page served on
-this Mac, when Playwright and a browser are installed (else they're skipped). Run with: make test"""
+"""Tests for the browser integration and tools: addresses, captchas, fenced content, settings, request guard."""
 
 import asyncio
 import base64
@@ -76,7 +73,7 @@ def test_captchas_and_bot_checks_are_noticed(title, text, frames, status):
 @pytest.mark.parametrize("title, text, frames, status", [
     ("Example Domain", "This domain is for use in illustrative examples.", [], 200),
     ("Login", "Email\nPassword", ["https://www.google.com/recaptcha/api2/anchor?k=x&size=invisible"], 200),
-    # A long article that mentions captchas is the article, not a check
+    # A long article mentioning captchas is not a check
     ("How they work", "Are you a robot? " + "Captchas tell people from bots. " * 200, [], 200),
 ])
 def test_ordinary_pages_arent_taken_for_bot_checks(title, text, frames, status):
@@ -154,7 +151,7 @@ def test_the_browser_settings_are_kept_and_checked(monkeypatch):
     monkeypatch.delenv("JARVIS_BROWSER", raising=False)
     monkeypatch.delenv("JARVIS_BROWSER_WINDOW", raising=False)
     try:
-        assert config.browser_on() and not config.browser_headless()  # on, and shown, by default
+        assert config.browser_on() and not config.browser_headless()  # on and visible by default
         settings.set_preference("browser", "Off")
         settings.set_preference("browser_window", "headless")
         assert settings.get("browser") == "off" and not config.browser_on() and config.browser_headless()
@@ -181,7 +178,7 @@ def test_the_profile_is_as_secret_as_secrets(monkeypatch):
 
 
 class FakeBrowser:
-    """Stands in for the real one: the page it's on, and the addresses it was asked to open."""
+    """Fake browser: tracks the current page and records each address asked for."""
 
     def __init__(self):
         self.opened = []
@@ -291,7 +288,7 @@ def test_the_conversation_ending_closes_the_browser(monkeypatch):
 
 @pytest.fixture
 def lookups(monkeypatch) -> dict[str, list[str]]:
-    """What names look up to, instead of asking DNS."""
+    """Fake DNS answers by name."""
     found = {"example.com": ["93.184.215.14"], "rebind.example": ["93.184.215.14", "192.168.1.10"],
              "metadata.example": ["169.254.169.254"], "v6.example": ["2606:4700::1"]}
 
@@ -335,7 +332,7 @@ def test_the_guard_reads_https_and_plain_http_requests():
         b"GET http://example.com:8080/a/b?q=1 HTTP/1.1\r\nHost: example.com:8080\r\nProxy-Authorization: Basic x\r\n"
         b"Proxy-Connection: keep-alive\r\nConnection: keep-alive\r\nAccept: */*\r\n\r\n")
     assert where == ["GET", "example.com", 8080]
-    # One request a connection, in origin form, without the proxy's own headers, so the next is checked afresh
+    # One request per connection, origin form, no proxy headers, so each is checked afresh
     assert request == (b"GET /a/b?q=1 HTTP/1.1\r\nHost: example.com:8080\r\nAccept: */*\r\nConnection: close\r\n\r\n")
     assert browser.parse(b"CONNECT [2606:4700::1]:443 HTTP/1.1\r\n\r\n")[1:3] == ("2606:4700::1", 443)
     for first in ("GET ftp://example.com/ HTTP/1.1", "GET /relative HTTP/1.1", "CONNECT :443 HTTP/1.1"):
@@ -353,7 +350,7 @@ def test_a_refused_load_says_why():
 
 
 def test_the_browser_goes_through_the_guard_with_webrtc_kept_to_it(monkeypatch, tmp_path):
-    """The options Chrome is started with, from a stand-in for Playwright: the guard as its proxy, its own profile."""
+    """Reads Chrome's launch options via a fake Playwright."""
     pytest.importorskip("playwright")
     import playwright.async_api as api
 
@@ -367,7 +364,7 @@ def test_the_browser_goes_through_the_guard_with_webrtc_kept_to_it(monkeypatch, 
         return SimpleNamespace(chromium=SimpleNamespace(launch_persistent_context=launch))
 
     async def no_server(self):
-        self.server = None  # the sandbox may not let it listen
+        self.server = None  # the sandbox may not allow listening
 
     monkeypatch.setattr(api, "async_playwright", lambda: SimpleNamespace(start=start))
     monkeypatch.setattr(browser.Guard, "start", no_server)
@@ -392,15 +389,14 @@ CAPTCHA = b"<!doctype html><title>Just a moment...</title><p>Checking your brows
 
 @pytest.fixture
 def site(monkeypatch, tmp_path):
-    """A small site on 127.0.0.1, which the browser is let reach for the test (localhost stays refused), and what
-    was asked of it."""
+    """Small site on 127.0.0.1 (allowed for the test; localhost stays refused) that records requests."""
     pytest.importorskip("playwright")
     asked = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             asked.append(self.path)
-            if self.path == "/redirect":  # a page sending the browser on to this Mac's own address
+            if self.path == "/redirect":  # redirects to this Mac's own address
                 self.send_response(302)
                 self.send_header("Location", f"http://localhost:{port}/secret")
                 self.end_headers()
@@ -442,7 +438,7 @@ def test_a_real_browser_reads_a_page_and_never_reaches_localhost(site):
             second = await b.open(base + "/two")
             back = await b.back()
             blocked = await b.open(base + "/captcha")
-            with pytest.raises(Refused):  # sent on to localhost: the guard refuses it before it's asked for
+            with pytest.raises(Refused):  # redirect to localhost: the guard refuses it before any request
                 await b.open(base + "/redirect")
         finally:
             await b.close()
@@ -450,7 +446,7 @@ def test_a_real_browser_reads_a_page_and_never_reaches_localhost(site):
 
     first, found, tree, shot, second, back, blocked = asyncio.run(visit())
     assert first["title"] == "Test page" and "Welcome" in first["text"] and "Some words." in first["text"]
-    assert "Menu" not in first["text"]  # the main content, when the page marks it
+    assert "Menu" not in first["text"]  # main content only, when the page marks it
     assert not first["blocked"]
     assert [text for text, _ in found] == ["Second page", "Out"]
     assert 'heading "Welcome"' in tree and 'button "Buy now"' in tree

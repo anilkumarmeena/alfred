@@ -1,11 +1,10 @@
-// Making a photo small enough to send JARVIS: at most MAX_EDGE pixels on its long side, as a JPEG, drawn through a
-// canvas, which also turns it the right way up. jarvis.state.pictures checks it again on the Mac, and converts what
-// this browser can't draw (an iPhone's HEIC, off Safari) itself.
+// Downscale a photo to a JPEG at most MAX_EDGE on the long side (canvas also applies EXIF orientation).
+// The server re-checks and converts what the browser can't decode (e.g. HEIC outside Safari).
 
-export const MAX_EDGE = 1568;  // what Claude reads well: more costs tokens without it seeing more
+export const MAX_EDGE = 1568;  // Claude's useful max; larger costs tokens for no gain
 const QUALITY = 0.85;
 
-// The size to draw a w x h picture at: scaled down to fit max on its long side, never up.
+// Fit w x h within max on the long side; never upscale.
 export function fitSize(w: number, h: number, max = MAX_EDGE): [number, number] {
   const s = Math.min(1, max / Math.max(w, h, 1));
   return [Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s))];
@@ -13,7 +12,7 @@ export function fitSize(w: number, h: number, max = MAX_EDGE): [number, number] 
 
 async function decode(file: Blob): Promise<ImageBitmap | HTMLImageElement> {
   try { return await createImageBitmap(file); } catch {}
-  const url = URL.createObjectURL(file);  // older Safari: through an <img>
+  const url = URL.createObjectURL(file);  // fallback: decode via <img> (older Safari)
   try {
     const img = new Image();
     img.src = url;
@@ -22,7 +21,7 @@ async function decode(file: Blob): Promise<ImageBitmap | HTMLImageElement> {
   } finally { URL.revokeObjectURL(url); }
 }
 
-// The photo as a JPEG that fits, or the file as it is if this browser can't draw it.
+// JPEG that fits, or the original file if the browser can't decode it.
 export async function shrink(file: Blob): Promise<Blob> {
   let img: ImageBitmap | HTMLImageElement;
   try { img = await decode(file); } catch { return file; }
@@ -38,7 +37,7 @@ export async function shrink(file: Blob): Promise<Blob> {
   return blob ?? file;
 }
 
-// The blob's bytes as base64, for a JSON body.
+// Blob to base64, for a JSON body.
 export function base64(blob: Blob): Promise<string> {
   return new Promise((done, fail) => {
     const reader = new FileReader();

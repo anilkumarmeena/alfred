@@ -7,8 +7,7 @@ import preact from "@preact/preset-vite";
 const API = `http://127.0.0.1:${process.env.JARVIS_WEB_PORT || 8787}`;
 const SW = fileURLToPath(new URL("./public/sw.js", import.meta.url));
 
-// jarvis.web serves the page at / and its service worker at /sw.js, so the worker's scope is the whole
-// app. The dev server does the same for /sw.js; Vite itself redirects / to the base.
+// Serve /sw.js at the root in dev, as jarvis.web does, so the worker's scope is the whole app.
 function rootServiceWorker(): Plugin {
   return {
     name: "jarvis-root-service-worker",
@@ -23,9 +22,8 @@ function rootServiceWorker(): Plugin {
   };
 }
 
-// The build's id, in <meta name="jarvis-build">: a hash of its files' names, which carry their contents' hashes, so it
-// changes when anything the page loads does. jarvis.web reads it back from index.html, and an open page that sees a
-// different one reloads (src/lib/build.ts).
+// Build id in <meta name="jarvis-build">: hash of the content-hashed file names, so any change alters it.
+// jarvis.web reads it from index.html; open pages that see a different one reload (src/lib/build.ts).
 function buildId(): Plugin {
   return {
     name: "jarvis-build-id",
@@ -41,21 +39,21 @@ function buildId(): Plugin {
   };
 }
 
-// Built into web/dist, which jarvis.web serves. Everything but the page lives under /static/, the
-// URLs the manifest, the service worker and Home Screen installs already use.
+// Output to web/dist, served by jarvis.web. Assets live under /static/ (URLs the manifest, service worker and
+// Home Screen installs depend on).
 export default defineConfig({
   base: "/static/",
   plugins: [preact(), rootServiceWorker(), buildId()],
   server: {
     host: process.env.HOST || "127.0.0.1",
     port: Number(process.env.WEB_PORT || 5173),
-    proxy: { "/api": API },  // the token, push and log endpoints stay on jarvis.web
+    proxy: { "/api": API },
   },
   build: {
-    target: "es2020",  // iOS 16.4+, the oldest Safari that can take push
+    target: "es2020",  // iOS 16.4+, the oldest Safari with Web Push
     modulePreload: { polyfill: false },
     rollupOptions: {
-      // LiveKit is most of the bundle and changes far less often than the page: its own file stays cached.
+      // LiveKit is most of the bundle and rarely changes: separate chunk stays cached.
       output: { manualChunks: (id) => (id.includes("livekit-client") ? "livekit" : undefined) },
     },
     chunkSizeWarningLimit: 600,

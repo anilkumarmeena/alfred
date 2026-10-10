@@ -1,23 +1,14 @@
-"""Starts one MCP server for a Claude session:
-`python -m jarvis.integrations.mcp_launch NAME [--read-only] [--wait=SECONDS] [--probe]`.
+"""Starts one MCP server for a Claude session; the only place its secrets are decrypted.
 
-The CLI runs this, as the stdio command jarvis.integrations.mcp_servers gives it, so the MCP config on the CLI's command line
-names only the server, never a secret. This is the one place a server's secrets are decrypted (jarvis.core.vault, with the
-master key from .env, since the CLI's environment has it blanked): they go into the server's own environment, along
-with its settings from the database. The master key and JARVIS's other .env settings aren't passed on. Task sessions
-start this with every .env setting blank, which config takes as unset. With --read-only, the server's read-only
-arguments and settings are added, for research tasks.
+Usage: python -m jarvis.integrations.mcp_launch NAME [--read-only] [--wait=SECONDS] [--probe]
 
-An HTTP server is reached the same way, through a bridge from stdio to its URL (jarvis.integrations.mcp_bridge), which
-adds the header with its key, or its signed-in token, to each request.
+  --read-only    add the server's read-only args and settings (research tasks)
+  --wait=SECONDS voice brain: a call still running after SECONDS continues in the background as a task
+  --probe        start a disabled or unsorted server bare (no relay) just to list its tools
 
-Either way this process stays between the CLI and the server as a relay (jarvis.integrations.mcp_relay): each tool is
-marked read-only as JARVIS sorted it, so the CLI runs reads side by side; a tool the server runs as an MCP task is
-called as one; and with --wait (the voice brain's), a call still running after that many seconds carries on in the
-background as a task of the runner's, the relay outliving the session until it ends.
-
---probe starts a server that's off, or whose tools aren't sorted yet, to list them as it marks them itself, with no
-relay (mcp_servers.offered); JARVIS uses it while connecting one. Nothing it offers is used then.
+The CLI's MCP config names only the server, never a secret. Secrets go into the server's own environment; the master
+key and JARVIS's .env settings are never passed on. HTTP servers are reached via mcp_bridge. Except with --probe,
+this process stays between CLI and server as a relay (mcp_relay) that marks read-only tools and runs MCP tasks.
 """
 
 import asyncio
@@ -29,16 +20,16 @@ from jarvis.core import vault
 from jarvis.integrations import mcp_servers
 from jarvis.safety import host
 
-WAIT = "--wait="  # a call's seconds before it carries on in the background (config.CONNECTION_WAIT)
+WAIT = "--wait="  # seconds before a call continues in the background (config.CONNECTION_WAIT)
 
 def command(server: mcp_servers.Server, read_only: bool) -> tuple[list[str], dict[str, str]]:
-    """The server's command line and environment. Raises ValueError, or vault.VaultError, if it can't start."""
+    """Server argv and env. Raises ValueError or vault.VaultError if it can't start."""
     if server.transport != "stdio":
         raise ValueError(f"{server.name} is an HTTP server, reached through the bridge.")
     if not (program := which(server.command)):
         raise ValueError(f"{server.name}: {server.command} isn't installed.")
     argv = [program, *server.args, *(server.read_only_args if read_only else [])]
-    # Not JARVIS's own settings and keys (.env), which the voice brain's CLI inherits and task sessions blank
+    # Drop JARVIS's own .env settings and keys
     env = {k: v for k, v in host.scrubbed_env().items() if k != vault.VAR} | server.env
     env |= server.read_only_env if read_only else {}
     for var, secret in server.secret_env.items():

@@ -1,5 +1,4 @@
-"""Tests for what background tasks may read: the user's projects and JARVIS's voice session logs,
-never secrets. Run with: make test"""
+"""Tests for what background tasks may read: the user's projects and voice session logs, never secrets."""
 
 import asyncio
 import json
@@ -17,7 +16,7 @@ from jarvis.tasks import access, briefs, gate, worker
 
 @pytest.fixture
 def mac(tmp_path, monkeypatch):
-    """A projects folder holding JARVIS (with its secrets, Claude config and session logs) and one other project."""
+    """A projects folder with JARVIS (secrets, Claude config, session logs) and one other project."""
     projects = tmp_path / "projects"
     jarvis = projects / "jarvis"
     secrets = jarvis / "secrets"
@@ -104,7 +103,7 @@ def test_deny_rules_leave_the_session_logs_readable(mac):
     logs = mac["log"].resolve()
     for rule in rules:
         prefix = Path(rule.split("*")[0].rstrip("/"))
-        if "/**/secrets/**" in rule:  # covers the logs only if there's a secrets folder below its prefix
+        if "/**/secrets/**" in rule:  # covers logs only if a secrets folder is below its prefix
             assert not (logs.is_relative_to(prefix) and "secrets" in logs.relative_to(prefix).parts), rule
         elif "*" not in rule.removesuffix("/**"):
             assert not logs.is_relative_to(Path(rule.removesuffix("/**"))), rule

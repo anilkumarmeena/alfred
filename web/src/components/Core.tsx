@@ -1,4 +1,4 @@
-// The core: a canvas reactor inside a button. A tap connects, mutes or unmutes, or brings the mic back.
+// The core button: tap to connect, toggle mute, or recover the mic.
 import { useEffect, useRef } from "preact/hooks";
 import { mountReactor } from "../lib/reactor";
 import { activate, reactorInput } from "../state/session";

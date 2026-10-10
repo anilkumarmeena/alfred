@@ -1,15 +1,8 @@
-"""Native push through Apple's APNs: the same heartbeat alerts and task updates as Web Push (jarvis.notify.push), for
-the JARVIS iPhone app (jarvis-app), whose web view can't do Web Push.
+"""APNs push for the native iPhone app (its web view can't do Web Push); same alerts as jarvis.notify.push.
 
-When a voice session starts, the app asks iOS for its APNs device token and posts it to jarvis.server's
-/api/push/native with the passcode; it's kept in data/push_devices.json, one per device. send_push() in
-jarvis.notify.push sends to these as well as to the Web Push subscriptions. Each push is an HTTP/2 request to
-api.push.apple.com (or api.sandbox.push.apple.com, for builds Xcode installed), authenticated with a JWT
-signed by the APNs auth key from the Apple Developer account: secrets/apns_key.p8, with its key id in the vault
-(jarvis.core.credentials, entered in the control panel) and the team id in .env (JARVIS_APNS_TEAM_ID). APNs
-answering 410, or BadDeviceToken, means the app was removed or the token is stale, so the device is dropped.
-
-Needs httpx's HTTP/2 support: uv add 'httpx[http2]'.
+The app posts its device token to /api/push/native; tokens live in data/push_devices.json. Each push is an HTTP/2
+request authenticated with an ES256 JWT from secrets/apns_key.p8, its key id (vault) and JARVIS_APNS_TEAM_ID.
+Sandbox host for Xcode builds. A 410 or BadDeviceToken drops the device.
 """
 
 import asyncio
@@ -33,10 +26,10 @@ from jarvis.notify.push import MAX_DEVICES, SEND_TIMEOUT, TTL, _locked
 
 log = logging.getLogger("jarvis.notify.apns")
 HOSTS = {"production": "https://api.push.apple.com", "development": "https://api.sandbox.push.apple.com"}
-JWT_LIFETIME = 50 * 60  # APNs refuses tokens older than an hour, and ones renewed more than every 20 minutes
-MAX_PAYLOAD = 4096  # bytes, APNs's limit for an alert
+JWT_LIFETIME = 50 * 60  # APNs rejects tokens over 1 h old or refreshed more often than every 20 min
+MAX_PAYLOAD = 4096  # bytes, APNs alert limit
 _TOKEN = re.compile(r"^[0-9a-f]{64,200}$")
-_TOPIC = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,154}$")  # a bundle id
+_TOPIC = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,154}$")  # bundle id
 GONE = {"BadDeviceToken", "Unregistered", "DeviceTokenNotForTopic"}
 NOT_SET_UP = ("APNs isn't set up on the Mac: put the APNs auth key in secrets/apns_key.p8, enter its key ID in the "
               "control panel (Settings → Logins and keys) and set JARVIS_APNS_TEAM_ID in .env, then restart JARVIS.")
@@ -54,7 +47,7 @@ def configured() -> bool:
 
 
 def validate(info: object) -> dict:
-    """What the app posts: its token (hex), which APNs server it's for, and its bundle id."""
+    """Validate the app's registration: hex token, environment and bundle id (topic)."""
     if not isinstance(info, dict):
         raise ValueError("device must be an object")
     token = str(info.get("token", "")).lower()
@@ -70,7 +63,7 @@ def validate(info: object) -> dict:
 
 
 class Devices:
-    """The app installs to push to, in a JSON file shared by the web app and the task runner."""
+    """Registered app installs; JSON file shared by the web app and task runner."""
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or profile.current().push_devices
@@ -118,7 +111,7 @@ _jwt: tuple[float, str] | None = None
 
 
 def provider_token(now: float | None = None) -> str:
-    """The ES256 JWT APNs wants in the authorization header, reused for 50 minutes."""
+    """ES256 provider JWT, cached for JWT_LIFETIME."""
     global _jwt
     now = time.time() if now is None else now
     if _jwt and now - _jwt[0] < JWT_LIFETIME:
@@ -137,9 +130,8 @@ def provider_token(now: float | None = None) -> str:
 
 def payload(title: str, body: str, url: str, tag: str, subtitle: str = "", category: str = "",
             data: dict | None = None) -> bytes:
-    """The alert, and where tapping it opens JARVIS (the app reads `url`), within APNs's size limit. A `category`
-    gives the notification the app's action buttons for it; `data` (such as an approval's id and nonce) goes
-    alongside `url` for them."""
+    """APNs JSON payload, body trimmed to fit MAX_PAYLOAD. `category` selects the app's action buttons; `data` (e.g.
+    an approval's id and nonce) is merged alongside `url`."""
     title, body = title[:120], body[:1000]
     alert = {"title": title, "body": body} | ({"subtitle": subtitle[:120]} if subtitle else {})
     aps = {"alert": alert, "sound": "default", "thread-id": tag or "jarvis"} | ({"category": category} if category else {})
@@ -156,11 +148,11 @@ def _client() -> httpx.AsyncClient:
 
 
 async def _send(client, dev: dict, data: bytes, jwt: str, tag: str) -> str:
-    """"ok" if APNs took it, "gone" if the device token is no longer good, else "failed"."""
+    """"ok", "gone" (token no longer valid) or "failed"."""
     headers = {"authorization": f"bearer {jwt}", "apns-topic": dev["topic"], "apns-push-type": "alert",
                "apns-priority": "10", "apns-expiration": str(int(time.time()) + TTL)}
     if tag:
-        headers["apns-collapse-id"] = tag[:64]  # a newer push about the same task replaces the older one
+        headers["apns-collapse-id"] = tag[:64]  # newer push with the same tag replaces the old
     try:
         r = await client.post(f"{HOSTS[dev['environment']]}/3/device/{dev['token']}", content=data, headers=headers)
     except Exception as e:
@@ -176,14 +168,14 @@ async def _send(client, dev: dict, data: bytes, jwt: str, tag: str) -> str:
         if r.status_code == 410 or reason in GONE:
             return "gone"
         detail = f"HTTP {r.status_code} {reason}".strip()
-    # the device token stays out of the log
+    # never log the device token
     log.warning("APNs push to %s (%s) failed: %s", dev.get("device") or "a device", dev["environment"], detail)
     return "failed"
 
 
 async def send(title: str, body: str, url: str = "/", tag: str = "", devices: Devices | None = None,
                subtitle: str = "", category: str = "", data: dict | None = None) -> int:
-    """Show a notification on every registered app. Returns how many APNs accepted."""
+    """Notify every registered app; returns how many APNs accepted."""
     store = devices or Devices()
     targets = store.all()
     if not targets:
@@ -194,7 +186,7 @@ async def send(title: str, body: str, url: str = "/", tag: str = "", devices: De
     try:
         jwt = await asyncio.to_thread(provider_token)
         client = _client()
-    except Exception as e:  # an unreadable key, or httpx without h2
+    except Exception as e:  # unreadable key, or httpx without h2
         log.warning("APNs push not sent: %s: %s", type(e).__name__, e if isinstance(e, ImportError) else "")
         return 0
     async with client:

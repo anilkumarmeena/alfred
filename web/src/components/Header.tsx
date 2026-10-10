@@ -1,5 +1,5 @@
-// The top bar: the link LED and session timer, connection quality, the clock, and the toggles: search (⌘K), the
-// transcript, the activity list (or, before the passcode is in, notifications) and the desktop's panel column.
+// Top bar: link LED and timer, connection quality, clock, and toggles (⌘K, transcript, activity or notifications
+// before login, desktop panel column).
 import { toggleNotifications } from "../state/push";
 import { activityOpen, activityUnread, needYou, paletteOpen, setSideOff, shown, sideOff, toggleActivity, unseen, wide } from "../state/panel";
 import { captions, clock, connected, linkText, passcode, pushOn, quality, setPasscode, showLogin, toggleCaptions } from "../state/store";

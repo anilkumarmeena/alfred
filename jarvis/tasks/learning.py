@@ -1,33 +1,12 @@
-"""The learning review: once a conversation is over, JARVIS reads it back and suggests what to keep in long-term memory,
-so the user needn't say "remember" every time.
+"""Learning review: after a conversation ends, suggest what to keep (memory, to-dos, skills, vocabulary).
 
-It runs inside the task runner, beside the heartbeat. Every CHECK_SECONDS it looks at data/conversations for exchanges
-it hasn't reviewed yet (data/learning.json keeps how far it has read: a day's file and a byte offset), and reviews them
-when the conversation is over:
-
-  hung up    the voice agent tells the runner its session ended (POST /learn); END_GRACE_SECONDS later, unless the
-             user is talking again by then (a dropped call that reconnected), the review runs
-  quiet      nothing new has been logged for LEARNING_QUIET_MINUTES
-
-Never per message: each review takes every exchange since the last one, and moves the mark past them before saving
-anything, so no exchange is reviewed twice. The first time it runs, what's already logged is only marked as read, like
-the heartbeat's first look at mail. A conversation with too few of the user's own words is passed over without a call.
-
-The review is one call to LEARNING_MODEL (Haiku unless set), with no tools: its reply is read only as JSON listing
-suggestions, which become the edits of a hidden `review` task, through the same checks as any task's suggested edits
-(jarvis.tasks.data_edits). The runner applies the routine ones straight away, as JARVIS would; the rest (rewriting
-or deleting memory lines, adding to-dos) are marked needs_yes and announced, so JARVIS asks first. A review with
-nothing worth keeping says nothing at all. JARVIS_LEARNING=off turns it off.
-
-It also reads the user's own requests from the last HISTORY_DAYS of earlier conversations, and the skills JARVIS has
-(jarvis.skills.home), so when the user has asked for the same kind of multi-step workflow again and again it can
-suggest a skill for it, or a better version of one that this conversation showed falling short. A skill is always
-needs_yes: the review never saves, installs or switches on a skill itself.
-
-And it spots words speech recognition misheard (the user corrected one, spelt it out, or a word in their line makes no
-sense but plainly stands for a name or term), and adds them to the speech vocabulary (jarvis.state.vocabulary) with
-what Whisper wrote, applied without asking like a routine memory fact, as a wrong word costs little. A mishearing is
-kept only if it's in the user's own words in the conversation, and isn't an everyday word (data_edits).
+Runs in the task runner every CHECK_SECONDS. Progress mark (day file + byte offset) lives in data/learning.json.
+A conversation is over when the voice agent reports a hang-up (POST /learn) and END_GRACE_SECONDS pass without a
+reconnect, or after LEARNING_QUIET_MINUTES of silence. The mark moves before saving, so nothing is reviewed twice;
+on first run the existing log is only marked read. Too few user words: skipped without a call.
+One tool-less LEARNING_MODEL call returns JSON suggestions, saved as a hidden `review` task's edits (data_edits
+checks). Routine ones (new facts, misheard words) apply at once; rewrites, deletions, to-dos and skills need a yes.
+Recent requests (HISTORY_DAYS) let it propose skills for repeated workflows. JARVIS_LEARNING=off disables it.
 """
 
 import asyncio
@@ -49,18 +28,17 @@ from jarvis.skills import home as skills
 from jarvis.state import memory, vocabulary
 
 log = logging.getLogger("jarvis.tasks.learning")
-KIND, TITLE = "review", "learning review"  # the task its suggestions are kept on
+KIND, TITLE = "review", "learning review"  # hidden task holding a review's suggestions
 CHECK_SECONDS = 60
-END_GRACE_SECONDS = 60  # after a hang-up, how long a reconnect has to carry the same conversation on
-MIN_WORDS = 12  # of the user's own, in the exchanges since the last review; fewer have nothing to learn from
-MAX_CHARS = 30_000  # of the conversation sent to the model: the latest part, if it's longer
+END_GRACE_SECONDS = 60  # after a hang-up, window for a reconnect to continue the conversation
+MIN_WORDS = 12  # min user words since the last review
+MAX_CHARS = 30_000  # conversation sent to the model (latest part)
 MAX_SUGGESTIONS = 5
-MAX_WORDS = 5  # misheard words, apart from the suggestions
-HISTORY_DAYS = 21  # of earlier conversations whose requests the review sees, to tell a workflow asked for again and again
-HISTORY_CHARS = 8_000  # of those requests: the latest
+MAX_WORDS = 5  # misheard words, on top of MAX_SUGGESTIONS
+HISTORY_DAYS = 21  # lookback for spotting repeated workflows
+HISTORY_CHARS = 8_000  # cap on those requests (latest kept)
 CALL_TIMEOUT = 180
-# A review that fails on a passing error (jarvis.brain.retry) is tried again 15 minutes later, twice; then, or on any
-# other error, the exchanges are passed over
+# Transient failures retry twice, 15 minutes apart; after that, or on other errors, the exchanges are skipped
 RETRIES = retry.Policy(waits=(15 * 60, 15 * 60))
 _ENTRY = re.compile(r"^\[(\d{2}:\d{2})\] ", re.MULTILINE)
 
@@ -71,25 +49,25 @@ def system() -> str:
 
 @dataclass
 class Unread:
-    """The exchanges logged since the last review."""
-    parts: list[tuple[str, str]]  # (day, text) for each day's file, oldest first
-    file: str  # where reading stopped: the newest day's file, and its size then
+    """Exchanges logged since the last review."""
+    parts: list[tuple[str, str]]  # (day, text) per day file, oldest first
+    file: str  # new mark: newest day file and its size
     offset: int
-    written: float  # when anything was last logged
+    written: float  # mtime of the newest file
 
 
 def _user_lines(text: str) -> list[str]:
-    """What the user said in these log entries, line by line (JARVIS's replies and announcements left out)."""
+    """The user's own lines in these log entries."""
     return re.findall(rf"^\[\d{{2}}:\d{{2}}\] {re.escape(profile.name())}: (.*)$", text, re.MULTILINE)
 
 
 def user_words(text: str) -> int:
-    """How many words the user said in these log entries (JARVIS's replies and announcements don't count)."""
+    """Word count of the user's own lines."""
     return sum(len(line.split()) for line in _user_lines(text))
 
 
 def span(parts: list[tuple[str, str]]) -> str:
-    """'2026-10-07 14:02 to 14:35', from the first and last entries' times."""
+    """Time range of the entries, e.g. '2026-10-07 14:02 to 14:35'."""
     times = [(day, t) for day, text in parts for t in _ENTRY.findall(text)]
     if not times:
         return parts[0][0] if parts else ""
@@ -98,8 +76,7 @@ def span(parts: list[tuple[str, str]]) -> str:
 
 
 def transcript(parts: list[tuple[str, str]], limit: int = MAX_CHARS) -> str:
-    """The exchanges as the model reads them, each day under its date; only the latest `limit` characters of a long
-    conversation, cut at an entry."""
+    """Exchanges grouped under day headings, trimmed to the latest `limit` chars at an entry boundary."""
     text = "\n".join(f"## {day}\n{chunk.strip()}\n" for day, chunk in parts)
     if len(text) > limit:
         text = text[-limit:]
@@ -109,13 +86,13 @@ def transcript(parts: list[tuple[str, str]], limit: int = MAX_CHARS) -> str:
 
 
 def numbered() -> list[tuple[str, str]]:
-    """Long-term memory's lines as (section, line), in the order the review numbers them from 1."""
+    """Memory lines as (section, line), in the 1-based order the review references."""
     found = memory.facts()
     return [(s, line) for s in memory.SECTIONS for line in found[s]]
 
 
 def memory_block(lines: list[tuple[str, str]]) -> str:
-    """Memory as the review reads it: each section with how full it is, its lines numbered."""
+    """Memory for the prompt: each section with its usage and numbered lines."""
     out = []
     for s in memory.SECTIONS:
         mine = [(n, line) for n, (sec, line) in enumerate(lines, 1) if sec == s]
@@ -126,8 +103,7 @@ def memory_block(lines: list[tuple[str, str]]) -> str:
 
 
 def earlier(mark: dict | None, now: datetime, days: int = HISTORY_DAYS, limit: int = HISTORY_CHARS) -> str:
-    """The user's own words in the conversations logged before the mark (what's being reviewed starts there), from
-    the last `days` days, one line each with its date and time: the latest `limit` characters."""
+    """User lines from the last `days` days before the mark, one per line with date and time, latest `limit` chars."""
     folder = profile.current().conversations
     if mark is None or not folder.exists():
         return ""
@@ -148,13 +124,13 @@ def earlier(mark: dict | None, now: datetime, days: int = HISTORY_DAYS, limit: i
 
 
 def vocabulary_block() -> str:
-    """The speech vocabulary as the review reads it: each word, with what it's been misheard as."""
+    """Speech vocabulary for the prompt, with known mishearings."""
     found = vocabulary.entries()
     return "\n".join(f"- {e.word}" + (f" (heard as: {', '.join(e.heard)})" if e.heard else "") for e in found) or "(none yet)"
 
 
 def said_by_user(parts: list[tuple[str, str]]) -> str:
-    """The user's own lines in these log entries, one per line."""
+    """The user's own lines across `parts`, newline-joined."""
     return "\n".join(line for _, text in parts for line in _user_lines(text))
 
 
@@ -171,8 +147,7 @@ def request(parts: list[tuple[str, str]], lines: list[tuple[str, str]], now: dat
 
 
 def parse(reply: str) -> list[dict]:
-    """The suggestions in the model's reply, at most MAX_SUGGESTIONS and MAX_WORDS misheard words; [] for anything
-    that isn't the JSON asked for."""
+    """Suggestions from the model reply, capped at MAX_SUGGESTIONS (+ MAX_WORDS vocabulary); [] if not valid JSON."""
     found = re.search(r"\{.*\}", reply or "", re.DOTALL)
     try:
         listed = json.loads(found[0])["suggestions"] if found else []
@@ -190,14 +165,16 @@ def _same(a: str, b: str) -> bool:
 
 
 def _fact(line: str) -> str:
-    """A memory line's fact, without its dash and date."""
+    """Memory line without its leading dash and trailing date."""
     return re.sub(r"\s*\(\d{4}-\d{2}-\d{2}\)$", "", line.removeprefix("- ")).strip()
 
 
 def to_edits(suggestions: list[dict], lines: list[tuple[str, str]], today: str, said: str = "") -> list[dict]:
-    """The suggestions as propose_data_edit's arguments (jarvis.tasks.data_edits), memory lines named by number
-    turned into their exact text. A misheard word keeps only the mishearings found in `said`, the user's own words.
-    What can't be made sense of is left out; data_edits.check judges the rest."""
+    """Convert suggestions to propose_data_edit args, resolving line numbers to memory text.
+
+    Mishearings are kept only if they occur in `said` (the user's words). Malformed suggestions are dropped;
+    data_edits.check validates the rest.
+    """
     out = []
     for s in suggestions:
         action, reason = s.get("action"), " ".join(str(s.get("reason") or "").split()) or "From the conversation."
@@ -238,7 +215,7 @@ def to_edits(suggestions: list[dict], lines: list[tuple[str, str]], today: str, 
 
 
 async def model_review(prompt: str) -> str:
-    """One short call to LEARNING_MODEL with no tools; returns its reply."""
+    """One tool-less LEARNING_MODEL call; returns the reply text."""
     from jarvis.brain.sdk import ask
 
     return (await ask(prompt, system(), LEARNING_MODEL, timeout=CALL_TIMEOUT))[0]
@@ -248,8 +225,10 @@ Save = Callable[[list[dict], str], Awaitable[object]]
 
 
 class Learning:
-    """Watches the conversation log and reviews each conversation once it's over. `save(edits, about)` keeps what a
-    review suggests (Runner.learned); `review(prompt)` is the model call."""
+    """Watch the conversation log and review each finished conversation.
+
+    `save(edits, about)` stores suggestions (Runner.learned); `review(prompt)` is the model call.
+    """
 
     def __init__(
         self,
@@ -266,16 +245,16 @@ class Learning:
         self.quiet = quiet_minutes * 60
         self.clock = clock
         self.sleep = sleep
-        self.ended_at: float | None = None  # when the voice agent last said its session ended
+        self.ended_at: float | None = None  # last hang-up reported by the voice agent
         self.failures, self.retry_at = 0, 0.0
 
     @property
     def state_file(self) -> Path:
-        """How far through the conversations it has read: the profile's record, unless given one."""
+        """Read-progress file (profile default unless overridden)."""
         return self._state_file or profile.current().learning_file
 
     def ended(self) -> None:
-        """The voice session has ended: review it shortly, unless the user reconnects and carries on."""
+        """Note a hang-up; review after END_GRACE_SECONDS unless the user reconnects."""
         self.ended_at = self.clock()
 
     async def run(self) -> None:
@@ -300,8 +279,7 @@ class Learning:
         write_atomic(self.state_file, json.dumps({"file": file, "offset": offset, "at": self.clock()}))
 
     def unread(self) -> Unread | None:
-        """What's been logged since the mark, or None. With no mark yet, it's set at the end of the log first, so the
-        exchanges from before the review existed aren't reviewed as a backlog."""
+        """Exchanges since the mark, or None. With no mark, set it at the log's end (no backlog review)."""
         folder = profile.current().conversations
         files = sorted(folder.glob("????-??-??.md")) if folder.exists() else []
         if not files:
@@ -316,29 +294,29 @@ class Learning:
                 continue
             data = f.read_bytes()
             start = mark["offset"] if f.name == mark["file"] else 0
-            start = 0 if start > len(data) else start  # the file was cut short by hand: read it all again
+            start = 0 if start > len(data) else start  # file truncated by hand: reread it all
             if text := data[start:].decode(errors="replace"):
                 parts.append((f.stem, text))
             end = len(data)
         return Unread(parts, newest.name, end, newest.stat().st_mtime) if parts else None
 
     def due(self, written: float, now: float) -> bool:
-        """Whether the conversation is over: hung up a little while ago without carrying on, or quiet long enough."""
+        """Whether the conversation is over: hang-up grace elapsed, or quiet long enough."""
         if self.ended_at is not None:
-            if written > self.ended_at:  # talking again since: the conversation carries on
+            if written > self.ended_at:  # talking again: conversation continues
                 self.ended_at = None
             elif now - self.ended_at >= END_GRACE_SECONDS:
                 return True
         return now - written >= self.quiet
 
     async def check(self) -> bool:
-        """One look at the log; reviews a conversation that's over. Returns whether a review ran."""
+        """Review a finished conversation if one is due. Returns whether a review ran."""
         now = self.clock()
         if (unread := self.unread()) is None or not self.due(unread.written, now) or now < self.retry_at:
             return False
         self.ended_at = None
         words = sum(user_words(text) for _, text in unread.parts)
-        if words < MIN_WORDS:  # announcements alone, or a word or two: nothing to learn from
+        if words < MIN_WORDS:
             self._move_mark(unread.file, unread.offset)
             log.info("learning review: %d words from %s since the last one, skipped", words, profile.name())
             return False
@@ -347,16 +325,16 @@ class Learning:
         prompt = request(unread.parts, lines, stamp, earlier(self._mark(), stamp), skills_block(), vocabulary_block())
         try:
             reply = await self.review(prompt)  # model_review has its own timeout
-        except Exception as e:  # the type alone keeps the conversation out of the log
+        except Exception as e:  # log only the type: keep conversation text out of logs
             self.failures += 1
             kind = RETRIES.kind(e)
             log.warning("learning review call failed (try %d, %s): %s", self.failures, kind, type(e).__name__)
             if (wait := RETRIES.wait(self.failures, kind)) is not None:
                 self.retry_at = now + wait
                 return False
-            reply = ""  # given up on: these exchanges are passed over
+            reply = ""  # give up: skip these exchanges
         self.failures, self.retry_at = 0, 0.0
-        self._move_mark(unread.file, unread.offset)  # before saving, so nothing is ever reviewed twice
+        self._move_mark(unread.file, unread.offset)  # before saving: never review twice
         edits = to_edits(parse(reply), lines, f"{stamp:%Y-%m-%d}", said_by_user(unread.parts))
         when = span(unread.parts)
         log.info("learning review of %s: %d suggestions", when, len(edits))

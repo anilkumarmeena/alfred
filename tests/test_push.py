@@ -1,4 +1,4 @@
-"""Tests for Web Push (jarvis.notify.push) and its hooks in the web app and the task runner. Run with: make test"""
+"""Tests for jarvis.notify.push: subscriptions, the VAPID key, sending, runner task events, web endpoints."""
 
 import asyncio
 import json
@@ -105,7 +105,7 @@ def test_vapid_key_is_made_once_and_kept_private(tmp_path, caplog):
 
 
 class FakePushService:
-    """Stands in for pywebpush.webpush_async; answers each endpoint with the given HTTP status."""
+    """Fake pywebpush.webpush_async; answers each endpoint with the given HTTP status."""
 
     def __init__(self, status: dict[str, int] | None = None, error: Exception | None = None) -> None:
         self.status, self.error, self.calls = status or {}, error, []
@@ -113,7 +113,7 @@ class FakePushService:
     async def __call__(self, subscription_info, data, vapid_private_key, vapid_claims, **kw):
         self.calls.append({"info": subscription_info, "data": json.loads(data), "claims": dict(vapid_claims),
                            "key": vapid_private_key} | kw)
-        vapid_claims["aud"] = "https://filled.in.by.webpush"  # what the real one does to the dict it's given
+        vapid_claims["aud"] = "https://filled.in.by.webpush"  # the real one mutates the claims dict it's given
         if self.error:
             raise self.error
         code = self.status.get(subscription_info["endpoint"], 201)
@@ -143,7 +143,7 @@ def test_send_push_reaches_every_device(devices, tmp_path, monkeypatch):
     for c in service.calls:
         assert c["info"]["keys"] == KEYS
         assert c["data"] == {"title": "Task 3 is done", "body": "Task 3, retry logic, is done.", "url": "/?task=3", "tag": "task-3"}
-        assert c["claims"] == {"sub": push.contact()}  # fresh each time: no aud left over from another push service
+        assert c["claims"] == {"sub": push.contact()}  # fresh each time: no aud left from another push service
         assert c["ttl"] == push.TTL
         assert isinstance(c["key"], push.Vapid)
     assert (tmp_path / "vapid.pem").exists()
@@ -187,7 +187,7 @@ def test_long_text_is_trimmed_to_fit_a_push(devices, tmp_path, monkeypatch):
 
 @pytest.fixture
 def pushes(tmp_path, monkeypatch):
-    """A runner on a temporary database, with Mac notifications off and pushes recorded."""
+    """Runner on a temp database, Mac notifications off, pushes recorded."""
     use_profile(monkeypatch, tmp_path)
     monkeypatch.setattr(events, "PUSH_ENABLED", True)
     sent = []
@@ -259,7 +259,7 @@ def test_push_failure_in_the_runner_is_only_logged(pushes, monkeypatch, caplog):
 
 
 class Request:
-    """Just enough of aiohttp's request for the handlers (the sandboxed test run can't open a port)."""
+    """Minimal aiohttp request for the handlers (the sandboxed test run can't open a port)."""
 
     remote = "100.64.0.2"
 

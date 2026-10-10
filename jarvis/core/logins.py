@@ -1,14 +1,8 @@
-"""Who may use JARVIS from the phone and browsers: each person's login, a name and a passcode of their own, kept in
-secrets/logins.json (mode 600, out of every task's and command's reach like the rest of secrets/) as a salted scrypt
-hash, never the passcode itself. jarvis.server checks every request's passcode here. The passcode alone says whose it
-is, so no two logins share one, and the JARVIS app, which sends only a passcode, needs no change. Logins are added,
-given new passcodes and removed in the control panel (Settings → Logins and keys), never by voice; every login can
-reach the whole panel, as the one shared passcode could.
+"""Phone/browser logins: name + passcode, stored as salted scrypt hashes in secrets/logins.json (0600).
 
-The first login comes from JARVIS_PASSCODE in .env: the passcode every device shared before, or the one
-jarvis.setup_local makes. adopt(), as the web service starts and at the end of setup, makes it the login of the user
-(the owner's profile name), so the devices already using it keep working, and takes it out of .env. With no login at all,
-JARVIS_PASSCODE is checked as it is, so nobody is locked out.
+The passcode alone identifies the login, so passcodes are unique. Managed only in the control panel, never by voice;
+every login reaches the whole panel. adopt() turns JARVIS_PASSCODE from .env into the owner's login and strips it
+from .env. With no logins, JARVIS_PASSCODE is checked directly so nobody is locked out.
 """
 
 import base64
@@ -27,15 +21,15 @@ from jarvis.core.files import write_atomic
 log = logging.getLogger("jarvis.core.logins")
 
 VAR = "JARVIS_PASSCODE"
-FILE = config.LOGINS_FILE  # the tests point it elsewhere
+FILE = config.LOGINS_FILE  # overridden by tests
 NAME = re.compile(r"[A-Za-z][A-Za-z0-9 ._'-]{0,31}")
-SHORTEST, LONGEST = 6, 128  # a passcode's length
-_SCRYPT = {"n": 2**14, "r": 8, "p": 1}  # 16 MB and about 50 ms a check
+SHORTEST, LONGEST = 6, 128  # passcode length bounds
+_SCRYPT = {"n": 2**14, "r": 8, "p": 1}  # 16 MB, ~50 ms per check
 _MAXMEM = 64 * 1024 * 1024
-USED_EVERY = 300  # seconds: how often a login's last use is written down
+USED_EVERY = 300  # seconds between writes of a login's last use
 _lock = threading.Lock()
-# Passcodes already checked, as an HMAC under this process's own key of the login's hash and the passcode, so a request
-# after the first costs no scrypt; a new passcode changes the hash, and with it the entry
+# Cache of verified (hash, passcode) pairs as HMACs under a per-process key, so repeat requests skip scrypt.
+# A passcode change alters the hash, invalidating the entry.
 _pepper = os.urandom(32)
 _known: set[str] = set()
 
@@ -75,14 +69,14 @@ def _memo(stored: str, passcode: str) -> str:
 
 
 def first_name() -> str:
-    """The first login's name: the owner's (jarvis.core.profile), when JARVIS knows it and it can name one."""
+    """Name for the first login: the owner's profile name if known and valid, else "Owner"."""
     name = profile.owner().name
-    known = name != "the user"  # the profile's stand-in for a name it doesn't know
+    known = name != "the user"  # profile placeholder for an unknown name
     return name if known and NAME.fullmatch(name) else "Owner"
 
 
 def check(passcode: str) -> str | None:
-    """The name of the login whose passcode this is, or None. With no login yet, JARVIS_PASSCODE's, as the user's."""
+    """Name of the login with this passcode, or None. With no logins, checks JARVIS_PASSCODE."""
     if not passcode:
         return None
     rows = _read()
@@ -99,12 +93,12 @@ def check(passcode: str) -> str | None:
 
 
 def ready() -> bool:
-    """Whether anyone can log in: a login, or JARVIS_PASSCODE for the first."""
+    """Whether any login (or JARVIS_PASSCODE) exists."""
     return bool(_read() or os.environ.get(VAR, "").strip())
 
 
 def listed() -> list[dict]:
-    """The logins, oldest first: name, created and last used, never the hash."""
+    """Logins, oldest first: name, created, last used (never the hash)."""
     return [{"name": r["name"], "created": r["created"], "used": r.get("used")} for r in _read()]
 
 
@@ -116,8 +110,7 @@ def _named(rows: list[dict], name: str) -> dict:
 
 
 def _new_passcode(rows: list[dict], passcode: str, mine: dict | None = None) -> str:
-    """The passcode's hash, or ValueError when it's too short or long, or another login's (the passcode says whose
-    login it is)."""
+    """Hash a new passcode; ValueError if wrong length or already used by another login."""
     if not SHORTEST <= len(passcode) <= LONGEST or passcode != passcode.strip():
         raise ValueError(f"A passcode is {SHORTEST} to {LONGEST} characters, with no spaces at either end.")
     if any(matches(r["hash"], passcode) for r in rows if r is not mine):
@@ -159,7 +152,7 @@ def remove(name: str) -> None:
 
 
 def used(name: str) -> None:
-    """Notes that the login was just used, at most every USED_EVERY seconds."""
+    """Record a login's use, writing at most every USED_EVERY seconds."""
     now = time.time()
     with _lock:
         rows = _read()
@@ -170,13 +163,12 @@ def used(name: str) -> None:
 
 
 def adopt() -> str:
-    """With no login yet, makes JARVIS_PASSCODE the user's login and takes it out of .env. Returns the login's name,
-    or "" when there was nothing to do."""
+    """If there are no logins, make JARVIS_PASSCODE the owner's and strip it from .env; return the name or ""."""
     passcode, name = os.environ.get(VAR, "").strip(), first_name()
     with _lock:
         if _read() or not passcode:
             return ""
-        # As it is, though shorter than a new one may be: it's the passcode the user's devices already have
+        # Skip length rules: existing devices already use this passcode
         _write([{"name": name, "hash": hashed(passcode), "created": time.time(), "used": None}])
     vault.unset_env([VAR])
     log.warning("the passcode in .env is now %s's login", name)

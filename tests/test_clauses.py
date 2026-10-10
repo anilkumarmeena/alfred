@@ -1,5 +1,4 @@
-"""Long sentences reach Kokoro in pieces cut at their pauses (jarvis.voice.clauses), so speaking starts before the
-whole sentence is rendered; short sentences, numbers and abbreviations stay whole, and no piece is a scrap."""
+"""Tests for voice.clauses: long sentences split at pauses; short ones, numbers, abbreviations kept whole."""
 
 import asyncio
 import json

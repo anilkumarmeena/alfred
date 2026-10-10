@@ -1,29 +1,11 @@
-"""Commands run on the Mac itself, outside Claude Code's sandbox: background tasks' host_run and start_job
-(jarvis.tasks.worker), and the voice shell's long jobs (jarvis.safety.shell).
+"""Run commands on the Mac outside Claude Code's sandbox: task host_run/start_job and voice-shell long jobs.
 
-A task's host command runs under `sandbox-exec` with `profile()`, a Seatbelt profile that allows by
-default and closes only what must stay closed, whatever the command or a script it wrote tries:
-
-  - reading secrets: JARVIS's secrets/ (all but the voice session logs) and .env, the home folder's
-    logins and keys (~/.ssh but its known_hosts and config, ~/.aws, ~/Library/Keychains, ...), and
-    .env files, keys and credentials anywhere in the home folder (the lists in jarvis.safety.commands)
-  - writing JARVIS's own files: everything in its folder except the task worktrees, the task cache
-    and task records (data/tasks/), and git's objects; so tasks.db (the project list and the
-    to-do list among it), the push files, memory, secrets/ and JARVIS's code stay as they are
-  - writing logins, shell start-up files and launch agents in the home folder
-  - connecting to the runner's socket (data/runner.sock)
-  - running the setuid /bin/ps, which could read other processes' environments, MCP servers' tokens among them
-
-The one exception is a package install that sandboxes its own steps (commands.own_sandbox: brew install, upgrade,
-uninstall), which macOS won't start inside this profile ("sandbox_apply: Operation not permitted"). Such a line is
-risky, so a task runs it only with the user's yes, and nothing else may ride along in it; then it runs with
-`walls=False`, as the voice shell's jobs and scheduled commands do, still without JARVIS's keys (`task_env()`).
-
-The network is open, and writes elsewhere are allowed: Xcode's DerivedData, devicectl and package
-caches need them. Nor does the command get JARVIS's keys: `task_env()` leaves out everything in .env,
-and anything named like a token, secret or password. It keeps the SSH agent (SSH_AUTH_SOCK), which
-signs without showing a key, so an approved git push or ssh works; both are risky commands, so each
-one still needs the user's yes.
+Task commands run under `sandbox-exec` with `profile()`: allow by default, deny only
+  - reading secrets (JARVIS secrets/ and .env, home logins/keys, secret-named files in home; commands.py lists)
+  - writing JARVIS's folder, except task worktrees, cache, data/tasks/ and git objects
+  - writing home logins, shell start-up files and launch agents; the runner socket; setuid /bin/ps
+Network and other writes stay open (Xcode, package caches). `task_env()` strips .env keys and credential-named
+vars but keeps SSH_AUTH_SOCK. Approved brew/port installs (commands.own_sandbox) can't nest and run `walls=False`.
 
   uv run python -m jarvis.safety.host check    runs the profile's own checks on this Mac
 """
@@ -53,29 +35,27 @@ from jarvis.safety.commands import HOME_SECRETS, JARVIS_SECRETS, SECRET_DIRS, se
 log = logging.getLogger("jarvis.safety.host")
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
-PS = "/bin/ps"  # setuid root, so it can show any process's environment
-SHELL = ("/bin/zsh", "-lc")  # a login shell, so Homebrew's and the user's PATH apply
-TASK_DATA_DIR = DATA_DIR / "tasks"  # research tasks' folders, and task jobs
+PS = "/bin/ps"  # setuid root: can show any process's environment
+SHELL = ("/bin/zsh", "-lc")  # login shell, for Homebrew's and the user's PATH
+TASK_DATA_DIR = DATA_DIR / "tasks"  # research task folders and task jobs
 TASK_JOBS_DIR = TASK_DATA_DIR / "jobs"
-MAX_OUTPUT = 30_000  # characters of a host_run's output the task sees: the start and the end
-RUN_TIMEOUT = 600  # the longest a host_run may take; longer work is a job
+MAX_OUTPUT = 30_000  # chars of host_run output kept (head and tail)
+RUN_TIMEOUT = 600  # seconds; longer work should be a job
 
-# In the home folder, secret wherever they are: commands.SECRET_DIRS and SECRET_FILES, within one path component
+# commands.SECRET_DIRS / SECRET_FILES, matched within one path component
 _SECRET_DIR_NAMES = "(" + "|".join(re.escape(d) for d in sorted(SECRET_DIRS)) + ")"
 _SECRET_FILE_NAMES = "(" + secret_file_names("[^/]", pem=False) + ")"
-# .pem files are keys too, except the certificate bundles TLS needs, which packages carry
+# .pem files are keys, except CA bundles shipped by packages
 _PEM_KEPT = r"/(site-packages|dist-packages|node_modules|Cellar)/|/(ca|cert|certs|cacert|ca-bundle|ca-certificates)\.pem$"
-# Home-folder files a command could use to run something later, outside any wall
+# Home files that could run something later, outside the walls
 _STARTUP_FILES = [".zshrc", ".zprofile", ".zshenv", ".zlogin", ".bashrc", ".bash_profile", ".profile", ".gitconfig"]
 _STARTUP_DIRS = ["Library/LaunchAgents", ".config/git"]
-# Names of variables that carry a credential, whatever set them
+# Variable names that carry a credential
 SENSITIVE = re.compile(r"TOKEN|SECRET|PASSWORD|PASSCODE|API_?KEY|PRIVATE_KEY|MASTER_KEY|CREDENTIAL|AUTH",
                         re.IGNORECASE)
-# Kept all the same: the SSH agent signs with the user's keys without ever showing them, so an approved
-# git push or ssh works while the key files stay unreadable
+# Kept: the SSH agent signs without exposing keys, so approved git push/ssh works
 _KEPT = {"SSH_AUTH_SOCK"}
-# In ~/.ssh, what ssh needs to connect through the agent: which hosts are known, and the host settings.
-# No key is in them; the key files, and everything else there, stay unreadable
+# The only readable ~/.ssh files (no keys), needed to connect via the agent
 _SSH_READABLE = ["known_hosts", "known_hosts2", "config"]
 
 
@@ -83,7 +63,7 @@ _SSH_READABLE = ["known_hosts", "known_hosts2", "config"]
 
 
 def _real(path: Path | str) -> str:
-    """A path as Seatbelt sees it: absolute, with symlinks (like /tmp) resolved."""
+    """Path as Seatbelt sees it: absolute, symlinks (e.g. /tmp) resolved."""
     return os.path.realpath(os.path.expanduser(str(path)))
 
 
@@ -92,7 +72,7 @@ def _str(text: str) -> str:
 
 
 def _rx(text: str) -> str:
-    """Escapes a path for a Seatbelt regex. A quote can't be escaped in #"...", so it matches any character."""
+    """Escape for a Seatbelt regex. Quotes can't be escaped in #"...", so they become `.`."""
     return re.sub(r"([.^$*+?()\[\]{}|\\])", r"\\\1", text).replace('"', ".")
 
 
@@ -101,7 +81,7 @@ def _any(*filters: str) -> str:
 
 
 def profile(home: Path | str | None = None) -> str:
-    """The Seatbelt profile a task's host commands run under."""
+    """Seatbelt profile for a task's host commands."""
     home = _real(home or Path.home())
     root = _real(ROOT)
     secret_paths = [_real(p) for p in JARVIS_SECRETS] + [_real(p.replace("~", home, 1)) for p in HOME_SECRETS]
@@ -132,33 +112,29 @@ def profile(home: Path | str | None = None) -> str:
         f"(deny file-write* {writes})",
         f"(deny file-read* file-write* (literal {_str(sock)}))",
         f"(deny network-outbound (remote unix-socket (path-literal {_str(sock)})))",
-        # The setuid ps is the one way to read another process's environment, where an MCP server's token is.
-        # Seatbelt won't start a setuid program anyway; this says so, whatever a later macOS does.
+        # Setuid ps can read other processes' environments (MCP tokens). Seatbelt already blocks setuid; be explicit.
         f"(deny process-exec (literal {_str(PS)}))",
     ])
 
 
 def env_keys() -> set[str]:
-    """The names of JARVIS's own settings and keys: everything in .env, and the variables of the keys it moved from
-    there into the vault, which LiveKit's worker puts back into its process's environment."""
+    """Names of JARVIS's own settings and keys: .env plus vault-held vars that get re-exported into the env."""
     return set(dotenv_values(ROOT / ".env")) | {*credentials.VARS, logins.VAR}
 
 
 def scrubbed_env() -> dict[str, str]:
-    """The runner's environment without JARVIS's own keys (everything in .env)."""
+    """The runner's environment minus JARVIS's own keys."""
     secret = env_keys()
     return {k: v for k, v in os.environ.items() if k not in secret}
 
 
 def task_env() -> dict[str, str]:
-    """What a task's host command gets: scrubbed_env() without anything else that looks like a credential,
-    except the SSH agent's socket."""
+    """scrubbed_env() minus credential-named vars, keeping SSH_AUTH_SOCK."""
     return {k: v for k, v in scrubbed_env().items() if k in _KEPT or not SENSITIVE.search(k)}
 
 
 def walled(argv: list[str], home: Path | str | None = None) -> list[str]:
-    """argv, run inside the host profile. Raises RuntimeError where sandbox-exec is missing, rather than
-    running the command without its walls."""
+    """Wrap argv in the host profile. Raises RuntimeError if sandbox-exec is missing (never runs unwalled)."""
     if not Path(SANDBOX_EXEC).exists():
         raise RuntimeError("sandbox-exec isn't on this Mac, so host commands can't run safely")
     return [SANDBOX_EXEC, "-p", profile(home), *argv]
@@ -169,8 +145,8 @@ def walled(argv: list[str], home: Path | str | None = None) -> list[str]:
 
 @dataclass
 class Ran:
-    code: int | None  # None: stopped at the timeout
-    output: str  # stdout and stderr together, the middle cut out past MAX_OUTPUT
+    code: int | None  # None: killed at the timeout
+    output: str  # stdout+stderr, middle elided past MAX_OUTPUT
     seconds: float
 
     def text(self) -> str:
@@ -179,7 +155,7 @@ class Ran:
 
 
 class _Output:
-    """A command's output as it comes: the start, and a rolling end, so a flood of it can't fill memory."""
+    """Bounded output buffer: fixed head plus rolling tail."""
 
     def __init__(self, limit: int = MAX_OUTPUT) -> None:
         self.limit, self.head, self.tail, self.size = limit, bytearray(), bytearray(), 0
@@ -200,7 +176,7 @@ class _Output:
 
 
 def _send(pid: int, sig: int, group: bool = True) -> None:
-    """Sends `sig` to the process group led by `pid` (or to `pid` alone), if it's still there to get it."""
+    """Send `sig` to the process group led by `pid` (or `pid` alone); ignore if gone."""
     try:
         (os.killpg if group else os.kill)(pid, sig)
     except (ProcessLookupError, PermissionError):
@@ -214,9 +190,10 @@ def _kill(pid: int) -> None:
 async def run(command: str, cwd: Path, timeout: float = RUN_TIMEOUT, walls: bool = True,
               shell: tuple[str, ...] = SHELL, env: dict[str, str] | None = None,
               started: Callable[[int], None] | None = None) -> Ran:
-    """Run a command on the Mac, in its own session, and wait for it and whatever it started that keeps its
-    output open (at most `timeout` seconds, after which they're killed). `env` adds to its environment, and
-    `started` hears the session's id (the shell's pid) as it starts."""
+    """Run in a new session; wait for it and anything holding its output, up to `timeout` s, then kill.
+
+    `env` extends task_env(). `started` receives the session id (shell pid) on start. Cancellation kills it.
+    """
     argv = [*shell, command]
     start = time.monotonic()
     proc = await asyncio.create_subprocess_exec(
@@ -236,12 +213,12 @@ async def run(command: str, cwd: Path, timeout: float = RUN_TIMEOUT, walls: bool
         code = await proc.wait()
     except TimeoutError:
         _kill(proc.pid)
-        try:  # something it started in a session of its own may still hold the output open
+        try:  # a child in its own session may still hold the output open
             await asyncio.wait_for(reader, 5)
         except TimeoutError:
             pass
         code = None
-    except asyncio.CancelledError:  # the task stopped: so does its command
+    except asyncio.CancelledError:
         _kill(proc.pid)
         reader.cancel()
         raise
@@ -249,13 +226,11 @@ async def run(command: str, cwd: Path, timeout: float = RUN_TIMEOUT, walls: bool
 
 
 # ── Which processes are whose ───────────────────────────────────
-# Every host command runs in a session of its own, and whatever it starts stays in that session unless it leaves
-# on purpose. A session is known by its leader's pid and when that started, since a pid can come back as another
-# process's once its own has gone.
+# Each host command gets its own session. A session is identified by (leader pid, start time), since pids get reused.
 
 
 class _BsdInfo(ctypes.Structure):
-    """macOS's struct proc_bsdinfo (sys/proc_info.h), as proc_pidinfo fills it in: ps without the setuid ps."""
+    """macOS struct proc_bsdinfo (sys/proc_info.h), filled by proc_pidinfo; avoids the setuid ps."""
     _fields_ = [(n, ctypes.c_uint32) for n in ("flags", "status", "xstatus", "pid", "ppid", "uid", "gid", "ruid", "rgid",
                                                 "svuid", "svgid", "rfu")] + [
         ("comm", ctypes.c_char * 16), ("name", ctypes.c_char * 32),
@@ -299,34 +274,33 @@ def _start(info: _BsdInfo) -> float:
 
 
 def started_at(pid: int) -> float | None:
-    """When a process started, in seconds since the epoch, or None if it isn't running."""
+    """Process start time (epoch seconds), or None if not running."""
     return _start(info) if (info := _info(pid)) else None
 
 
 def _unchanged(pid: int, started: float) -> bool:
-    """Whether `pid` is still the process that started at `started`, or isn't running at all: never another one that
-    has been given its pid since."""
+    """Whether `pid` is still the process started at `started`, or not running (never a reused pid)."""
     now = started_at(pid)
     return now is None or abs(now - started) <= 2
 
 
 def in_sessions(pid: int, sessions: Iterable[tuple[int, float]]) -> bool:
-    """Whether a running process is in one of these sessions, each (its leader's pid, when it started)."""
+    """Whether a running process is in one of `sessions`, each (leader pid, start time)."""
     if pid <= 1:
         return False
     try:
         sid = os.getsid(pid)
     except OSError:
         return False
-    # The leader may have ended, leaving the rest; if a process has its pid now, it must be the same one
+    # The leader may have exited; if its pid is in use, it must still be the same process
     return any(sid == leader and _unchanged(leader, at) for leader, at in sessions)
 
 
-_SZOMB = 5  # a process that has ended but not yet been reaped (sys/proc.h)
+_SZOMB = 5  # zombie: ended, not yet reaped (sys/proc.h)
 
 
 def _session(leader: int) -> Iterator[tuple[int, _BsdInfo]]:
-    """Each process in a session, whatever process group it's in, with what proc_pidinfo says of it."""
+    """(pid, info) for every process in a session, across process groups."""
     for pid in _pids():
         try:
             if os.getsid(pid) != leader:
@@ -338,12 +312,12 @@ def _session(leader: int) -> Iterator[tuple[int, _BsdInfo]]:
 
 
 def session_members(leader: int) -> list[int]:
-    """The live processes in a session (its leader among them, while it runs), whatever process group they're in."""
+    """Live (non-zombie) pids in a session, across process groups."""
     return [pid for pid, info in _session(leader) if info.status != _SZOMB]
 
 
 def lingering(leader: int) -> list[tuple[int, str]]:
-    """The processes still running in a session whose leader has ended: (pid, program name) for each, oldest first."""
+    """(pid, program name) of non-leader processes in a session, oldest first."""
     found = sorted((_start(info), pid, (info.name or info.comm).decode(errors="replace"))
                    for pid, info in _session(leader) if pid != leader)
     return [(pid, name) for _, pid, name in found]
@@ -351,8 +325,8 @@ def lingering(leader: int) -> list[tuple[int, str]]:
 
 # ── Long jobs ───────────────────────────────────────────────────
 
-# Runs the command, records its exit status, and puts up a Mac notification, even when nobody's listening any more.
-# Not `status`: that's read-only in zsh, and assigning it would end the script before the exit file is written.
+# Runs the command, writes its exit status, and posts a Mac notification even if nobody is listening.
+# Not `status`: it's read-only in zsh and assigning it would abort before the exit file is written.
 _JOB_SCRIPT = """(eval "$JARVIS_JOB_COMMAND")
 exit_code=$?
 echo "$exit_code" > "$JARVIS_JOB_EXIT"
@@ -365,16 +339,16 @@ exit "$exit_code"
 """
 RUNNING = "running"
 STOPPED = "stopped"
-STOP_GRACE = 5.0  # seconds a stopped job has to end after SIGTERM, before whatever is left gets SIGKILL
+STOP_GRACE = 5.0  # seconds between SIGTERM and SIGKILL
 
 
 def outcome(code: int) -> str:
-    """How a job that ended with exit status `code` went, for saying: 'is done', or 'failed, with exit code 2'."""
+    """Spoken outcome: 'is done' or 'failed, with exit code N'."""
     return "is done" if code == 0 else f"failed, with exit code {code}"
 
 
 def alive(pid: int) -> bool:
-    """Whether a process with this pid is running (one of another user's counts)."""
+    """Whether a pid is running (including other users' processes)."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -385,17 +359,18 @@ def alive(pid: int) -> bool:
 
 
 class Jobs:
-    """Long commands, started in their own session apart from whoever started them: the CLI restarting,
-    a voice session ending or the runner restarting leaves them running. Each has a record (N.json),
-    its output (N.log) and, once it's done, its exit status (N.exit) in `folder`, or N.stopped if `stop`
-    ended it. A task's jobs carry its id (`task`) and run inside the host profile (`walls`)."""
+    """Long commands in their own session, surviving CLI, voice-session and runner restarts.
+
+    Files in `folder`: N.json (record), N.log (output), N.exit (status) or N.stopped. Task jobs carry `task` and run
+    inside the host profile when `walls`.
+    """
 
     def __init__(self, folder: Path, shell: tuple[str, ...] = SHELL, notify: bool = True, walls: bool = False) -> None:
         self.folder, self.shell, self.notify, self.walls = folder, shell, notify, walls
-        self.poll = 2.0  # seconds between checks on a running job
+        self.poll = 2.0  # seconds
         self.grace = STOP_GRACE
         self._watchers: set[asyncio.Task] = set()
-        self._procs: dict[int, subprocess.Popen] = {}  # the jobs this process started, so `stop` can reap them
+        self._procs: dict[int, subprocess.Popen] = {}  # jobs started here, so `stop` can reap them
 
     def _records(self) -> list[dict]:
         records = []
@@ -409,11 +384,11 @@ class Jobs:
     def launch(self, command: str, title: str, cwd: Path, task: int | None = None, env: dict[str, str] | None = None,
                report: bool = False, extra: dict | None = None, job_id: int | None = None,
                walls: bool = True) -> dict:
-        """Start a job; returns its record. Raises ValueError if `cwd` isn't a folder, or `job_id`, the number it's
-        given rather than the next free one, is taken. `env` adds to its environment. A job that `report`s ends its
-        output with a line saying what it made, which is said as it ends. `extra` goes in its record as it is.
-        `walls` False runs this one outside the host profile, for an approved install that sandboxes itself
-        (commands.own_sandbox), still with the environment these jobs get."""
+        """Start a job; returns its record.
+
+        Raises ValueError if `cwd` isn't a folder or an explicit `job_id` is taken. `report`: its last output line is
+        spoken at the end. `extra` is merged into the record. `walls=False` skips the profile (commands.own_sandbox).
+        """
         if not cwd.is_dir():
             raise ValueError(f"{cwd} isn't a folder.")
         self.folder.mkdir(parents=True, exist_ok=True)
@@ -427,7 +402,7 @@ class Jobs:
             "JARVIS_JOB_TITLE": title, "JARVIS_JOB_NOTIFY": "1" if self.notify else "",
         }
         argv = [*self.shell, _JOB_SCRIPT]
-        # Popen rather than asyncio's subprocesses, which kill their child when the event loop lets go of them
+        # Popen, not asyncio subprocesses, which kill their child when the loop drops them
         with open(f"{base}.log", "wb") as out:
             proc = subprocess.Popen(walled(argv) if self.walls and walls else argv, cwd=cwd, env=env,
                                     stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
@@ -450,14 +425,14 @@ class Jobs:
         while (code := proc.poll()) is None:
             await asyncio.sleep(self.poll)
         self._procs.pop(job["id"], None)
-        if self._stopped(job):  # whoever stopped it has said so
+        if self._stopped(job):  # `stop` reports it
             log.warning("job %s was stopped (%s)", job["id"], code)
             return
         log.warning("job %s ended with %s", job["id"], code)
         self.ended(job, code)
 
     def ended(self, job: dict, code: int) -> None:
-        """Called as a job this process started ends on its own, not by `stop`."""
+        """Hook: a job started here ended on its own (not via `stop`)."""
 
     def _stopped(self, job: dict) -> bool:
         return (self.folder / f"{job['id']}.stopped").exists()
@@ -480,20 +455,20 @@ class Jobs:
                 "state": self._state(job), "minutes": round((now - job["started"]) / 60), "output_tail": end}
 
     def status(self, task: int | None = None) -> list[dict]:
-        """The jobs of the last day (only the task's, if one is given), newest last, each with the end of its output."""
+        """Last day's jobs (optionally one task's), oldest first, each with its output tail."""
         now = time.time()
         return [self._view(job, now) for job in self._records()
                 if now - job["started"] <= 86400 and (task is None or job.get("task") == task)]
 
     def sessions(self, task: int) -> list[tuple[int, float]]:
-        """The sessions a task's jobs run in, as in_sessions takes them: each job's pid, and when it started."""
+        """(pid, start time) per job of `task`, as in_sessions takes them."""
         return [(job["pid"], job["started"]) for job in self._records() if job.get("task") == task]
 
     def get(self, job_id: int, task: int | None = None) -> dict | None:
         return next((j for j in self._records() if j["id"] == job_id and (task is None or j.get("task") == task)), None)
 
     def _job(self, job_id: int, task: int | None) -> dict:
-        """`get`, but ValueError for a job that isn't there."""
+        """`get`, raising ValueError if missing."""
         if (job := self.get(job_id, task)) is None:
             raise ValueError(f"There's no job {job_id}" + (f" of task {task}." if task is not None else "."))
         return job
@@ -502,29 +477,27 @@ class Jobs:
         return self.folder / f"{job_id}.log"
 
     async def wait(self, job_id: int, timeout: float, task: int | None = None, tail: int = 3000) -> dict:
-        """Wait for a job to end, at most `timeout` seconds; returns how it stands, with the end of its output."""
+        """Wait up to `timeout` s for a job to end; returns its view with output tail."""
         job = self._job(job_id, task)
         deadline = time.monotonic() + timeout
         while self._state(job) == RUNNING and time.monotonic() < deadline:
             await asyncio.sleep(min(self.poll, max(0.0, deadline - time.monotonic())))
         return self._view(job, time.time(), tail)
 
-    # A job is stopped by its record alone: its session's leader is the pid the record holds, checked against when the
-    # job started, so a pid since reused by some other process is never signalled.
+    # Stopping uses the record's pid checked against its start time, so a reused pid is never signalled.
 
     def _ours(self, job: dict) -> bool:
-        """Whether the job's pid is still its own: running since the job started, or not running at all (so what's
-        left of its session is the job's)."""
+        """Whether the job's pid is still its own (or not running, so its session's leftovers are the job's)."""
         return _unchanged(job["pid"], job["started"])
 
     def _left(self, job: dict) -> list[int]:
-        """What's still running of a job: the live processes in its session."""
+        """Live pids in the job's session."""
         if (proc := self._procs.get(job["id"])) is not None:
-            proc.poll()  # reaps the leader once it ends, so it doesn't linger as a zombie
+            proc.poll()  # reap the leader so it doesn't linger as a zombie
         return session_members(job["pid"]) if self._ours(job) else []
 
     def _signal(self, job: dict, sig: int) -> None:
-        """Sends `sig` to the job's whole process group, and to anything of its session that left the group."""
+        """Send `sig` to the job's process group and to session members outside it."""
         if not self._ours(job):
             return
         _send(job["pid"], sig)
@@ -532,12 +505,13 @@ class Jobs:
             _send(pid, sig, group=False)
 
     async def stop(self, job_id: int, task: int | None = None) -> dict:
-        """Stop a running job: SIGTERM to all of it, then SIGKILL to whatever is left after `grace` seconds. It's
-        marked stopped (N.stopped), so its watcher doesn't report it as failed. Returns how it stands now. Raises
-        ValueError for a job that isn't there or has already ended."""
+        """SIGTERM the whole job, SIGKILL leftovers after `grace` s; writes N.stopped first. Returns its view.
+
+        Raises ValueError if the job is missing or already ended.
+        """
         job = self._job(job_id, task)
         state = self._state(job)
-        # Not "running" may still leave something behind if its leader alone was killed: that's stopped too
+        # A non-running job may still have children if only its leader died: stop those too
         if state == STOPPED or (self.folder / f"{job_id}.exit").exists() or not self._left(job):
             raise ValueError(f"job {job_id}, {job['title']}, isn't running"
                              + (f" ({state})." if state != RUNNING else "."))
@@ -551,7 +525,7 @@ class Jobs:
         return self._view(job, time.time())
 
     async def _gone(self, job: dict, timeout: float) -> bool:
-        """Waits at most `timeout` seconds for all of a job to end; whether it has."""
+        """Wait up to `timeout` s for the whole job to end; returns whether it did."""
         deadline = time.monotonic() + timeout
         while self._left(job):
             if time.monotonic() >= deadline:
@@ -571,7 +545,7 @@ class Jobs:
 
 # ── Checking the walls on this Mac ──────────────────────────────
 
-def _checks() -> list[tuple[str, str, bool]]:  # (what, command, whether it should work)
+def _checks() -> list[tuple[str, str, bool]]:  # (what, command, should succeed)
     return [
         ("reads JARVIS's .env", f"head -c1 {ROOT / '.env'}", False),
         ("reads secrets/", f"ls {JARVIS_SECRETS[0]}", False),
@@ -595,7 +569,7 @@ def _checks() -> list[tuple[str, str, bool]]:  # (what, command, whether it shou
 
 
 async def check() -> bool:
-    """Runs each check under the profile; True if every one came out as it should."""
+    """Run each check under the profile; True if all behave as expected."""
     good = True
     for what, command, should in _checks():
         ran = await run(command, TASK_CACHE_DIR if TASK_CACHE_DIR.is_dir() else Path.home(), timeout=60)

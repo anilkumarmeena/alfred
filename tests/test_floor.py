@@ -1,6 +1,4 @@
-"""Tests for when JARVIS speaks unprompted (jarvis.voice.floor): announcements wait while JARVIS is thinking
-or speaking, while the user is speaking or their words are on the way, and while a question JARVIS asked is
-open; they go straight after, once each, in order. Run with: make test"""
+"""Tests for jarvis.voice.floor: announcements wait while anyone talks or a question is open, then go once, in order."""
 
 import asyncio
 
@@ -30,7 +28,7 @@ class Clock:
 
 
 class Session:
-    """Stands in for the LiveKit AgentSession: its states, and what it was asked to say."""
+    """Fake LiveKit AgentSession: its states and what it was asked to say."""
 
     def __init__(self) -> None:
         self.agent_state = "listening"
@@ -75,8 +73,10 @@ async def settle() -> None:
 
 
 def running(coro_fn):
-    """Runs `coro_fn(clock, floor, announcements, session, brain, seen, stt)` with the announcer going alongside;
-    `seen` collects the task ids marked as heard."""
+    """Run `coro_fn(clock, floor, announcements, session, brain, seen, stt)` alongside the announcer.
+
+    `seen` collects the task ids marked as heard.
+    """
 
     async def main():
         clock, session, brain, stt, seen = Clock(), Session(), Brain(), STT(), []
@@ -123,9 +123,9 @@ def test_announcements_wait_while_jarvis_thinks_or_speaks_or_the_user_speaks():
 def test_the_users_words_hold_announcements_until_the_reply_starts():
     clock = Clock()
     floor = Floor(clock)
-    floor.heard("   ")  # nothing heard
+    floor.heard("   ")  # blank: nothing heard
     assert floor.held("listening", "listening") is None
-    floor.heard("Sure, go ahead.")  # the turn detector is still deciding whether they've finished
+    floor.heard("Sure, go ahead.")  # the turn detector hasn't decided they've finished
     assert floor.held("listening", "listening")
     floor.turn()
     assert floor.held("listening", "listening") is None
@@ -193,14 +193,14 @@ def test_an_announcement_goes_straight_away_when_nothing_holds_it():
         assert announcements.add(Announcement("The build is done.", "[That was task 5 ... edits]", [5]))
         await settle()
         assert session.said == ["The build is done."]
-        assert brain.notes == ["The build is done. [That was task 5 ... edits]"]  # said, then what's for it alone
+        assert brain.notes == ["The build is done. [That was task 5 ... edits]"]  # said, then the note meant only for the brain
         assert seen == [[5]]
 
     running(check)
 
 
 def test_an_email_announcement_waits_for_the_answer_to_a_question_and_the_reply_to_it():
-    """13:43: an email alert landed right after "Shall I do both?", and the answer got confused with it."""
+    """Otherwise an alert right after a question gets mixed up with its answer."""
 
     async def check(clock, floor, announcements, session, brain, seen, stt):
         floor.said("Shall I do both?")
@@ -249,12 +249,10 @@ def test_announcements_are_said_once_each_in_order_and_one_that_asks_holds_the_r
 
 
 def test_the_same_announcement_isnt_said_twice():
-    """15:10 and 15:31: a finished task was announced twice in a row."""
-
     async def check(clock, floor, announcements, session, brain, seen, stt):
         session.agent_state = "speaking"
         assert announcements.add(Announcement("Task 115 is done.", seen=[115]))
-        assert not announcements.add(Announcement("Task 115 is done.", seen=[115, 116]))  # still waiting
+        assert not announcements.add(Announcement("Task 115 is done.", seen=[115, 116]))  # still waiting to be said
         session.agent_state = "listening"
         await settle()
         assert not announcements.add(Announcement("Task 115 is done.", seen=[115]))  # just said
@@ -262,7 +260,7 @@ def test_the_same_announcement_isnt_said_twice():
         assert session.said == ["Task 115 is done."]
         assert seen == [[115, 116]]
         clock.now += REPEAT_MINUTES * 60 + 1
-        assert announcements.add(Announcement("Task 115 is done."))  # long enough ago to be news again
+        assert announcements.add(Announcement("Task 115 is done."))  # old enough to be news again
         await settle()
         assert session.said == ["Task 115 is done.", "Task 115 is done."]
 
@@ -276,7 +274,7 @@ def test_an_announcement_that_fails_isnt_marked_heard_and_asks_nothing():
         await settle()
         assert seen == [] and not floor.question
         session.fail = False
-        assert announcements.add(Announcement("Task 9 has a question: which one?", seen=[9]))  # not taken as said
+        assert announcements.add(Announcement("Task 9 has a question: which one?", seen=[9]))  # a failed say doesn't count as said
         await settle()
         assert session.said == ["Task 9 has a question: which one?"] and seen == [[9]]
 
@@ -284,7 +282,7 @@ def test_an_announcement_that_fails_isnt_marked_heard_and_asks_nothing():
 
 
 def test_a_request_left_unanswered_is_closed_before_an_announcement():
-    """So a yes after the announcement isn't taken as the answer to the request asked before it."""
+    """So a yes after the announcement isn't taken as answering the earlier request."""
 
     async def main():
         clock, session, brain = Clock(), Session(), Brain()
@@ -335,7 +333,7 @@ def test_the_agent_opens_a_question_with_a_reply_that_asks_one_and_closes_it_on_
 
 
 def test_an_approval_waits_for_the_answer_to_the_brains_question():
-    """15:02: a task's request cut in after "Shall I go ahead?", so "Sure, go ahead" went to the wrong thing."""
+    """Otherwise "Sure, go ahead" answers the request instead of the brain's question."""
 
     async def main():
         session, floor = Session(), Floor(Clock())
@@ -350,6 +348,6 @@ def test_an_approval_waits_for_the_answer_to_the_brains_question():
         await settle()
         task.cancel()
         assert session.said == ["Task 117 wants to delete files. Okay to go ahead?"]
-        assert floor.question  # its own question now holds announcements until the yes or no
+        assert floor.question  # the brain's question holds announcements until the yes or no
 
     asyncio.run(main())

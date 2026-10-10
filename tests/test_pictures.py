@@ -1,7 +1,4 @@
-"""Tests for picture understanding: photos the user sends from the page, which reach Claude with their next turn as
-image content blocks (jarvis.state.pictures, jarvis.brain.cli, jarvis.server), and screen_look, which shows Claude the
-Mac's screen only when the user asks (jarvis.tools.screen). Nothing here really runs sips or screencapture.
-Run with: make test"""
+"""Tests for pictures: user photos reach Claude with the next turn; screen_look only on request (sips faked)."""
 
 import asyncio
 import base64
@@ -24,7 +21,7 @@ from jarvis.tools import screen
 
 
 def png(width: int = 1, height: int = 1) -> bytes:
-    """A real PNG header of the given size (its pixels are only ever read by sips, which the tests don't run)."""
+    """Real PNG header of the given size (pixels are only read by sips, which tests don't run)."""
     def chunk(kind: bytes, data: bytes) -> bytes:
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
     return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
@@ -32,7 +29,7 @@ def png(width: int = 1, height: int = 1) -> bytes:
 
 
 def jpeg(width: int, height: int) -> bytes:
-    """A JPEG's start: an APP0 segment, then the start of frame that says its size."""
+    """JPEG start: APP0, then the start-of-frame giving its size."""
     app0 = b"\xff\xe0" + struct.pack(">H", 16) + b"JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
     sof = b"\xff\xc0" + struct.pack(">HBHHB", 11, 8, height, width, 1) + b"\x01\x11\x00"
     return b"\xff\xd8" + app0 + sof + b"\xff\xd9"
@@ -46,7 +43,7 @@ def folders(tmp_path, monkeypatch):
 
 @pytest.fixture
 def sips(monkeypatch):
-    """macOS's sips and screencapture, faked: each call is noted, and what it writes is a small JPEG."""
+    """Fake sips/screencapture: records each call and writes a small image."""
     calls = []
 
     def run(args):
@@ -122,7 +119,7 @@ def test_a_small_heic_becomes_a_jpeg_without_being_scaled_up(folders, monkeypatc
 
 def test_another_format_sips_reads_becomes_a_jpeg(folders, monkeypatch):
     def run(args):
-        if "-g" in args:  # a TIFF, say: no header dimensions() reads, but sips knows its size
+        if "-g" in args:  # e.g. a TIFF: no header dimensions() reads, but sips knows its size
             return pictures.subprocess.CompletedProcess(args, 0, "  pixelWidth: 3000\n  pixelHeight: 2000\n", "")
         pictures.Path(args[-1]).write_bytes(jpeg(1568, 1045))
         return pictures.subprocess.CompletedProcess(args, 0, "", "")
@@ -156,7 +153,7 @@ def test_several_photos_come_oldest_first_and_a_big_one_is_made_fit(folders, sip
     first = pictures.save_photo(png(10, 10))
     time.sleep(0.01)
     second = pictures.save_photo(jpeg(4032, 3024))
-    assert second.endswith(".jpg") and sips  # sips made it smaller
+    assert second.endswith(".jpg") and sips  # sips shrank it
     assert [p.name for p in pictures.take()] == sorted([first, second])
 
 
@@ -222,8 +219,8 @@ def test_a_screenshot_is_silent_made_fit_and_kept_in_screens(folders, sips):
     shot = pictures.screenshot()
     assert shot.parent == pictures.screens() and shot.suffix == ".jpg" and shot.is_file()
     assert sips[0][:5] == ["screencapture", "-x", "-m", "-t", "png"]
-    assert "-Z" in sips[1]  # a Retina screen is bigger than MAX_EDGE
-    assert [p for p in pictures.screens().iterdir()] == [shot]  # nothing half made left behind
+    assert "-Z" in sips[1]  # a Retina screen exceeds MAX_EDGE
+    assert [p for p in pictures.screens().iterdir()] == [shot]  # no half-made file left behind
 
 
 def test_a_screenshot_macos_refuses_says_what_to_do(folders, monkeypatch):
@@ -280,7 +277,7 @@ def run_tool(said: str, before: str = ""):
 def test_screen_look_is_refused_unless_the_user_asked(folders, sips):
     content, is_error = run_tool("summarise this web page for me")
     assert is_error and "Not taken" in content and "ask them" in content
-    assert sips == []  # no screenshot was taken
+    assert sips == []  # no screenshot taken
 
 
 def test_screen_look_shows_claude_the_screenshot(folders, sips):
@@ -313,7 +310,7 @@ def test_the_voice_brain_gets_screen_look_and_the_guidance_but_tasks_dont():
 # ── A photo reaches Claude with the next turn ──────────────────
 
 class PhotoClient:
-    """Stands in for ClaudeSDKClient, keeping what each query sent."""
+    """Fake ClaudeSDKClient that keeps what each query sent."""
 
     def __init__(self) -> None:
         self.sent: list = []
@@ -352,7 +349,7 @@ def test_a_photo_sent_goes_to_claude_as_an_image_with_the_users_words(folders, s
     assert text["text"].endswith(f"what's this?\n[{profile.name()} sent a photo with this, attached.]")
     assert logged[-1] == ("what's this? [sent a photo]", "A cat.")
 
-    asyncio.run(talk("and now?"))  # the photo went with the turn before
+    asyncio.run(talk("and now?"))  # the photo went with the previous turn
     assert isinstance(client.sent[1], str) and "photo" not in client.sent[1]
     assert logged[-1] == ("and now?", "A cat.")
     assert conversation.current().heard.before == "A cat."  # what the second turn answered

@@ -1,6 +1,4 @@
-"""The MCP servers' list (jarvis.integrations.mcp_servers), the launcher that alone decrypts their secrets
-(jarvis.integrations.mcp_launch), sorting a server's tools from its own markings, and GitHub and GitLab as plain
-entries, the way an earlier JARVIS kept them. Only a tiny fake server is started. Run with: make test"""
+"""Tests for integrations.mcp_servers and mcp_launch: server list, secret-holding launcher, tool sorting, sessions."""
 
 import json
 import os
@@ -43,7 +41,7 @@ def fresh(monkeypatch, tmp_path):
 
 
 def github() -> Server:
-    """GitHub's entry as an earlier JARVIS put it in, sorted by hand: now just a row like any other."""
+    """A hand-sorted GitHub entry, stored as an ordinary row."""
     return Server("github", "GitHub", command="github-mcp-server", args=["stdio", "--toolsets=repos,pull_requests"],
                   read_only_args=["--read-only"], secret_env={GH_VAR: "github.token"}, for_research=True,
                   prompt="pull requests, issues, notifications.",
@@ -63,7 +61,7 @@ def gitlab() -> Server:
 
 
 def seeded(github_on=True, gitlab_on=True):
-    """GitHub and GitLab as kept, each with its token and switched on when asked for."""
+    """Save GitHub and GitLab, each with its token, enabled when asked."""
     for server, token, wanted in ((github(), GH_TOKEN, github_on), (gitlab(), GL_TOKEN, gitlab_on)):
         server.enabled = wanted
         mcp_servers.save(server, new=True)
@@ -72,7 +70,7 @@ def seeded(github_on=True, gitlab_on=True):
             vault.put(server.secret_env[next(iter(server.secret_env))], token)
 
 
-# ── Rows kept from before ───────────────────────────────────────
+# ── Stored rows ─────────────────────────────────────────────────
 
 def test_tokens_are_kept_only_in_the_vault(fresh):
     seeded()
@@ -88,20 +86,7 @@ def test_nothing_is_put_in_on_a_first_start(fresh):
     with mcp_servers._db() as db:
         db.execute("drop table mcp_servers")
         db.execute("drop table mcp_tools")
-    assert mcp_servers.load() == []  # GitHub and GitLab are connected like anything else now
-
-
-def test_a_list_made_before_the_new_columns_keeps_its_rows_as_sorted(fresh):
-    with mcp_servers._db() as db:
-        db.execute("drop table mcp_servers")
-        db.execute(mcp_servers._SCHEMA[0])  # as an earlier JARVIS made it, before versions were kept
-        db.execute("delete from schema_versions where name = 'mcp_servers'")
-        db.execute("insert into mcp_servers (name, label, position, enabled, command, created, updated) "
-                   "values ('github', 'GitHub', 0, 1, 'github-mcp-server', 1, 1)")
-    server = mcp_servers.get("github")
-    assert server.enabled and server.reviewed and not server.verified and server.source == "" and server.headers == {}
-    mcp_servers.save(replace(server, source="io.github.github/github-mcp-server", verified=True))
-    assert mcp_servers.get("github").verified
+    assert mcp_servers.load() == []  # no built-in servers are seeded
 
 
 def test_setting_a_secret_makes_the_master_key_when_theres_none(fresh, monkeypatch):
@@ -111,7 +96,7 @@ def test_setting_a_secret_makes_the_master_key_when_theres_none(fresh, monkeypat
 
 
 def python(code: str, **env: str) -> subprocess.CompletedProcess:
-    """`code` run in a fresh interpreter, as JARVIS's code is started from a session, with `env` over this one's."""
+    """Run `code` in a fresh interpreter with the launcher's env plus `env`."""
     return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, cwd=config.ROOT,
                           env=os.environ | mcp_servers.launcher("x")["env"] | env)
 

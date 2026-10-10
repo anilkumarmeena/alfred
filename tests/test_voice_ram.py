@@ -1,5 +1,4 @@
-"""The voice agent's memory: each process's footprint, logged now and then (jarvis.voice.ram), and the setting that has
-the worker's child processes hand freed memory back to macOS (jarvis.voice.agent)."""
+"""Tests for jarvis.voice.ram footprint logging and the agent setting that returns freed memory to macOS."""
 
 import logging
 import os

@@ -1,16 +1,13 @@
-// Reading back up the transcript (body[data-reading]) folds the stage into a strip: the core shrinks to the left of
-// what JARVIS is doing, so the transcript gets the room. Everything moves by transform alone, over a transcript
-// that runs the full height under the stage the whole time, so folding changes no layout and never touches the
-// transcript's scroll position. (Animating the stage's size instead resized the core's canvas and re-scrolled the
-// transcript every frame, which stuttered, and on iOS fought the finger mid-scroll.)
+// Reading back (body[data-reading]) folds the stage into a strip beside the status. Transforms only, over a
+// full-height transcript: no layout change and no scroll-position change. (Animating the stage's size would resize
+// the canvas and re-scroll every frame, stuttering and fighting the finger on iOS.)
 //
-// This works out where each part goes, as CSS variables the stylesheet applies while reading (--fx, --fy, --fs),
-// and the stage's two heights (--stage-h, --strip-h on its parent), which the transcript is masked from.
-const CORE = 46, GAP = 12, ROW_GAP = 4, TOP = 4, BOTTOM = 6;  // px: the strip's core, its gaps and its padding
-const STATUS = 10.5 / 13, HINT = 12.5 / 14;  // the readout's two lines, scaled to the strip's font sizes
-const BELOW = ["unlockAudio", "error", "notice"];  // shown under the strip, each on its own line; the rest fade out
+// Computes per-part CSS vars --fx/--fy/--fs, plus --stage-h/--strip-h on the parent for the transcript mask.
+const CORE = 46, GAP = 12, ROW_GAP = 4, TOP = 4, BOTTOM = 6;  // px: strip core size, gaps, padding
+const STATUS = 10.5 / 13, HINT = 12.5 / 14;  // readout font scale in the strip
+const BELOW = ["unlockAudio", "error", "notice"];  // stacked under the strip; everything else fades out
 
-/** The stage's height, and the strip's when folded: the transcript reads them on the parent's "fold" event. */
+/** Stage and folded-strip heights; the transcript reads them on the parent's "fold" event. */
 export const heights = { stage: 0, strip: 0 };
 
 function place(el: HTMLElement, x: number, y: number, s = 1) {
@@ -19,7 +16,7 @@ function place(el: HTMLElement, x: number, y: number, s = 1) {
   el.style.setProperty("--fs", s.toFixed(4));
 }
 
-// Measures the stage now and whenever it or its readout changes size. Returns a function that stops it.
+// Measure the stage now and on any resize of it or its readout. Returns a stop function.
 export function mountFold(stage: HTMLElement): () => void {
   const host = stage.parentElement!;
   const $ = (id: string) => stage.querySelector<HTMLElement>(`#${id}`);
@@ -27,9 +24,9 @@ export function mountFold(stage: HTMLElement): () => void {
   function measure() {
     const core = $("core"), status = $("status"), hint = $("hint");
     const cw = core?.offsetWidth;
-    if (!core || !status || !hint || !cw) return;  // not laid out (yet)
-    // Offsets ignore transforms, so these are the unfolded places whether or not the stage is folded now
-    const pad = parseFloat(getComputedStyle(status).paddingLeft) || 0;  // the status's letter-spacing balance
+    if (!core || !status || !hint || !cw) return;  // not laid out yet
+    // Offsets ignore transforms, so these are unfolded positions even while folded
+    const pad = parseFloat(getComputedStyle(status).paddingLeft) || 0;  // letter-spacing balance
     const sh = status.offsetHeight * STATUS, textH = sh + 2 + hint.offsetHeight * HINT;
     const textW = Math.max((status.offsetWidth - pad) * STATUS, hint.offsetWidth * HINT);
     const row = Math.max(CORE, textH), left = Math.max(0, (stage.clientWidth - CORE - GAP - textW) / 2);
@@ -57,8 +54,7 @@ export function mountFold(stage: HTMLElement): () => void {
   resized.observe(stage);
   for (const id of ["status", "hint"]) { const el = $(id); if (el) resized.observe(el); }
   measure();
-  // The transcript's mask follows --stage-h with a transition: not from the first measurement, or it would sweep
-  // down over the page as it loads
+  // Mask transition only after the first measurement, or it sweeps down the page on load
   let raf = requestAnimationFrame(() => { raf = requestAnimationFrame(() => { host.dataset.fold = ""; }); });
   return () => { resized.disconnect(); cancelAnimationFrame(raf); delete host.dataset.fold; };
 }

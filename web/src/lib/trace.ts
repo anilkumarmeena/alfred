@@ -1,4 +1,4 @@
-// Earphone trace: what the page made of each press, sent to logs/web.log on the Mac (/api/log).
+// Debug trace (earphone presses, session events), sent to logs/web.log via /api/log.
 import { postAuthed } from "./api";
 import { DEVICE, mobile } from "./device";
 

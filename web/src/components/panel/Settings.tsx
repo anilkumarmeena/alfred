@@ -1,8 +1,6 @@
-// Settings: a list of pages, each opening beside it (wide) or in its place (narrow). Connections (MCP servers) take
-// their keys here, write-only, so a key is never spoken; connecting one is by voice, with a yes (Connections.tsx).
-// Logins and keys does the same for JARVIS's own keys, and gives each person a login with a passcode of their own.
-// Preferences gathers the choices about how JARVIS behaves (do not disturb, its voice, whose voice it answers,
-// background work and the browser) on one page; the list keeps what's about you, your accounts, your data and the Mac.
+// Settings: a list of pages, opening beside the list (wide) or in place (narrow).
+// Secrets (MCP server keys, JARVIS's own keys) are entered here write-only so they're never spoken aloud.
+// Adding a connection is by voice with approval (Connections.tsx).
 import type { ComponentChildren } from "preact";
 import { useEffect } from "preact/hooks";
 import { useSignal } from "@preact/signals";
@@ -154,7 +152,7 @@ function Fact({ line }: { line: string }) {
   );
 }
 
-// Memory's two sections, each with a size limit JARVIS keeps to by merging and shortening facts
+// Memory sections; JARVIS stays under each limit by merging and shortening facts
 const SECTIONS: { key: MemorySection; label: string; placeholder: string }[] = [
   { key: "user", label: "User", placeholder: "A fact about you: a preference, habit or goal" },
   { key: "environment", label: "Environment", placeholder: "A fact about your machine, setup, tools or projects" },
@@ -208,7 +206,7 @@ function Memory() {
   );
 }
 
-// ── Vocabulary: names and words speech recognition expects, with what it has misheard them as ──
+// ── Vocabulary: expected words and their mishearings ──
 
 function vocabularySummary() {
   const v = vocabulary.value;
@@ -219,7 +217,7 @@ function vocabularySummary() {
 
 const heardList = (text: string) => text.split(",").map((h) => h.trim()).filter(Boolean);
 
-// A word and what it's been misheard as, comma-separated: adds one, or with `old` rewrites that entry
+// Parse "word, misheard, ...": adds an entry, or with `old` rewrites that one
 function WordForm({ old, initial, done }: { old?: string; initial?: Word; done?: () => void }) {
   const word = useSignal(initial?.word ?? ""), heard = useSignal(initial?.heard.join(", ") ?? ""), busy = useSignal(false);
   async function submit(e: Event) {
@@ -293,7 +291,7 @@ function VocabularyPage() {
   );
 }
 
-// ── Remembered approvals: made by answering a request "for this task" or "always", withdrawn here ──
+// ── Remembered approvals (created from the approval card; withdrawn here) ──
 
 function rulesSummary() {
   const all = rules.value;
@@ -330,7 +328,7 @@ function Approvals() {
   );
 }
 
-// ── Preferences: kept in the Mac's database; a value .env sets wins and is only shown ──
+// ── Preferences: stored server-side; an .env value wins and is read-only here ──
 
 const AT_RESTART = "Saved. JARVIS uses it once its services restart.";
 const NEXT_CALL = "Saved. JARVIS uses it from the next conversation.";
@@ -346,7 +344,7 @@ async function savePref(key: PrefKey, value: string, done: string) {
 const ACCENT: Record<string, string> = { a: "American", b: "British" };
 const voiceName = (v: string) => `${cap(v.slice(3))} · ${ACCENT[v.charAt(0)] ?? ""} ${v.charAt(1) === "m" ? "male" : "female"}`;
 
-// The Preferences line: do not disturb while it's on, else the voice and whose voice it answers
+// Preferences summary line: do-not-disturb if on, else voice and voice ID
 function prefsSummary(): [string, "warn" | null] {
   const h = quiet.value?.hold, v = shown("voice");
   if (h) return [`Do not disturb is ${h.said}`, "warn"];
@@ -361,7 +359,7 @@ const FromEnv = ({ label, value }: { label: string; value: string }) => (
     <p class="hint">Set in .env on the Mac, which wins: take it out there to change it here.</p></>
 );
 
-// A typed preference, saved with its button. Empty goes back to the default, shown as the placeholder.
+// Free-text preference, saved on button press. Empty resets to the default (shown as placeholder).
 function PrefField({ k, label, type = "text", list, done = AT_RESTART }: { k: PrefKey; label: string; type?: string; list?: string; done?: string }) {
   const p = pref(k)!, text = useSignal(p.value);
   useEffect(() => { text.value = p.value; }, [p.value]);
@@ -378,7 +376,7 @@ function PrefField({ k, label, type = "text", list, done = AT_RESTART }: { k: Pr
   );
 }
 
-// Choices saved as soon as one is picked
+// Saved on selection
 function PrefChoice({ k, label, options }: { k: PrefKey; label: string; options: [string, string][] }) {
   const p = pref(k)!, now = p.value || p.default;
   if (p.env) return <FromEnv label={label} value={p.env} />;
@@ -421,7 +419,7 @@ function About() {
   );
 }
 
-// A preference's choices, and the value it has now when that's none of them (set in .env or on the Mac)
+// Choices plus the current value if it isn't one of them (set via .env or on the Mac)
 const withShown = (k: PrefKey, options: [string, string][], label = (v: string) => v): [string, string][] =>
   options.some(([v]) => v === shown(k)) ? options : [...options, [shown(k), label(shown(k))]];
 
@@ -437,8 +435,8 @@ const BROWSER: [string, string][] = [["on", "On"], ["off", "Off"]];
 const BROWSER_WINDOW: [string, string][] = [["headed", "Shown"], ["headless", "Hidden"]];
 const INJECTION_MODEL: [string, string][] = [["claude-haiku-4-5-20251001", "Haiku (fastest)"], ["claude-sonnet-5", "Sonnet (more careful)"]];
 
-// Do not disturb, the same hold as "pause everything" by voice, and its only place in the panel: the switch holds
-// until it's turned off, the buttons for an hour or until a time (and change the end while it's on).
+// Do not disturb (same hold as "pause everything" by voice). Switch: until turned off. Buttons: for an hour or
+// until a time; they also change the end while on.
 function DoNotDisturb() {
   const q = quiet.value, busy = useSignal(false), until = useSignal("");
   if (!q) return <Empty>Loading…</Empty>;
@@ -471,8 +469,8 @@ const MODES: Record<string, string> = { standard: "Standard", voiceIsolation: "V
 const modeName = (m: string) => MODES[m] ?? "Other";
 const iosApp = nativePlatform() === "ios";
 
-// In the iOS app: Voice Isolation, on while it's the Mic Mode in use. An app can't set the mode itself, so the switch
-// opens Apple's picker and iOS keeps the choice for the app. Only during a session: the picker needs the mic live.
+// iOS app: Voice Isolation Mic Mode. Apps can't set it, so the switch opens the system picker (iOS remembers the
+// choice per app). Session only: the picker needs a live mic.
 function MicModeRow() {
   if (!iosApp) return null;
   const m = micMode.value;
@@ -539,7 +537,7 @@ function PreferencesPage() {
   );
 }
 
-// ── Voice ID: the speaker check (jarvis.voice.speaker), with the voiceprint recorded here ──
+// ── Voice ID: speaker check and voiceprint enrolment ──
 
 const SPEAKER: [string, string][] = [["on", "On"], ["shadow", "Only log"], ["off", "Off"]];
 const SPEAKER_HINT: Record<string, string> = {
@@ -553,7 +551,7 @@ const VIA_ENROLL: Record<string, string> = { voice: "by voice", panel: "here", c
 function VoiceId() {
   const v = voiceprints.value, rec = useSignal<Recording | null>(null), secs = useSignal(0), lvl = useSignal(0);
   const busy = useSignal(false);
-  useEffect(() => () => { rec.peek()?.cancel(); }, []);  // leaving the page stops a recording
+  useEffect(() => () => { rec.peek()?.cancel(); }, []);  // cancel recording on unmount
   useEffect(() => {
     const r = rec.value;
     if (!r) return;
@@ -652,7 +650,7 @@ function DeviceRow({ d }: { d: Device }) {
 }
 
 function Notifications() {
-  useEffect(() => { refreshAppPush(); }, []);  // the iPhone app: iOS may have asked since, at a session's start
+  useEffect(() => { refreshAppPush(); }, []);  // iPhone app: permission may have changed since
   return (
     <>
       <div class="row flat">
@@ -694,7 +692,7 @@ function SystemPage() {
   );
 }
 
-// ── Logins and keys: who can connect, each with a passcode of their own, and JARVIS's own keys, written here only ──
+// ── Logins (one passcode each) and JARVIS keys (write-only) ──
 
 function accessSummary(): [string, "warn" | null] {
   const a = access.value;
@@ -705,7 +703,7 @@ function accessSummary(): [string, "warn" | null] {
   return [`${n ? `${n} login${n === 1 ? "" : "s"}` : "The first-setup passcode"} · ${a.keys.filter((k) => k.source).length} of ${a.keys.length} keys set`, null];
 }
 
-// A new login (no `name`), or a new passcode for `name`'s. A device's own login keeps working on it after the change.
+// Create a login (no `name`) or rotate `name`'s passcode. The current device stays signed in after a change.
 function PasscodeForm({ name, done }: { name?: string; done?: () => void }) {
   const who = useSignal(""), code = useSignal(""), busy = useSignal(false);
   async function submit(e: Event) {

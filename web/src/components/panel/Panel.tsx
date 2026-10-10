@@ -1,5 +1,4 @@
-// The panel: a column beside the voice screen on a desktop, with tabs; on a phone, a sheet that slides up over it
-// from the row of buttons along the bottom (the dock), and can be dragged between full height, half and closed.
+// The panel: a tabbed column on desktop; on phones a sheet raised from the bottom dock, draggable full/half/closed.
 import { useEffect, useRef } from "preact/hooks";
 import { jobOf } from "../../lib/schedule";
 import { readout } from "../../state/store";
@@ -19,9 +18,9 @@ const SECTIONS: [Section, string, () => preact.JSX.Element][] = [
   ["tasks", "Tasks", TasksIcon], ["todos", "To-dos", TodosIcon], ["projects", "Projects", ProjectsIcon], ["history", "History", HistoryIcon],
   ["settings", "Settings", SettingsIcon],
 ];
-const ROOMY = 760;  // px of panel width for a list and the open item side by side
+const ROOMY = 760;  // px: panel width that fits list and open item side by side
 
-// The badge on a section's button: an amber count when something waits on the user, a dot for news.
+// Section badge: amber count when something waits on the user, a dot for news.
 export function Badge({ sec }: { sec: Section }) {
   if (sec !== "tasks") return null;
   if (needYou.value) return <i class="bdg n">{needYou.value}</i>;
@@ -53,7 +52,7 @@ function title(): string {
   return SECTIONS.find(([s]) => s === sec)![1];
 }
 
-// Phone: drag the handle or the title between full, half and closed; a tap on the handle switches full and half.
+// Phone: drag handle or title between full, half, closed; tapping the handle toggles full/half.
 function useDrag(panel: { current: HTMLElement | null }) {
   return (e: PointerEvent) => {
     const el = panel.current, target = e.currentTarget as HTMLElement;
@@ -88,7 +87,6 @@ function useDrag(panel: { current: HTMLElement | null }) {
 export function Panel() {
   const ref = useRef<HTMLElement>(null);
   const drag = useDrag(ref);
-  // Wide enough for a list and the open item side by side?
   useEffect(() => {
     const el = ref.current!;
     const watch = new ResizeObserver(() => { roomy.value = wide.peek() && el.clientWidth >= ROOMY; });

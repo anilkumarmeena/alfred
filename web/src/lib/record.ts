@@ -1,11 +1,9 @@
-// Recording the user's voice in the page for their voiceprint (Settings, Preferences): the mic as 16 kHz mono 16-bit PCM,
-// which the panel's voiceprint_enroll takes (jarvis.voice.speaker). The conversions are plain functions, which
-// tests/record.test.ts checks; recordMic is the browser part.
+// Voiceprint recording: mic as 16 kHz mono 16-bit PCM for the panel's voiceprint_enroll.
+// Conversions are pure functions; recordMic is the browser part.
 
 export const RATE = 16000;
 
-// Float samples at `from` Hz as `to` Hz, each output sample the mean of the input it covers: a box filter, enough for
-// speech on its way to a speaker model, and no worse than linear interpolation at aliasing.
+// Resample `from` Hz to `to` Hz with a box filter (mean of covered input): fine for speech, aliasing no worse than linear.
 export function downsample(input: Float32Array, from: number, to = RATE): Float32Array {
   if (from === to) return input.slice();
   const ratio = from / to, out = new Float32Array(Math.floor(input.length / ratio));
@@ -18,7 +16,7 @@ export function downsample(input: Float32Array, from: number, to = RATE): Float3
   return out;
 }
 
-// Float samples, clipped to ±1, as 16-bit integers
+// Float samples (clipped to ±1) to 16-bit integers
 export function toPcm16(samples: Float32Array): Int16Array {
   const out = new Int16Array(samples.length);
   for (let i = 0; i < samples.length; i++) out[i] = Math.round(Math.max(-1, Math.min(1, samples[i]!)) * 32767);
@@ -31,7 +29,7 @@ export function toBase64(bytes: Uint8Array): string {
   return btoa(text);
 }
 
-// Chunks of float samples joined
+// Concatenate float chunks
 export function join(chunks: Float32Array[]): Float32Array {
   const out = new Float32Array(chunks.reduce((n, c) => n + c.length, 0));
   let at = 0;
@@ -39,7 +37,7 @@ export function join(chunks: Float32Array[]): Float32Array {
   return out;
 }
 
-// The loudness of a chunk, 0 to 1, for a level meter: its RMS, scaled so ordinary speech reaches most of the way
+// Level meter value 0..1: RMS scaled so normal speech reads high
 export function level(chunk: Float32Array): number {
   let sum = 0;
   for (let i = 0; i < chunk.length; i++) sum += chunk[i]! * chunk[i]!;
@@ -47,16 +45,16 @@ export function level(chunk: Float32Array): number {
 }
 
 export interface Recording {
-  seconds(): number;  // recorded so far
-  level(): number;  // the latest chunk's, 0 to 1
-  stop(): string;  // ends it: the recording as base64 of 16 kHz 16-bit PCM
+  seconds(): number;
+  level(): number;  // latest chunk, 0..1
+  stop(): string;  // base64 of 16 kHz 16-bit PCM
   cancel(): void;
 }
 
-// Start recording from the mic, with the processing a call's mic gets (echo cancelling, noise suppression, gain), so
-// the voiceprint hears what a conversation does. Call it straight from a tap: iOS only starts audio from one.
+// Record with the same processing as a call (echo cancel, noise suppression, AGC) so the voiceprint matches live
+// audio. Call directly from a user gesture: iOS only starts audio from one.
 export async function recordMic(): Promise<Recording> {
-  const ctx = new AudioContext();  // made before any await, while the tap still counts
+  const ctx = new AudioContext();  // before any await, while the gesture still counts
   let stream: MediaStream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
@@ -68,8 +66,8 @@ export async function recordMic(): Promise<Recording> {
     throw new Error(`Couldn't use the microphone: ${(e as Error).message || e}`);
   }
   const source = ctx.createMediaStreamSource(stream);
-  // A ScriptProcessor rather than an AudioWorklet: one file, and every browser JARVIS runs in still has it. Its output
-  // is left silent; it's connected only because it doesn't run otherwise.
+  // ScriptProcessor, not AudioWorklet: no extra file, and still universally supported. Output stays silent; it's
+  // connected only because it won't run otherwise.
   const node = ctx.createScriptProcessor(4096, 1, 1);
   const chunks: Float32Array[] = [];
   let samples = 0, latest = 0;

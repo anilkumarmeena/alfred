@@ -1,5 +1,4 @@
-"""Tests for the learning review, which reads each finished conversation and suggests lasting facts for long-term
-memory (jarvis.tasks.learning), and for how the runner keeps what it suggests. Run with: make test"""
+"""Tests for jarvis.tasks.learning: when the review runs, reading its suggestions, and how the runner keeps them."""
 
 import asyncio
 import json
@@ -27,7 +26,7 @@ CHATTY = ("I've switched from VS Code to Zed for all my editing now, and I like 
 
 @pytest.fixture
 def data(env, monkeypatch):
-    """A memory, conversation log and review state of the test's own, on the env fixture's task database."""
+    """Own memory, conversation log and review state on the env fixture's task database."""
     use_profile(monkeypatch, name="Alex")
     use_profile(monkeypatch, name="Alex")
     profile.current().memory_file.write_text(MEMORY)
@@ -43,7 +42,7 @@ class Clock:
 
 
 class Reviewer:
-    """Stands in for the model call: answers with `reply` (or raises it), and keeps each prompt."""
+    """Fake model call: answers `reply` (or raises it) and records each prompt."""
 
     def __init__(self, reply="") -> None:
         self.reply, self.prompts = reply, []
@@ -60,7 +59,7 @@ def suggesting(*suggestions: dict) -> Reviewer:
 
 
 def watcher(data, reviewer: Reviewer, saved: list | None = None) -> tuple[learning.Learning, Clock]:
-    """A Learning on a clock of the test's own, which keeps what it would save in `saved`."""
+    """A Learning on a test clock; what it would save goes in `saved`."""
     clock = Clock()
 
     async def save(found: list[dict], about: str) -> None:
@@ -70,7 +69,7 @@ def watcher(data, reviewer: Reviewer, saved: list | None = None) -> tuple[learni
 
 
 def talk(*exchanges: tuple[str, str], at: float | None = None) -> None:
-    """Exchanges logged, the log last written `at`."""
+    """Log exchanges; the log was last written `at`."""
     for user, reply in exchanges:
         memory.log_exchange(user, reply)
     if at is not None:
@@ -83,7 +82,7 @@ def check(watch: learning.Learning) -> bool:
 
 
 def reviewed(prompt: str) -> str:
-    """The conversation a prompt reviews, without the earlier requests it's shown to spot repeated workflows."""
+    """The conversation part of a prompt, minus earlier requests shown for spotting repeated workflows."""
     return prompt.split("<conversation>", 1)[1]
 
 
@@ -95,7 +94,7 @@ def test_first_look_only_marks_what_is_already_logged(data):
     reviewer = Reviewer()
     watch, clock = watcher(data, reviewer, [])
     clock.now += 3600
-    assert not check(watch)  # no backlog: what came before the review existed is only marked as read
+    assert not check(watch)  # no backlog: earlier history is only marked as read
     assert not check(watch) and reviewer.prompts == []
 
 
@@ -114,7 +113,7 @@ def test_reviews_once_the_conversation_has_been_quiet_long_enough_and_only_once(
     assert "<earlier_requests>\n" in reviewer.prompts[0] and ": hello\n</earlier_requests>" in reviewer.prompts[0]
     clock.now += 3600
     assert not check(watch) and len(reviewer.prompts) == 1  # nothing new: never twice
-    assert saved == []  # nothing worth keeping is said nowhere
+    assert saved == []  # nothing worth keeping: nothing saved
 
 
 def test_a_hang_up_reviews_soon_unless_the_user_carries_on(data):
@@ -276,7 +275,7 @@ def test_helpers_count_the_user_s_words_and_cut_a_long_conversation_at_an_entry(
 
 
 def run_learned(suggested: list[dict]) -> tuple[runner.Runner, dict, list[dict], list[tuple]]:
-    """Runner.learned on these suggestions: the review task, the events it sent, and the alerts it raised."""
+    """Run Runner.learned on these suggestions; return (review task, events sent, alerts raised)."""
     alerts = []
 
     async def main():

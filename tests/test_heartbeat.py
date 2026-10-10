@@ -1,4 +1,4 @@
-"""Tests for jarvis.tasks.heartbeat. Run with: make test"""
+"""Tests for jarvis.tasks.heartbeat: scheduling, flagging, push, quiet hours, failing sources, triage, sources."""
 
 import asyncio
 import importlib
@@ -192,7 +192,7 @@ def test_flagged_alerts_are_pushed_alongside_the_mac_notification(tmp_path):
     assert len(notify.sent) == 2
     (cal_title, cal_body, cal_url, cal_tag), task_push = phone.sent
     assert (cal_title, cal_body, cal_url) == ("Calendar", MEETING.text, "/?alert=calendar")
-    assert cal_tag.startswith("alert-") and "Standup" not in cal_tag  # stable per item, but says nothing about it
+    assert cal_tag.startswith("alert-") and "Standup" not in cal_tag  # stable per item, but reveals nothing about it
     assert task_push == ("Tasks", reminder.text, "/?task=3", "task-3")  # opens the app on the task
 
 
@@ -205,7 +205,7 @@ def test_pushes_respect_dedup_and_quiet_hours(tmp_path):
     hb.clock = lambda: datetime(2026, 9, 27, 8, 5, tzinfo=TZ)
     asyncio.run(hb.beat())
     asyncio.run(hb.beat())
-    assert [body for _, body, _, _ in phone.sent] == [MEETING.text]  # once, at the first beat after
+    assert [body for _, body, _, _ in phone.sent] == [MEETING.text]  # once, at the first beat after quiet hours
 
 
 def test_triaged_out_alerts_are_not_pushed(tmp_path):
@@ -351,7 +351,7 @@ def test_the_triage_model_reads_numbers_kept_and_marks(monkeypatch):
     monkeypatch.setattr("jarvis.brain.sdk.ask", ask)
     assert asyncio.run(heartbeat.model_triage([a, b, c])) == {a.key: False, c.key: True}  # 9 isn't an item
     assert asyncio.run(heartbeat.model_triage([a, b, c])) == {}  # none kept
-    for _ in range(2):  # not JSON matching the schema: an error, so the heartbeat keeps everything
+    for _ in range(2):  # invalid JSON for the schema: an error, so everything is kept
         with pytest.raises(ValueError):
             asyncio.run(heartbeat.model_triage([a, b, c]))
 
@@ -390,7 +390,7 @@ def test_calendar_soon_picks_timed_events_within_the_lead(monkeypatch):
     monkeypatch.setattr(calendar, "calendar_events", lambda days, account: events[account])
     alerts = asyncio.run(heartbeat.calendar_soon(AFTERNOON, lead=30))
     assert [a.text for a in alerts] == ["Standup starts in 12 minutes.", "Call mum starts now."]
-    assert [round(a.at - AFTERNOON.timestamp()) for a in alerts] == [720, 20]  # when each starts, for the voice
+    assert [round(a.at - AFTERNOON.timestamp()) for a in alerts] == [720, 20]  # start offsets, for the voice
 
 
 def test_no_connected_google_accounts_is_simply_empty(monkeypatch):
@@ -460,7 +460,6 @@ def test_task_changes():
 
 
 def test_heartbeat_only_reads():
-    """The heartbeat must never send, create, start or run anything on its own."""
     code = open(heartbeat.__file__).read()
     for write in ("gmail_create_draft", "gmail_modify", "calendar_create_event", "sheets_write", "sheets_append",
                   "sheets_add_tab", "sheets_delete_tab", "sheets_format", "docs_beautify", "docs_format", "docs_replace_text", "docs_insert",
@@ -506,7 +505,7 @@ def test_chat_alerts_say_who_and_where_but_only_the_voice_hears_what(chat_news):
 def test_chat_text_never_reaches_the_lock_screen(tmp_path, chat_news):
     events, phone = [], Pusher()
     hb, notify = make(tmp_path, {"chat": heartbeat.chat_news}, announce=events.append, push=phone)
-    assert asyncio.run(hb.beat()) == []  # the first answer only records what's there already
+    assert asyncio.run(hb.beat()) == []  # the first answer only records what's there
     CHAT_NEWS.append({"account": "work", "space": "spaces/DM2", "name": "Sam Park", "kind": "dm",
                       "from": "Sam Park", "count": 3, "latest": "spaces/DM2/messages/9", "text": "Secret plan"})
     try:
@@ -586,7 +585,7 @@ def test_another_gmail_search_is_added_checked_and_removed(own_profile):
     assert heartbeat.add_source("email", "invoices!", {"query": "subject:invoice"}, "by voice").id == "email:invoices-2"
     on = heartbeat.sources_on(None)
     assert on["email:invoices"].keywords == {"query": "from:billing@acme.example"}
-    assert on["email"].keywords == {"query": heartbeat.MAIL_QUERY}  # the built-in one is as it was
+    assert on["email"].keywords == {"query": heartbeat.MAIL_QUERY}  # the built-in query is unchanged
     assert heartbeat.baseline("email:invoices")
 
     heartbeat.change_source("email:invoices", on=False)
@@ -633,7 +632,7 @@ def test_a_kind_registered_elsewhere_is_checked_and_set_up_like_the_rest(own_pro
     assert asyncio.run(on["rss"](AFTERNOON))[0].key == "rss:https://a.example/feed"
     assert [k["name"] for k in heartbeat.described()["kinds"]] == ["email", "rss"]
 
-    # Its module not loaded, or its source not set up: the beat goes on without it, and what the user set is kept
+    # Module not loaded or source not set up: the beat skips it and the user's settings are kept
     monkeypatch.setitem(heartbeat.KINDS, "rss", replace(heartbeat.KINDS["rss"], make=lambda s, c: 1 / 0))
     assert "rss" not in heartbeat.sources_on(None) and "couldn't be set up: ZeroDivisionError" in caplog.text
     monkeypatch.delitem(heartbeat.KINDS, "rss")
@@ -650,7 +649,7 @@ def test_an_unreadable_setting_means_the_defaults(own_profile, caplog):
 
 
 def test_each_beat_checks_the_sources_on_then(tmp_path, own_profile):
-    """A source switched off, or added, in the panel counts from the next beat; one added only records what's there."""
+    """Sources switched off or added in the panel take effect from the next beat."""
     mail = [Alert("email:work:m1", "email", "New email from Ann: Invoice 7.", soft=True)]
 
     def lineup():
@@ -662,7 +661,7 @@ def test_each_beat_checks_the_sources_on_then(tmp_path, own_profile):
     heartbeat.change_source("email", on=False)
     heartbeat.add_source("email", "Invoices", {"query": "subject:invoice"}, "in the panel")
     mail[:] = [Alert("email:work:m2", "email", "New email from Ann: Invoice 8.", soft=True)]
-    assert asyncio.run(hb.beat()) == []  # the added source's first answer
+    assert asyncio.run(hb.beat()) == []  # a newly added source's first answer
     mail[:] = [Alert("email:work:m3", "email", "New email from Ann: Invoice 9.", soft=True)]
     assert [a.key for a in asyncio.run(hb.beat())] == ["email:work:m3"]
     assert notify.sent[-1] == ("JARVIS · email", "New email from Ann: Invoice 9.")

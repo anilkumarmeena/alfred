@@ -1,17 +1,12 @@
-"""Finding MCP servers in the official MCP registry (registry.modelcontextprotocol.io), and turning one into an entry
-for JARVIS's list (jarvis.integrations.mcp_servers), for the voice tools that connect them (jarvis.tools.connections).
+"""Search the official MCP registry (registry.modelcontextprotocol.io) and turn a hit into a mcp_servers entry.
 
-The registry lists each server as its server.json: a name in reverse-DNS form whose namespace its publisher has
-proved they own (io.github.<user>/..., com.<company>/...), a description, a version, and the ways to run it: hosted
-`remotes` (an https URL, maybe with a key in a header) and `packages` run on this Mac (npm through npx, PyPI through
-uvx, a container image through docker), each with the settings and secrets it takes. `ways` lists the ones JARVIS can
-run, and why not for the rest; `build` makes the entry for one, its version pinned, its secrets kept apart (each a
-vault secret the user enters in the control panel, never by voice) and every setting given or defaulted.
+A registry entry (server.json) has a verified reverse-DNS name, a version, and ways to run it: hosted `remotes` (https,
+maybe with a header key) or local `packages` (npm via npx, PyPI via uvx, OCI via docker). `ways` splits them into
+runnable and not (with reasons); `build` makes the entry: version pinned, every setting given or defaulted, secrets
+as vault references entered in the control panel, never by voice. `unlisted` builds an unverified entry from a web
+search hit (package or https URL plus the page it was found on).
 
-A server not in the registry can be connected from what a web search found (`unlisted`): an npm or PyPI package at a
-pinned version, or an https URL, marked unverified with the page it was found on.
-
-    uv run python -m jarvis.integrations.mcp_registry QUERY     what a search finds
+    uv run python -m jarvis.integrations.mcp_registry QUERY     print what a search finds
 """
 
 import asyncio
@@ -30,16 +25,16 @@ from jarvis.integrations.mcp_servers import ENV_NAME, Server
 
 REGISTRY = os.environ.get("JARVIS_MCP_REGISTRY", "https://registry.modelcontextprotocol.io").rstrip("/")
 TIMEOUT = 20
-SHOWN = 8  # entries a search gives back
-FETCHED = 60  # entries asked for, before ranking
-DESCRIBED = 300  # characters of a description given back
+SHOWN = 8  # results returned
+FETCHED = 60  # results fetched before ranking
+DESCRIBED = 300  # description chars returned
 _VAR = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 RUNNERS = {"npm": "npx", "pypi": "uvx", "oci": "docker"}
 KINDS = {"npm": "an npm package", "pypi": "a Python package", "oci": "a container image"}
 
 
 class RegistryError(Exception):
-    """The registry can't be reached or doesn't have it; its message says so."""
+    """Registry unreachable or entry missing; the message says which."""
 
 
 # ── Searching ───────────────────────────────────────────────────
@@ -66,7 +61,7 @@ def _status(item: dict) -> str:
 
 
 def _score(query: str, server: dict) -> int:
-    """How well an entry matches: its own name or title first, then its publisher's, then anything."""
+    """Match rank: own name/title, then publisher namespace, then substring; runnable entries break ties."""
     q = query.lower().strip()
     name = server.get("name", "").lower()
     namespace, _, short = name.partition("/")
@@ -75,17 +70,17 @@ def _score(query: str, server: dict) -> int:
     if q in (short, title) or short == f"{q}-mcp" or short == f"{q}-mcp-server" or short == "mcp":
         score += 4
     if q in namespace.split("."):
-        score += 3  # its publisher: com.notion/..., io.github.github/...
+        score += 3  # publisher, e.g. com.notion/...
     if q in short or q in title:
         score += 2
     if ways(server)[0]:
-        score += 1  # one JARVIS can run
+        score += 1  # runnable
     return score
 
 
 async def search(query: str, client: httpx.AsyncClient | None = None) -> list[dict]:
-    """The registry's latest active entries for `query`, best first. The registry matches names only, so a query of
-    several words is also tried word by word."""
+    """Latest active entries for `query`, best first. The registry matches names only, so multi-word queries fall
+    back to single words."""
     words = [query.strip()] + sorted({w for w in re.split(r"\W+", query) if len(w) > 2} - {query.strip()},
                                      key=len, reverse=True)
     found: dict[str, dict] = {}
@@ -101,18 +96,18 @@ async def search(query: str, client: httpx.AsyncClient | None = None) -> list[di
 
 
 async def fetch(name: str, client: httpx.AsyncClient | None = None) -> dict:
-    """The registry's latest entry for the server named `name` (io.github.github/github-mcp-server)."""
+    """Latest entry for `name`, e.g. io.github.github/github-mcp-server."""
     item = await _get(f"/v0/servers/{quote(name.strip(), safe='')}/versions/latest", client=client)
     if _status(item) != "active":
         raise RegistryError(f"The MCP registry marks {name} as {_status(item)}.")
     return item.get("server") or {}
 
 
-# ── The ways to run one ─────────────────────────────────────────
+# ── Ways to run ─────────────────────────────────────────────────
 
 @dataclass
 class Need:
-    """A setting or secret a way to run it takes."""
+    """A setting or secret a Way requires."""
     var: str
     description: str = ""
     secret: bool = False
@@ -131,11 +126,11 @@ class Need:
 
 @dataclass
 class Way:
-    """One way to run a server: hosted (a remote) or a package on this Mac."""
+    """One way to run a server: hosted remote or local package."""
     kind: str  # remote, npm, pypi, oci
     spec: dict
     needs: list[Need] = field(default_factory=list)
-    problem: str = ""  # why JARVIS can't run it this way, or ''
+    problem: str = ""  # why it can't run, or ''
 
     def brief(self, index: int) -> dict:
         out = {"way": index, "runs": self.said()}
@@ -150,7 +145,7 @@ class Way:
 
 
 def _needs_of(items: list, secret_default: bool = False) -> list[Need]:
-    """Settings and secrets from the server.json's environmentVariables, headers or a value's variables."""
+    """Needs from server.json environmentVariables, headers or variables."""
     out = []
     for item in items or []:
         if not isinstance(item, dict) or not item.get("name"):
@@ -166,7 +161,7 @@ def _variables(spec: dict) -> list[Need]:
 
 
 def ways(server: dict) -> tuple[list[Way], list[Way]]:
-    """The ways JARVIS can run it, best first (hosted, then packages), and those it can't, each saying why."""
+    """(runnable, not runnable) ways, hosted first; each unrunnable one has a `problem`."""
     can, cant = [], []
     for remote in server.get("remotes") or []:
         if not isinstance(remote, dict):
@@ -213,23 +208,23 @@ def ways(server: dict) -> tuple[list[Way], list[Way]]:
 
 
 def _secret_on_command_line(package: dict) -> str:
-    """Why the package would need a secret on its command line, where every process can read it, or ''."""
+    """Reason if the package needs a secret on argv (visible to every process), else ''."""
     for arg in [*(package.get("runtimeArguments") or []), *(package.get("packageArguments") or [])]:
         if not isinstance(arg, dict):
             continue
         secret_vars = {k for k, v in (arg.get("variables") or {}).items() if isinstance(v, dict) and v.get("isSecret")}
         value = str(arg.get("value") or "")
         if package.get("registryType") == "oci" and arg.get("name") == "-e" and "=" in value:
-            continue  # docker's -e VAR=..., which build passes from the environment instead
+            continue  # docker -e VAR=...: build passes it via env instead
         if arg.get("isSecret") or secret_vars & set(_VAR.findall(value)):
             return "it takes its key on the command line, where other programs could read it"
     return ""
 
 
-# ── Making the entry ────────────────────────────────────────────
+# ── Building the entry ──────────────────────────────────────────
 
 def slug(text: str, taken: list[str] = ()) -> str:
-    """A server name from a title or registry name: lowercase, underscores, short, not taken."""
+    """Short unused snake_case server name from a title or registry name."""
     base = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
     base = re.sub(r"_?(mcp|server)(_|$)", "_", base).strip("_") or "server"
     if not base[0].isalpha():
@@ -244,7 +239,7 @@ def slug(text: str, taken: list[str] = ()) -> str:
 
 
 def label_of(server: dict) -> str:
-    """How it's said aloud: its title, else the last part of its name."""
+    """Spoken label: title, else the last part of the name."""
     title = " ".join(str(server.get("title") or "").split())
     if title and len(title) <= 40:
         return title
@@ -261,13 +256,13 @@ def _secret_name(server_name: str, var: str) -> str:
 
 
 def _env_var(name: str) -> str:
-    """A header's or argument's name as a variable: Authorization -> AUTHORIZATION."""
+    """Header/argument name as an env var: Authorization -> AUTHORIZATION."""
     var = re.sub(r"[^A-Za-z0-9_]+", "_", name).strip("_").upper() or "SECRET"
     return var if ENV_NAME.fullmatch(var) else "V_" + var
 
 
 class Building:
-    """What `build` collects: the settings given, what's missing, and the secrets."""
+    """`build` state: given settings, missing needs, secret_env."""
 
     def __init__(self, name: str, settings: dict[str, str]) -> None:
         self.name, self.settings = name, {k: str(v) for k, v in (settings or {}).items()}
@@ -275,7 +270,7 @@ class Building:
         self.secret_env: dict[str, str] = {}
 
     def value(self, need: Need) -> str:
-        """A setting's value: given, else its default; recorded as missing if it's required and has neither."""
+        """Given value or default; a required need with neither is recorded as missing."""
         got = self.settings.get(need.var, need.default)
         if need.choices and got and got not in need.choices:
             raise ValueError(f"{need.var} is one of {', '.join(need.choices)}, not {got}.")
@@ -284,13 +279,13 @@ class Building:
         return got
 
     def secret(self, var: str) -> str:
-        """The placeholder for a secret, kept apart: the variable it fills, named in secret_env."""
+        """Register a secret in secret_env; returns its variable name for a `{VAR}` placeholder."""
         var = var if ENV_NAME.fullmatch(var) else _env_var(var)
         self.secret_env[var] = _secret_name(self.name, var)
         return var
 
     def fill(self, text: str, variables: dict) -> str:
-        """A value with its {variables}: settings filled in; secrets left as {VAR}, for the launcher or bridge."""
+        """Fill `{variables}` in text; secrets stay as `{VAR}` for the launcher or bridge."""
         def one(m: re.Match) -> str:
             spec = variables.get(m.group(1)) if isinstance(variables.get(m.group(1)), dict) else {}
             need = Need(m.group(1), str(spec.get("description") or ""), bool(spec.get("isSecret")),
@@ -300,8 +295,8 @@ class Building:
 
 
 def _arguments(args: list, b: Building, oci: bool) -> tuple[list[str], dict[str, str]]:
-    """A package's arguments as argv, and for docker's `-e VAR=value`, the variable's value (or secret) to pass
-    through the environment instead, so it's never on the command line."""
+    """Package arguments as (argv, env). Docker `-e VAR=value` becomes `-e VAR` with the value (or secret) in env, so
+    it never appears on the command line."""
     argv, env = [], {}
     for arg in args or []:
         if not isinstance(arg, dict):
@@ -311,13 +306,13 @@ def _arguments(args: list, b: Building, oci: bool) -> tuple[list[str], dict[str,
         if not raw and arg.get("isRequired"):
             raw = b.value(Need(arg.get("name") or arg.get("valueHint") or "argument", str(arg.get("description") or "")))
         if not raw and not arg.get("isRequired") and arg.get("type") == "named":
-            continue  # an optional flag with nothing to say
+            continue  # optional flag with no value
         if oci and arg.get("name") == "-e" and "=" in raw:
             var, _, template = raw.partition("=")
             filled = b.fill(template, variables)
             if m := re.fullmatch(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", filled):
                 b.secret_env.pop(m.group(1), None)
-                b.secret_env[var] = _secret_name(b.name, var)  # the secret goes in as VAR itself
+                b.secret_env[var] = _secret_name(b.name, var)  # secret injected as VAR itself
             elif filled:
                 env[var] = filled
             else:
@@ -335,8 +330,8 @@ def _arguments(args: list, b: Building, oci: bool) -> tuple[list[str], dict[str,
 
 
 def build(found: dict, way: Way, name: str, label: str, settings: dict[str, str] | None = None) -> tuple[Server, list[Need]]:
-    """The entry for running `found` (a registry entry) `way`: off, its tools unsorted, from the registry. Returns it
-    with the settings it still needs, which the user says (never a secret: those go in the control panel)."""
+    """Entry for running registry entry `found` via `way`, disabled and unreviewed. Returns it with the non-secret
+    settings still missing; secrets are entered in the control panel."""
     if way.problem:
         raise ValueError(f"JARVIS can't run {label} that way: {way.problem}.")
     b = Building(name, settings or {})
@@ -380,7 +375,7 @@ def build(found: dict, way: Way, name: str, label: str, settings: dict[str, str]
     else:
         if not re.search(r"(:[\w.-]+|@sha256:[0-9a-f]{64})$", package.rpartition("/")[2]) or package.endswith(":latest"):
             raise ValueError(f"Its image {package} isn't pinned to a version.")
-        # Its environment, secrets included, passed through by name: never on docker's command line
+        # Env and secrets passed by name only, never as values on docker's argv
         passed = [a for var in [*env, *b.secret_env] if f"-e {var}" not in " ".join(runtime) for a in ("-e", var)]
         server.command, server.args = "docker", ["run", "-i", "--rm", *runtime, *passed, package, *args]
     server.env, server.secret_env = env, b.secret_env
@@ -389,9 +384,8 @@ def build(found: dict, way: Way, name: str, label: str, settings: dict[str, str]
 
 def unlisted(name: str, label: str, source: str, package: str = "", runner: str = "", url: str = "",
              secrets: list[str] = (), settings: dict[str, str] | None = None) -> Server:
-    """An entry for a server found on the web rather than in the registry: unverified, with where it was found. A
-    package (npm through npx, or PyPI through uvx, at a pinned version) runs on this Mac; a URL is hosted. Its
-    secrets are environment variables for a package, or for a URL, keys sent as a Bearer token (one) or headers."""
+    """Unverified entry for a server found on the web (`source` is the page). A package runs via npx/uvx; a URL is
+    hosted. Secrets become env vars for a package; for a URL the first is a Bearer token, the rest headers."""
     if not source.startswith(("https://", "http://")):
         raise ValueError("Say where it was found: the page's https:// link.")
     server = Server(name, label, enabled=False, source=source, verified=False, for_research=True, reviewed=False)

@@ -1,9 +1,8 @@
-// Past conversations, as jarvis.panel's conversations, conversation and conversation_search actions return them
-// (jarvis.state.history), and how the History view words them. Newest first throughout: the days, and the exchanges
-// within a day.
+// Past-conversation types (from the conversations / conversation / conversation_search panel actions) and their
+// formatting. Newest first throughout.
 
-// One logged exchange: who spoke, what they said, the commands their words said yes to and JARVIS's reply. Something
-// JARVIS said between turns (a task update, say) is an announcement; a line in no known shape is a note.
+// A logged exchange: speaker, words, commands they approved, and JARVIS's reply. Between-turn speech (e.g. a task
+// update) is an announcement; an unrecognised line is a note.
 export interface Entry {
   n: number; time: string; kind: "exchange" | "announcement" | "note"; said: string;
   who?: string; approved?: string[]; reply?: string; interrupted?: boolean;
@@ -19,7 +18,7 @@ export interface Found { text: string; hits: Hit[]; more: boolean }
 const DAY_MS = 86_400_000;
 const utc = (date: string) => new Date(`${date}T00:00:00Z`);
 
-// "Today", "Yesterday", or "Monday 5 October" (with the year when it isn't this one), `today` being the Mac's date.
+// "Today", "Yesterday" or "Monday 5 October" (year added if not current). `today` is the Mac's date.
 export function dayLabel(date: string, today: string): string {
   if (date === today) return "Today";
   const d = utc(date);
@@ -30,7 +29,7 @@ export function dayLabel(date: string, today: string): string {
   }).replace(",", "");
 }
 
-// "09:14–21:53", or the one time when they're the same
+// "09:14–21:53", or a single time when equal
 export const span = (first: string, last: string) => (first && last && first !== last ? `${first}–${last}` : first || last);
 
 // "12 exchanges", "1 exchange · 3 updates"
@@ -40,7 +39,7 @@ export function tally(exchanges: number, count: number): string {
   return others > 0 ? `${said} · ${others} update${others === 1 ? "" : "s"}` : said;
 }
 
-// `text` cut into runs, each marked whether it's one of `words` (in any case), for a search's hits to show them.
+// Split `text` into runs flagged when they match one of `words` (case-insensitive), for hit highlighting.
 export function marks(text: string, words: string[]): { text: string; hit: boolean }[] {
   const wanted = words.map((w) => w.trim()).filter(Boolean);
   if (!wanted.length || !text) return text ? [{ text, hit: false }] : [];
@@ -56,7 +55,7 @@ export function marks(text: string, words: string[]): { text: string; hit: boole
   return out;
 }
 
-// A search's hits in runs by day, keeping their order (newest first), for a heading over each day.
+// Group search hits by day, preserving order (newest first).
 export function byDay(hits: Hit[]): { date: string; hits: Hit[] }[] {
   const out: { date: string; hits: Hit[] }[] = [];
   for (const h of hits) {

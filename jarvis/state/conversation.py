@@ -1,11 +1,8 @@
-"""A voice conversation's own state, kept on one object rather than in module globals: the profile it runs as, the
-user's own words this turn (`heard`), a rule offered for saving (`offer`), the speaker check the voice_enroll tool
-reaches, and the background lookups background_lookup hands work to.
+"""Per-conversation voice state: profile, this turn's words (`heard`), pending rule offer, speaker check, lookups.
 
-The voice agent begins one per conversation (`begin`), and the code that conversation runs (its brain, tools and gates)
-finds it with current(). A voice process holds one conversation at a time, so the one begun is also the process's,
-for code that runs outside its context (a callback LiveKit makes from elsewhere). Outside any conversation (the task
-runner, tests), current() is one of the process's own.
+begin() makes it current in this context and also process-wide, since a voice process holds one conversation and
+LiveKit callbacks may run outside the context. Outside a conversation (task runner, tests) current() returns a
+process default.
 """
 
 from __future__ import annotations
@@ -24,7 +21,7 @@ if TYPE_CHECKING:
 
 @dataclass(eq=False)
 class Conversation:
-    profile: profile.Profile | None = None  # who it's with; None: whoever the process runs as
+    profile: profile.Profile | None = None  # None = the process's profile
     heard: Heard = field(default_factory=Heard)
     offer: RuleOffer = field(default_factory=RuleOffer)
     speaker: SpeakerCheck | None = None
@@ -40,8 +37,9 @@ def current() -> Conversation:
 
 
 def begin(who: profile.Profile | None = None) -> Conversation:
-    """A new conversation, with `who` (the profile the process runs as by default), current from here on in this
-    context and the tasks it starts, and the process's. Its profile is the one its code runs as too."""
+    """Start a conversation with `who` (default: current profile), current for this context and process-wide.
+
+    Also switches the context's profile to it."""
     global _process
     _process = Conversation(who or profile.current())
     _current.set(_process)
@@ -50,7 +48,7 @@ def begin(who: profile.Profile | None = None) -> Conversation:
 
 
 def end(ended: Conversation) -> None:
-    """The conversation is over: the process's goes back to one of its own."""
+    """Reset the process default if `ended` is still it."""
     global _process
     if _process is ended:
         _process = Conversation()

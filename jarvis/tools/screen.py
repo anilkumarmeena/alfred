@@ -1,12 +1,8 @@
-"""Looking at the Mac's screen: screen_look takes a screenshot (jarvis.state.pictures) and shows it to Claude as an
-image. PROMPT, which the voice brain's prompt gets, also covers the photos the user sends, which come attached to their
-message (jarvis.brain.cli).
+"""screen_look: screenshot the Mac's screen for Claude. `prompt()` also covers photos the user sends.
 
-The screen is looked at only when the user asks. screen_look runs only when the user's own words this turn
-(the conversation's `heard`, which no email, web page or tool result can write) mention the screen, or are a clear yes straight
-after JARVIS asked about it (by the word lists, or failing them a short model call on those words alone:
-jarvis.safety.consent); anything else is refused before a screenshot is taken. Background tasks don't get it
-(jarvis.tasks.worker.READ_ONLY_TOOLS).
+Runs only if the user's own words this turn (`heard`, unwritable by tool results) mention the screen, or are a clear
+yes to JARVIS asking about it (word lists, else a short model call). Otherwise refused before any capture.
+Not available to background tasks.
 """
 
 import asyncio
@@ -19,7 +15,7 @@ from jarvis.state import conversation, pictures
 
 from . import WithPictures, tool
 
-# The user's words asking about the screen, as speech recognition writes them
+# Screen mentions, as speech recognition writes them
 ASKS = re.compile(r"\b(screens?|screenshots?|screen\s?shot|screen\s?grab|display|monitor|desktop)\b", re.I)
 
 
@@ -34,8 +30,7 @@ Pictures:
 
 
 def asked(said: str, before: str) -> bool:
-    """Whether the user's words ask to look at the screen: they mention it, or plainly say yes to JARVIS's question
-    about it just before, by the word lists."""
+    """User words mention the screen, or are a word-list yes to JARVIS's screen question just before."""
     if ASKS.search(said):
         return True
     return _asked_to_look(before) and approves(said)
@@ -46,8 +41,7 @@ def _asked_to_look(before: str) -> bool:
 
 
 async def agreed(said: str, before: str) -> bool:
-    """asked, or a yes to JARVIS's question about the screen that the word lists can't read but the model can, from
-    the user's words alone (consent.reply)."""
+    """`asked`, or a model-judged yes (from the user's words alone) to JARVIS's screen question."""
     if asked(said, before):
         return True
     return _asked_to_look(before) and (await consent.reply(said, consent.SCREEN)).yes

@@ -1,6 +1,6 @@
-"""How the task runner (jarvis.tasks.runner) tells the user about its tasks: events on GET /events, which the voice
-agent speaks, the control panel's bell (jarvis.state.activity), a Mac notification, and a push to the phone when
-JARVIS_PUSH is on (jarvis.notify.push); and a run's end (`_finish`), announced those ways.
+"""Runner mixin for telling the user about tasks: GET /events (voice), the panel bell, Mac notifications and pushes.
+
+`_finish` records a run's end and announces it through all of these.
 """
 
 import logging
@@ -16,14 +16,13 @@ from jarvis.tasks.approvals import _VIA, SETTLED, _commands
 from jarvis.tasks.runner_base import RunnerBase
 
 log = logging.getLogger("jarvis.tasks.runner")
-# The statuses worth interrupting the user for, with the phone notification's title for each
+# Statuses that alert the user, with their push title
 PUSH_TITLES = {"done": "Task {id} is done", "waiting": "Task {id} has a question", "failed": "Task {id} failed"}
 STATUS_LIGHT = {"done": "ok", "failed": "bad", "waiting": "warn", "stopped": "warn"}
 
 
 def bell_entry(event: dict) -> tuple[str, str, int | None] | None:
-    """What one of the runner's events says in the control panel's bell (jarvis.state.activity): its text, its light
-    and its task; None for events it leaves out."""
+    """(text, light, task id) for the panel bell, or None for events it skips."""
     match event["type"]:
         case "status":
             return event["text"], STATUS_LIGHT.get(event["task"]["status"], "run"), event["task"]["id"]
@@ -44,20 +43,20 @@ def bell_entry(event: dict) -> tuple[str, str, int | None] | None:
 
 
 class Events(RunnerBase):
-    """A task's end, announced, and the ways the runner reaches the user."""
+    """Ending tasks and reaching the user."""
 
     def _finish(self, task_id: int, status: str, spoken: str, quiet: bool = False, title: str = "", alert: bool = True,
                 **fields) -> None:
-        """A run's end, announced unless `quiet` (a wait for requests the user has already been asked, or a scheduled
-        run with nothing to say). `title` heads its push instead of the task's number (a scheduled job's). Without
-        `alert` it's only said in a live session, or at the next one's greeting: no Mac notification or push. Do not
-        disturb (jarvis.tasks.hold) takes the alert away too."""
+        """Record a run's end and announce it unless `quiet`.
+
+        `title` replaces the task number in the push (e.g. a scheduled job). `alert=False` or do-not-disturb skips the
+        Mac notification and push; it's still spoken in a live session or at the next greeting."""
         fields.setdefault("seen", 0 if status in PUSH_TITLES else 1)
-        if status != "waiting":  # what the user's words ordered was for the work they sent it on, now over
+        if status != "waiting":  # orders apply only to the work just finished
             fields["orders"] = None
         task = self.store.update(task_id, status=status, spoken=spoken, activity=None, **fields)
         self.store.log(task_id, status, spoken)
-        if status != "waiting":  # an answer carries on from the same snapshot; anything else starts afresh
+        if status != "waiting":  # only an answered question resumes from the same snapshot
             self.snapshots.pop(task_id, None)
             self._close_approvals(task_id, status)
         if quiet:
@@ -78,7 +77,7 @@ class Events(RunnerBase):
             return
         try:
             await send_push(title, text, url, tag, **extra)
-        except Exception as e:  # the type alone: nothing about keys or endpoints reaches the log
+        except Exception as e:  # log the type only: no keys or endpoints
             log.warning("push failed: %s", type(e).__name__)
 
     def _emit(self, kind: str, task: dict, text: str) -> None:

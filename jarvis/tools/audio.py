@@ -1,10 +1,7 @@
-"""audio_file: text, a document on the Mac or a summary read into an audio file to listen to later, in JARVIS's own
-voice (Kokoro, jarvis.voice.audio_file).
+"""audio_file: render text or a Mac document to an audio file in JARVIS's voice (Kokoro).
 
-It never reads in the conversation: it starts a long job, a command task in the task runner (jarvis.tasks.command_jobs),
-and says how long the audio will be, roughly how long it takes to make, and where it goes. So it's in the task list,
-job_status shows how far it's got, stop_job (or task_stop) stops it, and JARVIS says when it's done and where it went,
-from the job's last line. Asked to, the job also sends the file to the phone.
+Runs as a command job in the task runner, never in the conversation: visible in the task list, tracked by
+job_status, stopped by stop_job/task_stop, announced on completion from its last line. Optionally sent to the phone.
 """
 
 import asyncio
@@ -23,11 +20,11 @@ from jarvis.voice import audio_file as render
 from . import tool
 from .files import read_file
 
-RENDER_SPEED = 1.0  # seconds of audio made per second, about: 0.9 to 1.8 on an 8 GB M2, busy or not
+RENDER_SPEED = 1.0  # audio seconds rendered per second (0.9-1.8 on an 8 GB M2)
 
 
 def _document(path: str) -> tuple[str, str]:
-    """A document's text, all of it, and its name without the extension."""
+    """(full text, file stem) of a document."""
     p, doc = read_file(path)
     if not doc.text.strip():
         raise ValueError(f"{p.name} has no text to read" + (" (it's a scan or pictures)." if doc.pages else "."))
@@ -94,7 +91,7 @@ async def audio_file(text: str = "", path: str = "", title: str = "", format: st
     write_atomic(spec, json.dumps({"text": spoken, "out": str(out), "format": fmt, "voice": voice, "speed": speed,
                                    "title": name, "phone": phone}), mode=0o600)
     command = f"{shlex.quote(sys.executable)} -m jarvis.voice.audio_file {shlex.quote(str(spec))}"
-    try:  # its last line says what it made; nothing to fix if it fails
+    try:  # last line reports the result; no auto-fix
         job = await client.start_command(command, f"the audio file {name}", str(config.ROOT), summarize=False,
                                          auto_fix=False, report=True)
     except Exception:

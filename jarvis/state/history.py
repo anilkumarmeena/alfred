@@ -1,10 +1,7 @@
-"""The full conversation log (data/conversations, one file a day, written by jarvis.state.memory) as the web page's
-History shows it: which days have conversations, one day's exchanges, and the exchanges that mention some words.
+"""Conversation log (daily files written by jarvis.state.memory) for the web History page: days, a day, search.
 
-Everything comes back newest first, the days and the exchanges within a day alike, so scrolling down goes back in
-time. An exchange is who spoke and what they said, the commands their words said yes to, and JARVIS's reply; something
-JARVIS said between turns, such as a task update, is an announcement. Each install of JARVIS is one person's, with its
-own data/ and passcode, so this is only ever that person's log.
+Results are newest first throughout. Entry kinds: "exchange" (speaker, words, approvals, reply), "announcement"
+(JARVIS speaking between turns), "note" (anything else, e.g. hand edits). Reads the current profile's log only.
 """
 
 import re
@@ -15,8 +12,8 @@ from jarvis.core import profile
 from jarvis.state import memory
 
 DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
-DAYS_PAGE = 30  # days listed at once, before "older"
-SEARCH_MOST = 100  # matching exchanges returned at once
+DAYS_PAGE = 30  # days per page
+SEARCH_MOST = 100  # max search hits
 PREVIEW_CHARS = 140
 _HEAD = re.compile(r"\[(\d{2}:\d{2})\] ([^:\n]{1,60}?)( \(announced\))?: ")
 _TIME = re.compile(r"\[(\d{2}:\d{2})\] ?")
@@ -37,15 +34,15 @@ def _check(day: object) -> str:
 
 
 def _files() -> list[Path]:
-    """The day files, newest first."""
+    """Day files, newest first."""
     folder = profile.current().conversations
     return sorted((f for f in folder.glob("????-??-??.md") if _is_day(f.stem)), reverse=True)
 
 
 def _parse(raw: str) -> dict:
-    """One logged entry (jarvis.state.memory.log_exchange and log_announcement): {"time", "kind", ...}. An exchange
-    ("exchange") has "who", "said", "approved", "reply" and "interrupted"; something JARVIS said between turns
-    ("announcement") has "said"; anything else, such as a hand edit, is a "note" with its text as written."""
+    """Parse one log entry into {"time", "kind", ...}.
+
+    exchange: who, said, approved, reply, interrupted. announcement / note: said."""
     head = _HEAD.match(raw)
     if not head:
         found = _TIME.match(raw)
@@ -72,12 +69,12 @@ def _parse(raw: str) -> dict:
 
 
 def _entries(path: Path) -> list[dict]:
-    """A day file's entries, newest first, each numbered by its place in the day (oldest is 1)."""
+    """A day's entries, newest first, with "n" = position in the day (oldest is 1)."""
     return [_parse(e) | {"n": n} for n, e in reversed(list(enumerate(memory.day_entries(path), 1)))]
 
 
 def _preview(entries: list[dict]) -> str:
-    """The latest thing the user said that day, or failing that the latest thing JARVIS said, shortened."""
+    """Latest user utterance of the day (else latest JARVIS text), truncated."""
     found = next((e["said"] for e in entries if e["kind"] == "exchange" and e["said"]), "") \
         or next((e.get("reply") or e["said"] for e in entries), "")
     found = " ".join(found.split())
@@ -85,9 +82,9 @@ def _preview(entries: list[dict]) -> str:
 
 
 def days(before: str = "", limit: int = DAYS_PAGE) -> dict:
-    """The days with conversations, newest first: up to `limit` of them, older than `before` (YYYY-MM-DD) if given.
-    Each says how many exchanges it holds, its first and last times and a preview. `more` says whether there are older
-    days still; `today` is the date on the Mac, for the page to call it Today."""
+    """Page of days with conversations, newest first, older than `before` if given.
+
+    Each day has counts, first/last time and a preview. Also returns `more` (older days exist) and `today`."""
     if before:
         _check(before)
     files = [f for f in _files() if not before or f.stem < before]
@@ -101,7 +98,7 @@ def days(before: str = "", limit: int = DAYS_PAGE) -> dict:
 
 
 def day(on: str) -> dict:
-    """One day's entries, newest first, with the days either side that have conversations (None at either end)."""
+    """A day's entries, newest first, plus the adjacent days with conversations (or None)."""
     path = profile.current().conversations / f"{_check(on)}.md"
     stems = [f.stem for f in _files()]
     return {"date": on, "entries": _entries(path) if path.is_file() else [],
@@ -114,8 +111,7 @@ def _haystack(entry: dict) -> str:
 
 
 def search(text: str, limit: int = SEARCH_MOST) -> dict:
-    """The entries that contain every word of `text`, in any case, newest first: up to `limit` of them, each with its
-    date. `more` says whether older ones were left out."""
+    """Entries containing every word of `text` (case-insensitive), newest first, up to `limit`; `more` if truncated."""
     if not (words := text.lower().split()):
         raise ValueError("Say what to look for.")
     hits: list[dict] = []

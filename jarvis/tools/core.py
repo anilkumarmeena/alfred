@@ -6,8 +6,7 @@ from . import tool
 
 
 def vetted(text: str, what: str) -> str:
-    """The text without invisible characters, unless it reads like hidden instructions (jarvis.safety.scan): then it's
-    refused, saying what was found, for the brain to tell the user rather than save it."""
+    """`text` stripped of invisible characters; ValueError if it reads like hidden instructions."""
     try:
         return scan.vetted(text, what)
     except scan.Suspicious as e:
@@ -88,7 +87,7 @@ def vocabulary_add(word: str, heard_as: list[str] | None = None) -> str:
     {"stop": {"type": "boolean", "description": "true: stop an enrollment under way, keeping the voiceprint as it was."}},
 )
 async def voice_enroll(stop: bool = False) -> str:
-    if (check := conversation.current().speaker) is None:  # the conversation's own check, which collects the clips
+    if (check := conversation.current().speaker) is None:  # this conversation's speaker check
         return "Voice enrollment only works in a voice conversation: ask in one, or use Settings, Preferences in the panel."
     if stop:
         return "Stopped; the voiceprint is as it was." if check.cancel_enrollment() else "No enrollment was under way."

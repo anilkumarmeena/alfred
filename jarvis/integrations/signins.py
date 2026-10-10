@@ -1,18 +1,12 @@
-"""Whether JARVIS's connections still work, so the heartbeat can say when one stops, before a tool fails on it.
+"""Sign-in health checks, so the heartbeat warns before a tool fails on an expired or revoked login.
 
-  google  each configured Google account: signed in, and its sign-in still refreshes. Google gives no end date for a
-          sign-in, so this can only say once it has stopped working (revoked, a password change, or a 7-day token
-          from an OAuth app left in testing), within about an hour, as access tokens last that long
-  github  the gh CLI's login, which the heartbeat and tasks use, and the GitHub MCP server's token (github.token in
-          the vault) when that server is on: each still accepted, and, for a token with an end date (GitHub's
-          github-authentication-token-expiration header), how soon it ends
-  gitlab  the GitLab MCP server's token (gitlab.token), when that server is on: still accepted and active, and its
-          expires_at (GitLab's personal_access_tokens/self)
+  google  each account still refreshes. Google gives no expiry, so this only detects failure (within ~1 h)
+  github  gh CLI login, plus the GitHub MCP token if enabled (expiry from github-authentication-token-expiration)
+  gitlab  the GitLab MCP token if enabled: active, and expires_at from personal_access_tokens/self
 
-Each finding is a Problem with a key that stays the same while it lasts, so the heartbeat says it once (and again
-only if it clears and comes back). It warns SIGNIN_WARN_DAYS before a token's end. A check that can't reach the
-service says nothing: being offline isn't a sign-in problem. Read-only: it reads tokens to test them, never shows,
-logs or changes them, except that refreshing a Google sign-in saves the new access token, as every Google tool does.
+Each Problem has a stable key so the heartbeat says it once. Warns SIGNIN_WARN_DAYS before expiry. Unreachable
+services are silent (offline isn't a sign-in problem). Tokens are never shown or logged; the only write is saving a
+refreshed Google access token.
 """
 
 import asyncio
@@ -32,12 +26,12 @@ GITHUB_API = "https://api.github.com"
 
 @dataclass(frozen=True)
 class Problem:
-    key: str  # the same while the problem lasts
-    text: str  # one sentence, fit to be spoken and shown on the lock screen: never a token or what a service said
+    key: str  # stable while the problem lasts
+    text: str  # one sentence, safe to speak and show on the lock screen: no tokens or service replies
 
 
 def _ending(key: str, what: str, ends: date, today: date, fix: str) -> list[Problem]:
-    """A warning if `ends` is within SIGNIN_WARN_DAYS, else nothing."""
+    """Warning if `ends` is within SIGNIN_WARN_DAYS, else []."""
     days = (ends - today).days
     if days > SIGNIN_WARN_DAYS:
         return []
@@ -46,7 +40,7 @@ def _ending(key: str, what: str, ends: date, today: date, fix: str) -> list[Prob
 
 
 def _stopped(service: str, name: str, fix: str) -> Problem:
-    """An MCP server's token that the service no longer accepts."""
+    """MCP server token no longer accepted."""
     return Problem(f"signin:{service}:token:out", f"JARVIS's {name} token has stopped working; {fix}")
 
 
@@ -54,8 +48,7 @@ def _stopped(service: str, name: str, fix: str) -> Problem:
 
 
 def _google_account(label: str) -> str:
-    """'' if the account's sign-in works (refreshing it if it's due), 'out' if it doesn't, 'offline' if Google can't
-    be reached."""
+    """'' if the sign-in works (refreshing if due), 'out' if not, 'offline' if Google is unreachable."""
     from ai_armory.toolsets.google import common
     from google.auth.exceptions import RefreshError, TransportError
     from google.auth.transport.requests import Request
@@ -85,13 +78,13 @@ def _google_account(label: str) -> str:
 async def google_accounts(now: datetime) -> list[Problem]:
     from ai_armory.toolsets.google.common import settings
 
-    from jarvis.tools import google  # sets AI Armory's Google tool sets up with JARVIS's accounts
+    from jarvis.tools import google  # configures AI Armory with JARVIS's accounts
 
     out = []
     for label in google.LABELS:
         try:
             state = await asyncio.wait_for(asyncio.to_thread(_google_account, label), TIMEOUT)
-        except Exception as e:  # the type alone: an error's text may carry what the request did
+        except Exception as e:  # log the type only: the message may contain request data
             log.warning("checking the %s Google account failed: %s", label, type(e).__name__)
             continue
         if state == "out":
@@ -105,7 +98,7 @@ async def google_accounts(now: datetime) -> list[Problem]:
 
 
 def _expiry(value: str | None) -> date | None:
-    """GitHub's '2026-11-01 12:00:00 UTC', or GitLab's '2026-11-01', as a date."""
+    """Parse GitHub's '2026-11-01 12:00:00 UTC' or GitLab's '2026-11-01'."""
     if not value:
         return None
     try:
@@ -115,7 +108,7 @@ def _expiry(value: str | None) -> date | None:
 
 
 async def _token_check(url: str, headers: dict[str, str]):
-    """GET `url` with a token: the response, or None if the service couldn't be reached."""
+    """GET `url`; None if unreachable."""
     import httpx
 
     try:
@@ -127,7 +120,7 @@ async def _token_check(url: str, headers: dict[str, str]):
 
 
 def _secret(server_name: str) -> str | None:
-    """The MCP server's token, if the server is on and its token is set; None otherwise."""
+    """The MCP server's token if it is enabled and set, else None."""
     from jarvis.core import vault
     from jarvis.integrations import mcp_servers
 
@@ -192,7 +185,7 @@ CHECKS = {"google": google_accounts, "github": github, "gitlab": gitlab}
 
 
 async def check(now: datetime) -> list[Problem]:
-    """Every connection's problems. One check failing is logged (its type only) and the others still count."""
+    """All sign-in problems. A failing check is logged (type only) and skipped."""
     results = await asyncio.gather(*(fn(now) for fn in CHECKS.values()), return_exceptions=True)
     out = []
     for name, found in zip(CHECKS, results):
@@ -204,6 +197,6 @@ async def check(now: datetime) -> list[Problem]:
 
 
 if __name__ == "__main__":
-    # What the heartbeat would say about the sign-ins now
+    # Print what the heartbeat would say now
     for p in asyncio.run(check(datetime.now(profile.tz()))) or [Problem("", "Every connection works.")]:
         print(p.text)

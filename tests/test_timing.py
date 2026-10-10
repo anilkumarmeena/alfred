@@ -1,5 +1,4 @@
-"""Tests for each voice turn's timing (jarvis.voice.timing): LiveKit's measures and JARVIS's own marks, one record
-per turn, written when its reply is spoken or cut off. Run with: make test"""
+"""Tests for jarvis.voice.timing: LiveKit measures and JARVIS marks, one record per turn when spoken or cut off."""
 
 import asyncio
 import json
@@ -78,7 +77,7 @@ def test_a_reply_the_user_went_on_over_is_unspoken_with_how_long_they_paused(tim
     timings.heard("Let's discuss what you", heard_at(1000.0))
     clock.now = 1001.0
     timings.replying()
-    timings.heard("think about the delay", heard_at(1004.0, spoke_for=2.6))  # they went on 1.4 s after stopping
+    timings.heard("think about the delay", heard_at(1004.0, spoke_for=2.6))  # they kept talking 1.4 s after stopping
     [r] = records(path)
     assert r["ended"] == "unspoken" and r["resumed"] == 1.4 and "first_audio" not in r
     assert timings.turn.record["turn"] == 2 and timings.turn.record["words"] == 4
@@ -98,7 +97,7 @@ def test_only_a_reply_to_the_turn_under_way_ends_it(timed):
     timings.heard("hello", heard_at(1000.0))
     timings.spoke({"started_speaking_at": 1001.0}, False)  # before the reply started: not its reply
     timings.replying()
-    timings.spoke({"started_speaking_at": 999.0}, True)  # the last reply, cut off once the user had started this turn
+    timings.spoke({"started_speaking_at": 999.0}, True)  # the previous reply, cut off after the user started this turn
     assert not path.exists() and timings.turn is not None
     timings.spoke({"started_speaking_at": 1001.5}, False)
     assert records(path)[0]["first_audio"] == 1.5
@@ -161,7 +160,7 @@ def test_the_agent_times_its_reply_from_the_users_turn_to_its_first_words(timed)
 
 
 class ToolClient:
-    """Stands in for ClaudeSDKClient: a reply that says a phrase, calls a tool, then answers."""
+    """Fake ClaudeSDKClient: says a phrase, calls a tool, then answers."""
 
     async def query(self, prompt) -> None:
         pass

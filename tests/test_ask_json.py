@@ -1,6 +1,4 @@
-"""Tests for sdk.ask_json and sdk.ask_flag: every short model call that gives a verdict replies in JSON, checked against
-a schema, and a reply that isn't such JSON is None for the caller's fallback, never read for keywords. The model call
-is faked. Run with: make test"""
+"""Tests for sdk.ask_json/ask_flag: schema-checked JSON verdicts; anything else is None, never keyword-matched."""
 
 import asyncio
 import logging
@@ -16,9 +14,10 @@ SCHEMA = {"type": "object", "properties": {"met": {"type": "boolean"}, "said": {
 
 @pytest.fixture
 def replies(monkeypatch):
-    """sdk.ask faked: each call answers with the next of `replies.queue` (an exception is raised, an event waited for),
-    costing 0.01, within its timeout as the real one. What each call was asked is in `replies.asked`, as (prompt, system
-    prompt, model, options), and its timeout in `replies.timeouts`."""
+    """Fake sdk.ask: each call returns (or raises, or awaits) the next item of `replies.queue`.
+
+    Records (prompt, system, model, options) in `replies.asked` and timeouts in `replies.timeouts`.
+    """
     fake = SimpleNamespace(queue=[], asked=[], timeouts=[])
 
     async def ask(prompt, system_prompt, model, timeout=sdk.ASK_SECONDS, **options):
@@ -42,9 +41,9 @@ def replies(monkeypatch):
     ('Here is my verdict: {"met": false, "extra": 1} Hope that helps.', {"met": False, "extra": 1}),
     ('{"outer": {"met": true}}', None),  # nested: the object itself must match
     ("MET: it shipped.", None),  # keywords are no verdict
-    ('{"met": "yes"}', None),  # the wrong type
-    ('{"said": "It shipped."}', None),  # a required field missing
-    ('[{"met": true}]', {"met": True}),  # the object inside
+    ('{"met": "yes"}', None),  # wrong type
+    ('{"said": "It shipped."}', None),  # required field missing
+    ('[{"met": true}]', {"met": True}),  # the object inside a list
     ('[true]', None),  # no object
     ("{not json}", None),
     ("", None),
@@ -93,7 +92,7 @@ def test_ask_json_on_the_real_sdk_path(monkeypatch):
 @pytest.mark.parametrize("reply, answer", [
     ('{"rerun": true}', True),
     ('{"rerun": false}', False),
-    ("RERUN: yes", None),  # not JSON: no answer, whatever its words
+    ("RERUN: yes", None),  # not JSON: no answer, whatever the words
     ('{"rerun": "yes"}', None),
     (RuntimeError("overloaded"), None),  # the call failed
 ])

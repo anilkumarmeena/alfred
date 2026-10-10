@@ -1,6 +1,4 @@
-"""Tests for the heartbeat's warnings that aren't news: sign-ins that stopped working or tokens about to expire
-(jarvis.integrations.signins), Claude's usage limits, alerts about something ongoing flagged once until it clears, and
-do not disturb holding the beat. Run with: make test"""
+"""Tests for jarvis.integrations.signins and heartbeat warnings: sign-ins, usage limits, once-only alerts, DND."""
 
 import asyncio
 import json
@@ -98,7 +96,7 @@ class Reply:
 
 @pytest.fixture
 def services(monkeypatch):
-    """The gh CLI, the vault's tokens and the services' answers, as each test sets them."""
+    """Fake gh CLI, vault tokens and service answers, set per test."""
     state = {"gh": (0, "Logged in to github.com account me"), "tokens": {}, "replies": {}, "asked": []}
 
     async def run_try(*argv, timeout=30):

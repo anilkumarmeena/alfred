@@ -1,20 +1,14 @@
-"""One-time and repeatable local setup: uv run python -m jarvis.setup_local [--install | start | stop | labels]
+"""Local setup, safe to rerun: uv run python -m jarvis.setup_local [--install | start | stop | labels]
 
-- Generates LiveKit keys, a phone passcode and the vault's master key (jarvis.core.vault) into .env, only if
-  missing, and keeps .env readable by you alone (mode 600). Then moves the keys into the vault
-  (jarvis.core.credentials) and makes the passcode the first login (jarvis.core.logins), both out of .env; the new
-  passcode is shown once.
-- Asks where your projects are kept, once (JARVIS_NEW_PROJECTS_DIR and JARVIS_TASK_READ_DIRS in .env), offering the
-  folder this checkout is in (config.projects_home).
-- Writes secrets/livekit.yaml for the local LiveKit server, advertising the
-  Tailscale IP for media when Tailscale is running.
-- With --install, installs and (re)starts the launchd services, filling their labels (config.service_label) and this
-  Mac's folders into the plists in deploy/.
+  (default)  fill missing LiveKit keys, passcode and vault master key in .env (mode 600), move keys into the vault
+             and the passcode into logins (shown once); ask once for the projects folder; write secrets/livekit.yaml
+  --install  also (re)install and start the launchd services from deploy/*.plist
+  start      load installed services, installing missing ones
+  stop       unload services (they stay installed)
+  labels     print the service labels
 
-The services alone, for make: `start` loads them, installing any that aren't yet; `stop` unloads them; `labels` prints
-their labels. Services this checkout installed under other labels (an older prefix, or JARVIS_SERVICE_PREFIX changed
-since) are stale: stop unloads them too, and start and --install unload them and remove their plists before loading
-the current ones, so an install moves over to new labels on its next restart.
+Plists this checkout installed under old labels (e.g. a changed JARVIS_SERVICE_PREFIX) are stale: stop unloads them;
+start and --install remove them before loading the current ones.
 """
 
 import os
@@ -37,7 +31,7 @@ from jarvis.core.files import write_atomic
 ENV = ROOT / ".env"
 LIVEKIT_CONFIG = SECRETS_DIR / "livekit.yaml"
 LAUNCH_AGENTS = Path.home() / "Library/LaunchAgents"
-SERVICES = config.SERVICE_NAMES  # deploy/<name>.plist, installed as <label>.plist
+SERVICES = config.SERVICE_NAMES  # deploy/<name>.plist -> <label>.plist
 TAILSCALE_CLIS = ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]
 
 
@@ -62,7 +56,7 @@ def tailscale_ip() -> str:
 
 
 def _shown(path: Path) -> str:
-    """A folder as .env should have it: ~/... when it's in the home folder."""
+    """Path for .env, as ~/... when under home."""
     try:
         return "~/" + str(path.relative_to(Path.home()))
     except ValueError:
@@ -70,9 +64,8 @@ def _shown(path: Path) -> str:
 
 
 def ask_projects_folder(text: str, ask=input) -> str:
-    """The .env text with JARVIS_NEW_PROJECTS_DIR, and JARVIS_TASK_READ_DIRS unless that's set already, both naming
-    where the user's projects are: asked when there's someone at the terminal, else config.projects_home(). Unchanged
-    when JARVIS_NEW_PROJECTS_DIR is set already, in .env or the environment."""
+    """Set JARVIS_NEW_PROJECTS_DIR (and JARVIS_TASK_READ_DIRS if unset) in `text`, asking on a TTY, else
+    config.projects_home(). No-op if JARVIS_NEW_PROJECTS_DIR is already set in .env or the environment."""
     if _env_get(text, "JARVIS_NEW_PROJECTS_DIR") or os.environ.get("JARVIS_NEW_PROJECTS_DIR", "").strip():
         return text
     folder = default = _shown(config.projects_home())
@@ -87,30 +80,29 @@ def ask_projects_folder(text: str, ask=input) -> str:
     return text
 
 
-# ── The launchd services ────────────────────────────────────────
+# ── launchd services ────────────────────────────────────────────
 
 
 def service_plist(name: str) -> str:
-    """deploy/<name>.plist with its label and this Mac's folders in: ${LABEL} the service's label, ${ROOT} the
-    project, ${HOME} the home folder, and ${NODE} the folder of the `node` on PATH now (nvm's, say) with its colon, or
-    nothing."""
+    """deploy/<name>.plist with ${LABEL}, ${ROOT}, ${HOME} and ${NODE} (current node's bin dir plus ":", or "")
+    substituted."""
     node = shutil.which("node")
     return Template((ROOT / "deploy" / f"{name}.plist").read_text()).substitute(
         LABEL=config.service_label(name), ROOT=ROOT, HOME=Path.home(), NODE=f"{Path(node).parent}:" if node else "")
 
 
 def installed(name: str) -> Path:
-    """Where a service's plist goes: ~/Library/LaunchAgents/<label>.plist."""
+    """~/Library/LaunchAgents/<label>.plist."""
     return LAUNCH_AGENTS / f"{config.service_label(name)}.plist"
 
 
 def _service(plist: Path) -> str:
-    """The service an installed plist is named for: "agent" for com.jarvis.agent.plist."""
+    """Service name from a plist: com.jarvis.agent.plist -> "agent"."""
     return plist.stem.rpartition(".")[2]
 
 
 def _write(name: str) -> Path:
-    """Write a service's plist to ~/Library/LaunchAgents, making that folder and logs/ if need be."""
+    """Write the service plist, creating LaunchAgents/ and logs/ if needed."""
     dest = installed(name)
     dest.parent.mkdir(parents=True, exist_ok=True)
     (ROOT / "logs").mkdir(exist_ok=True)
@@ -119,8 +111,7 @@ def _write(name: str) -> Path:
 
 
 def stale() -> list[Path]:
-    """Plists in ~/Library/LaunchAgents this checkout installed under labels it no longer uses: named like one of its
-    services (<anything>.agent and so on) and logging into this checkout's logs/, which no other install's do."""
+    """Plists from this checkout under unused labels: named *.<service> and logging into this checkout's logs/."""
     current = {installed(name) for name in SERVICES}
     found = []
     for plist in sorted(LAUNCH_AGENTS.glob("*.plist")):
@@ -136,8 +127,8 @@ def stale() -> list[Path]:
 
 
 def _launchctl(action: str, plist: Path) -> str:
-    """bootstrap or bootout a plist in the user's GUI domain: "" when it worked, else launchctl's error. Not the
-    legacy load and unload, whose exit status is 0 even when they fail."""
+    """launchctl bootstrap/bootout in the GUI domain; "" on success, else the error. (Legacy load/unload exit 0 even
+    on failure.)"""
     done = subprocess.run(["launchctl", action, f"gui/{os.getuid()}", str(plist)], capture_output=True, text=True)
     return "" if done.returncode == 0 else (done.stderr or done.stdout or f"exit {done.returncode}").strip()
 
@@ -147,8 +138,8 @@ def _running(label: str) -> bool:
 
 
 def _start(name: str, tries: int = 5) -> bool:
-    """bootstrap a service's installed plist, retrying a few times while a just-stopped one is still shutting down
-    (launchctl's "5: Input/output error"); an already running one counts as started. Says why when it can't."""
+    """Bootstrap a service, retrying while a just-stopped one shuts down ("5: Input/output error"). Already running
+    counts as started; prints the error on failure."""
     label, error = config.service_label(name), ""
     for attempt in range(tries):
         if not (error := _launchctl("bootstrap", installed(name))) or _running(label):
@@ -161,7 +152,7 @@ def _start(name: str, tries: int = 5) -> bool:
 
 
 def _retire_stale() -> None:
-    """Unload the stale services and remove their plists, so they don't come back at the next login."""
+    """Unload stale services and delete their plists so they don't return at login."""
     for plist in stale():
         _launchctl("bootout", plist)
         plist.unlink(missing_ok=True)
@@ -169,8 +160,7 @@ def _retire_stale() -> None:
 
 
 def install_services() -> None:
-    """Write each service's plist afresh and (re)load it, after moving off any stale labels. Exits with status 1 if
-    any of them didn't start."""
+    """Retire stale labels, rewrite and reload every plist. Exits 1 if any service fails to start."""
     _retire_stale()
     started = True
     for name in SERVICES:
@@ -182,8 +172,7 @@ def install_services() -> None:
 
 
 def start_services() -> None:
-    """Load the installed services, installing any whose plist isn't there yet: all of them after a move to new
-    labels, whose stale ones go first. Exits with status 1 if any of them didn't start."""
+    """Retire stale labels, install missing plists and load all services. Exits 1 if any fails to start."""
     _retire_stale()
     started = True
     for name in SERVICES:
@@ -195,7 +184,7 @@ def start_services() -> None:
 
 
 def stop_services() -> None:
-    """Unload the services, stale ones too. They stay installed, but for the stale ones, which start removes."""
+    """Unload current and stale services; plists stay (start removes stale ones)."""
     for plist in [installed(name) for name in SERVICES] + stale():
         if plist.exists() and not _launchctl("bootout", plist):
             print(f"stopped {plist.stem}")
@@ -209,7 +198,7 @@ def main() -> None:
     if not ENV.exists():
         shutil.copy(ROOT / ".env.example", ENV)
     text = ENV.read_text()
-    # A first setup's keys and passcode go into .env, as before, then into the vault and the logins (adopt, below)
+    # First-setup keys and passcode go into .env, then adopt() below moves them to the vault and logins
     if not _env_get(text, "LIVEKIT_API_KEY") and not credentials.get(credentials.LIVEKIT_KEY):
         text = _env_set(text, "LIVEKIT_API_KEY", "jarvis" + secrets.token_hex(4))
     if not _env_get(text, "LIVEKIT_API_SECRET") and not credentials.get(credentials.LIVEKIT_SECRET):
@@ -218,10 +207,10 @@ def main() -> None:
     if new_passcode:
         text = _env_set(text, logins.VAR, new_passcode)
     if not _env_get(text, vault.VAR) and not os.environ.get(vault.VAR) and not config.MASTER_KEY:
-        text = _env_set(text, vault.VAR, vault.new_key())  # the key to the secrets in the database (jarvis.core.vault)
+        text = _env_set(text, vault.VAR, vault.new_key())  # vault master key
     text = ask_projects_folder(text)
     write_atomic(ENV, text, mode=0o600)
-    load_dotenv(ENV)  # what was just written, for adopt to find
+    load_dotenv(ENV)  # so adopt() sees the new values
 
     for label in credentials.adopt():
         print(f"Moved the {label} from .env into the vault.")
@@ -230,7 +219,7 @@ def main() -> None:
     ip = write_livekit_config()
     print(f"LiveKit config written. Media address: {ip or 'local network (Tailscale not running)'}")
     if new_passcode:
-        # Shown once, as it's made: only its hash is kept. Change it in the control panel (Settings → Logins and keys).
+        # Shown once; only its hash is kept
         print(f"Phone passcode for {logins.first_name()}: {new_passcode}")
 
     if "--install" in sys.argv:
@@ -238,9 +227,8 @@ def main() -> None:
 
 
 def write_livekit_config() -> str:
-    """secrets/livekit.yaml, mode 600, for the local LiveKit server, with the LiveKit keys (jarvis.core.credentials).
-    The control panel writes it again when they change; the LiveKit service reads it as it starts. Returns the
-    Tailscale address it gives for media, or ""."""
+    """Write secrets/livekit.yaml (mode 600) with the LiveKit keys; the panel rewrites it when keys change. Returns
+    the Tailscale media IP, or ""."""
     ip = tailscale_ip()
     node_ip = f"  node_ip: {ip}\n" if ip else ""
     write_atomic(LIVEKIT_CONFIG, (

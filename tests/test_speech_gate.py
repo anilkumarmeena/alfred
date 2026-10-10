@@ -1,5 +1,7 @@
-"""The speech gate (jarvis.voice.speech_gate): clips are judged on their audio and Whisper's confidence, the words only
-count when they are a known phantom such as "Thank you.", and shadow mode only logs. Silero is stood in for by a fake that marks chosen stretches as speech, except in the one test of the real one."""
+"""Tests for voice.speech_gate: audio and Whisper-confidence checks, phantom phrases, shadow mode, clip saving.
+
+Silero is faked (it marks chosen stretches as speech) except in one test of the real model.
+"""
 
 import asyncio
 import dataclasses
@@ -66,7 +68,6 @@ def test_a_clip_is_measured():
 
 
 def test_real_short_replies_always_get_through(caplog):
-    """Short replies are real speech: the VAD hears them, and their words never count against them."""
     for mode in ("shadow", "enforce"):
         g = gate(mode, (0.5, 0.85))
         for text in ("Okay.", "No.", "Yes.", "Go ahead.", "Sure, go ahead.", "Yeah."):
@@ -76,7 +77,7 @@ def test_real_short_replies_always_get_through(caplog):
 
 
 def test_a_real_thank_you_gets_through_when_said_clearly(caplog):
-    """A phantom phrase needs a clip that's loud enough, with enough speech, that Whisper is sure of."""
+    """A phantom phrase passes only when loud, with enough speech, and Whisper is sure."""
     g = gate("enforce", (0.4, 1.1))
     with caplog.at_level(logging.INFO, "jarvis.voice.speech_gate"):
         assert g.passes(g.measure(clip(1.8, (0.4, 1.1), level=0.3)), "Thank you.", no_speech=0.0, avg_logprob=-0.6)
@@ -128,7 +129,7 @@ def heard(seconds: float, loudest_dbfs: float, speech_seconds: float, avg_logpro
 
 
 def test_faint_phantoms_get_caught():
-    """The two phantoms let through at 20:45 IST on 4 October: just over the 0.1 s of speech that "no speech" needs."""
+    """Real phantoms from the log, just over the 0.1 s of speech that "no speech" needs."""
     assert speech_gate.reasons(heard(1.172, -39.3, 0.16), LOOSE) == ["faint"]  # "You"
     assert speech_gate.reasons(heard(1.172, -30.9, 0.192), LOOSE) == ["faint"]  # "Thank you."
 
@@ -155,7 +156,7 @@ def test_faint_needs_all_three():
 
 
 @pytest.mark.parametrize("text, seconds, loudest, speech_s", [
-    # Phantoms the audio checks let through on 4 and 5 October, which reached the brain as the user's turns
+    # real phantoms that passed the audio checks and reached the brain as user turns
     ("Thank you.", 1.204, -27.8, 0.352),
     ("Thank you.", 1.588, -31.1, 0.512),
     ("Thank you.", 1.556, -32.4, 0.736),  # plenty of VAD "speech", but quiet: the tail of JARVIS's own voice
@@ -174,7 +175,7 @@ def test_phantom_phrases_on_weak_audio_are_caught(text, seconds, loudest, speech
 @pytest.mark.parametrize("text", ["Yes.", "No.", "Okay.", "Sure.", "Go ahead.", "Sure, go ahead.", "Yeah, sure.",
                                   "Thank you, that's all.", "Stop.", "What?"])
 def test_real_replies_on_the_same_weak_audio_are_not_phantoms(text):
-    """Only the listed phrases are held to the higher bar, and only when they are the whole transcript."""
+    """Only listed phrases face the higher bar, and only as the whole transcript."""
     assert speech_gate.reasons(heard(1.524, -27.0, 0.352, -0.8), LOOSE, text) == [], text
 
 
@@ -308,7 +309,7 @@ def test_whisper_keeps_real_speech_when_enforcing(monkeypatch):
 
 
 def test_whisper_hands_the_gate_its_confidence(monkeypatch):
-    """A garbled clip: real sound, but Whisper's every retry failed. Its guess, "Nngo!", never reaches the brain."""
+    """Garbled clip: real sound, every Whisper retry failed; its guess never reaches the brain."""
     stt = speech.WhisperSTT(gate=gate("enforce", (0.4, 0.65)))
     monkeypatch.setattr(stt, "_transcribe", transcribes("Nngo!", 0.0, avg_logprob=-1.9))
     assert asyncio.run(stt._hear(buffer(clip(1.0, (0.4, 0.65), level=0.4)))) == ""
@@ -342,7 +343,7 @@ def test_each_clip_is_saved_as_the_wav_whisper_heard_and_its_line_says_where(tmp
 
 
 def test_kept_clips_are_saved_too_in_either_mode(tmp_path):
-    """Two of the four phantom "Thank you"s were kept, so what the gate lets through is worth hearing as well."""
+    """Some phantoms get through, so kept clips are worth hearing too."""
     for mode in ("shadow", "enforce"):
         g = gate(mode, (0.4, 0.8), tmp_path)
         audio = clip(1.2, (0.4, 0.8))

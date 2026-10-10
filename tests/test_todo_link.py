@@ -1,7 +1,4 @@
-"""Tests for settling the to-do list as tasks finish: a task started for a to-do item (task_start's todo) has it ticked
-off once the goal check finds it finished, or a rewording to what's left suggested, and an open item a task finishes
-unasked is suggested for ticking off (jarvis.tasks.goal, jarvis.tasks.runner). The check's model call is faked.
-Run with: make test"""
+"""Tests for settling to-dos as tasks finish (jarvis.tasks.goal, runner): tick off, reword, or suggest ticking off."""
 
 import asyncio
 
@@ -22,7 +19,7 @@ from jarvis.tools import tasks as task_tools
 
 @pytest.fixture
 def listed(env):
-    """The env fixture's task database, with a to-do list in it: 1 and 2 open, 3 done."""
+    """Task database with to-dos 1 and 2 open, 3 done."""
     for item in ("Load MCP connection tools only when needed", "Build the iPhone app", "Old thing"):
         todo.add(item)
     todo.done("Old thing")
@@ -30,8 +27,10 @@ def listed(env):
 
 
 def run(*replies, checks, todo_item: str = "", then=None, job=None):
-    """Start a research task (for `todo_item`, if given), its checks answering with `replies`, let it settle, and return
-    the runner, the task and what was announced. `then(r, task)` runs once it has settled, and it settles again after."""
+    """Start a research task (for `todo_item`, if given) with checks answering `replies`; let it settle.
+
+    Returns (runner, task, announced). `then(r, task)` runs once it settles, then it settles again.
+    """
     checks.replies = list(replies)
 
     async def main():
@@ -58,7 +57,7 @@ def is_open(item_id: int) -> bool:
 def test_find_prefers_the_item_worded_exactly_and_takes_a_listed_line(env):
     todo.add("Fix the build")
     todo.add("Fix the build on CI")
-    assert todo.find("fix the build")["id"] == 1  # also inside the second, but this one is it exactly
+    assert todo.find("fix the build")["id"] == 1  # also inside the second, but this one matches exactly
     assert todo.find("- [ ] Fix the build on CI (added 2026-10-09)")["id"] == 2
     with pytest.raises(ValueError, match="2 open to-dos"):
         todo.find("fix")

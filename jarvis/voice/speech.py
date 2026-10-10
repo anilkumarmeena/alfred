@@ -1,16 +1,11 @@
 """On-device speech for LiveKit: Whisper (MLX, Apple GPU) in, Kokoro out. Nothing leaves the Mac.
 
-The models load once, in LiveKit's inference process: the worker starts that one process before it takes any call
-(its runners are the classes registered here), and every job process, one per call from the Mac, phone or browser,
-sends it audio or text over the worker's IPC. So two calls share one Whisper and one Kokoro, and a job process holds
-no model of its own (only the small Silero VAD and noise filter, which keep per-call state). The inference process
-handles one request at a time, which queues calls' requests behind each other; each runner also holds a lock, so a
-model never runs twice at once. If that process is down, or a model failed to load in it, a call's STT or TTS raises
-an APIConnectionError saying so, rather than hang.
-Whisper is prompted with the user's speech vocabulary (jarvis.state.vocabulary), sent with each clip, and a clip the
-speech gate passes has the vocabulary's known mishearings put right before the brain hears it.
-It keeps no more memory than it's using: MLX's cache of freed GPU buffers is capped (JARVIS_MLX_CACHE_MB), and
-Kokoro runs without ONNX Runtime's memory arena (JARVIS_TTS_MEMORY_ARENA), which grew to fit the longest sentence yet.
+Models load once in LiveKit's shared inference process (runners registered here); job processes send it audio/text
+over IPC, so concurrent calls share one Whisper and one Kokoro. Requests are serialized, and each runner locks too.
+If that process is down or a model failed to load, STT/TTS raise APIConnectionError instead of hanging.
+
+Whisper is prompted with the user's vocabulary, and known mishearings are fixed after the speech gate. Memory is kept
+lean: MLX's buffer cache is capped (JARVIS_MLX_CACHE_MB) and Kokoro's ORT arena is off by default.
 """
 
 import asyncio
@@ -52,17 +47,16 @@ WHISPER_RATE = 16000
 KOKORO_RATE = 24000
 WHISPER_METHOD = "jarvis_whisper"
 KOKORO_METHOD = "jarvis_kokoro"
-INFERENCE_TIMEOUT = 30  # seconds: far more than a clip or sentence takes, so only a stuck process hits it
+INFERENCE_TIMEOUT = 30  # seconds; only a stuck process hits it
 
 
-# ── The shared process: one runner per model ────────────────────
+# ── Shared process: one runner per model ───────────────────────
 
 
 def transcribe(audio: np.ndarray, model: str = STT_MODEL, prompt: str = "") -> dict:
-    """{text, no_speech, avg_logprob}: Whisper's no-speech probability (the lowest of its segments') and its average
-    log-probability per token over the whole text, each None without any segments. Each clip is heard on its own
-    (condition_on_previous_text off), so one phantom can't seed the next; `prompt`, the words to expect, is the only
-    text it's given before the clip."""
+    """{text, no_speech (min over segments), avg_logprob (token-weighted)}; numbers None without segments.
+
+    condition_on_previous_text is off so one phantom can't seed the next; `prompt` is the only context."""
     import mlx_whisper
 
     result: dict = mlx_whisper.transcribe(audio, path_or_hf_repo=model, language="en",
@@ -76,28 +70,27 @@ def transcribe(audio: np.ndarray, model: str = STT_MODEL, prompt: str = "") -> d
 
 
 def limit_mlx_cache(mb: int = MLX_CACHE_MB) -> None:
-    """Cap the GPU buffers MLX keeps for reuse after a clip (JARVIS_MLX_CACHE_MB); without a cap they stay at the
-    largest clip's needs, about 0.7 GB for Whisper large-v3-turbo. -1 leaves MLX's own default, no cap."""
+    """Cap MLX's freed-buffer cache. Uncapped it stays at the largest clip's size (~0.7 GB for large-v3-turbo).
+    -1 leaves MLX's default."""
     if mb < 0:
         return
     try:
         import mlx.core as mx
 
         mx.set_cache_limit(mb * 2**20)
-    except Exception as e:  # Whisper still runs, only without the cap
+    except Exception as e:  # Whisper still runs, uncapped
         log.warning("couldn't cap MLX's cache at %d MB: %r", mb, e)
 
 
 def mlx_memory() -> str:
-    """MLX's memory now, for the logs: what Whisper holds, and what's cached for reuse."""
+    """MLX active and cached memory, for logs."""
     import mlx.core as mx
 
     return f"MLX {mx.get_active_memory() / 2**20:.0f} MB in use, {mx.get_cache_memory() / 2**20:.0f} MB cached"
 
 
 def whisper_request(audio: np.ndarray, prompt: str = "") -> bytes:
-    """A clip as the shared process takes it: the prompt's length in 4 bytes and the prompt, in UTF-8, then the
-    samples."""
+    """Encode as: 4-byte LE prompt length, UTF-8 prompt, float32 samples."""
     said = prompt.encode()
     return len(said).to_bytes(4, "little") + said + audio.astype(np.float32).tobytes()
 
@@ -108,8 +101,7 @@ def read_whisper_request(data: bytes) -> tuple[np.ndarray, str]:
 
 
 class WhisperRunner(_InferenceRunner):
-    """Whisper, in the inference process. In: a prompt and 16 kHz mono float32 samples (whisper_request). Out: JSON
-    {text, no_speech, avg_logprob}."""
+    """Whisper runner. In: whisper_request bytes. Out: JSON {text, no_speech, avg_logprob}."""
     INFERENCE_METHOD = WHISPER_METHOD
 
     def __init__(self) -> None:
@@ -118,13 +110,13 @@ class WhisperRunner(_InferenceRunner):
 
     def initialize(self) -> None:
         limit_mlx_cache()
-        transcribe(np.zeros(WHISPER_RATE, dtype=np.float32))  # loads it, and compiles the MLX kernels (~3 s)
+        transcribe(np.zeros(WHISPER_RATE, dtype=np.float32))  # load and compile MLX kernels (~3 s)
         self._ready = True
         log.info("shared speech process: Whisper %s loaded, MLX cache capped at %s", STT_MODEL,
                  f"{MLX_CACHE_MB} MB" if MLX_CACHE_MB >= 0 else "nothing (JARVIS_MLX_CACHE_MB=-1)")
 
     def run(self, data: bytes) -> bytes:
-        if not self._ready:  # LiveKit logs a runner's failed initialize and carries on without it
+        if not self._ready:  # LiveKit swallows initialize failures
             raise RuntimeError("Whisper didn't load in the shared speech process; see logs/agent.log")
         audio, prompt = read_whisper_request(data)
         with self._lock:
@@ -135,8 +127,7 @@ class WhisperRunner(_InferenceRunner):
 
 
 def kokoro_model(chosen: Path = TTS_MODEL, fallbacks: tuple[Path, ...] = TTS_MODEL_FALLBACKS) -> Path:
-    """The Kokoro model file to load: the chosen one (JARVIS_TTS_MODEL), or if it's missing the first fallback there
-    is (the full 32-bit one, then the 8-bit one)."""
+    """`chosen` if present, else the first existing fallback (fp32, then int8)."""
     if chosen.exists():
         return chosen
     fallback = next((f for f in fallbacks if f.exists()), fallbacks[0])
@@ -145,7 +136,7 @@ def kokoro_model(chosen: Path = TTS_MODEL, fallbacks: tuple[Path, ...] = TTS_MOD
 
 
 def performance_cores() -> int:
-    """This Mac's performance cores (all its physical cores on an Intel Mac), else the CPU count."""
+    """Performance-core count (physical cores on Intel), else cpu_count."""
     try:
         libc = ctypes.CDLL(None)
         for name in (b"hw.perflevel0.physicalcpu", b"hw.physicalcpu"):
@@ -158,9 +149,8 @@ def performance_cores() -> int:
 
 
 def kokoro_threads(setting: str = TTS_THREADS, cores: int | None = None) -> int:
-    """Kokoro's intra-op threads (JARVIS_TTS_THREADS): one fewer than the performance cores, 2 to 4, unless set; 0 is
-    ONNX Runtime's own default (every physical core, efficiency ones too). More threads didn't render faster under
-    load, they only took CPU from the call's own process."""
+    """Kokoro intra-op threads: P-cores minus one, clamped 2..4, unless set (0 = ORT default, all cores).
+    More threads didn't render faster under load; they only starved the call's process."""
     if setting:
         try:
             return max(0, int(setting))
@@ -170,10 +160,8 @@ def kokoro_threads(setting: str = TTS_THREADS, cores: int | None = None) -> int:
 
 
 def kokoro_session(model: Path, threads: int, arena: bool = TTS_MEMORY_ARENA):
-    """Kokoro's ONNX Runtime session, on the providers kokoro-onnx would pick. Without the CPU memory arena
-    (JARVIS_TTS_MEMORY_ARENA) a sentence's buffers are freed when it's done, rather than kept at the size of the
-    longest sentence yet. Its `threads` (kokoro_threads(); 0 is ONNX Runtime's default) sleep between sentences
-    rather than spin, which kept idle cores busy for nothing."""
+    """Kokoro ORT session. Arena off frees buffers per sentence instead of growing to the longest one.
+    Spinning is disabled so idle threads sleep between sentences."""
     import onnxruntime as ort
     from kokoro_onnx.session import resolve_providers
 
@@ -185,8 +173,7 @@ def kokoro_session(model: Path, threads: int, arena: bool = TTS_MEMORY_ARENA):
 
 
 def log_render(words: int, took: float, speech: float) -> None:
-    """One piece's render time against its length when spoken. Each piece renders while the one before it plays, so
-    rendering slower than speaking (over 1x real time) leaves pauses between pieces: those are warnings."""
+    """Log render time vs. audio length. Over 1x real time leaves audible gaps, so it's a warning."""
     ratio = took / speech if speech else 0.0
     slow = ratio > 1
     log.log(logging.WARNING if slow else logging.INFO,
@@ -195,7 +182,7 @@ def log_render(words: int, took: float, speech: float) -> None:
 
 
 class KokoroRunner(_InferenceRunner):
-    """Kokoro, in the inference process. In: JSON {text, voice, speed}. Out: 24 kHz mono int16 PCM."""
+    """Kokoro runner. In: JSON {text, voice, speed}. Out: 24 kHz mono int16 PCM."""
     INFERENCE_METHOD = KOKORO_METHOD
 
     def __init__(self) -> None:
@@ -207,7 +194,7 @@ class KokoroRunner(_InferenceRunner):
 
         model, threads = kokoro_model(), kokoro_threads()
         self._kokoro = Kokoro.from_session(kokoro_session(model, threads), str(ROOT / "models/voices-v1.0.bin"))
-        self._render("Ready.", TTS_VOICE, TTS_SPEED, timed=False)  # the first synthesis is the slow one
+        self._render("Ready.", TTS_VOICE, TTS_SPEED, timed=False)  # first synthesis is slow
         log.info("shared speech process: Kokoro loaded (%s, %s, memory arena %s)", model.name,
                  f"{threads} threads" if threads else "ONNX Runtime's default threads",
                  "on" if TTS_MEMORY_ARENA else "off")
@@ -230,16 +217,14 @@ class KokoroRunner(_InferenceRunner):
 
 
 def register_runners() -> None:
-    """Have the worker start the shared process with Whisper and Kokoro. Call on the main thread before the server
-    runs; calling it again (a spawned process re-importing the agent module) does nothing."""
+    """Register the Whisper and Kokoro runners. Call on the main thread before the server runs; idempotent."""
     for runner in (WhisperRunner, KokoroRunner):
         if runner.INFERENCE_METHOD not in _InferenceRunner.registered_runners:
             _InferenceRunner.register_runner(runner)
 
 
 async def _infer(executor: InferenceExecutor | None, method: str, data: bytes) -> bytes:
-    """One request to the shared process, from a job process. Raises APIConnectionError, not retried, when it's
-    unreachable, failing or stuck."""
+    """Call the shared process. Raises non-retryable APIConnectionError if unreachable, failing or stuck."""
     try:
         executor = executor or get_job_context().inference_executor
         async with asyncio.timeout(INFERENCE_TIMEOUT):
@@ -253,7 +238,7 @@ async def _infer(executor: InferenceExecutor | None, method: str, data: bytes) -
     return result
 
 
-# ── The job side: LiveKit STT and TTS that call it ──────────────
+# ── Job side: LiveKit STT and TTS clients ──────────────────────
 
 
 def _to_whisper_audio(buffer: utils.AudioBuffer) -> np.ndarray:
@@ -268,13 +253,10 @@ def _to_whisper_audio(buffer: utils.AudioBuffer) -> np.ndarray:
 
 
 class WhisperSTT(stt.STT):
-    """Batch recognition; the session's VAD cuts speech into utterances first. The speech gate then judges each
-    clip's audio and Whisper's confidence, so Whisper's made-up text for near-silence never reaches the brain
-    (jarvis.voice.speech_gate). Once the user has a voiceprint, the speaker check judges whose voice it is, while
-    Whisper transcribes, and a clip that isn't theirs goes no further (jarvis.voice.speaker); while they enroll by
-    voice, their clips go to the voiceprint instead. The vocabulary (use_vocabulary) is Whisper's prompt, and puts
-    right what a clip that passes has misheard.
-    Whisper itself runs in the shared process; `executor` stands in for it in tests."""
+    """Batch STT on VAD-cut utterances, filtered by the speech gate and speaker check.
+
+    The speaker check runs alongside Whisper; other voices are dropped. During voice enrollment clips feed the
+    voiceprint instead. Whisper runs in the shared process; `executor` replaces it in tests."""
 
     def __init__(self, model: str = STT_MODEL, gate: SpeechGate | None = None,
                  executor: InferenceExecutor | None = None, speaker: SpeakerCheck | None = None) -> None:
@@ -284,9 +266,9 @@ class WhisperSTT(stt.STT):
         self._speaker = speaker or SpeakerCheck()
         self._executor = executor
         self._vocabulary, self._prompt = Vocabulary(), ""
-        self._lock = asyncio.Lock()  # one clip at a time, in the order heard
-        self.hearing = 0  # clips being transcribed now, which hold announcements back (jarvis.voice.floor)
-        self.clips: list[dict] = []  # those passed on since the turn under way began (take_clips)
+        self._lock = asyncio.Lock()  # one clip at a time, in order
+        self.hearing = 0  # in-flight clips; holds announcements
+        self.clips: list[dict] = []  # passed clips this turn (take_clips)
 
     @property
     def gate(self) -> SpeechGate:
@@ -298,12 +280,11 @@ class WhisperSTT(stt.STT):
 
     @property
     def enrolling(self) -> bool:
-        """The user is enrolling their voice by talking: announcements wait (jarvis.voice.floor)."""
+        """True during voice enrollment; announcements wait."""
         return self._speaker.enrolling
 
     def use_vocabulary(self, vocabulary: Vocabulary, prompt: bool = True) -> None:
-        """The words to expect and mishearings to put right, for the conversation starting (vocabulary.load());
-        `prompt` False (JARVIS_STT_PROMPT=off) only puts mishearings right, leaving Whisper unprompted."""
+        """Set the conversation's vocabulary. `prompt` False only fixes mishearings, leaving Whisper unprompted."""
         self._vocabulary, self._prompt = vocabulary, vocabulary.prompt() if prompt else ""
         log.info("speech vocabulary: %d words, %d known mishearings%s", len(vocabulary.terms), len(vocabulary.fixes),
                  f"; Whisper's prompt: {self._prompt!r}" if self._prompt else "; Whisper unprompted")
@@ -317,7 +298,7 @@ class WhisperSTT(stt.STT):
         return "mlx-whisper"
 
     async def _transcribe(self, audio: np.ndarray) -> dict:
-        """{text, no_speech, avg_logprob}, as transcribe gave them."""
+        """{text, no_speech, avg_logprob} from the shared process."""
         heard = json.loads(await _infer(self._executor, WHISPER_METHOD, whisper_request(audio, self._prompt)))
         return {"text": heard["text"], "no_speech": heard.get("no_speech"), "avg_logprob": heard.get("avg_logprob")}
 
@@ -330,18 +311,18 @@ class WhisperSTT(stt.STT):
         return audio, self._gate.measure(audio)
 
     async def _hear(self, buffer: utils.AudioBuffer) -> str:
-        # converting and gating in a thread keeps the event loop free for live audio
+        # off the event loop, which carries live audio
         audio, measured = await asyncio.to_thread(self._measure, buffer)
         if self._speaker.enrolling:
             return await self._enroll(audio)
-        # whose voice it is, judged on this process's CPU while Whisper runs in the shared one
+        # speaker check on this process's CPU while Whisper runs in the shared one
         judging = asyncio.ensure_future(asyncio.to_thread(self._speaker.judge, audio)) if self._speaker.on else None
         try:
             heard = await self._transcribe(audio)
         finally:
             judged = await judging if judging is not None else None
         text = heard["text"]
-        passes = judged is None or not judged.drop  # someone else's words go no further: JARVIS stays silent
+        passes = judged is None or not judged.drop  # another voice: stay silent
         if passes:
             echo = bool(self._prompt) and self._vocabulary.echo(text)
             passes = await asyncio.to_thread(self._gate.passes, measured, text, heard["no_speech"], audio,
@@ -349,27 +330,25 @@ class WhisperSTT(stt.STT):
         if judged is not None:
             await asyncio.to_thread(self._speaker.record, judged, text)
         if not passes:
-            return ""  # empty: the session ignores it
+            return ""  # session ignores empty text
         if (fixed := self._vocabulary.correct(text)) != text:
             log.info("speech vocabulary put a mishearing right: %r as %r", text, fixed)
         self.clips.append({"words": len(fixed.split()), "logprob": heard["avg_logprob"], "speaker": self._who(judged)})
         return fixed
 
     def _who(self, judged) -> str | None:
-        """The voiceprint a clip matched, if the speaker check judged it."""
+        """Matched voiceprint name, if any."""
         if judged is None or not judged.reference:
             return None
         return self._speaker.prints[0].name if judged.reference == "this call" else judged.reference
 
     def take_clips(self) -> list[dict]:
-        """The clips heard since the last call, {words, logprob, speaker}: a turn's, once it's over
-        (jarvis.voice.turn.clips_heard)."""
+        """Return and clear clips since the last call: [{words, logprob, speaker}]."""
         clips, self.clips = self.clips, []
         return clips
 
     async def _enroll(self, audio: np.ndarray) -> str:
-        """A clip while the user enrolls by voice: its speech goes to the voiceprint, not the brain. Transcribed only
-        to hear a "stop"."""
+        """Enrollment clip: feeds the voiceprint, not the brain. Transcribed only to catch "stop"."""
         heard = await self._transcribe(audio)
         said = await asyncio.to_thread(self._speaker.collect, audio, heard["text"])
         self._speaker.rearm()
@@ -392,8 +371,7 @@ class WhisperSTT(stt.STT):
 
 
 class KokoroTTS(tts.TTS):
-    """Whole-piece synthesis; the session feeds it one sentence, or part of a long one, at a time as the brain streams
-    (streaming()). Kokoro itself runs in the shared process; `executor` stands in for it in tests."""
+    """Whole-piece TTS, fed one sentence or clause at a time via streaming(). `executor` replaces it in tests."""
 
     def __init__(self, voice: str = TTS_VOICE, speed: float = TTS_SPEED,
                  executor: InferenceExecutor | None = None) -> None:
@@ -403,7 +381,7 @@ class KokoroTTS(tts.TTS):
         self._lock = asyncio.Lock()
 
     def use(self, voice: str, speed: float) -> None:
-        """The voice and speed for the conversation starting (config.tts_voice(), config.tts_speed())."""
+        """Set the conversation's voice and speed."""
         self._voice, self._speed = voice, speed
 
     @property
@@ -423,9 +401,7 @@ class KokoroTTS(tts.TTS):
 
 
 def streaming(engine: KokoroTTS) -> tts.StreamAdapter:
-    """Kokoro as the session's TTS: the brain's streamed text cut into sentences, and long sentences at their pauses
-    (jarvis.voice.clauses), so speaking starts before a long sentence is all rendered. LiveKit would otherwise wrap
-    it in an adapter of its own that cuts at sentence ends only. Make one per process: it listens to `engine`."""
+    """Session TTS that also cuts long sentences at pauses, so speech starts sooner. One per process."""
     return tts.StreamAdapter(tts=engine, sentence_tokenizer=ClauseTokenizer())
 
 

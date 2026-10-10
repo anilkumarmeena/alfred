@@ -1,28 +1,19 @@
-"""The skills folder (data/skills) and what's known about each skill in it.
+"""Skills folder (data/skills) and the `skills` table that tracks each skill.
 
-A skill is a folder named after it, holding a SKILL.md: YAML frontmatter with its name and a description of when to use
-it, then the instructions, and maybe scripts and other files beside it. That's Claude Code's own format, which the
-Claude Agent SDK loads from plugins. So each session gets a small plugin of its own (`plugin`): a plugin.json and links
-to the skills that are switched on, nothing else. The CLI lists their names and descriptions, and the model loads one
-with the Skill tool only when a request calls for it. They go under the plugin's name: jarvis-skills:standup-notes.
-The voice brain (jarvis.brain.cli) and background tasks (jarvis.tasks.worker) each make one as they start, so a change
-applies from the next conversation or run.
+A skill is a folder with a SKILL.md (YAML frontmatter: name, description; then instructions) plus optional files, in
+Claude Code's format. Each session gets its own minimal plugin (`plugin`: plugin.json plus links to enabled skills),
+so skills appear as jarvis-skills:<name> and load on demand. Changes apply from the next conversation or task run.
 
-The `skills` table of data/tasks.db keeps, for each one: where it came from (installed from a link, written together
-by voice, learned from conversations, or added to the folder by hand), whether it's switched on, and for one with
-scripts, the review of them and the digest of the files the user approved. The folder holds the content; a folder
-put there by hand is listed, switched off, and one taken away drops out of the table.
+The table records source (installed, written, learned, manual), enabled, and for skills with scripts the review and
+the approved digest. Folders added by hand appear disabled; removed folders drop out.
 
-The walls, none of which a skill's own text can lower:
-- Frontmatter that would change permissions or run something (allowed-tools, hooks, shell, model, context, agent and
-  the rest) is taken out when a skill is saved or installed (`sanitize`), and a skill that has it again is skipped as
-  sessions start: allowed-tools become allow rules, which would let calls past the brain's gate.
-- Sessions set disableAllHooks and disableSkillShellExecution (`FLAGS`), so no hook or !`command` in a skill runs.
-- A skill with scripts or other executable files is used only while its files are the ones the user approved after
-  hearing a review of them (jarvis.skills.review): changed since, it's skipped until approved again.
-- Links in a skill's folder are refused, so it can't point at secrets or anywhere else on the Mac.
-- Scripts run like any other command: in the voice shell's sandbox, risky ones only after a yes; in a task's sandbox,
-  through its gate. Nothing here reads a secret, and the CLI's deny rules still hide them.
+Safety (a skill's own text can't lower any of these):
+- Frontmatter outside KEPT (allowed-tools, hooks, model, ...) is stripped on save/install (`sanitize`); a skill that
+  regains it is skipped. allowed-tools would bypass the brain's gate.
+- Sessions set FLAGS: no hooks, no !`command` execution.
+- Skills with scripts are used only while their files match the digest the user approved after a review.
+- Symlinks inside a skill folder are refused.
+- Scripts run like any other command, inside the same sandbox and approval gates.
 """
 
 import hashlib
@@ -47,18 +38,18 @@ from jarvis.safety.host import alive
 
 log = logging.getLogger("jarvis.skills")
 
-PLUGIN = "jarvis-skills"  # the plugin each session gets, which its skills are named under
+PLUGIN = "jarvis-skills"  # per-session plugin name; skills are <PLUGIN>:<name>
 SKILL_FILE = "SKILL.md"
 INSTALLED, WRITTEN, LEARNED, MANUAL = "installed", "written", "learned", "manual"
 SOURCES = {INSTALLED: "installed", WRITTEN: "written together", LEARNED: "learned", MANUAL: "added by hand"}
-NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?")  # Claude Code's rule: lowercase, digits and hyphens, 64 at most
+NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?")  # Claude Code's rule: [a-z0-9-], max 64
 DESCRIPTION_MAX = 1024
 INSTRUCTIONS_MAX = 20_000
-# Frontmatter a skill keeps. Everything else is taken out: allowed-tools, hooks, shell, model, effort, context, agent,
-# paths, mcpServers and the like change permissions, run commands or start other things.
+# Allowed frontmatter. Anything else (allowed-tools, hooks, shell, model, agent, mcpServers, ...) can change
+# permissions or run things, so it is stripped.
 KEPT = ("name", "description", "when_to_use", "argument-hint", "arguments", "version", "license", "compatibility",
         "metadata", "created_by", "improved_by", "user-invocable", "disable-model-invocation")
-# Settings every session with skills gets: no hooks from them, and no !`command` in a SKILL.md run as it loads
+# Session settings: no skill hooks, no !`command` execution on load
 FLAGS = {"disableAllHooks": True, "disableSkillShellExecution": True}
 
 SCRIPTS = {".sh", ".bash", ".zsh", ".fish", ".command", ".tool", ".py", ".pyw", ".js", ".mjs", ".cjs", ".ts", ".mts",
@@ -67,27 +58,27 @@ SCRIPTS = {".sh", ".bash", ".zsh", ".fish", ".command", ".tool", ".py", ".pyw", 
            ".bin", ".so", ".dylib", ".dll", ".wasm", ".app", ".pkg", ".dmg", ".deb", ".rpm", ".whl", ".egg"}
 SCRIPT_NAMES = {"Makefile", "makefile", "GNUmakefile", "Dockerfile", "Justfile", "justfile", "Rakefile", "package.json",
                 "pyproject.toml", "setup.py", "requirements.txt"}
-# Binary files that are only data (images, fonts, documents): anything else binary counts as a program
+# Binary data formats; any other binary file counts as a program
 MEDIA = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif", ".tiff", ".heic", ".pdf", ".ttf", ".otf",
          ".woff", ".woff2", ".mp3", ".wav", ".m4a", ".mp4", ".mov", ".docx", ".xlsx", ".pptx", ".odt", ".zip", ".gz"}
 
 _SCHEMA = """
 create table skills (
-    name text primary key,      -- its folder in data/skills, and its name in SKILL.md
-    source text not null,       -- installed, written (together, by voice), learned (the learning review), manual
-    origin text,                -- for an installed one, the link it came from
+    name text primary key,      -- folder name and SKILL.md name
+    source text not null,       -- installed, written, learned, manual
+    origin text,                -- installed: source link
     enabled integer not null default 0,
-    scripts text,               -- JSON list of its scripts and other executable files, as last looked at
-    digest text,                -- of its files other than SKILL.md, as last looked at
-    approved text,              -- the digest the user approved its scripts at, after hearing the review
-    review text,                -- JSON: the latest review of its scripts (jarvis.skills.review)
+    scripts text,               -- JSON list of executable files, as last scanned
+    digest text,                -- of files other than SKILL.md, as last scanned
+    approved text,              -- digest the user approved after the review
+    review text,                -- JSON: latest script review
     created real not null,
     updated real not null
 )"""
 
 
 class NeedsApproval(ValueError):
-    """The skill has scripts the user hasn't approved, as they are now."""
+    """The skill's current scripts aren't approved."""
 
 
 def _db() -> AbstractContextManager[sqlite3.Connection]:
@@ -95,7 +86,7 @@ def _db() -> AbstractContextManager[sqlite3.Connection]:
 
 
 def home() -> Path:
-    """The profile's skills folder."""
+    """The profile's skills folder (created if missing)."""
     (found := profile.current().skills).mkdir(parents=True, exist_ok=True)
     return found
 
@@ -107,11 +98,11 @@ def folder(name: str) -> Path:
 # ── SKILL.md ────────────────────────────────────────────────────
 
 _FRONTMATTER = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)(.*)", re.DOTALL)
-INLINE = re.compile(r"!`[^`\n]+`")  # a !`command` line, which Claude Code would run as the skill loads
+INLINE = re.compile(r"!`[^`\n]+`")  # !`command`, which Claude Code runs on load
 
 
 def split(text: str) -> tuple[dict, str]:
-    """A SKILL.md's frontmatter and body. ValueError if it has no frontmatter, or it isn't YAML."""
+    """(frontmatter, body). Raises ValueError if frontmatter is missing or not a YAML mapping."""
     m = _FRONTMATTER.match(text.lstrip("﻿"))
     if not m:
         raise ValueError("its SKILL.md has no frontmatter (a --- block with its name and description)")
@@ -130,8 +121,8 @@ def compose(meta: dict, body: str) -> str:
 
 
 def sanitize(text: str, name: str | None = None) -> tuple[str, list[str]]:
-    """The SKILL.md with the frontmatter that could change permissions or run something taken out, and the name set to
-    `name` if given; and the fields taken out. Unchanged text when there's nothing to take out."""
+    """Strip non-KEPT frontmatter and optionally set `name`. Returns (text, dropped fields); text is unchanged if
+    nothing needed changing."""
     meta, body = split(text)
     dropped = [str(k) for k in meta if k not in KEPT]
     if not dropped and (name is None or meta.get("name") == name):
@@ -147,15 +138,14 @@ def one_line(text: str) -> str:
 
 
 def render(name: str, description: str, instructions: str, keep: dict | None = None) -> str:
-    """A SKILL.md for a skill written by voice or learned: its name, description and instructions, keeping any other
-    allowed frontmatter of the version it replaces (`keep`)."""
+    """Build a SKILL.md, preserving other allowed frontmatter from the replaced version (`keep`)."""
     meta = {"name": name, "description": one_line(description)}
     meta |= {k: v for k, v in (keep or {}).items() if k in KEPT and k not in meta}
     return compose(meta, instructions)
 
 
 def check_text(name: str, description: str, instructions: str) -> None:
-    """ValueError, saying what to fix, for a skill that can't be saved like this."""
+    """Raise ValueError saying what to fix if the skill can't be saved."""
     if not NAME.fullmatch(name):
         raise ValueError(f"'{name}' can't be a skill's name: use lowercase letters, digits and hyphens, at most 64, "
                          "like standup-notes.")
@@ -173,20 +163,20 @@ def check_text(name: str, description: str, instructions: str) -> None:
 
 
 def slug(text: str) -> str:
-    """A spoken name as a skill's name: 'Standup Notes' -> standup-notes."""
+    """'Standup Notes' -> standup-notes."""
     return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", str(text).lower())).strip("-")[:64].strip("-")
 
 
 def as_name(text: str) -> str:
-    """A skill's name as given, if it is one, else made into one (`slug`)."""
+    """`text` if already a valid name, else its slug."""
     return text if NAME.fullmatch(text) else slug(text)
 
 
-# ── What a skill's folder holds ─────────────────────────────────
+# ── Folder contents ─────────────────────────────────────────────
 
 
 def files(where: Path) -> list[str]:
-    """Every file in the folder, as relative paths, sorted. Links are listed too, to be refused."""
+    """Sorted relative paths of all files, including symlinks (so they can be refused)."""
     found = []
     for root, dirs, names in os.walk(where):
         dirs.sort()
@@ -200,8 +190,7 @@ def links(where: Path) -> list[str]:
 
 
 def is_script(path: Path) -> bool:
-    """Whether a file is a script or another program: marked executable, named like one, starting with #!, or binary
-    but not a picture, font or document."""
+    """Executable bit, script-like name, #! shebang, or non-media binary."""
     try:
         mode = path.lstat().st_mode
     except OSError:
@@ -223,8 +212,8 @@ def scripts(where: Path) -> list[str]:
 
 
 def digest(where: Path) -> str:
-    """A digest of the folder's files other than SKILL.md: what the user approves when they approve its scripts. The
-    instructions can change (by voice, with a yes) without the scripts needing approval again."""
+    """SHA-256 over all files except SKILL.md: what script approval covers. Instruction edits don't need
+    re-approval."""
     h = hashlib.sha256()
     for rel in files(where):
         if rel == SKILL_FILE:
@@ -237,7 +226,7 @@ def digest(where: Path) -> str:
 
 
 def problems(where: Path, name: str | None = None) -> list[str]:
-    """Why a skill's folder can't be used, if anything."""
+    """Reasons the folder can't be used; empty if fine."""
     skill = where / SKILL_FILE
     if not skill.is_file() or skill.is_symlink():
         return ["it has no SKILL.md"]
@@ -267,13 +256,13 @@ def problems(where: Path, name: str | None = None) -> list[str]:
 
 
 def skill_md(where: Path) -> str:
-    """The folder's SKILL.md as it is now: "" if there's none."""
+    """Current SKILL.md text, or ""."""
     path = where / SKILL_FILE
     return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
 
 
 def _meta(where: Path) -> dict:
-    """The frontmatter of the folder's SKILL.md: empty if it can't be read."""
+    """SKILL.md frontmatter, or {} if unreadable."""
     try:
         return split((where / SKILL_FILE).read_text(encoding="utf-8"))[0]
     except (OSError, UnicodeDecodeError, ValueError):
@@ -284,7 +273,7 @@ def description_of(where: Path) -> str:
     return one_line(_meta(where).get("description"))
 
 
-# ── The table ───────────────────────────────────────────────────
+# ── Table ───────────────────────────────────────────────────────
 
 
 @dataclass
@@ -308,7 +297,7 @@ class Skill:
 
     @property
     def needs_approval(self) -> bool:
-        """It has scripts the user hasn't approved as they are now."""
+        """Has scripts whose current digest isn't approved."""
         return bool(self.scripts) and self.approved != self.digest
 
     @property
@@ -324,7 +313,7 @@ class Skill:
         return "on" if self.enabled else "off"
 
     def brief(self) -> dict:
-        """As the voice tools and the panel list it."""
+        """Summary for the voice tools and panel."""
         out = {"name": self.name, "description": self.description, "source": SOURCES.get(self.source, self.source),
                "state": self.state, "added": f"{datetime.fromtimestamp(self.created):%Y-%m-%d}"}
         if self.updated - self.created > 60:
@@ -345,8 +334,8 @@ def _row(r: sqlite3.Row, where: Path) -> Skill:
 
 
 def all_skills() -> list[Skill]:
-    """Every skill in the folder, by name, with what's on disk looked at afresh: a folder with no row yet (put there by
-    hand) gets one, switched off; a row whose folder has gone is dropped; scripts and digests are brought up to date."""
+    """All skills by name, synced with disk: new folders get a disabled row, rows without folders are dropped, and
+    scripts/digests are refreshed."""
     base = home()
     on_disk = {p.name: p for p in base.iterdir() if p.is_dir() and not p.name.startswith(".") and not p.is_symlink()}
     found: list[Skill] = []
@@ -365,13 +354,12 @@ def all_skills() -> list[Skill]:
                 db.execute("update skills set scripts = ?, digest = ? where name = ?", (listed, made, name))
         db.execute("commit")
         found = [_row(r, on_disk[r["name"]]) for r in db.execute("select * from skills order by name")
-                 if r["name"] in on_disk]  # not one another process added meanwhile
+                 if r["name"] in on_disk]  # skip rows another process added meanwhile
     return found
 
 
 def get(name: str) -> Skill:
-    """The skill by its exact name, else by its spoken one ('standup notes'), else the one whose name contains it.
-    ValueError, listing them, if none or several match."""
+    """Find by exact name, slug ('standup notes'), or unique substring. Raises ValueError listing skills otherwise."""
     listed = all_skills()
     by_name = {s.name: s for s in listed}
     wanted = slug(name)
@@ -392,15 +380,14 @@ def _update(name: str, **fields) -> None:
 
 
 def refuse_broken(skill: Skill) -> Skill:
-    """The skill, unless it's broken: then ValueError, saying why it can't be switched on."""
+    """Return `skill`, or raise ValueError if it has problems."""
     if skill.problems:
         raise ValueError(f"The skill {skill.name} can't be switched on: {'; '.join(skill.problems)}.")
     return skill
 
 
 def switch(name: str, on: bool) -> Skill:
-    """Switch a skill on or off. On is refused for a broken skill, and for one whose scripts aren't approved as they
-    are now (NeedsApproval): that takes a review and the user's yes (approve)."""
+    """Enable or disable. Enabling raises ValueError if broken, NeedsApproval if scripts aren't approved."""
     skill = get(name)
     if on and refuse_broken(skill).needs_approval:
         raise NeedsApproval(f"The skill {skill.name} has scripts ({', '.join(skill.scripts[:5])}) that need a review and "
@@ -416,8 +403,7 @@ def set_review(name: str, review: dict) -> Skill:
 
 
 def approve(name: str, reviewed: str) -> Skill:
-    """The user approved the skill's scripts as the review found them (`reviewed`, that review's digest): switched on.
-    Refused if the files have changed since that review."""
+    """Record approval of the reviewed digest and enable. Raises ValueError if files changed since the review."""
     skill = refuse_broken(get(name))
     if reviewed != skill.digest:
         raise ValueError(f"The skill {skill.name}'s files have changed since they were reviewed; review them again.")
@@ -426,7 +412,7 @@ def approve(name: str, reviewed: str) -> Skill:
 
 
 def delete(name: str) -> str:
-    """Delete a skill: its folder and its row."""
+    """Delete the skill's folder and row."""
     skill = get(name)
     where = skill.folder
     if where.is_dir() and not where.is_symlink():
@@ -437,8 +423,8 @@ def delete(name: str) -> str:
 
 
 def save(name: str, description: str, instructions: str, source: str = WRITTEN, enable: bool = True) -> tuple[Skill, bool]:
-    """Write a skill's SKILL.md: a new skill (switched on unless `enable` is false), or a new version of one, which
-    keeps its source, its other files and whether it's on. Returns it, and whether it's new."""
+    """Write SKILL.md for a new skill (enabled per `enable`) or update an existing one (keeps source, files, state).
+    Returns (skill, is_new)."""
     check_text(name, description, instructions)
     where, now = home() / name, time.time()
     new = not where.exists()
@@ -448,7 +434,7 @@ def save(name: str, description: str, instructions: str, source: str = WRITTEN, 
     with _db() as db:
         if not new and db.execute("select 1 from skills where name = ?", (name,)).fetchone():
             db.execute("update skills set updated = ? where name = ?", (now, name))
-        else:  # a row left from a folder taken away by hand is replaced
+        else:  # replaces a stale row whose folder was removed by hand
             db.execute("insert or replace into skills (name, source, enabled, scripts, digest, created, updated) "
                        "values (?, ?, ?, ?, ?, ?, ?)", (name, source, int(enable), json.dumps(scripts(where)),
                                                         digest(where), now, now))
@@ -456,8 +442,8 @@ def save(name: str, description: str, instructions: str, source: str = WRITTEN, 
 
 
 def install(staged: Path, name: str, origin: str) -> Skill:
-    """Move a fetched skill's folder (jarvis.skills.install) into the skills folder as `name`, replacing one of that
-    name. Switched on only if it holds no scripts; one with scripts waits for a review and the user's approval."""
+    """Move a staged skill folder into place as `name`, replacing any existing one. Enabled only if it has no
+    scripts; otherwise it awaits review and approval."""
     if problem := problems(staged, name):
         raise ValueError(f"It can't be installed: {'; '.join(problem)}.")
     where, now = home() / name, time.time()
@@ -486,8 +472,7 @@ def install(staged: Path, name: str, origin: str) -> Skill:
 
 
 def usable() -> list[Skill]:
-    """The skills a session gets: switched on, not broken, and scripts (if any) approved as they are. The rest that
-    are switched on are logged with why they're left out."""
+    """Enabled, unbroken skills with approved scripts. Enabled ones left out are logged with the reason."""
     out = []
     for s in all_skills():
         if s.usable:
@@ -509,9 +494,8 @@ def _clear(where: Path) -> None:
 
 
 def plugin(where: Path) -> list[Skill]:
-    """Make the session's plugin at `where`: a plugin.json and links to the usable skills, nothing else (no hooks,
-    agents, commands or MCP servers, which a plugin could hold). Returns those skills; none, and no plugin, if there
-    are none. Their names for the SDK's `skills` option are `qualified`."""
+    """Build the session plugin at `where`: plugin.json plus links to usable skills, nothing else (no hooks, agents,
+    commands or MCP servers). Returns the skills; no plugin is made if there are none. Use `qualified` for SDK names."""
     found = usable()
     _clear(where)
     if not found:
@@ -526,7 +510,7 @@ def plugin(where: Path) -> list[Skill]:
 
 
 def voice_plugin() -> Path:
-    """Where this voice process's plugin goes, with those of voice processes that have ended cleared away."""
+    """Plugin path for this voice process; clears plugins of dead voice processes."""
     sessions = home() / ".sessions"
     sessions.mkdir(exist_ok=True)
     for old in sessions.glob("voice-*"):
@@ -537,5 +521,5 @@ def voice_plugin() -> Path:
 
 
 def listing(found: list[Skill]) -> str:
-    """The skills a session has, a line each, for its prompt."""
+    """Prompt listing, one line per skill."""
     return "\n".join(f"- {qualified(s)}: {s.description}" for s in found)

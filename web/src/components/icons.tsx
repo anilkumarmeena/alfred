@@ -1,4 +1,4 @@
-// Line icons, stroked in the current colour (see the svg rule in styles.css).
+// Line icons stroked in currentColor (see the svg rule in styles.css).
 export const CaptionsIcon = () => (
   <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3" /><path d="M7 10h3M13 10h4M7 14h6M16 14h1" /></svg>
 );
@@ -17,10 +17,10 @@ export const CloseIcon = () => (
 export const PowerIcon = () => (
   <svg viewBox="0 0 24 24"><path d="M12 3v8" /><path d="M6.3 6.8a8 8 0 1 0 11.4 0" /></svg>
 );
-export const MicIcon = () => (  // the slash shows while muted
+export const MicIcon = () => (  // slash shown while muted
   <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" /><path class="slash" d="M4 4l16 16" /></svg>
 );
-export const SpeakerIcon = () => (  // the slash shows while the speaker is off
+export const SpeakerIcon = () => (  // slash shown while speaker is off
   <svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z" /><path d="M16.5 8.5a5 5 0 0 1 0 7" /><path class="slash" d="M4 4l16 16" /></svg>
 );
 export const CameraIcon = () => (
@@ -32,7 +32,7 @@ export const SendIcon = () => (
 export const HangupIcon = () => (
   <svg viewBox="0 0 24 24"><path d="M3 13.6c5-4.4 13-4.4 18 0l-1.6 2.6c-.3.4-.8.6-1.3.4l-2.7-1.1c-.4-.2-.7-.6-.7-1l-.1-1.8a12 12 0 0 0-5.2 0l-.1 1.8c0 .4-.3.8-.7 1l-2.7 1.1c-.5.2-1 0-1.3-.4z" /></svg>
 );
-// The control panel's
+// Panel icons
 export const TasksIcon = () => (
   <svg viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" /><circle cx="12" cy="12" r="3" /></svg>
 );

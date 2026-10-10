@@ -1,30 +1,13 @@
-"""Command tasks: a shell command run as a background task of its own kind (database.COMMAND), with no model while it
-works, however many hours that is.
+"""Command tasks (database.COMMAND): a shell command run in the background with no model until it ends.
 
-They come from the voice shell's start_job (jarvis.safety.shell), an audio file being made (jarvis.tools.audio) and each
-run of a scheduled command (kind "command" in jarvis.tasks.schedules), and each is a task like any other: listed by
-task_list, the control panel's Tasks page and so the phone's, stopped with task_stop (stop_job too), announced as it
-ends with a Mac notification and a push, its output kept, and kept as long as tasks are. The runner
-(jarvis.tasks.runner) starts it as a long job (jarvis.safety.host.Jobs) in COMMANDS_DIR, numbered as its task is: in its
-own session in its folder, outside any sandbox, through a login shell, with JARVIS's own keys left out of its
-environment, its output in N.log. It outlives the runner restarting: the runner knows it by its record alone, and looks
-every few seconds at how it stands (`how`), stopping one past its time limit. Only once it ends does a model wake:
-
-  success   one short call to COMMAND_SUMMARY_MODEL sums up the end of its output in a sentence or two (`summarize`)
-  failure   one short call to COMMAND_TRIAGE_MODEL reads the end of its output, says why it failed, and decides
-            (`triage`, its reply JSON): FIX, an ordinary failure, so a code_change task in its project starts at once to
-            find the cause and fix it (`fix_prompt`); ASK, the same, but only once the user says yes, since fixing it
-            would touch secrets, deploy or push, delete data or change system settings; or REPORT, nothing a task can
-            fix (the network, a login only the user can renew, a failure that is the command's answer). A fix task's
-            summary ends saying whether the command should now succeed; one short call to VERDICT_MODEL reads that as
-            JSON (`wants_rerun`), and on a yes the runner runs the command again once, as a command task of its own,
-            which says what failed, what was fixed and how the rerun went. A rerun that fails again is only reported, so
-            it can't loop. Risky steps in a fix wait for the user's yes, as in any task.
-
-How a command task runs and how it went is kept with it, as JSON (its `command`): its folder, time limit, own log file,
-whether to sum up a success and whether failures may be fixed, which attempt it is, and once it ends its outcome.
-
-What the command printed comes from wherever it read, so it's data for the model, never instructions.
+Sources: start_job, audio rendering, scheduled "command" jobs. Runs as a host.Jobs job in COMMANDS_DIR (N.log), outside
+the sandbox via a login shell, without JARVIS's keys; survives runner restarts, polled via `how`, stopped at its limit.
+On end:
+  success  `summarize` (COMMAND_SUMMARY_MODEL)
+  failure  `triage` (COMMAND_TRIAGE_MODEL): FIX starts a code_change task (`fix_prompt`); ASK waits for the user's yes
+           (secrets, deploys, data loss, system settings); REPORT only explains. `wants_rerun` (VERDICT_MODEL) reads
+           the fix summary; a yes reruns once, and a failed rerun is only reported, so it can't loop.
+Spec and outcome are JSON in the task's `command` column. Command output is untrusted data, never instructions.
 """
 
 import json
@@ -44,10 +27,10 @@ from jarvis.core.config import (
 from jarvis.safety import host
 from jarvis.safety.commands import secret_path
 
-COMMANDS_DIR = DATA_DIR / "commands"  # each command task's record, output and exit status, named by its task's id
-SUMMARY_CHARS, TRIAGE_CHARS, FIX_CHARS = 6000, 8000, 15000  # how much of the end of its output each one reads
-TAIL_CHARS = 1500  # how much of a command task's output its view shows
-FIX_ATTEMPTS = 1  # a command that fails gets this many tasks to fix it, each followed by a rerun
+COMMANDS_DIR = DATA_DIR / "commands"  # per-task record, output and exit status, named by task id
+SUMMARY_CHARS, TRIAGE_CHARS, FIX_CHARS = 6000, 8000, 15000  # output tail chars read by each model call
+TAIL_CHARS = 1500  # output tail shown in the task view
+FIX_ATTEMPTS = 1  # fix tasks per failed command, each followed by a rerun
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\r")
 
 DONE, FAILED, TIMEOUT, LOST, STOPPED = "done", "failed", "timeout", "lost", "stopped"
@@ -55,7 +38,7 @@ FIX, ASK, REPORT = "fix", "ask", "report"
 
 
 def spec(task: dict) -> dict:
-    """How a command task runs and how it went (its `command` column, or its view's); {} for any other task."""
+    """The task's command spec/outcome (from the column or view); {} for non-command tasks."""
     if isinstance(kept := task.get("command"), dict):
         return kept
     try:
@@ -66,33 +49,31 @@ def spec(task: dict) -> dict:
 
 
 def project_of(folder: Path, named=None) -> str | None:
-    """The registered project whose folder holds `folder` most closely (`named`, a projects.Project, first among equals),
-    or None. JARVIS's own data and secrets belong to no project, so a job in the voice shell's scratch folder has no
-    project to be fixed in."""
+    """Name of the innermost registered project containing `folder` (`named` wins ties), or None.
+
+    Folders under DATA_DIR or SECRETS_DIR never belong to a project, so they're never auto-fixed."""
     from jarvis.tasks import projects
 
     path = folder.resolve()
     if any(path.is_relative_to(p.resolve()) for p in (DATA_DIR, SECRETS_DIR)):
         return None
     holding = [p for p in ([named] if named else []) + projects.load() if path.is_relative_to(p.path.resolve())]
-    found = max(holding, key=lambda p: len(p.path.resolve().parts), default=None)  # max keeps the first of equals
+    found = max(holding, key=lambda p: len(p.path.resolve().parts), default=None)  # max keeps the first on ties
     return found.name if found else None
 
 
 class Runs(host.Jobs):
-    """Command tasks' commands, each a long job numbered as its task is. No Mac notification as one ends: the runner
-    says how it went."""
+    """Long jobs for command tasks, numbered by task id; no Mac notification (the runner announces)."""
 
     def __init__(self, folder: Path | None = None, shell: tuple[str, ...] = host.SHELL) -> None:
         super().__init__(folder or COMMANDS_DIR, shell, notify=False)
 
     def start(self, task_id: int, command: str, title: str, folder: Path) -> dict:
-        """Start a command task's command; its record. ValueError if its folder has gone."""
+        """Start the command; returns its record. ValueError if the folder is gone."""
         return self.launch(command, title, folder, job_id=task_id)
 
     def how(self, record: dict) -> tuple[str, int | None] | None:
-        """How a run ended: (DONE or FAILED, its exit code), (STOPPED, None) if stopped, (LOST, None) if it ended
-        without saying (killed, or the Mac restarted); None while it runs."""
+        """(DONE|FAILED, exit code), (STOPPED, None), (LOST, None) if it died without an exit file; None while running."""
         if self._stopped(record):
             return STOPPED, None
         try:
@@ -102,8 +83,7 @@ class Runs(host.Jobs):
         return (DONE if code == 0 else FAILED), code
 
     def output(self, task_id: int, chars: int, log_file: str | None = None, since: float = 0.0) -> str:
-        """The end of what a command printed, and of the log it keeps itself (`log_file`, a pattern in its folder), if
-        it wrote one since it started: at most `chars` characters, shared between them."""
+        """Tail of the command's output plus its own `log_file` (glob in its folder) if written since start; `chars` total."""
         record = self.get(task_id) or {}
         own = own_log(Path(record["folder"]), log_file, since or record.get("started", 0)) if record else None
         mine = tail(self.log_file(task_id), chars // 2 if own else chars)
@@ -114,7 +94,7 @@ class Runs(host.Jobs):
 
 
 def own_log(folder: Path, log_file: str | None, since: float) -> Path | None:
-    """The newest file matching `log_file` in `folder`, written since `since`; None if there's none."""
+    """Newest non-secret file matching `log_file` in `folder` modified since `since`, or None."""
     if not log_file:
         return None
     try:
@@ -126,7 +106,7 @@ def own_log(folder: Path, log_file: str | None, since: float) -> Path | None:
 
 
 def tail(path: Path, chars: int) -> str:
-    """The end of a text file, at most `chars` characters of it from a line's start, without terminal colours."""
+    """Last `chars` chars of a file, starting at a line boundary, ANSI codes stripped."""
     try:
         with open(path, "rb") as f:
             f.seek(max(0, f.seek(0, 2) - chars * 2))
@@ -142,7 +122,7 @@ def last_lines(text: str, n: int = 3) -> str:
 
 
 def last_line(text: str) -> str:
-    """The last line printed, at most 600 characters of it: what a job that reports says it made."""
+    """Last non-blank line (max 600 chars): what a `report` job says it produced."""
     return next((line.strip() for line in reversed(text.splitlines()) if line.strip()), "")[-600:]
 
 
@@ -157,7 +137,7 @@ def took(seconds: float) -> str:
 
 
 def ending(how: dict) -> str:
-    """How a failed run ended, in words, from its spec once it has ended."""
+    """A failed run's ending, in words."""
     if how["outcome"] == TIMEOUT:
         return f"it ran past its time limit of {took(how['timeout_minutes'] * 60)} and was stopped"
     if how["outcome"] == LOST:
@@ -175,8 +155,7 @@ def summary_system() -> str:
 
 
 async def summarize(title: str, command: str, seconds: float, output: str) -> str:
-    """A sentence or two on a run that succeeded, from the end of its output, by one short call (sdk.ask, with its
-    timeout). RuntimeError or TimeoutError if the call fails."""
+    """One-or-two-sentence summary of a successful run. Raises RuntimeError or TimeoutError if the call fails."""
     from jarvis.brain import retry, sdk
 
     prompt = (f"Job: {title}\nCommand: {command}\nIt succeeded (exit code 0) after {took(seconds)}.\n\n"
@@ -188,8 +167,7 @@ async def summarize(title: str, command: str, seconds: float, output: str) -> st
 
 @dataclass
 class Triage:
-    """What the model made of a failure: `said`, what failed and why, to say; `action`, FIX, ASK or REPORT; and for
-    ASK, `needs`: what fixing it would involve that needs the user's yes."""
+    """Triage verdict: `said` (spoken cause), `action` (FIX/ASK/REPORT), `needs` (for ASK: what needs a yes)."""
     action: str
     said: str
     needs: str = ""
@@ -216,8 +194,7 @@ TRIAGE_SCHEMA = {
 
 
 def parse_triage(found: dict | None, can_fix: bool) -> Triage | None:
-    """The triage call's reply, JSON matching TRIAGE_SCHEMA, as a Triage; None if it gave none. An action it can't take
-    is REPORT."""
+    """TRIAGE_SCHEMA reply as a Triage, or None if empty. Forced to REPORT when not `can_fix`."""
     if not found or not (said := " ".join(found["said"].split())[:600]):
         return None
     action = found["action"]
@@ -228,9 +205,9 @@ def parse_triage(found: dict | None, can_fix: bool) -> Triage | None:
 
 async def triage(title: str, command: str, folder: str, why: str, seconds: float, output: str,
                  can_fix: bool) -> Triage | None:
-    """What failed and what to do about it, from the end of a failed run's output; None if the call fails or says
-    nothing usable. Without `can_fix` (no project to fix it in, fixing turned off, or it has had its fix) it only says
-    why."""
+    """Triage a failed run from its output tail; None if the call fails or is unusable.
+
+    Without `can_fix` (no project, fixing off, or already fixed once) the result is always REPORT."""
     from jarvis.brain import retry, sdk
 
     fixing = ("" if can_fix else
@@ -247,8 +224,9 @@ async def triage(title: str, command: str, folder: str, why: str, seconds: float
 
 
 def fix_prompt(task: dict, how: dict, output: str, log: Path, scheduled: str = "", said_yes: str = "") -> str:
-    """The brief of a code_change task fixing a command task that failed. `scheduled` describes the scheduled job it
-    was a run of; `said_yes`, the user's words agreeing to the fix, when they were asked first."""
+    """Brief for a code_change task fixing a failed command.
+
+    `scheduled`: the scheduled job's name, if any. `said_yes`: the user's words approving an ASK fix."""
     from jarvis.tasks import schedules
 
     started = (f"a run of the scheduled job \"{scheduled}\"" if scheduled
@@ -280,8 +258,7 @@ def rerun_system() -> str:
 
 
 async def wants_rerun(summary: str) -> bool:
-    """Whether a fix task's summary says its command should now succeed, by one short call to VERDICT_MODEL; False if
-    the call fails or says nothing usable, so a fix never loops."""
+    """Whether a fix summary says the command should now succeed (VERDICT_MODEL); False on any doubt."""
     from jarvis.brain import sdk
 
     prompt = f"<summary>\n{summary.strip() or '(empty)'}\n</summary>"
@@ -289,8 +266,7 @@ async def wants_rerun(summary: str) -> bool:
 
 
 def view(task: dict, runs: Runs, now: float | None = None) -> dict:
-    """A command task's `command` as its view shows it: how it runs and how it went, with how long it has run (or ran)
-    and the end of its output."""
+    """View fields for a command task: spec plus elapsed seconds, output tail and log path."""
     how = spec(task)
     started = how.get("started") or task["created"]
     return {"command": {k: v for k, v in how.items() if v is not None} | {

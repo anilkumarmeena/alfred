@@ -1,6 +1,4 @@
-"""Tests for how JARVIS gets its Mac tools from AI Armory (jarvis.tools.mac): the tools keep their names, wording and
-inputs, none waits for the user's yes, and the runner's own notifications use the same function. The tools themselves
-are tested in AI Armory; here nothing really runs on the Mac. Run with: make test"""
+"""Tests for jarvis.tools.mac: Mac tools come from AI Armory with unchanged names, wording and inputs; no yes needed."""
 
 import asyncio
 
@@ -12,7 +10,7 @@ from jarvis.brain import cli
 from jarvis.tasks import events, worker
 from jarvis.tools.mac import NOTES
 
-# Each tool's description, input fields and required fields, as the model has always seen them
+# Each tool's description, input fields and required fields, as the model sees them
 TOOLS = {
     "mac_notify": ("Show a notification on the Mac.",
                    {"title": {"type": "string"}, "message": {"type": "string"}}, ["title", "message"]),
@@ -44,8 +42,8 @@ def test_every_mac_tool_comes_from_ai_armory_under_its_old_name_and_wording():
     assert set(found) == set(TOOLS)
     for name, (description, properties, required) in TOOLS.items():
         t = found[name]
-        assert t.armory, name  # no copy of JARVIS's own is left
-        # AI Armory's wording, then JARVIS's own note on how to use it by voice, if it has one
+        assert t.armory, name  # no JARVIS-side copy left
+        # AI Armory's wording, plus JARVIS's voice note if any
         note = f" {NOTES[name]}" if name in NOTES else ""
         assert (t.description, t.properties, t.required) == (description + note, properties, required), name
         schema = {"type": "object", "properties": properties, "additionalProperties": False}
@@ -82,7 +80,7 @@ def test_the_runner_notifies_with_the_tool_sets_own_function():
 
 @pytest.fixture
 def ran(monkeypatch) -> list[tuple]:
-    """Records what would have run on the Mac instead of running it."""
+    """Record what would have run on the Mac instead of running it."""
     calls = []
 
     async def fake_run(*argv, timeout=30, input=None, env=None):

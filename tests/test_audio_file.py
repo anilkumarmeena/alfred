@@ -1,7 +1,4 @@
-"""Tests for audio files (jarvis.voice.audio_file, jarvis.tools.audio): text made speakable and cut into parts, each
-part read and joined into one file with pauses, encoded or kept as a WAV, saved where asked or in JARVIS's own folder,
-and sent to the phone through a shared link the web app serves (jarvis.state.shared_files). The tool starts it as a
-long job that says what it made as it ends. Kokoro itself is stood in for. Run with: make test"""
+"""Tests for voice.audio_file and tools.audio: speakable text, rendering, saving, phone sharing, the job."""
 
 import asyncio
 import json
@@ -24,7 +21,7 @@ from jarvis.voice import audio_file as af
 
 
 def fake_speak(text: str, voice: str, speed: float) -> np.ndarray:
-    """A tenth of a second of quiet tone per word, so the length of what's read shows in the file."""
+    """0.1 s of tone per word, so file length tracks the text."""
     return np.full(int(af.RATE * 0.1) * len(text.split()), 0.1, dtype=np.float32)
 
 
@@ -40,7 +37,7 @@ def work(tmp_path, monkeypatch):
     return tmp_path
 
 
-# ── Making text speakable, and cutting it into parts ────────────
+# ── Speakable text and parts ────────────────────────────────────
 
 
 def test_markdown_is_read_as_plain_speech():
@@ -83,7 +80,7 @@ def test_parts_keep_every_word_in_order_and_within_the_limit():
     assert all(len(p) <= 60 for p, _ in found)
     assert " ".join(p for p, _ in found).split() == " ".join(
         ["Short one. Another short one!", long_sentence, "x" * 60, "x" * 30, "end.", "Last."]).split()
-    # each paragraph's last part is marked, so a longer pause follows it
+    # a paragraph's last part is marked for a longer pause
     ends = [p for p, end in found if end]
     assert ends[0] == "Short one. Another short one!" and ends[-1] == "Last." and len(ends) == 4
 
@@ -143,7 +140,7 @@ def test_a_file_is_saved_where_asked_and_says_where(work):
     assert (work / "Music" / "Test.wav").is_file() and frames(work / "Music" / "Test.wav") > 0
     assert said == f"Saved as Test.wav in {af.shown(work / 'Music')}, 1 second of audio."
     assert not list((work / "audio").glob("*.wav"))  # nothing left behind
-    # made again: a new name, never over the first
+    # a second render gets a new name, never overwrites
     af.make(spec(work / "Music"), fake_speak, ["bm_george"])
     assert (work / "Music" / "Test 2.wav").is_file()
 
@@ -203,7 +200,7 @@ def test_m4a_is_made_with_the_macs_own_encoder(work):
 
 @pytest.fixture
 def job(work, monkeypatch):
-    """The job's own process, in this one: Kokoro, its priority and its SIGTERM handler stood in for."""
+    """Run the job in-process with Kokoro, priority and the SIGTERM handler faked."""
     monkeypatch.setattr(af, "kokoro", lambda: (fake_speak, ["bm_george", "bf_emma", "af_heart"]))
     monkeypatch.setattr(af.os, "nice", lambda n: None)
     stopping = []
@@ -216,7 +213,7 @@ def test_the_job_renders_one_file_at_a_time_and_tidies_up(work, job, capsys):
     file.write_text(json.dumps(spec(work)))
     assert af.main([str(file)]) == 0
     out = capsys.readouterr().out.strip().splitlines()
-    assert out[-1].startswith("Saved as Test.wav") and not file.exists()  # the user's words don't stay
+    assert out[-1].startswith("Saved as Test.wav") and not file.exists()  # the source text isn't kept
     assert (work / "audio" / "render.lock").exists()
 
     file.write_text(json.dumps(spec(work, voice="bx_none")))
@@ -302,11 +299,11 @@ def test_the_web_app_serves_a_shared_file_and_nothing_else(tmp_path, monkeypatch
     assert "/api/files/{token}" in routes
 
 
-# ── The tool, and the job it starts ─────────────────────────────
+# ── The tool and its job ────────────────────────────────────────
 
 
 class FakeRunner:
-    """The task runner's start_command, as the client reaches it: each job a command task."""
+    """Runner's start_command as the client sees it: records each job."""
 
     def __init__(self) -> None:
         self.launched = []
@@ -344,7 +341,7 @@ def test_the_tool_starts_a_job_and_says_how_long_and_where(jobs, work):
     assert report and not summarize and not auto_fix  # its last line says what it made; nothing to fix if it fails
     assert " -m jarvis.voice.audio_file " in command
     [file] = (work / "audio").glob("*.json")
-    assert oct(file.stat().st_mode & 0o777) == "0o600"  # the user's words
+    assert oct(file.stat().st_mode & 0o777) == "0o600"  # private: holds the user's text
     assert str(file) in command
     asked = json.loads(file.read_text())
     assert asked["text"].startswith("Summary.\n\nPlenty of words here.")

@@ -1,15 +1,9 @@
-"""Pictures JARVIS looks at: photos the user sends from the phone or a browser, and screenshots of the Mac's screen.
+"""Pictures for the model: photos sent from the phone/browser, and on-demand Mac screenshots.
 
-A photo comes in through jarvis.server (POST /api/picture) and waits in the profile's pictures/inbox until the voice brain's
-next turn, spoken or typed, takes it (`take`) and shows it to Claude with the user's words, as an image content block.
-One left waiting more than INBOX_MINUTES is dropped instead, so it can't turn up in an unrelated conversation later.
-Screenshots are taken only by the screen_look tool (jarvis.tools.screen), when the user asks.
-
-Each is made to fit what Claude reads well (`fit`): a JPEG, PNG, GIF or WebP at most MAX_EDGE pixels on its long side
-and MAX_BYTES in size. Anything bigger, or in another format (an iPhone's HEIC, a TIFF), becomes a JPEG through macOS's
-own sips; pictures in documents and attachments are made to fit the same way (jarvis.core.documents). They're kept in
-the profile's pictures folder, photos for PHOTO_DAYS and screenshots for SCREEN_HOURS (at most the newest PHOTOS_KEPT and
-SCREENS_KEPT), pruned whenever one is added.
+Sent photos wait in pictures/inbox until the next voice turn take()s them; after INBOX_MINUTES they are dropped so
+they can't surface in an unrelated conversation. fit() converts anything over MAX_EDGE / MAX_BYTES or not
+JPEG/PNG/GIF/WebP (e.g. HEIC, TIFF) to JPEG via sips. Photos are kept PHOTO_DAYS, screenshots SCREEN_HOURS (capped
+by count), pruned on each add.
 """
 
 import base64
@@ -28,20 +22,20 @@ log = logging.getLogger("jarvis.pictures")
 
 
 def inbox() -> Path:
-    return profile.current().pictures / "inbox"  # sent, waiting for the next turn
+    return profile.current().pictures / "inbox"  # awaiting the next turn
 
 
 def photos() -> Path:
-    return profile.current().pictures / "photos"  # sent and shown to Claude
+    return profile.current().pictures / "photos"  # already shown to Claude
 
 
 def screens() -> Path:
     return profile.current().pictures / "screens"  # screenshots
 
 
-MAX_EDGE = 1568  # pixels on the long side: more costs tokens without Claude seeing more
-MAX_BYTES = 3_750_000  # Claude takes up to 5 MB of base64 per image
-MAX_UPLOAD = 15_000_000  # the most a sent photo may be before it's made to fit
+MAX_EDGE = 1568  # long-side px; larger costs tokens for no gain
+MAX_BYTES = 3_750_000  # stays under Claude's 5 MB base64 limit
+MAX_UPLOAD = 15_000_000  # max upload before fitting
 JPEG_QUALITY = 82
 INBOX_MINUTES = 10
 PHOTO_DAYS, PHOTOS_KEPT = 7, 50
@@ -50,7 +44,7 @@ TIMEOUT = 30  # seconds for screencapture or sips
 
 SENDABLE = {"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp"}
 MEDIA = {ext: media for media, ext in SENDABLE.items()}
-NAME = re.compile(r"\d{8}-\d{6}-[0-9a-f]{6}\.(jpg|png|gif|webp)")  # a picture's file name, which is also its id
+NAME = re.compile(r"\d{8}-\d{6}-[0-9a-f]{6}\.(jpg|png|gif|webp)")  # file name, also the picture id
 
 NOT_A_PICTURE = "That isn't a picture JARVIS can read: send a JPEG, PNG, GIF, WebP or HEIC."
 SCREEN_PERMISSION = ("macOS may need to let JARVIS record the screen: in System Settings, Privacy & Security, Screen "
@@ -58,7 +52,7 @@ SCREEN_PERMISSION = ("macOS may need to let JARVIS record the screen: in System 
 
 
 def kind(data: bytes) -> str | None:
-    """The picture's media type, from its first bytes: one Claude takes (SENDABLE), "image/heic", or None."""
+    """Media type sniffed from magic bytes: a SENDABLE type, "image/heic", or None."""
     if data[:3] == b"\xff\xd8\xff":
         return "image/jpeg"
     if data[:8] == b"\x89PNG\r\n\x1a\n":
@@ -73,7 +67,7 @@ def kind(data: bytes) -> str | None:
 
 
 def dimensions(data: bytes, media: str | None) -> tuple[int, int] | None:
-    """Width and height, read from the header of a JPEG, PNG, GIF or WebP; None if it can't tell."""
+    """(width, height) from a JPEG/PNG/GIF/WebP header; None if unknown."""
     try:
         if media == "image/png":
             return struct.unpack(">II", data[16:24])
@@ -99,11 +93,11 @@ def dimensions(data: bytes, media: str | None) -> tuple[int, int] | None:
                 if marker == 0xFF:  # padding
                     i += 1
                     continue
-                if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:  # no length follows
+                if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:  # markers without a length
                     i += 2
                     continue
                 length = struct.unpack(">H", data[i + 2:i + 4])[0]
-                if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):  # a start of frame
+                if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):  # SOFn
                     h, w = struct.unpack(">HH", data[i + 5:i + 9])
                     return w, h
                 i += 2 + length
@@ -113,7 +107,7 @@ def dimensions(data: bytes, media: str | None) -> tuple[int, int] | None:
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
-    """One of macOS's own programs (sips, screencapture), with its arguments as argv; RuntimeError if it fails."""
+    """Run a macOS tool (sips, screencapture); RuntimeError on failure."""
     try:
         done = subprocess.run(args, capture_output=True, text=True, timeout=TIMEOUT)
     except (OSError, subprocess.TimeoutExpired) as e:
@@ -124,8 +118,7 @@ def _run(args: list[str]) -> subprocess.CompletedProcess:
 
 
 def _sips_size(path: Path) -> tuple[int, int] | None:
-    """Width and height as sips reads them, for a format whose header dimensions() doesn't (HEIC, TIFF); None if it
-    can't, as when it isn't a picture at all."""
+    """(width, height) via sips for formats dimensions() can't read; None if not a picture."""
     try:
         out = _run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(path)]).stdout
     except RuntimeError:
@@ -135,9 +128,9 @@ def _sips_size(path: Path) -> tuple[int, int] | None:
 
 
 def fit(src: Path, stem: Path) -> Path:
-    """`src` made fit for Claude and moved to `stem` plus its extension, which is returned. Kept as it is if it already
-    fits; else a JPEG, scaled down to MAX_EDGE if it's bigger. ValueError if it isn't a picture sips can read;
-    RuntimeError if sips fails."""
+    """Move `src` to `stem`+ext, converting to a (downscaled) JPEG if needed; return the new path. Consumes `src`.
+
+    ValueError if not a readable picture or still too big; RuntimeError if sips fails."""
     data = src.read_bytes()
     media = kind(data)
     size = dimensions(data, media) or _sips_size(src)
@@ -150,7 +143,7 @@ def fit(src: Path, stem: Path) -> Path:
     try:
         for quality in (JPEG_QUALITY, 60):
             args = ["sips", "-s", "format", "jpeg", "-s", "formatOptions", str(quality)]
-            if not size or max(size) > MAX_EDGE:  # only ever down: sips -Z scales small pictures up too
+            if not size or max(size) > MAX_EDGE:  # sips -Z would also upscale
                 args += ["-Z", str(MAX_EDGE)]
             _run([*args, str(src), "--out", str(out)])
             if out.stat().st_size <= MAX_BYTES:
@@ -168,7 +161,7 @@ def _stamp() -> str:
 
 
 def prune(folder: Path, max_age: float, keep: int) -> int:
-    """Delete the pictures in `folder` older than `max_age` seconds, and all but the newest `keep`; how many went."""
+    """Delete files older than `max_age` seconds or beyond the newest `keep`; return the count."""
     if not folder.is_dir():
         return 0
     found = sorted((p for p in folder.iterdir() if p.is_file()), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -186,8 +179,7 @@ def prune_all() -> None:
 
 
 def _expire() -> None:
-    """Drop what has waited in the inbox more than INBOX_MINUTES: photos nobody asked about, and saves that died
-    half way."""
+    """Delete inbox files older than INBOX_MINUTES (unclaimed photos, abandoned partial saves)."""
     if not inbox().is_dir():
         return
     for p in inbox().iterdir():
@@ -195,12 +187,12 @@ def _expire() -> None:
             if time.time() - p.stat().st_mtime > INBOX_MINUTES * 60:
                 log.info("%s waited too long; dropped", p.name)
                 p.unlink(missing_ok=True)
-        except FileNotFoundError:  # taken by a turn meanwhile
+        except FileNotFoundError:  # taken concurrently
             pass
 
 
 def save_photo(data: bytes) -> str:
-    """Keep a photo the user sent for the next turn; returns its id. ValueError if it isn't a picture or is too big."""
+    """Queue an uploaded photo for the next turn; return its id. ValueError if not a picture or too big."""
     if len(data) > MAX_UPLOAD:
         raise ValueError(f"That photo is too big: the most is {MAX_UPLOAD // 1_000_000} MB.")
     if kind(data) is None:
@@ -208,7 +200,7 @@ def save_photo(data: bytes) -> str:
     inbox().mkdir(parents=True, exist_ok=True)
     _expire()
     stamp = _stamp()
-    raw = inbox() / f".{stamp}.part"  # hidden while it's made to fit, so a turn can't take it half made
+    raw = inbox() / f".{stamp}.part"  # dot-prefixed so take() ignores it until done
     raw.write_bytes(data)
     fitted = fit(raw, inbox() / f".{stamp}")
     final = inbox() / fitted.name.lstrip(".")
@@ -218,7 +210,7 @@ def save_photo(data: bytes) -> str:
 
 
 def drop(photo_id: str) -> bool:
-    """Take back a photo still waiting for its turn, as the page does when the user removes it."""
+    """Remove a queued photo (user removed it in the page)."""
     if not NAME.fullmatch(photo_id):
         raise ValueError("That isn't a photo's id.")
     path = inbox() / photo_id
@@ -229,8 +221,7 @@ def drop(photo_id: str) -> bool:
 
 
 def take() -> list[Path]:
-    """The photos sent since the last turn, oldest first, moved out of the inbox to be shown to Claude now. Ones
-    that waited more than INBOX_MINUTES are dropped instead."""
+    """Move queued photos (oldest first) out of the inbox for this turn; expired ones are dropped."""
     if not inbox().is_dir():
         return []
     _expire()
@@ -244,8 +235,7 @@ def take() -> list[Path]:
 
 
 def screenshot() -> Path:
-    """A screenshot of the Mac's main display, made fit for Claude, kept in data/pictures/screens. Silent (no shutter
-    sound). RuntimeError, saying what to do, if macOS won't take it."""
+    """Silent screenshot of the main display, fitted for Claude. RuntimeError with a permissions hint on failure."""
     screens().mkdir(parents=True, exist_ok=True)
     stamp = _stamp()
     raw = screens() / f".{stamp}.part"
@@ -263,12 +253,12 @@ def screenshot() -> Path:
 
 
 def read(path: Path) -> tuple[str, bytes]:
-    """A picture `fit` made: its media type and bytes."""
+    """(media type, bytes) of a fitted picture."""
     return MEDIA[path.suffix], path.read_bytes()
 
 
 def block(path: Path) -> dict:
-    """The picture as a content block for a message to Claude."""
+    """Base64 image content block for a Claude message."""
     media, data = read(path)
     return {"type": "image", "source": {"type": "base64", "media_type": media,
                                         "data": base64.b64encode(data).decode()}}

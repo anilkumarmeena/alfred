@@ -1,6 +1,4 @@
-"""Tests for scanning for hidden instructions (jarvis.safety.scan): what it flags and strips, and where it's used:
-memory, the to-do list and the project list, tasks' and the learning review's suggested edits, the voice brain's own
-saves, and the project files code tasks load. Run with: make test"""
+"""Tests for jarvis.safety.scan: what it flags and strips, and each place that uses it."""
 
 import pytest
 from test_data_edits import data, suggests  # noqa: F401  (a fixture)
@@ -193,7 +191,7 @@ def test_tampered_skills_agents_and_agents_md_are_left_out_one_by_one(project, t
     setup = project_claude.load(project, "video-agent", where)
     assert setup.claude_md and "sneaky" not in setup.agents and "scout" in setup.agents
     assert setup.skills == ["video-agent:scout-ideas", "video-agent:ship"]
-    assert sorted(p.name for p in (where / "skills").iterdir()) == ["scout-ideas"]  # linked one by one now
+    assert sorted(p.name for p in (where / "skills").iterdir()) == ["scout-ideas"]  # linked one by one
     assert (where / "skills" / "scout-ideas").resolve() == (claude / "skills" / "scout-ideas").resolve()
     assert (where / "commands").resolve() == (claude / "commands").resolve()  # nothing left out there
     flagged = "; ".join(setup.flagged)

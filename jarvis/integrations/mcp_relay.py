@@ -1,22 +1,12 @@
-"""Between a Claude session and one of its connections (an MCP server): the launcher (jarvis.integrations.mcp_launch)
-runs the server, a local program or an HTTP endpoint through the bridge (jarvis.integrations.mcp_bridge), behind this
-relay, so the CLI meets every server the same way, whatever MCP features it has.
+"""Relay between a Claude session and one MCP server (local process or HTTP via mcp_bridge).
 
-- Reads side by side. The CLI runs several calls of one step at once only when the server's tools/list marks them
-  readOnlyHint, which many servers leave out or get wrong. Here each tool is marked as JARVIS sorted it
-  (jarvis.integrations.mcp_servers): a read as read-only, anything else not.
-- Long-running calls. A tool the server runs as an MCP task (its execution.taskSupport, MCP 2025-11-25) is called as
-  one: the relay creates the task, follows it with tasks/get until it ends, and fetches its tasks/result. The server's
-  tasks capability is kept from the CLI, which makes a plain call either way. Every call carries a progress token of
-  the relay's, so what the server says of its progress, or a task's status message, is known while it runs.
-- Background. With a wait (the voice brain's sessions: config.CONNECTION_WAIT), a call still running after it is
-  answered there and then: it carries on as a task of the task runner's (kind connection: jarvis.tasks.connection_jobs),
-  which says how it went when it ends, like any task, and whose task_stop cancels it. The relay outlives the session
-  that started it (`detach`) until its calls in the background have ended.
-
-Everything else passes through as it is, both ways: the CLI's other requests and notifications, the server's own
-requests (roots, sampling, elicitation) and the answers to them. The relay's requests have ids of their own
-("jarvis-1"), which never clash with the CLI's numbers.
+Gives the CLI a uniform server whatever MCP features it has:
+  read-only hints  readOnlyHint set from JARVIS's own sorting (mcp_servers), so the CLI runs reads in parallel
+  MCP tasks        tools with execution.taskSupport are run as tasks (create, poll tasks/get, fetch tasks/result); the
+                   tasks capability is hidden from the CLI. Every call carries a relay progress token.
+  background       with `wait` (voice sessions, config.CONNECTION_WAIT), a call still running is handed to the task
+                   runner as a connection task; the relay outlives the session (`detach`) until it ends.
+Everything else passes through both ways. Relay request ids ("jarvis-N") never clash with the CLI's numeric ids.
 """
 
 import asyncio
@@ -40,30 +30,30 @@ from jarvis.tasks import client
 log = logging.getLogger("jarvis.integrations.mcp_relay")
 
 ERROR = mcp_bridge.ERROR
-TASK_TTL_MS = 24 * 3600 * 1000  # how long a server is asked to keep a task and its result
-POLL_SECONDS = 2.0  # between looks at a task, unless the server asks for another pace (pollInterval)
+TASK_TTL_MS = 24 * 3600 * 1000  # requested task/result retention
+POLL_SECONDS = 2.0  # task poll interval unless the server sets pollInterval
 POLL_LIMITS = (0.5, 30.0)
-FOLLOW_SECONDS = 5.0  # how often a call in the background tells the runner how it goes and hears if it was stopped
-BACKGROUND_HOURS = 24  # the longest a call carries on in the background
-RESULT_CHARS = 20_000  # of what a call in the background returned, kept on its task
-REPORT_TRIES = 12  # a minute of tries to tell the runner a call's end, while it restarts
+FOLLOW_SECONDS = 5.0  # background call: progress report / stop check interval
+BACKGROUND_HOURS = 24  # max background call duration
+RESULT_CHARS = 20_000  # result chars stored on the task
+REPORT_TRIES = 12  # ~1 min of retries to report the end while the runner restarts
 
 
 @dataclass
 class Call:
-    """One of the CLI's tools/call requests, as the relay makes it."""
+    """A CLI tools/call as the relay runs it."""
     tool: str
     args: dict
-    token: str  # the progress token the relay gave it
-    cli_token: str | int | None  # the CLI's own, when it asked for progress
-    request: str = ""  # the id of the tools/call the relay sent
-    task: str = ""  # the server's task id, when it runs as one
-    said: str = ""  # the latest the server said of how it's going
+    token: str  # relay progress token
+    cli_token: str | int | None  # CLI's progress token, if it asked
+    request: str = ""  # relay request id
+    task: str = ""  # server task id, if run as a task
+    said: str = ""  # latest progress message
     background: bool = False
 
 
 def _progress(params: dict) -> str:
-    """A progress notification as words: its message, else how far along it is."""
+    """Progress notification as text: its message, else a percentage."""
     if message := str(params.get("message") or "").strip():
         return message
     done, total = params.get("progress"), params.get("total")
@@ -79,7 +69,7 @@ def _poll(task: dict) -> float:
 
 
 def result_text(reply: dict) -> str:
-    """What a call returned, or why it failed, as text: its text blocks, else its structured content."""
+    """Call result (text blocks, else structuredContent) or error message, as text."""
     if "error" in reply:
         return str((reply["error"] or {}).get("message") or "It failed.")
     result = reply.get("result") or {}
@@ -91,19 +81,19 @@ def result_text(reply: dict) -> str:
 
 
 class Relay:
-    """Carries one session's messages between the CLI (`to_cli`) and the server (`send`, set once it's open)."""
+    """One session's traffic between the CLI (`to_cli`) and the server (`send`, set once open)."""
 
     def __init__(self, server: Server, to_cli: Callable[[dict], Awaitable[None]], wait: float = 0.0,
                  runner=client) -> None:
         self.server, self.to_cli, self.wait, self.runner = server, to_cli, wait, runner
         self.send: Callable[[dict], Awaitable[None]] | None = None
-        self.tasks = False  # the server runs tools/call as tasks
-        self.task_tools: set[str] = set()  # those of its tools it can run as one
-        self.pending: dict[str, asyncio.Future] = {}  # the relay's own requests, by id
-        self.asked: dict = {}  # the CLI's requests whose answers the relay changes: id -> method
-        self.calls: dict = {}  # the CLI's tools/call requests being made, by its id
+        self.tasks = False  # server supports tools/call as tasks
+        self.task_tools: set[str] = set()  # tools that can run as tasks
+        self.pending: dict[str, asyncio.Future] = {}  # relay's own requests by id
+        self.asked: dict = {}  # CLI requests whose replies get rewritten: id -> method
+        self.calls: dict = {}  # in-flight CLI tools/call by CLI id
         self.by_token: dict[str, Call] = {}
-        self.background: set[asyncio.Task] = set()  # following the calls carried on in the background
+        self.background: set[asyncio.Task] = set()  # followers of background calls
         self._tasks: set[asyncio.Task] = set()
         self._ids = itertools.count(1)
 
@@ -119,16 +109,16 @@ class Relay:
     # ── From the CLI ───────────────────────────────────────
 
     async def from_cli(self, message) -> None:
-        one = message if isinstance(message, dict) else {}  # a batch passes as it is
+        one = message if isinstance(message, dict) else {}  # batches pass through
         method, mid, params = one.get("method"), one.get("id"), one.get("params") or {}
         if method in ("initialize", "tools/list"):
-            self.asked[mid] = method  # its answer is changed on the way back
+            self.asked[mid] = method  # reply rewritten on the way back
         if method == "tools/call" and mid is not None:
             self.calls[mid] = self._spawn(self._call(message))
         elif method == "notifications/cancelled" and (call := self.calls.get(params.get("requestId"))):
-            call.cancel()  # and the server is told, as the relay made the call (_run)
+            call.cancel()  # _run tells the server
         elif method == "initialize":
-            await self.send(message)  # first, so what follows carries its session
+            await self.send(message)  # awaited so later requests carry its session
         else:
             self._spawn(self.send(message))
 
@@ -158,13 +148,13 @@ class Relay:
         await self.to_cli(message)
 
     def _initialized(self, result: dict) -> None:
-        """Whether the server runs calls as tasks, which the CLI isn't told: the relay does that."""
+        """Note task support and hide it from the CLI; the relay handles tasks."""
         capabilities = result.get("capabilities") or {}
         self.tasks = "call" in (((capabilities.get("tasks") or {}).get("requests") or {}).get("tools") or {})
         capabilities.pop("tasks", None)
 
     def _listed(self, result: dict) -> None:
-        """Each tool marked read-only as JARVIS sorted it, and which run as tasks noted, then kept from the CLI."""
+        """Set readOnlyHint from JARVIS's sorting; record and hide taskSupport."""
         for tool in result.get("tools") or []:
             if not isinstance(tool, dict):
                 continue
@@ -179,7 +169,7 @@ class Relay:
     # ── Calls ──────────────────────────────────────────────
 
     async def request(self, method: str, params: dict, rid: str = "") -> dict:
-        """One request of the relay's own to the server, and its answer, with "result" or "error"."""
+        """Send a relay request; returns the reply ("result" or "error")."""
         rid = rid or self._id()
         self.pending[rid] = future = asyncio.get_running_loop().create_future()
         try:
@@ -201,7 +191,7 @@ class Relay:
             else:
                 reply = await run
             await self.to_cli({"jsonrpc": "2.0", "id": mid} | {k: reply[k] for k in ("result", "error") if k in reply})
-        except asyncio.CancelledError:  # the CLI cancelled it, or went
+        except asyncio.CancelledError:  # CLI cancelled or disconnected
             run.cancel()
             raise
         finally:
@@ -210,7 +200,7 @@ class Relay:
                 self.by_token.pop(call.token, None)
 
     async def _run(self, call: Call, params: dict) -> dict:
-        """Makes the call, as a task if the server runs it as one; its answer, with "result" or "error"."""
+        """Make the call (as a task if supported); returns "result" or "error"."""
         call.request = self._id()
         try:
             if not (self.tasks and call.tool in self.task_tools):
@@ -218,7 +208,7 @@ class Relay:
             made = await self.request("tools/call", params | {"task": {"ttl": TASK_TTL_MS}}, call.request)
             task = (made.get("result") or {}).get("task")
             if not isinstance(task, dict) or not task.get("taskId"):
-                return made  # refused, or answered at once
+                return made  # refused or answered immediately
             call.task = str(task["taskId"])
             while task.get("status") == "working":
                 await asyncio.sleep(_poll(task))
@@ -227,11 +217,11 @@ class Relay:
                     return got
                 task = got.get("result") or {}
                 call.said = task.get("statusMessage") or call.said
-            return await self.request("tasks/result", {"taskId": call.task})  # input_required waits there too
+            return await self.request("tasks/result", {"taskId": call.task})  # also blocks through input_required
         except asyncio.CancelledError:
             self._spawn(self._cancel(call))
             raise
-        except (OSError, ValueError, httpx.HTTPError) as e:  # the server gone
+        except (OSError, ValueError, httpx.HTTPError) as e:  # server gone
             why = type(e).__name__
             log.warning("%s: %s failed: %s", self.server.name, call.tool, why)
             return {"error": {"code": ERROR, "message": f"{self.server.label} couldn't be reached ({why})."}}
@@ -246,11 +236,11 @@ class Relay:
         except (OSError, ValueError, TimeoutError, httpx.HTTPError):
             pass
 
-    # ── In the background ──────────────────────────────────
+    # ── Background ─────────────────────────────────────────
 
     async def _to_background(self, call: Call, run: asyncio.Task) -> str:
-        """Hands a call still running to the task runner, as a connection task: what the CLI is told. '' if the runner
-        can't take it, and the call is waited for after all."""
+        """Hand a running call to the task runner as a connection task; returns the CLI's reply text, or '' if the
+        runner is unavailable (the call is then awaited in the foreground)."""
         title = f"{self.server.label} {call.tool.replace('_', ' ')}"
         instruction = f"{self.server.tool(call.tool)} {json.dumps(call.args, ensure_ascii=False)}"
         try:
@@ -268,8 +258,8 @@ class Relay:
                 f"call it again or wait for it; say it's under way and carry on.")
 
     async def _follow(self, call: Call, run: asyncio.Task, task_id: int) -> None:
-        """Until the call ends: its progress told to the runner, and the call cancelled if its task was stopped, or
-        after BACKGROUND_HOURS. Then how it went."""
+        """Report progress until the call ends, cancelling it if the task is stopped or after BACKGROUND_HOURS; then
+        report the outcome."""
         told, until = "", time.monotonic() + BACKGROUND_HOURS * 3600
         try:
             while not run.done():
@@ -281,16 +271,16 @@ class Relay:
                     return await self._report(task_id, "failed", f"Gave up after {BACKGROUND_HOURS} hours.")
                 try:
                     if (await self.runner.task(task_id))["status"] != "running":
-                        run.cancel()  # stopped: the runner has said so
+                        run.cancel()  # stopped; the runner already announced it
                         return
                     if call.said != told:
                         await self.runner.connection_update(task_id, call.said)
                         told = call.said
                 except (client.RunnerUnavailable, ValueError, OSError):
-                    pass  # restarting: next time
+                    pass  # runner restarting; retry next round
             try:
                 reply = run.result()
-            except Exception as e:  # a fault of the relay's own: the task mustn't stay running
+            except Exception as e:  # relay bug: never leave the task running
                 log.exception("%s: %s failed", self.server.name, call.tool)
                 reply = {"error": {"message": f"It failed ({type(e).__name__})."}}
             failed = "error" in reply or (reply.get("result") or {}).get("isError")
@@ -305,27 +295,27 @@ class Relay:
                 return
             except (client.RunnerUnavailable, OSError):
                 await asyncio.sleep(FOLLOW_SECONDS)
-            except ValueError:  # it's gone from the runner
+            except ValueError:  # task no longer exists
                 break
         log.warning("%s: task %s's end couldn't be told", self.server.name, task_id)
 
-    # ── Ending ─────────────────────────────────────────────
+    # ── Shutdown ───────────────────────────────────────────
 
     def closed(self) -> None:
-        """The server has gone: what the relay asked it is answered so."""
+        """Server gone: fail all pending relay requests."""
         for future in self.pending.values():
             if not future.done():
                 future.set_result({"error": {"code": ERROR, "message": f"{self.server.label} stopped."}})
 
     async def finish(self) -> None:
-        """The CLI has gone: the calls it was waiting for stop, and those in the background carry on to their end."""
+        """CLI gone: cancel foreground calls, wait for background ones."""
         for call in list(self.calls.values()):
             call.cancel()
         await asyncio.gather(*self.background, return_exceptions=True)
 
 
 class Process:
-    """A local server (stdio), started by the relay, each line it writes going to `deliver`."""
+    """Local stdio server; each stdout line goes to `deliver`."""
 
     def __init__(self, proc: asyncio.subprocess.Process, deliver: Callable[[dict], Awaitable[None]]) -> None:
         self.proc = proc
@@ -366,9 +356,8 @@ class Process:
 async def serve(server: Server, wait: float = 0.0, command: tuple[list[str], dict[str, str]] | None = None,
                 reader: asyncio.StreamReader | None = None, out=None,
                 transport: httpx.AsyncBaseTransport | None = None) -> int:
-    """Relays stdin to the server and its answers to stdout until either ends, then waits for the calls carried on in
-    the background. A local server is started with `command` (mcp_launch.command); an HTTP one is reached through the
-    bridge. Raises vault.VaultError if a secret isn't set."""
+    """Relay stdin/stdout to the server until either ends, then wait for background calls. Local servers start from
+    `command` (mcp_launch.command); HTTP ones go through the bridge. Raises vault.VaultError if a secret isn't set."""
     reader = reader or await mcp_bridge._stdin()
     out = out or sys.stdout
     lock = asyncio.Lock()
@@ -378,7 +367,7 @@ async def serve(server: Server, wait: float = 0.0, command: tuple[list[str], dic
             try:
                 out.write(json.dumps(message, ensure_ascii=False) + "\n")
                 out.flush()
-            except (BrokenPipeError, ValueError):  # the CLI has gone; calls in the background carry on
+            except (BrokenPipeError, ValueError):  # CLI gone; background calls continue
                 pass
 
     relay = Relay(server, write, wait)
@@ -410,9 +399,8 @@ async def serve(server: Server, wait: float = 0.0, command: tuple[list[str], dic
 
 
 def detach() -> None:
-    """Carries on in a child process of a session of its own, so the CLI stopping the process it started as its
-    session ends (SIGINT, then SIGTERM and SIGKILL, to that process alone) leaves calls in the background to finish.
-    That process only waits for this one, and goes as soon as it's told to."""
+    """Fork into a new session so background calls survive the CLI killing its child at session end. The parent
+    just waits and exits as soon as it is signalled."""
     if pid := os.fork():
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, lambda *_: os._exit(0))

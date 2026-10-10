@@ -1,7 +1,5 @@
-// Connections: the MCP servers whose tools JARVIS uses (jarvis.integrations.mcp_servers). Each can be switched on and
-// off, signed in to (in JARVIS's browser on the Mac), given its keys and removed here, after reading what goes with it.
-// Keys are only ever written: pasted here so they're never spoken, and shown back as set or not. Finding, connecting
-// and sorting a server's tools is by voice, with a yes.
+// Connections (MCP servers): toggle, sign in (via JARVIS's browser on the Mac), set keys, remove.
+// Keys are write-only (pasted, never spoken; shown only as set/unset). Adding servers is by voice, with approval.
 import { useSignal } from "@preact/signals";
 import { act, servers, type Server } from "../../state/panel";
 import { ChevronIcon, TrashIcon } from "../icons";

@@ -1,8 +1,4 @@
-"""Where the voice agent sends each reply (jarvis.voice.agent.JarvisAgent, jarvis.voice.session.VoiceSession.reply),
-beyond tests/test_voice_session.py: which of LiveKit's messages is the turn, an empty turn, how far a yes goes
-("for this session", "always" and the rule it offers), a rule that can't be saved or is the voice shell's own, the
-model's read of words the lists can't, and a request withdrawn when the brain's reply asks its own question. The
-brain, the runner and the consent model are stood in for. Run with: make test"""
+"""Tests for voice reply routing (JarvisAgent, VoiceSession.reply): LiveKit turns, yes scope, rules, brain questions."""
 
 import asyncio
 

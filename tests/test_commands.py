@@ -1,5 +1,4 @@
-"""Tests for the command rules the voice shell and background tasks share: what's risky, how it's
-described, what a task may never run, and which text names a secret. Run with: make test"""
+"""Tests for shared command rules: what's risky, how it's described, task-forbidden commands, secret-naming text."""
 
 import pytest
 
@@ -156,7 +155,7 @@ CHROME = '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headl
 
 @pytest.fixture
 def own(tmp_path):
-    """A task's folder (with a build folder, a .git and a link out of it), its temp folder, and one process of its own."""
+    """A task's folder (build dir, .git, outbound link), its temp folder and one process of its own."""
     folder, temp, outside = tmp_path / "app", tmp_path / "cache" / "tmp" / "task-9", tmp_path / "elsewhere"
     for d in (folder / "build", folder / ".git", temp / "shots", outside):
         d.mkdir(parents=True)
@@ -175,7 +174,7 @@ def own(tmp_path):
 ])
 def test_a_task_deleting_its_own_files_or_stopping_its_own_processes_needs_no_yes(own, command):
     command = command.format(temp=own.roots[1], folder=own.folder)
-    assert risky(command), command  # for anyone else it's risky
+    assert risky(command), command  # risky for anyone else
     assert risky(command, own) == "", command
 
 
@@ -213,7 +212,7 @@ def test_its_own_rm_is_judged_apart_from_the_rest_of_the_line(own):
                                      "brew install jq && brew install yq", "port install wget"])
 def test_installs_that_sandbox_themselves_leave_the_host_profile(command):
     assert commands.own_sandbox(command)
-    assert risky(command) == "installs software"  # so they always wait for a yes first
+    assert risky(command) == "installs software"  # so they always wait for a yes
 
 
 @pytest.mark.parametrize("command", [

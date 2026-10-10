@@ -1,6 +1,4 @@
-"""The speaker check (jarvis.voice.speaker): voiceprints made from the user's speech, each utterance judged against them,
-someone else's dropped before the brain hears it, short replies given the benefit of the conversation around them,
-and enrolling by voice, in the panel and on the command line."""
+"""Tests for jarvis.voice.speaker: voiceprints, judging utterances, dropping other speakers, enrolling."""
 
 import asyncio
 import base64
@@ -21,13 +19,12 @@ from jarvis.voice.floor import Floor
 from jarvis.voice.speaker import RATE, WINDOW, SpeakerCheck, Thresholds
 from jarvis.voice.speech_gate import SpeechGate
 
-DIM = 8  # real embeddings have 256: different voices, and a voice and a room's sound, are about orthogonal
+DIM = 8  # real embeddings are 256-d; distinct voices, and voice vs room sound, are near-orthogonal
 USER = np.eye(DIM, dtype=np.float32)[0]
 
 
 def voice(alike: float, axis: int = 1) -> np.ndarray:
-    """A unit embedding with cosine similarity `alike` to USER, the rest of it along `axis`: 1 for how the user sounds
-    through some other mic, 2 and up for other people."""
+    """Unit embedding with cosine `alike` to USER, the rest along `axis` (1: user via another mic, 2+: others)."""
     v = np.zeros(DIM, np.float32)
     v[0], v[axis] = alike, np.sqrt(max(0.0, 1 - alike ** 2))
     return v
@@ -37,9 +34,11 @@ OTHER = voice(0.0, 2)
 
 
 def clip(seconds: float, alike: float, axis: int | None = None) -> np.ndarray:
-    """Audio standing for `seconds` of speech by a voice `alike` to the user's: unless `axis` says, a voice at least
-    half like theirs is them through some mic (axis 1), a less alike one someone else (axis 2). The fake embedder reads
-    it back from any two samples starting at an even one, so pieces of it say the same."""
+    """Fake audio for `seconds` of speech by a voice `alike` to the user's.
+
+    Default axis: 1 (the user via some mic) if alike >= 0.5, else 2 (someone else). The fake embedder reads it back
+    from any even-aligned sample pair, so slices of it embed the same.
+    """
     audio = np.empty(max(2, int(seconds * RATE) // 2 * 2), np.float32)
     audio[0::2], audio[1::2] = alike, (axis or (1 if alike >= 0.5 else 2)) / 10
     return audio
@@ -83,7 +82,7 @@ def check(mode: str = "on", tmp_path=None, **thresholds) -> tuple[SpeakerCheck, 
 
 
 def forget_all() -> None:
-    """No voiceprints in the tests' database."""
+    """Remove every voiceprint from the test database."""
     for p in voiceprints.every():
         voiceprints.remove(p.name)
 
@@ -128,7 +127,7 @@ def test_only_speech_is_judged_widened_a_little_at_each_edge():
     probs = np.zeros(20, np.float32)
     probs[10] = 0.9
     kept = speaker.speech_only(audio, lambda a: probs)
-    assert np.array_equal(kept, audio[8 * WINDOW:13 * WINDOW])  # window 10, and two either side
+    assert np.array_equal(kept, audio[8 * WINDOW:13 * WINDOW])  # window 10, plus two either side
     assert len(speaker.speech_only(audio, lambda a: np.zeros(20))) == 0
 
 
@@ -209,8 +208,8 @@ def test_once_someone_else_is_heard_short_clips_lose_the_benefit():
 
 def test_the_users_clear_utterances_become_a_reference_for_this_call():
     c, _ = check()
-    c.prints = [Voiceprint(voice(0.5, 3), 25.0, 0.8)]  # enrolled through another mic: in this call they sound like USER
-    assert c.judge(clip(4, 1.0, 1)).score == pytest.approx(0.5, abs=1e-3)  # 0.5 >= 0.35 + 0.1: adapted to
+    c.prints = [Voiceprint(voice(0.5, 3), 25.0, 0.8)]  # enrolled via another mic; in this call they sound like USER
+    assert c.judge(clip(4, 1.0, 1)).score == pytest.approx(0.5, abs=1e-3)  # 0.5 >= 0.35 + 0.1: adapted
     j = c.judge(clip(2, 0.95, 1))
     assert j.reference == "this call" and j.score > 0.8
     assert c.judge(clip(0.8, 0.95, 1)).reference == OWNER  # too short to compare with the call's
@@ -219,8 +218,8 @@ def test_the_users_clear_utterances_become_a_reference_for_this_call():
 
 def test_the_call_reference_stays_anchored_to_the_voiceprint():
     c, _ = check()
-    c.judge(clip(4, 0.5, 1))  # the user, faintly like their voiceprint: adapted to
-    j = c.judge(clip(3, 0.0, 1))  # all room, none of the user's voice: half the way back to the voiceprint, no more
+    c.judge(clip(4, 0.5, 1))  # the user, faintly like their voiceprint: adapted
+    j = c.judge(clip(3, 0.0, 1))  # all room, no user voice: halfway back to the voiceprint, no more
     assert j.reference == "this call" and j.score < 0.65
 
 
@@ -287,7 +286,7 @@ def test_a_voiceprint_averages_its_pieces_and_leaves_out_an_odd_one():
     speech_ = np.concatenate([clip(3, 0.9), clip(3, 0.95), clip(3, 0.85), clip(3, 0.9), clip(3, -0.9)])
     made = speaker.voiceprint(speech_, FakeEmbedder(), minimum=5)
     assert made.seconds == pytest.approx(15) and made.consistency > 0.95 and made.via == "voice"
-    assert speaker.cosine(made.embedding, USER) > 0.85  # the -0.9 piece (a cough, someone else) is out
+    assert speaker.cosine(made.embedding, USER) > 0.85  # the -0.9 piece (a cough, someone else) is excluded
 
 
 def test_a_voiceprint_needs_enough_speech_from_one_voice():
@@ -332,7 +331,7 @@ def test_voiceprints_are_kept_replaced_and_forgotten():
     found = voiceprints.load()
     assert [p.name for p in found] == [OWNER, "guest"] and np.allclose(found[0].embedding, USER)
     assert found[0].seconds == 26.0 and found[0].via == "voice" and found[0].created > 0
-    assert [p.name for p in voiceprints.every()] == [OWNER, "guest", "old"]  # another model's, left out of load
+    assert [p.name for p in voiceprints.every()] == [OWNER, "guest", "old"]  # another model's print is left out of load
     assert voiceprints.every()[2].described()["current"] is False
     assert voiceprints.remove("old") and voiceprints.remove("guest") and not voiceprints.remove("guest")
     assert voiceprints.remove() and voiceprints.load() == []
@@ -349,7 +348,7 @@ def test_enrolling_by_voice_collects_clips_then_keeps_the_voiceprint(monkeypatch
     assert c.enrolling and "thirty seconds" in told and "stop" in told
     assert c.collect(clip(5, 0.9), "My day started early.") is None
     c.jarvis_speaking(True)
-    assert c.collect(clip(5, 0.0), "JARVIS's own voice") is None  # while JARVIS speaks: not collected
+    assert c.collect(clip(5, 0.0), "JARVIS's own voice") is None  # collected nothing while JARVIS speaks
     c.jarvis_speaking(False)
     assert c.collect(clip(4, 0.92), "and then") is None
     said = c.collect(clip(4, 0.88), "that's all.")
@@ -409,7 +408,7 @@ def test_an_old_enrollments_timer_leaves_a_new_one_alone(monkeypatch):
         old = c._enrolling
         c.cancel_enrollment()
         c.start_enrollment()
-        await c._lapse(old)  # the first one's timer, had it fired: nothing
+        await c._lapse(old)  # the first one's timer, had it fired: no effect
         assert c.enrolling and not said
         c.cancel_enrollment()
         return said

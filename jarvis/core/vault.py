@@ -1,23 +1,16 @@
-"""Secrets JARVIS keeps for its MCP servers (tokens and the like) and for itself (its LiveKit keys and the like:
-jarvis.core.credentials), encrypted in the secrets table of data/tasks.db.
+"""Encrypted secrets (MCP tokens, JARVIS's own keys) in the profile database's secrets table.
 
-Each secret is AES-256-GCM under the master key, JARVIS_MASTER_KEY: 32 random bytes, base64url, always from the
-environment, which on the Mac means .env. A blob is a 12-byte nonce then the ciphertext, and the secret's name and the
-key's id are bound in as associated data, so a blob copied under another name, or kept with the wrong key id, won't
-open. The key id is the first 8 bytes of the key's SHA-256, in hex: enough to tell keys apart, nothing to go on.
-A settings row, vault_check, holds a known text encrypted the same way, so a wrong key is caught before it's used.
+AES-256-GCM under JARVIS_MASTER_KEY (32 bytes base64url, from .env). Blob = 12-byte nonce + ciphertext; name and key
+id are the associated data, so a blob can't be moved to another name or key. Key id = first 8 bytes of SHA-256 (hex).
+The vault_check setting detects a wrong key before use. "new,old,..." keys: write with the first, read by key id.
+config pops the key from the environment so no session, shell command or MCP server sees it; only mcp_launch decrypts,
+reading the key from .env.
 
-The key may be "new,old,...": secrets are written under the first and read under whichever their key id names, which
-is how a key is rotated. JARVIS's own processes take the key out of their environment as config loads
-(config.MASTER_KEY), and the CLI sessions get it blanked, so no session, shell command or MCP server sees it. Only
-jarvis.integrations.mcp_launch decrypts a server's secrets, just before it starts that server; it reads the key from .env, since
-the CLI that starts it has none.
-
-    uv run python -m jarvis.core.vault              what's kept: the key's id and the secrets' names, never a value
-    uv run python -m jarvis.core.vault init         make the key and put it in .env (mode 600), or --print it once
-    uv run python -m jarvis.core.vault rotate       a new key first in .env, the old kept after it; everything re-encrypted
-    uv run python -m jarvis.core.vault reencrypt    everything under the first key; --drop-old then takes the rest out of .env
-    uv run python -m jarvis.core.vault reset --yes  for a lost key: forget every secret and start a new key
+    uv run python -m jarvis.core.vault              key id and secret names (never values)
+    uv run python -m jarvis.core.vault init         create the key in .env (0600), or --print it once
+    uv run python -m jarvis.core.vault rotate       prepend a new key, re-encrypt everything
+    uv run python -m jarvis.core.vault reencrypt    re-encrypt under the first key; --drop-old removes the others
+    uv run python -m jarvis.core.vault reset --yes  lost key: forget all secrets, make a new key
 """
 
 import argparse
@@ -46,23 +39,23 @@ from jarvis.state import settings
 log = logging.getLogger("jarvis.core.vault")
 
 VAR = "JARVIS_MASTER_KEY"
-ENV_FILE = ROOT / ".env"  # where the key lives on the Mac; the tests point it elsewhere
-CHECK = "vault_check"  # the settings row that tells a wrong key from the right one
+ENV_FILE = ROOT / ".env"  # overridden by tests
+CHECK = "vault_check"  # settings row used to detect a wrong key
 _CHECK_TEXT = b"JARVIS vault check"
-NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")  # a secret's name, e.g. github.token
+NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")  # e.g. github.token
 
 _SCHEMA = """
 create table secrets (
     name text primary key,
-    blob blob not null,                  -- 12-byte nonce, then AES-256-GCM ciphertext and tag
-    key_id text not null,                -- which key it's under; with the name, the associated data
+    blob blob not null,                  -- 12-byte nonce + AES-256-GCM ciphertext and tag
+    key_id text not null,                -- encrypting key; part of the associated data
     created real not null,
     updated real not null
 )"""
 
 
 class VaultError(Exception):
-    """Something the user has to fix: no key, a wrong key, a secret missing."""
+    """User-fixable vault problem: missing key, wrong key, missing secret."""
 
 
 @dataclass(frozen=True)
@@ -70,7 +63,7 @@ class Key:
     id: str
     secret: bytes = b""
 
-    def __repr__(self) -> str:  # never the key itself, in a log or a traceback
+    def __repr__(self) -> str:  # keep the key out of logs and tracebacks
         return f"Key({self.id})"
 
 
@@ -87,7 +80,7 @@ def key_id(raw: bytes) -> str:
 
 
 def parse(text: str) -> list[Key]:
-    """The keys in a JARVIS_MASTER_KEY value, the newest first. Raises VaultError for one that isn't 32 bytes."""
+    """Parse a JARVIS_MASTER_KEY value, newest first. VaultError if any key isn't 32 bytes."""
     keys = []
     for n, part in enumerate(p.strip() for p in text.split(",") if p.strip()):
         try:
@@ -108,7 +101,7 @@ def _env_file_value() -> str:
 
 
 def keys() -> list[Key]:
-    """The master keys: from the environment as config found it, or else .env (as jarvis.integrations.mcp_launch needs)."""
+    """Master keys from config.MASTER_KEY, else .env (for mcp_launch, whose env lacks it)."""
     return parse(config.MASTER_KEY or _env_file_value())
 
 
@@ -139,8 +132,7 @@ def _db() -> AbstractContextManager[sqlite3.Connection]:
 
 
 def _checked(found: list[Key]) -> list[Key]:
-    """The keys, once vault_check opens with one of them (or written now, with none yet). Raises VaultError without a
-    key, or when it doesn't open."""
+    """Return `found` once vault_check decrypts (writing it if absent). VaultError if no key or the wrong key."""
     if not found:
         raise VaultError(f"No {VAR} is set. Make one with: make vault ARGS=init")
     stored = settings.get(CHECK)
@@ -157,7 +149,7 @@ def _checked(found: list[Key]) -> list[Key]:
 
 
 def verify() -> list[Key]:
-    """The master keys, checked against the secrets kept with them. Raises VaultError, saying what's wrong."""
+    """Master keys, verified against vault_check. Raises VaultError."""
     return _checked(keys())
 
 
@@ -166,7 +158,7 @@ def _check_row(key: Key) -> str:
 
 
 def put(name: str, value: str) -> None:
-    """Keeps `value` as the secret `name`, under the newest key."""
+    """Store secret `name` under the newest key."""
     if not NAME.fullmatch(name):
         raise VaultError(f"'{name}' can't name a secret: lowercase letters, digits, dots, dashes and underscores.")
     if not value:
@@ -180,7 +172,7 @@ def put(name: str, value: str) -> None:
 
 
 def get(name: str) -> str:
-    """The secret `name`. Raises VaultError if it isn't kept or won't open."""
+    """Decrypt secret `name`. VaultError if missing or undecryptable."""
     found = _checked(keys())
     with _db() as db:
         row = db.execute("select blob, key_id from secrets where name = ?", (name,)).fetchone()
@@ -196,7 +188,7 @@ def has(name: str) -> bool:
 
 
 def names() -> dict[str, str]:
-    """Each secret's name, with the id of the key it's under."""
+    """{secret name: key id}."""
     with _db() as db:
         return dict(db.execute("select name, key_id from secrets order by name").fetchall())
 
@@ -207,7 +199,7 @@ def remove(name: str) -> bool:
 
 
 def reencrypt(found: list[Key] | None = None) -> int:
-    """Every secret, and the check, under the first key; returns how many secrets moved. All or nothing."""
+    """Re-encrypt all secrets and the check under the first key, atomically; return the count moved."""
     found = _checked(found or keys())
     newest = found[0]
     with _db() as db:
@@ -225,7 +217,7 @@ def reencrypt(found: list[Key] | None = None) -> int:
 
 
 def reset() -> list[str]:
-    """Forgets every secret and the check, for a key that's lost. Returns the secrets' names."""
+    """Delete all secrets and the check (lost key); return the names deleted."""
     with _db() as db:
         gone = [r[0] for r in db.execute("select name from secrets order by name")]
         db.execute("delete from secrets")
@@ -236,7 +228,7 @@ def reset() -> list[str]:
 # ── The key in .env ─────────────────────────────────────────────
 
 def _rewrite_env(drop: list[str], add: str = "", path: Path | None = None) -> None:
-    """.env without the lines setting the variables in `drop`, then the line `add`, atomically and mode 600."""
+    """Rewrite .env without `drop` variables, appending `add`; atomic, 0600."""
     path = path or ENV_FILE
     try:
         lines = path.read_text().splitlines()
@@ -248,14 +240,13 @@ def _rewrite_env(drop: list[str], add: str = "", path: Path | None = None) -> No
 
 
 def write_key(value: str, path: Path | None = None) -> None:
-    """Sets JARVIS_MASTER_KEY in .env, replacing any line for it and keeping the rest, atomically and mode 600."""
+    """Set JARVIS_MASTER_KEY in .env (atomic, 0600) and in this process."""
     _rewrite_env([VAR], f"{VAR}={value}", path)
-    config.MASTER_KEY = value  # this process uses it from now on
+    config.MASTER_KEY = value  # takes effect in this process
 
 
 def unset_env(names: list[str]) -> None:
-    """Takes the variables `names` out of .env, and out of this process's environment, once the vault holds what they
-    held. The rest of .env is kept as it is."""
+    """Remove `names` from .env and os.environ once the vault holds them."""
     if names and ENV_FILE.exists():
         _rewrite_env(names)
     for name in names:
@@ -263,8 +254,7 @@ def unset_env(names: list[str]) -> None:
 
 
 def init(print_only: bool = False) -> str:
-    """Makes the master key, unless there is one; returns what to tell the user. The key goes into .env, or with
-    `print_only` is printed once, for an environment set up some other way."""
+    """Create the master key if absent; return a user message. Writes to .env, or with `print_only` shows it once."""
     if found := keys():
         _checked(found)
         return f"There's a master key already (key {found[0].id})."
@@ -280,7 +270,7 @@ def init(print_only: bool = False) -> str:
 
 
 def ensure() -> None:
-    """A master key, made now (into .env) if there's none. Raises VaultError if it can't be."""
+    """Create the master key in .env if missing. Raises VaultError on failure."""
     if not keys():
         log.warning(init())
 
@@ -289,7 +279,7 @@ def rotate() -> str:
     found = _checked(keys())
     value = ",".join([new_key(), *(_encode(k.secret) for k in found)])
     fresh = parse(value)
-    write_key(value)  # first, with the old keys still after the new: if this fails, nothing has moved
+    write_key(value)  # first, old keys kept: a failure here moves nothing
     moved = reencrypt(fresh)
     return (f"New key {fresh[0].id} first in {VAR}; {moved} secret{'s' * (moved != 1)} re-encrypted. The old key stays "
             "after it until: make vault ARGS='reencrypt --drop-old'")
@@ -331,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
         elif command == "reset":
             if not args.yes:
                 sys.exit("This forgets every secret for good. Run it again with --yes.")
-            write_key(new_key())  # first: if .env can't take it, nothing is forgotten
+            write_key(new_key())  # first: if .env write fails, nothing is lost
             gone = reset()
             _checked(keys())
             print(f"Forgot {', '.join(gone) or 'nothing'}; new key {keys()[0].id}. Set the servers' secrets again "

@@ -1,7 +1,4 @@
-"""The voice brain when the user talks over it (jarvis.brain.cli.CliBrain.respond): a reply cut off is interrupted
-and read to its end so the next turn starts clean, or, while a shell command runs, left to finish unheard; work cut
-off is handed to the next turn; and a CLI that fails along the way is restarted. On fake CLIs (tests/fake_cli.py).
-Run with: make test"""
+"""Tests for CliBrain.respond when talked over: interrupted replies, running commands, handover, CLI restarts."""
 
 import asyncio
 
@@ -149,7 +146,7 @@ def test_the_cli_failing_mid_reply_says_so_and_the_next_turn_restarts_it(voice):
     first, second = asyncio.run(main())
     assert first == "Let me check. I can't reach Claude right now."
     assert second == "Here now." and v.clis[0].closed and len(v.clis) == 2
-    assert v.logged[0] == ("check my mail", "Let me check.", False)  # Claude's words only, not JARVIS's own apology
+    assert v.logged[0] == ("check my mail", "Let me check.", False)  # Claude's words only, not JARVIS's apology
 
 
 def test_a_failed_turn_with_nothing_said_apologises(voice):

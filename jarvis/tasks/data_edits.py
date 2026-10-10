@@ -1,25 +1,10 @@
-"""Edits to JARVIS's own data files that background tasks suggest and the voice brain applies.
+"""Edits to JARVIS's data that sandboxed tasks suggest (propose_data_edit) and the voice brain applies (task_edits).
 
-Tasks can't write data/: their sandbox keeps them to their own folder. Instead a task calls
-propose_data_edit (jarvis.tasks.worker), and the runner checks the edit and keeps it on the task
-(the `edits` column of tasks.db), numbered from 1. JARVIS hears about it with the task's
-update (jarvis.tasks.announce), and applies or dismisses it with the task_edits tool, deciding small ones itself and
-asking the user about the rest (see task_edits' description in jarvis.tools.tasks).
-
-Most edits are the same operations as JARVIS's voice tools: project_register, todo_add,
-todo_done, remember (which names the memory section, user or environment) and forget; project_update
-changes a listed project's settings, and todo_reword an open to-do's wording. `edit` replaces one exact piece of text
-in memory.md, for anything they don't cover, and is refused if it would break memory's size limits. Only the learning review suggests `skill`: a new
-skill, or a new version of one, for a workflow the user keeps asking for (jarvis.skills.home), always for their yes;
-and `vocabulary`: a word speech recognition misheard, with what it heard (jarvis.state.vocabulary), applied without
-asking, as a wrong one costs little, and only with mishearings that aren't everyday words;
-and `follow_up`: something the user said they'd see to at a later time, as a reminder (jarvis.tasks.schedules), always
-for their yes, which comes back through the voice's judged floor or the phone; the project list
-and the to-do list, tables in tasks.db (jarvis.tasks.projects, jarvis.state.todo), change only
-through their actions. Secrets and .env are out of reach: a task can't read them, so it can't
-suggest changes to them either. Every suggestion is scanned for hidden instructions (jarvis.safety.scan): invisible
-characters are stripped, and one that reads like instructions to the assistant is kept `flagged`, which makes it
-needs_yes, so it's put to the user word for word and never applied unasked, the learning review's included.
+Edits are validated by `check`, stored numbered on the task's `edits` column, and applied by `apply`.
+  ACTIONS  mirror voice tools: project_register/update, todo_add/done/reword, remember, forget; `edit` replaces one
+           exact span of memory.md within its size limits
+  LEARNED  learning review only: `skill` (always needs a yes), `vocabulary` (auto-applied), `follow_up` (needs a yes)
+Every text field is scanned for hidden instructions; anything suspicious is `flagged`, which forces needs_yes.
 """
 
 from datetime import datetime
@@ -36,7 +21,7 @@ from jarvis.tasks import projects, schedules
 MAX_EDITS = 20  # per task
 MAX_TEXT = 4000  # characters in any one field
 
-# What each action takes: its required fields, then its optional ones
+# action -> (required fields, optional fields)
 ACTIONS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "project_register": (("name",), ("path", "aliases", "about", "in_place")),
     "project_update": (("name",), ("path", "aliases", "about", "in_place")),
@@ -47,27 +32,26 @@ ACTIONS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "forget": (("text",), ()),
     "edit": (("file", "old", "new"), ()),
 }
-# Only the learning review (a task of kind "review") suggests these
+# Only tasks of kind "review" (the learning review) may suggest these
 LEARNED: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "skill": (("name", "description", "instructions"), ()),
     "vocabulary": (("word",), ("heard_as",)),
     "follow_up": (("text", "when"), ()),
 }
-LISTS = ("aliases", "heard_as")  # the fields that take a list of text
+LISTS = ("aliases", "heard_as")  # list-of-text fields
 FILES = ("memory.md",)
 PENDING, APPLIED, DISMISSED, FAILED = "pending", "applied", "dismissed", "failed"
 
 
 def _file(name: str) -> Path:
-    """The current profile's file."""
-    if name not in FILES:  # an edit suggested to a file that's since stopped being one
+    """Path of data file `name` for the current profile."""
+    if name not in FILES:  # stored edit naming a file no longer editable
         raise ValueError(f"{name} isn't a data file; the only one is {', '.join(FILES)}.")
     return {"memory.md": profile.current().memory_file}[name]
 
 
 def check(args: dict, kind: str = "") -> dict:
-    """The edit a task of this kind suggested, cleaned up and checked against the files as they are now.
-    Raises ValueError, with what to fix, for one that couldn't be applied."""
+    """Validate and normalise a suggested edit against current data; ValueError says what to fix."""
     action = args.get("action")
     if not (spec := ACTIONS.get(action) or (LEARNED.get(action) if kind == "review" else None)):
         raise ValueError(f"action must be one of {', '.join(ACTIONS)}.")
@@ -79,7 +63,7 @@ def check(args: dict, kind: str = "") -> dict:
     for key in (*required, *optional):
         value = args.get(key)
         blank = value == [] or (isinstance(value, str) and not value.strip() and key not in ("old", "new"))
-        if value is None or blank:  # an edit's new text may be empty, deleting the old
+        if value is None or blank:  # empty `new` is allowed: it deletes `old`
             if key in required:
                 raise ValueError(f"{action} needs {key}.")
             continue
@@ -89,7 +73,7 @@ def check(args: dict, kind: str = "") -> dict:
             raise ValueError(f"{key} must be a list of text.")
         if key not in ("in_place", *LISTS) and not isinstance(value, str):
             raise ValueError(f"{key} must be text.")
-        if key == "section" and (value := str(value).strip().lower()) not in memory.SECTIONS:  # text, as just checked
+        if key == "section" and (value := str(value).strip().lower()) not in memory.SECTIONS:  # already checked to be text
             raise ValueError("section must be user or environment.")
         if len(str(value)) > (most := skills.INSTRUCTIONS_MAX if key == "instructions" else MAX_TEXT):
             raise ValueError(f"{key} is too long; keep each edit under {most} characters.")
@@ -97,7 +81,7 @@ def check(args: dict, kind: str = "") -> dict:
     extra = sorted(k for k, v in args.items() if k not in (*required, *optional, "action", "reason") and v not in (None, "", []))
     if extra:
         raise ValueError(f"{action} doesn't take {', '.join(extra)}.")
-    flagged = _scanned(edit)  # hidden instructions are put to the user, never applied unasked (needs_yes)
+    flagged = _scanned(edit)  # flagged edits always need the user's yes
     said = scan.scan(reason)
     reason = said.clean
     if said.suspicious:
@@ -137,9 +121,9 @@ def check(args: dict, kind: str = "") -> dict:
 
 
 def _scanned(edit: dict) -> list[str]:
-    """Strips invisible characters from an edit's text in place (but `old`, which names text already in a file), and
-    returns what looks like hidden instructions in it, field by field (jarvis.safety.scan). A skill is meant to
-    instruct JARVIS, so its text is judged only on plain attacks."""
+    """Strip invisible chars from text fields in place (not `old`); return per-field hidden-instruction findings.
+
+    Skills are meant to instruct, so they're scanned with the laxer INSTRUCTIONS source."""
     flagged = []
     source = scan.INSTRUCTIONS if edit["action"] == "skill" else scan.DATA
     for key, value in edit.items():
@@ -153,8 +137,7 @@ def _scanned(edit: dict) -> list[str]:
 
 
 def _replaced(name: str, old: str, new: str) -> str:
-    """The file's text with `old`, which must appear exactly once, replaced by `new`; for memory.md, only if that
-    keeps it within its limits."""
+    """File text with the single occurrence of `old` replaced; ValueError if not unique or memory limits break."""
     path = _file(name)
     text = path.read_text() if path.exists() else ""
     if (count := text.count(old)) != 1:
@@ -167,13 +150,13 @@ def _replaced(name: str, old: str, new: str) -> str:
 
 
 def _only_adds_lines(old: str, new: str) -> bool:
-    """Whether `new` keeps every line of `old` as it was, in order, and only adds lines around them."""
+    """Whether `new` keeps every line of `old` in order, only adding lines."""
     kept = iter(new.splitlines())
     return all(line in kept for line in old.splitlines())
 
 
 def needs_yes(edit: dict, kind: str) -> str | None:
-    """Why JARVIS should ask the user before applying this edit, or None for a routine one."""
+    """Reason the user must approve this edit, or None if JARVIS may apply it itself."""
     if edit.get("flagged"):
         return f"it looks like hidden instructions, so check it with {profile.name()} word for word: {edit['flagged']}"
     if edit["action"] == "skill":
@@ -239,7 +222,7 @@ def pending(task: dict) -> list[dict]:
 
 
 def apply(edit: dict) -> str:
-    """Make the edit. Returns what the voice tool would have said; raises ValueError if it can't be done."""
+    """Apply the edit; returns the voice tool's reply. ValueError if it can't be done."""
     match edit["action"]:
         case "project_register":
             out = projects.register(edit["name"], edit.get("path") or None, edit.get("aliases"), edit.get("about", ""),
@@ -255,12 +238,12 @@ def apply(edit: dict) -> str:
         case "todo_reword":
             return todo.reword(edit["text"], edit["item"])
         case "remember":
-            return memory.remember(edit["fact"], edit.get("section", ""))  # one suggested before sections fails
+            return memory.remember(edit["fact"], edit.get("section", ""))  # missing section fails
         case "forget":
             return memory.forget(edit["text"])
         case "vocabulary":
             return vocabulary.add(edit["word"], edit.get("heard_as", ()), learned=True)
-        case "follow_up":  # a reminder, which comes back through the voice's judged floor, or the phone
+        case "follow_up":  # stored as a reminder job
             job = schedules.add("reminder", "", edit["text"], when=edit["when"])
             return f"I'll remind {profile.name()} {schedules.describe(job)}: {job['text']}"
         case "skill":

@@ -1,17 +1,14 @@
-"""Tests for the scheduler: jobs kept in tasks.db (jarvis.tasks.schedules), run when due by the runner's scheduler
-(jarvis.tasks.scheduler), missed runs caught up once at most, watches checked with and without a model, scheduled runs
-announced under their job's title or not at all, and the voice tools. Run with: make test"""
+"""Tests for jarvis.tasks.schedules and scheduler: due runs, catch-up, watches, announcing, job memory, voice tools."""
 
 import asyncio
 import json
-import sqlite3
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import httpx
 import pytest
-from test_approvals import drained, events, pushes  # noqa: F401  (pushes is a fixture)
-from test_in_place import env  # noqa: F401  (a fixture)
+from test_approvals import drained, events, pushes  # noqa: F401  (fixture)
+from test_in_place import env  # noqa: F401  (fixture)
 from test_nudges import fake_run, finishes, settle
 
 from conftest import use_profile
@@ -22,7 +19,7 @@ from jarvis.core.database import Store
 from jarvis.tasks import heartbeat, runner, schedules, scheduler, worker
 from jarvis.tasks.scheduler import Found, Reading, Scheduler
 
-# A Tuesday, at a quarter past nine
+# A Tuesday, 09:15
 NOW = datetime(2026, 10, 6, 9, 15, tzinfo=profile.tz())
 
 
@@ -34,8 +31,7 @@ def db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def flags(monkeypatch):
-    """The short calls that read a run's yes or no (sdk.ask_flag), faked: each field answers with the next of its list
-    in `flags.answers` (None, a call that failed, once it runs out). `flags.asked` has each call's (field, prompt)."""
+    """Fake sdk.ask_flag: answers per field from `flags.answers`, then None (failed); records `flags.asked`."""
     fake = SimpleNamespace(answers={}, asked=[])
 
     async def ask_flag(prompt, field, system_prompt, model, **options):
@@ -230,7 +226,7 @@ def test_a_reminder_is_said_every_way_once(db):
 
 def test_a_late_reminder_says_when_it_was_due(db):
     schedules.add("reminder", "Call Priya", "Call Priya", when="17:00", now=NOW)
-    s, said, _ = make(now=at(hours=9))  # JARVIS was down at 17:00, and back at 18:15
+    s, said, _ = make(now=at(hours=9))  # JARVIS was down at 17:00, back at 18:15
     tick(s)
     assert said["notified"] == [("JARVIS · Reminder", "Call Priya. It was due at 17:00.")]
 
@@ -252,13 +248,13 @@ def test_a_scheduled_task_starts_a_background_task_with_its_brief(db):
 
 def test_missed_days_run_once_if_recent_and_never_pile_up(db):
     job = schedules.add("task", "Morning brief", "Brief me.", when="09:00", repeat="daily", now=at(days=-5))
-    s, _, _ = make()  # back at 09:15, five days and five missed runs later: the latest is 15 minutes old
+    s, _, _ = make()  # back at 09:15 after five missed runs: the latest is 15 minutes old
     tick(s)
     assert len(s.runner.started) == 1
     assert schedules.get(job["id"])["next_run"] == datetime(2026, 10, 7, 9, 0, tzinfo=profile.tz()).timestamp()
 
     late = schedules.add("task", "Evening brief", "Brief me.", when="06:00", repeat="daily", now=at(days=-1))
-    tick(s)  # 06:00 was more than CATCH_UP_HOURS ago: skipped, said so, and it waits for tomorrow
+    tick(s)  # 06:00 is past CATCH_UP_HOURS: skipped, said so, waits for tomorrow
     assert len(s.runner.started) == 1
     after = schedules.get(late["id"])
     assert "Skipped its run due" in after["last_result"] and after["runs"] == 0
@@ -507,7 +503,7 @@ def with_scheduler(r: runner.Runner) -> Scheduler:
         pass
 
     r.scheduler = Scheduler(r, nothing, r.broadcast, nothing, quiet_hours="")
-    r.scheduler.pruned = float("inf")  # never this machine's data/tasks folders
+    r.scheduler.pruned = float("inf")  # never touch this machine's data/tasks folders
     return r.scheduler
 
 
@@ -619,7 +615,7 @@ def test_do_not_disturb_keeps_task_updates_off_the_mac_and_the_phone(env, pushes
     assert pushes == []
     [status] = [e for e in said if e["type"] == "status"]  # still said in a live session
     assert status["text"].startswith("Your task, Flights, is done.")
-    assert r.store.get(1)["seen"] == 0  # and left unheard for the next one's greeting
+    assert r.store.get(1)["seen"] == 0  # and left unheard for the next greeting
 
 
 def test_a_restart_drops_a_watch_check_quietly_but_not_a_task(env):
@@ -642,22 +638,6 @@ def test_scheduled_runs_use_the_lighter_model(env):
 
 
 # ── Storage ─────────────────────────────────────────────────────
-
-
-def test_an_older_database_gets_the_new_task_columns(db):
-    old = sqlite3.connect(db)
-    old.execute("create table tasks (id integer primary key, kind text not null, title text not null, instruction text "
-                "not null, project text, status text not null, created real not null, updated real not null, session_id "
-                "text, worktree text, in_place integer not null default 0, branch text, base text, activity text, "
-                "question text, nudges text, edits text, summary text, spoken text, changes text, error text, cost real "
-                "not null default 0, seen integer not null default 1)")
-    old.execute("insert into tasks (kind, title, instruction, status, created, updated) values "
-                "('research', 'old', 'x', 'done', 0, 0)")
-    old.commit()
-    old.close()
-    store = Store()
-    assert (store.get(1)["job"], store.get(1)["hidden"]) == (None, 0)
-    assert store.create("research", "new", "x", None, job=4, hidden=True)["job"] == 4
 
 
 def test_old_hidden_runs_are_forgotten_but_the_newest_task_kept(db):
@@ -746,11 +726,11 @@ def test_schedule_hold_pauses_and_resumes_everything(db):
     assert error
 
 
-# ── Job memory: the notepad, and staying silent when nothing changed ─
+# ── Job memory: notepad and only_changes ────────────────────────
 
 
 def brief_ran(s: Scheduler, clock: Clock, only_changes: bool = False) -> tuple[dict, dict]:
-    """A daily brief at 09:30 that has just started its run: the job and its run's task."""
+    """A daily 09:30 brief whose run has just started: the job and its task."""
     job = schedules.add("task", "Morning brief", "Brief me on my day.", when="09:30", repeat="daily",
                         only_changes=only_changes, now=NOW)
     clock.now = at(minutes=15)
@@ -765,7 +745,7 @@ def test_a_run_keeps_a_notepad_for_the_next_which_hears_it(db):
     verdict = s.ended(task, "Two meetings, one new PR.\n- Standup 10:00\n- PR 14 by Priya\n\n"
                             "NOTEPAD: Meetings: standup, design review. PRs seen: 12, 14.", "")
     assert verdict.spoken == "Morning brief: Two meetings, one new PR." and not verdict.quiet
-    assert verdict.summary == "Two meetings, one new PR.\n- Standup 10:00\n- PR 14 by Priya"  # kept without it
+    assert verdict.summary == "Two meetings, one new PR.\n- Standup 10:00\n- PR 14 by Priya"  # kept without the notepad
     note = schedules.notepad(schedules.get(job["id"]))
     assert note == {"at": at(minutes=15).timestamp(), "text": "Meetings: standup, design review. PRs seen: 12, 14."}
 
@@ -791,7 +771,7 @@ def test_only_changes_stays_silent_when_nothing_is_new(db):
     job, task = brief_ran(s, clock, only_changes=True)
     assert "wants to hear only what's new" in task["instruction"]
     assert not s.ended(task, "PR 14 waits for your review.\nNOTEPAD: PR 14.", "").quiet
-    # The run should have said there's nothing new; a word-for-word repeat is silent anyway
+    # The run should say nothing new; a word-for-word repeat is silent anyway
     again = s.ended(task, "PR 14 waits for your review.\nNOTEPAD: PR 14.", "")
     assert again.quiet and again.spoken.startswith("Morning brief: nothing new.")
     assert not s.ended(task, "PR 15 waits for your review too.\nNOTEPAD: PR 14, 15.", "").quiet
@@ -812,7 +792,7 @@ def test_a_brief_is_always_delivered_even_when_its_run_says_nothing_new(db):
     assert verdict.spoken == "Morning brief: Your leads syncup is at ten thirty. Sam asked to work from home today."
     assert verdict.summary == "Your leads syncup is at ten thirty. Sam asked to work from home today."
     assert schedules.get(job["id"])["last_result"] == verdict.spoken.removeprefix("Morning brief: ")
-    # Even a reading of nothing new doesn't silence a run whose job isn't only_changes
+    # A nothing-new reading doesn't silence a job without only_changes
     quiet_day = s.ended(task, "A quiet day: no meetings and no new mail.", "", Reading(nothing_new=True))
     assert not quiet_day.quiet and quiet_day.spoken == "Morning brief: A quiet day: no meetings and no new mail."
     bare = s.ended(task, "NOTEPAD: nothing.", "")
@@ -821,12 +801,12 @@ def test_a_brief_is_always_delivered_even_when_its_run_says_nothing_new(db):
 
 def test_only_only_changes_lets_a_run_stay_silent_whatever_its_instruction_says(db):
     s, _, _ = make()
-    # The instruction's words aren't matched: without only_changes, even "only tell me if" is delivered every run
+    # Wording isn't matched: without only_changes, even "only tell me if" is delivered every run
     asked = schedules.add("task", "Build check", "Tell me only if a build failed.", every_minutes=60, now=NOW)
     assert "stays silent" not in scheduler.task_prompt(asked)
     said = s.ended({"id": 1, "job": asked["id"]}, "All builds green.", "", Reading(nothing_new=True))
     assert not said.quiet and said.spoken == "Build check: All builds green."
-    # With only_changes, set when it was scheduled as the user wanted, a run read as nothing new is silent
+    # With only_changes set at scheduling, a run read as nothing new is silent
     job = schedules.add("task", "Build watch", "Tell me only if a build failed.", every_minutes=60, only_changes=True,
                         now=NOW)
     task = {"id": 2, "job": job["id"]}

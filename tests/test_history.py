@@ -1,6 +1,4 @@
-"""Tests for past conversations as the web page's History shows them (jarvis.state.history): the days with
-conversations, one day's exchanges and a search, newest first, read from the full log in data/conversations that
-jarvis.state.memory writes; and the panel actions that serve them, behind the passcode. Run with: make test"""
+"""Tests for jarvis.state.history: days, a day's exchanges and search over the log; the passcode-gated panel."""
 
 import asyncio
 import json

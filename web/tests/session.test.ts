@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// Tests for src/state/session.ts bringing a lost voice session back by itself: after JARVIS restarts, the network
-// drops, or no agent turns up, with LiveKit's Room and the token request faked. Run with: make test (or npm test in web/)
+// state/session.ts auto-reconnect (JARVIS restart, network drop, no agent), with Room and /api/token faked.
+// Run: make test (or npm test in web/)
 import assert from "node:assert/strict";
 import { afterEach, beforeAll, test, vi } from "vitest";
 
@@ -20,7 +20,7 @@ const fake = vi.hoisted(() => {
     },
     token: null as null | (() => Promise<Record<string, any>>),
     tokens: 0,
-    asked: [] as Record<string, any>[],  // the /api/token request bodies
+    asked: [] as Record<string, any>[],  // /api/token request bodies
     rooms: [] as any[],
     micError: null as unknown,
   };
@@ -49,7 +49,7 @@ vi.mock("livekit-client", () => {
     remoteParticipants = new Map<string, any>();
     canPlaybackAudio = true;
     connected = false; ended = false; mic = false;
-    attrs: Record<string, string>[] = [];  // what the page set on its participant
+    attrs: Record<string, string>[] = [];  // attributes the page set
     localParticipant = {
       identity: "me",
       attributes: {} as Record<string, string>,
@@ -62,7 +62,7 @@ vi.mock("livekit-client", () => {
     on(ev: string, fn: (...a: any[]) => void) { this.handlers.set(ev, [...(this.handlers.get(ev) ?? []), fn]); return this; }
     emit(ev: string, ...a: any[]) { for (const fn of this.handlers.get(ev) ?? []) fn(...a); }
     registerTextStreamHandler() {}
-    async connect() {  // the token's attributes, as the server sets them (jarvis.server)
+    async connect() {  // apply the token's attributes, as the server does
       this.connected = true;
       this.localParticipant.attributes = { "jarvis.speaker": fake.asked.at(-1)?.speaker ?? "on" };
     }
@@ -120,12 +120,12 @@ test("when JARVIS restarts, the session comes back by itself, muted as it was", 
   assert.equal(store.muted.peek(), true);
   const first = room(), before = fake.tokens;
 
-  first.agentLeaves();  // the agent service stopped
+  first.agentLeaves();  // agent service stopped
   assert.ok(first.ended);
   assert.ok(reconnecting());
   assert.equal(store.readout.peek().label, "Reconnecting");
   assert.equal(store.live.peek(), false);
-  assert.equal(store.error.peek(), "");  // no "tap to reconnect": it's on it
+  assert.equal(store.error.peek(), "");  // no "tap to reconnect": already retrying
 
   await tick(499);
   assert.equal(fake.tokens, before);
@@ -134,7 +134,7 @@ test("when JARVIS restarts, the session comes back by itself, muted as it was", 
   assert.notEqual(room(), first);
   assert.ok(store.live.peek());
   assert.equal(store.muted.peek(), true);
-  assert.equal(room().mic, false);  // muted: the mic stays closed
+  assert.equal(room().mic, false);  // muted: mic stays closed
   assert.equal(store.resuming.peek(), false);
   assert.equal(store.agentState.peek(), "initializing");
   room().agentJoins();
@@ -178,7 +178,7 @@ test("back online, or back on screen, it tries at once", async () => {
   await tick(500 + 1000 + 2000);
   const before = fake.tokens;
   fake.token = null;
-  S.online();  // main.tsx's handler for the window's online event
+  S.online();  // window online event
   await tick(0);
   assert.equal(fake.tokens, before + 1);
   assert.ok(store.live.peek());
@@ -320,7 +320,7 @@ test("speaker off: the session starts silent, and the switch reaches the agent d
   S.toggleSpeaker();  // before connecting
   assert.equal(store.speakerOff.peek(), true);
   await live();
-  assert.equal(fake.asked.at(-1)!.speaker, "off");  // in the token: even the greeting is silent
+  assert.equal(fake.asked.at(-1)!.speaker, "off");  // in the token, so the greeting is silent
   assert.deepEqual(room().attrs, []);
   assert.equal(store.readout.peek().hint, "Speaker off: replies come as text");
   room().emit("ParticipantAttributesChanged", { "lk.agent.state": "speaking" });
@@ -331,13 +331,13 @@ test("speaker off: the session starts silent, and the switch reaches the agent d
   assert.equal(player.muted, false);
   S.toggleSpeaker();
   assert.deepEqual(room().attrs.at(-1), { "jarvis.speaker": "off" });
-  assert.equal(player.muted, true);  // a reply already being spoken stops at once
+  assert.equal(player.muted, true);  // in-progress reply stops at once
 });
 
 test("the speaker switched while it connects is told to the agent once it's in", async () => {
   const going = S.connect();
   S.toggleSpeaker();
   await going;
-  assert.equal(fake.asked.at(-1)!.speaker, "on");  // asked for before the switch
+  assert.equal(fake.asked.at(-1)!.speaker, "on");  // requested before the toggle
   assert.deepEqual(room().attrs, [{ "jarvis.speaker": "off" }]);
 });

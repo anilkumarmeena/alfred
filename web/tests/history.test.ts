@@ -1,13 +1,12 @@
 // @vitest-environment jsdom
-// Tests for the panel's History, past conversations: src/lib/history.ts, src/state/history.ts and
-// src/components/panel/History.tsx. Run with: make test (or npm test in web/)
+// Panel History: lib/history.ts, state/history.ts, panel/History.tsx. Run: make test (or npm test in web/)
 import assert from "node:assert/strict";
 import { h, render } from "preact";
 import { act } from "preact/test-utils";
 import { afterEach, beforeAll, beforeEach, test } from "vitest";
 import { byDay, dayLabel, marks, span, tally, type DayDetail, type Days, type Found, type Hit } from "../src/lib/history";
 
-// ── The helpers ─────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────
 
 test("days are called Today, Yesterday, or by name, with the year only when it isn't this one", () => {
   assert.equal(dayLabel("2026-10-08", "2026-10-08"), "Today");
@@ -41,7 +40,7 @@ test("hits run together by day, in order", () => {
   assert.deepEqual(grouped.map((g) => [g.date, g.hits.map((x) => x.n)]), [["2026-10-08", [3, 1]], ["2026-10-05", [9]]]);
 });
 
-// ── The History view ────────────────────────────────────────────
+// ── History view ────────────────────────────────────────────────
 
 const DAYS: Days = {
   today: "2026-10-08", more: true, days: [
@@ -120,7 +119,7 @@ test("History lists the days newest first, with how much was said and a preview,
   assert.deepEqual(calls.filter((c) => c.action === "conversations").map((c) => c.body.before), [undefined, "2026-10-07"]);
   assert.deepEqual([...box.querySelectorAll(".hday .title")].map(text), ["Today", "Yesterday", "Monday 5 October"]);
   assert.equal(box.querySelector(".hmore"), null);  // no older days left
-  // Coming back to History refreshes the first page without losing the older ones
+  // Reopening refreshes page one and keeps older pages
   await act(() => hist.loadDays());
   assert.equal(box.querySelectorAll(".hday").length, 3);
 });
@@ -136,7 +135,7 @@ test("a day opens to who said what, newest first, with the days either side", as
   const shown = [...box.querySelectorAll(".hx")];
   assert.deepEqual(shown.map((x) => text(x.querySelector(".hx-time"))), ["10:30", "09:05", "09:00"]);
   assert.equal(text(shown[0]!.querySelector(".ann .who")), "JARVIS · update");
-  assert.equal(text(shown[0]!.querySelector(".tref")), "Task 12");  // a button that opens the task
+  assert.equal(text(shown[0]!.querySelector(".tref")), "Task 12");  // task link button
   assert.equal(text(shown[1]!.querySelector(".you .who")), "Alex");
   assert.equal(text(shown[1]!.querySelector(".hx-yes code")), "make test");
   assert.equal(text(shown[1]!.querySelector(".jarvis .cut")), "Interrupted before replying");

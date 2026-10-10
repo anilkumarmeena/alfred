@@ -1,5 +1,4 @@
-"""Tests for the database layer: one way to connect, tables brought to their latest version by ordered migrations, and
-tasks' steps kept in memory and written off the runner's event loop. Run with: make test"""
+"""Tests for jarvis.core.database: connections, ordered migrations, batched task-step writes."""
 
 import asyncio
 import sqlite3
@@ -21,7 +20,7 @@ def db(own_profile):
 
 
 def raw(path) -> sqlite3.Connection:
-    """A connection of the test's own, as another process would have."""
+    """A separate connection, as another process would have."""
     return sqlite3.connect(path, isolation_level=None)
 
 
@@ -71,17 +70,6 @@ def test_made_runs_once_only_when_the_table_is_made(db, tmp_path):
     with database.table("notes", NOTES, at=tmp_path / "other.db", made=lambda: seeded.append(2)):
         pass
     assert seeded == [1, 2]
-
-
-def test_a_table_made_before_versions_keeps_its_rows_and_gets_what_it_lacks(db):
-    old = raw(db)
-    old.execute("create table notes (id integer primary key)")  # before text, added since
-    old.execute("insert into notes (id) values (7)")
-    old.close()
-    with database.table("notes", NOTES, added={"text": "text not null default ''"},
-                        migrations=["alter table notes add column tag text default 'old'"]) as conn:
-        assert [tuple(r) for r in conn.execute("select id, text, tag from notes")] == [(7, "", "old")]
-    assert versions(db) == {"notes": 2}
 
 
 def test_a_migration_added_later_runs_on_a_table_already_versioned(db):
@@ -145,25 +133,6 @@ def test_processes_opening_it_at_once_migrate_it_once(db):
     assert ran == [1] and versions(db) == {"notes": 2}
 
 
-def test_the_tasks_database_of_an_earlier_jarvis_upgrades_in_place(db):
-    old = raw(db)
-    old.execute("create table tasks (id integer primary key, kind text not null, title text not null, instruction text "
-                "not null, project text, status text not null, created real not null, updated real not null, session_id "
-                "text, worktree text, in_place integer not null default 0, branch text, base text, activity text, "
-                "question text, nudges text, edits text, summary text, spoken text, changes text, error text, cost real "
-                "not null default 0, seen integer not null default 1)")
-    old.execute("create table log (task integer not null, at real not null, kind text not null, text text not null)")
-    old.execute("insert into tasks (kind, title, instruction, status, created, updated) values "
-                "('research', 'old', 'x', 'done', 0, 0)")
-    old.execute("insert into log values (1, 0, 'start', 'x')")
-    old.close()
-    store = Store()
-    assert store.get(1)["title"] == "old" and store.get(1)["interrupted"] is None
-    assert [e["text"] for e in store.history(1)] == ["x"]
-    assert raw(db).execute("select 1 from sqlite_master where name = 'log_task'").fetchone()
-    assert versions(db) == {"tasks": 1, "log": 2, "approvals": 1}
-
-
 # ── Steps, written in batches ───────────────────────────────────
 
 
@@ -190,7 +159,7 @@ def test_anything_else_the_store_does_comes_after_the_steps_before_it(db):
     assert store.get(task["id"])["activity"] == "reading a page"
     assert logged(db, task["id"]) == [("step", "reading a page"), ("progress", "found it")]
     store.set(task["id"], activity="found it")
-    store.step(task["id"], "reading a page")  # differs from the activity set since, so logged again
+    store.step(task["id"], "reading a page")  # differs from the activity set since: logged again
     store.write_steps()
     assert logged(db, task["id"])[-1] == ("step", "reading a page")
 

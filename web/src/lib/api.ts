@@ -1,6 +1,6 @@
 import { PASSCODE_KEY, storage } from "./storage";
 
-// POST JSON to jarvis.web with the saved passcode, which every endpoint but /api/push/key checks.
+// POST JSON with the saved passcode (checked by every endpoint except /api/push/key).
 export function postAuthed(path: string, fields: Record<string, unknown>): Promise<Response> {
   return fetch(path, {
     method: "POST", headers: { "content-type": "application/json" },
@@ -8,10 +8,10 @@ export function postAuthed(path: string, fields: Record<string, unknown>): Promi
   });
 }
 
-// jarvis.web turned the saved passcode down.
+// The server rejected the saved passcode.
 export class Unauthorized extends Error {}
 
-// postAuthed, then the reply's JSON. Throws Unauthorized for a wrong passcode, or the server's error.
+// postAuthed and parse JSON. Throws Unauthorized for a bad passcode, else the server's error.
 export async function postAuthedJson(path: string, fields: Record<string, unknown>): Promise<Record<string, any>> {
   const res = await postAuthed(path, fields);
   const data = await res.json().catch(() => ({}));
@@ -20,7 +20,7 @@ export async function postAuthedJson(path: string, fields: Record<string, unknow
   return data;
 }
 
-// One of the control panel's actions (jarvis.panel, at /api/panel/ACTION), and what it returns.
+// Call a panel action at /api/panel/ACTION.
 export async function panelCall<T = any>(action: string, fields: Record<string, unknown> = {}): Promise<T> {
   return (await postAuthedJson(`/api/panel/${action}`, fields)).result as T;
 }

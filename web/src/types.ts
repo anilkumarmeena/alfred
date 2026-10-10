@@ -1,16 +1,14 @@
 import type { Signal } from "@preact/signals";
 
-// LiveKit's lk.agent.state, plus the page's own states around a connection.
+// LiveKit's lk.agent.state plus page-side connection states.
 export type AgentState = "idle" | "connecting" | "initializing" | "listening" | "thinking" | "speaking" | "reconnecting";
 
 export type Link = "off" | "linking" | "on";
 
-// The mic dropped out, typically while the Home Screen app was in the background: micGuard is getting
-// it back ("recovering"), gave up until the next tap ("retry"), or the session itself is coming back.
+// Why the mic is out: micGuard "recovering", "retry" (gave up until next tap), or the session "resuming".
 export type Paused = "" | "recovering" | "retry" | "resuming";
 
-// What a tapped notification was about: /?task=3, /?alert=calendar, or a file JARVIS made, /?file=TOKEN&name=…,
-// which the card plays if it's audio and links to either way.
+// Focus card for a tapped notification: /?task=3, /?alert=calendar, or /?file=TOKEN&name=… (audio plays inline).
 export interface Focus { label: string; body: string; talk: string; file?: { src: string; name: string; audio: boolean } }
 
 export type Line =

@@ -1,6 +1,5 @@
-// The heartbeat's sources (jarvis.tasks.heartbeat): what it checks every few minutes to flag what's new, each switched on
-// or off here with its settings, kept per user and read afresh at every check. Another of a kind that allows more (a
-// Gmail search) is added here, by voice, or by a skill; only those can be removed.
+// Heartbeat sources: toggle and configure each (per user, re-read every beat). Multi-instance kinds (e.g. a Gmail
+// search) can be added here, by voice or by a skill; only those can be removed.
 import { useSignal } from "@preact/signals";
 import { act, heartbeat, type Heartbeat, type HeartbeatSource, type SourceKind, type SourceSetting } from "../../state/panel";
 import { EditIcon, TrashIcon } from "../icons";
@@ -20,8 +19,8 @@ export function heartbeatSummary(): string {
   return `${on.length} on · ${on.slice(0, 4).map((s) => s.title).join(", ")}${on.length > 4 ? "…" : ""}`;
 }
 
-// A source's settings as fields, saved together. Changing one, an empty field goes back to the default, its placeholder;
-// adding one (with `adding`), it takes a title and every setting.
+// Source settings form, saved together. Editing: empty resets to default (the placeholder). Adding (`adding`):
+// needs a title and every setting.
 function SourceForm({ settings, adding = false, send }: {
   settings: SourceSetting[]; adding?: boolean; send: (values: Record<string, string>, title: string) => Promise<boolean>;
 }) {

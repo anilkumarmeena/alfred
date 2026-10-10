@@ -1,10 +1,9 @@
-"""Set up before any test module imports jarvis: an install of the tests' own (JARVIS_DATA_DIR, its data folder and
-database), and a profile in it every test runs as (PROFILE), holding the Google accounts and "about you" below, so the
-tools' account lists and the prompt are the same everywhere and this machine's data/ is never touched. The vault has no
-key and a scratch .env, and no token comes from this machine.
+"""Test setup, run before any test imports jarvis.
 
-A test that wants a profile of its own, its data, database and sign-ins apart from every other test's, takes the
-`own_profile` fixture, or calls use_profile() for one in a folder of its choosing."""
+Points JARVIS_DATA_DIR at a scratch install and activates PROFILE with fixed Google accounts and "about you", so
+results never depend on (or touch) this machine's data/, vault, .env or tokens. Model-backed checks are off.
+For an isolated profile, use the `own_profile` fixture or call use_profile().
+"""
 
 import atexit
 import dataclasses
@@ -19,12 +18,12 @@ SCRATCH = Path(tempfile.mkdtemp(prefix="jarvis-tests-"))
 atexit.register(shutil.rmtree, SCRATCH, True)
 os.environ["JARVIS_DATA_DIR"] = str(SCRATCH / "data")
 os.environ["JARVIS_DB_FILE"] = str(SCRATCH / "data" / "tasks.db")
-os.environ["JARVIS_GOAL_LOOP"] = "0"  # no model calls when a task finishes; test_goal turns it on, with a fake check
-os.environ["JARVIS_CONSENT"] = "0"  # no model call for a yes the word lists can't read; test_consent fakes one
-os.environ["JARVIS_ANNOUNCE"] = "0"  # a task's end in fixed words, without a model call; test_announce fakes one
-os.environ["JARVIS_INJECTION_CHECK"] = "0"  # sessions' tool results unscreened; test_injection fakes the check
+os.environ["JARVIS_GOAL_LOOP"] = "0"  # test_goal enables it with a fake check
+os.environ["JARVIS_CONSENT"] = "0"  # test_consent fakes the model call
+os.environ["JARVIS_ANNOUNCE"] = "0"  # test_announce fakes the model call
+os.environ["JARVIS_INJECTION_CHECK"] = "0"  # test_injection fakes the check
 
-# After JARVIS_DATA_DIR, which jarvis.core.config reads
+# Must follow the env setup above: jarvis.core.config reads JARVIS_DATA_DIR on import
 from jarvis.core import config, credentials, logins, profile, transcribe, vault  # noqa: E402
 from jarvis.integrations import accounts  # noqa: E402
 from jarvis.state import conversation, settings  # noqa: E402
@@ -32,13 +31,12 @@ from jarvis.state import conversation, settings  # noqa: E402
 PROFILE = profile.Profile("test", "Sam", config.mac_timezone() or "UTC", config.DATA_DIR, config.DB_FILE,
                           SCRATCH / "secrets")
 profile.activate(PROFILE)
-transcribe.LOG_FILE = SCRATCH / "transcribe.log"  # the transcriber's errors: none in this checkout's logs/
+transcribe.LOG_FILE = SCRATCH / "transcribe.log"  # keep errors out of the checkout's logs/
 
 
 def use_profile(monkeypatch: pytest.MonkeyPatch, data: Path | None = None, **changes) -> profile.Profile:
-    """Runs the rest of the test as a profile of its own: its data in `data` (its database data/tasks.db and its
-    sign-ins data/secrets, unless `changes` say otherwise), or with no `data`, the current one's with `changes`, such
-    as another name."""
+    """Switch to a profile rooted at `data` for the rest of the test, or, with no `data`, the current one plus
+    `changes`."""
     folders = {"data": data, "db": data / "tasks.db", "secrets": data / "secrets"} if data else {}
     mine = dataclasses.replace(profile.current() if data is None else PROFILE, **folders | changes)
     monkeypatch.setattr(profile, "_process", mine)
@@ -46,8 +44,7 @@ def use_profile(monkeypatch: pytest.MonkeyPatch, data: Path | None = None, **cha
 
 
 def use_task_cache(monkeypatch: pytest.MonkeyPatch, folder: Path) -> Path:
-    """Background tasks' cache folder (TASK_CACHE_DIR) is `folder` for the rest of the test, in every part of the
-    worker that reads it."""
+    """Point TASK_CACHE_DIR at `folder` in every module that reads it."""
     from jarvis.tasks import briefs, host_tools, worker
 
     for module in (worker, host_tools, briefs):
@@ -57,26 +54,25 @@ def use_task_cache(monkeypatch: pytest.MonkeyPatch, folder: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def fresh_conversation(monkeypatch) -> conversation.Conversation:
-    """Each test talks in a conversation of its own: what one heard or offered never reaches the next."""
+    """Fresh conversation per test, so no state leaks between tests."""
     monkeypatch.setattr(conversation, "_process", fresh := conversation.Conversation())
     return fresh
 
 
 @pytest.fixture
 def own_profile(monkeypatch, tmp_path) -> profile.Profile:
-    """A profile of the test's own, in tmp_path."""
+    """Isolated profile in tmp_path."""
     return use_profile(monkeypatch, tmp_path)
 
 
-# No master key, .env or tokens of this machine's: the vault's key goes in a scratch .env, and GitHub and GitLab start
-# disabled, as on a Mac with no tokens yet
+# No master key, .env or tokens from this machine; GitHub and GitLab start disabled
 config.MASTER_KEY = ""
-vault.ENV_FILE = SCRATCH / "dotenv"  # not named .env, which sandboxes hide
-logins.FILE = SCRATCH / "logins.json"  # none: the first-setup passcode, JARVIS_PASSCODE, is what's checked
+vault.ENV_FILE = SCRATCH / "dotenv"  # not ".env": sandboxes hide it
+logins.FILE = SCRATCH / "logins.json"  # absent, so JARVIS_PASSCODE is checked
 for _var in ("GITHUB_PERSONAL_ACCESS_TOKEN", "GITLAB_PERSONAL_ACCESS_TOKEN", "JARVIS_GITHUB_MCP", logins.VAR,
              *credentials.VARS):
     os.environ.pop(_var, None)
-config.GOOGLE_CLIENT_SECRET = ""  # no client_secret*.json of this machine's
+config.GOOGLE_CLIENT_SECRET = ""
 ACCOUNTS = accounts.Accounts([accounts.Account("work", "me@acme.example", "for work", chat=True),
                               accounts.Account("personal", "me@mail.example", "their own")], "work")
 ABOUT = "Works at Acme on its video platform.\n- Also runs their own ventures, kept apart from the day job."
@@ -88,8 +84,7 @@ settings.set_about(ABOUT)
 
 @pytest.fixture
 def voice(monkeypatch):
-    """The voice brain on fake CLIs (tests/fake_cli.py): voice(*turns, **settings) gives a fake_cli.Voice whose
-    CLIs play `turns`, each a script of what the CLI streams for one query."""
+    """voice(*turns, **cli) -> fake_cli.Voice; each turn is the script the fake CLI streams for one query."""
     from fake_cli import Voice
 
     return lambda *turns, **cli: Voice(monkeypatch, list(turns), **cli)

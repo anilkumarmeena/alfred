@@ -1,31 +1,11 @@
-"""The goal loop: a background task that says it's finished is checked against what it was asked before it's announced.
+"""Goal loop: check a finished run against what was asked before announcing it.
 
-When a run ends with a result (not stopped, failed, asking a question or waiting for a go-ahead), the runner asks
-`review` for a verdict: one short call to GOAL_MODEL, with no tools, that reads the instruction and the user's later
-messages, the task's summary, and the evidence of what it did: for a code_change, its diff and the builds, tests and jobs
-in its log. It replies in JSON (SCHEMA), its verdict one of
-
-  complete    everything asked for is done and backed up (or what's left is only what the user must decide)
-  incomplete  something the task could do itself is missing or unverified: it's sent back, in the same session (as a
-              reply would be), with what to finish
-  blocked     what's left needs the user's decision, access, credentials or a tool the task can't get: reported, never
-              sent back
-
-A task is sent back at most GOAL_ROUNDS times for each thing the user asked (its start, and each reply), and, when
-GOAL_MAX_COST is set, never once it has cost that many dollars; the last round tells it to say plainly what's done and
-what isn't. Only the final result is announced, with what the check still found missing; every check goes in the task's
-log as a "goal" entry, so task_detail and task_log show them. A check that can't be made (off, the call failing,
-GOAL_DAILY_CHECKS reached, a reply that isn't JSON matching SCHEMA) lets the result through as it is.
-
-Not checked: a watch's checks, whose met or not yet is the whole answer, and scheduled runs found to have nothing new
-to report (jarvis.tasks.scheduler.read), which come often and are what the instruction asks for when nothing's new.
-
-The check settles the to-do list too. A task started for one of the user's to-do items (task_start's `todo`) has that
-item put to the check, which says whether the work finishes it or what's left of it (its reply's `todos`); a task the
-user asked for without one has their open items put to it instead, and it names any the work clearly finishes.
-`todo_changes` turns that into the task's suggested edits (jarvis.tasks.data_edits): its own item is ticked off
-at once, a part done is a rewording put to the user, and an item it wasn't started for is a tick-off put to them, each
-said in its announcement. The model decides what matches; nothing matches on words.
+`review` makes one tool-less GOAL_MODEL call over instruction, later messages, summary and evidence (diff, build/test
+steps). Verdicts: complete; incomplete (sent back in-session, at most GOAL_ROUNDS per user ask, capped by
+GOAL_MAX_COST); blocked (needs the user: reported, never sent back). Each check is logged as a "goal" entry. If the
+check can't run (off, error, daily budget, bad JSON) the result passes as is. Watches and nothing-new scheduled runs
+are skipped. The check also judges to-dos; `todo_changes` turns that into edits (own item ticked at once, others put
+to the user).
 """
 
 import asyncio
@@ -46,18 +26,18 @@ from jarvis.tasks import schedules
 log = logging.getLogger("jarvis.tasks.goal")
 
 COMPLETE, INCOMPLETE, BLOCKED = "complete", "incomplete", "blocked"
-KIND = "goal"  # its entries in the task's log
-ROUND = "checked, round "  # how an entry that sent the task back opens
+KIND = "goal"  # log entry kind
+ROUND = "checked, round "  # prefix of entries that sent the task back
 CHECK_TIMEOUT = 120
-LOG_ENTRIES = 1000  # how much of a task's log, steps included, the check looks through
-# The most of each part the check reads: one short call, however much the task did
+LOG_ENTRIES = 1000  # log entries (steps included) the check scans
+# Char caps per input part, keeping the check one short call
 MOST = {"instruction": 6000, "messages": 3000, "summary": 8000, "diff": 12000, "log": 3000}
-SAID_MOST = 300  # what's said aloud of what's missing
-OPEN_TODOS = 40  # the most open to-dos put to the check of a task not started for one
-# Steps in a task's log that look like building, testing or checking its work
+SAID_MOST = 300  # max chars of `left` spoken
+OPEN_TODOS = 40  # open to-dos shown when the task has no linked to-do
+# Log steps that look like building, testing or checking
 _CHECKING = re.compile(r"\b(tests?|pytest|unittest|jest|vitest|playwright|build|make|lint|ruff|mypy|pyright|tsc|"
                        r"typecheck|compileall|xcodebuild|swift|cargo|gradle|npm|pnpm|yarn|go (?:test|build|vet))\b", re.IGNORECASE)
-# Never sent to the check, even in a task's own diff
+# Excluded from the diff sent to the check
 _NO_SECRETS = [f":(exclude,glob){p}" for p in (*SECRET_PATTERNS, "**/secrets/**")]
 
 
@@ -65,7 +45,7 @@ def system() -> str:
     return prompts.load("goal_check", user_name=profile.name())
 
 
-# The check's reply: its verdict, a sentence on it, what to finish (for incomplete) and its word on each to-do item
+# Reply: verdict, one sentence, what to finish (incomplete), and per-to-do status
 SCHEMA = {
     "type": "object",
     "properties": {
@@ -85,14 +65,14 @@ SCHEMA = {
 @dataclass
 class Check:
     verdict: str  # COMPLETE, INCOMPLETE or BLOCKED
-    said: str  # one plain sentence: what was done, or what's missing
-    details: str  # for INCOMPLETE, the list of what to finish
+    said: str  # one sentence: what was done or what's missing
+    details: str  # INCOMPLETE: bullet list of what to finish
     cost: float
-    todos: dict[int, str] = field(default_factory=dict)  # to-do item: "" when the work finishes it, else what's left
+    todos: dict[int, str] = field(default_factory=dict)  # to-do id -> "" if finished, else what's left
 
 
 class Budget:
-    """At most `most` checks in any 24 hours, across every task: a guard should a loop ever run away."""
+    """Global cap of `most` checks per rolling 24h, guarding against a runaway loop."""
 
     def __init__(self, most: int) -> None:
         self.most, self.times = most, deque()
@@ -108,8 +88,7 @@ class Budget:
 
 
 def skipped(task: dict, nothing_new: bool = False) -> str | None:
-    """Why a run that finished isn't checked, or None if it is. `nothing_new`: a scheduled run found to have nothing new
-    to report (jarvis.tasks.scheduler.read), which stays silent."""
+    """Why a finished run skips the check, or None. `nothing_new`: a silent scheduled run with nothing to report."""
     if not GOAL_LOOP:
         return "off"
     if task["job"] is not None and (job := schedules.get(task["job"])) and job["kind"] == "watch":
@@ -120,13 +99,13 @@ def skipped(task: dict, nothing_new: bool = False) -> str | None:
 
 
 def since_asked(entries: list[dict]) -> list[dict]:
-    """A task's log entries since the user last asked it something: its start, or their latest reply."""
+    """Log entries since the task's start or the user's latest reply."""
     start = max((i for i, e in enumerate(entries) if e["kind"] in ("start", "reply")), default=0)
     return entries[start:]
 
 
 def rounds(entries: list[dict]) -> int:
-    """How many times the check has sent the task back since the user last asked it something."""
+    """Times the check sent the task back since the user last asked."""
     return sum(e["kind"] == KIND and e["text"].startswith(ROUND) for e in since_asked(entries))
 
 
@@ -136,14 +115,13 @@ def _clip(text: str, most: int) -> str:
 
 
 def _messages(entries: list[dict]) -> str:
-    """The user's messages to the task after its instruction: replies, answers and nudges."""
+    """The user's later messages (replies, answers, nudges), clipped."""
     said = [f"- {e['text']}" for e in entries if e["kind"] in ("reply", "nudge")]
     return _clip("\n".join(said), MOST["messages"])
 
 
 def _work_log(entries: list[dict]) -> str:
-    """What the task did since it was last asked, as far as checking its work goes: its milestones, subagents and jobs,
-    and the steps that built, tested or checked something."""
+    """Relevant work since the last ask: milestones, subagents, jobs, and build/test/check steps."""
     kept = [f"{e['kind']}: {e['text']}" for e in since_asked(entries)
             if e["kind"] in ("progress", "subagent", "job", KIND) or (e["kind"] == "step" and _CHECKING.search(e["text"]))]
     return _clip("\n".join(kept[-60:]), MOST["log"])
@@ -155,8 +133,7 @@ async def _git(folder: str, *args: str) -> str:
 
 
 async def evidence(task: dict, changes: str) -> str:
-    """What a code_change changed: `changes` (its shortstat, or the files a folder without git changed) and, in git, the
-    files and the diff against its base, secrets left out."""
+    """Evidence for a code_change: `changes`, plus (in git) stat, untracked files and diff vs base, minus secrets."""
     if task["kind"] != "code_change":
         return ""
     parts = [f"Changes: {changes or 'none recorded'}"]
@@ -173,8 +150,7 @@ async def evidence(task: dict, changes: str) -> str:
 
 
 def todos(task: dict) -> list[dict]:
-    """The to-do items put to the check: the one the task was started for while it's open, or, for a task the user
-    asked for without one (not a scheduled run or a fix), their open items."""
+    """To-dos for the check: the linked item if still open; else (user-started tasks only) all open items."""
     if task.get("todo"):
         item = todo.get(task["todo"])
         return [item] if item and not item["done"] else []
@@ -184,7 +160,7 @@ def todos(task: dict) -> list[dict]:
 
 
 def material(task: dict, result: str, entries: list[dict], proof: str, round_: int, items: list[dict] = ()) -> str:
-    """What the check reads; `items` are the to-dos put to it (todos)."""
+    """The check's prompt; `items` are the to-dos from `todos`."""
     kinds = {"code_change": "change code", "code_question": "answer a question about code", "research": "research"}
     where = f" in the project {task['project']}" if task["project"] else ""
     first = next((e["text"] for e in entries if e["kind"] == "start"), "") or task["instruction"]
@@ -206,7 +182,7 @@ def material(task: dict, result: str, entries: list[dict], proof: str, round_: i
 
 
 def parse(found: dict | None, cost: float = 0.0) -> Check | None:
-    """The check's reply, JSON matching SCHEMA, as a Check; None if it gave none."""
+    """SCHEMA reply as a Check, or None if empty."""
     if not found:
         return None
     details = "\n".join(f"- {line}" for line in found.get("to_finish", []))
@@ -215,30 +191,27 @@ def parse(found: dict | None, cost: float = 0.0) -> Check | None:
 
 
 async def ask_model(text: str) -> tuple[dict | None, float]:
-    """One short call to GOAL_MODEL with no tools: its reply, JSON matching SCHEMA (None if it isn't), and what it
-    cost."""
+    """One tool-less GOAL_MODEL call: (SCHEMA reply or None, cost)."""
     from jarvis.brain.sdk import ask_json
 
     return await ask_json(text, SCHEMA, system(), GOAL_MODEL, effort="low")
 
 
 async def review(text: str, budget: Budget) -> Check | None:
-    """The verdict on a finished run, or None if the check couldn't be made (which lets the result through) or
-    `budget` (the runner's) has none left."""
+    """Verdict on a finished run; None (result passes) if the call fails or `budget` is spent."""
     if not budget.take():
         log.warning("goal check skipped: %d checks in the last day already", budget.most)
         return None
     try:
         found, cost = await asyncio.wait_for(ask_model(text), CHECK_TIMEOUT)
-    except Exception as e:  # the type alone: nothing of the task's reaches the log
+    except Exception as e:  # log the type only: no task content
         log.warning("goal check failed: %s", type(e).__name__)
         return None
     return parse(found, cost)
 
 
 def next_step(check: Check, done: int, cost: float) -> tuple[str, str | None]:
-    """What becomes of a checked run, sent back `done` times already and costing `cost` so far: its log entry, and the
-    message that sends it back to finish (None when it's reported as it is)."""
+    """(log entry, send-back message or None) for a checked run already sent back `done` times at `cost` dollars."""
     if check.verdict == COMPLETE:
         return f"checked: complete: {check.said}", None
     if check.verdict == BLOCKED:
@@ -246,7 +219,7 @@ def next_step(check: Check, done: int, cost: float) -> tuple[str, str | None]:
     if done >= GOAL_ROUNDS:
         why = f"it was sent back {done} time{'s' if done != 1 else ''} already" if done else "sending back is off"
         return f"checked: incomplete, but {why}, so it's reported as it is: {check.said}", None
-    if GOAL_MAX_COST and cost >= GOAL_MAX_COST:  # 0 is no limit
+    if GOAL_MAX_COST and cost >= GOAL_MAX_COST:  # 0 means no limit
         return (f"checked: incomplete, but it has cost ${cost:.2f}, over the ${GOAL_MAX_COST:g} limit for sending it back, so "
                 f"it's reported as it is: {check.said}"), None
     n = done + 1
@@ -255,7 +228,7 @@ def next_step(check: Check, done: int, cost: float) -> tuple[str, str | None]:
 
 
 def send_back(check: Check, round_: int) -> str:
-    """The message that sends a task back to finish, in its own session."""
+    """Message sending the task back to finish, in its own session."""
     left = check.details or f"- {check.said}"
     last = (" This is the last time JARVIS sends it back: if anything is still undone after this, the summary must say "
             "plainly what is done, what isn't, and why.") if round_ >= GOAL_ROUNDS else ""
@@ -267,8 +240,7 @@ def send_back(check: Check, round_: int) -> str:
 
 
 def left(check: Check | None) -> tuple[str, bool]:
-    """What the check found still missing, for the announcement ("" if nothing), and whether it waits on the user
-    (BLOCKED) rather than being the task's to finish."""
+    """(what's missing for the announcement or "", whether it's on the user, i.e. BLOCKED)."""
     if check is None or check.verdict == COMPLETE:
         return "", False
     said = check.said if len(check.said) <= SAID_MOST else check.said[:SAID_MOST].rsplit(" ", 1)[0] + "…"
@@ -277,8 +249,7 @@ def left(check: Check | None) -> tuple[str, bool]:
 
 @dataclass
 class TodoChange:
-    """What a finished task does to the to-do list: an edit, as propose_data_edit's arguments (jarvis.tasks.data_edits),
-    made at once, or left for JARVIS, asking the user first for `needs_yes`. Its announcement says which."""
+    """A to-do edit (propose_data_edit args): applied `at_once`, or left pending, asking first if `needs_yes`."""
     edit: dict
     at_once: bool = False
     needs_yes: str | None = None
@@ -289,13 +260,13 @@ def _tick(text: str, reason: str) -> dict:
 
 
 def todo_changes(task: dict, check: Check | None) -> list[TodoChange]:
-    """The to-do edits a task's final result calls for, by its check (None when it wasn't checked). The item it was
-    started for is ticked off at once when the check finds it finished (or, saying nothing of it, the task complete),
-    and a rewording to what's left is suggested when the work does part of it; unchecked, ticking it off is put to the
-    user. An open item it wasn't started for that the check finds finished is a tick-off put to the user."""
+    """To-do edits implied by the final result and its `check` (None if unchecked).
+
+    Linked item: ticked at once if finished, reworded to what's left if partly done, or a tick needing a yes if
+    unchecked. Other open items the check finds finished: a tick needing a yes."""
     items = todos(task)
     if task.get("todo"):
-        if not items:  # ticked off, or removed, meanwhile
+        if not items:  # already ticked off or removed
             return []
         text = items[0]["text"]
         if check is None:
@@ -305,7 +276,7 @@ def todo_changes(task: dict, check: Check | None) -> list[TodoChange]:
         if not left:
             return [TodoChange(_tick(text, f"Task {task['id']} was started for it, and JARVIS's check found it finished."),
                                at_once=True)]
-        if left.lower() == text.lower():  # no headway on it
+        if left.lower() == text.lower():  # no progress
             return []
         return [TodoChange({"action": "todo_reword", "text": text, "item": left,
                             "reason": f"Task {task['id']} was started for it and did part of it; this is what's left."})]

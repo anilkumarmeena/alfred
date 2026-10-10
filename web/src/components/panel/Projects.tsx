@@ -1,5 +1,5 @@
-// Projects: the folders code tasks work in. Each opens to change what JARVIS hears it as, what it's about and
-// whether tasks work in place or on a branch of their own. Its folder only changes on the Mac (make projects).
+// Projects: folders code tasks work in. Edit aliases, description, and in-place vs branch mode. The path changes
+// only on the Mac (make projects).
 import { useSignal } from "@preact/signals";
 import { act, projects, type Project } from "../../state/panel";
 import { ChevronIcon, PlusIcon } from "../icons";

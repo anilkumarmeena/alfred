@@ -1,8 +1,4 @@
-"""Finding and connecting new tools (MCP servers): the official MCP registry and turning an entry into a server
-(jarvis.integrations.mcp_registry), the bridge to HTTP servers with a key or a sign-in (jarvis.integrations.mcp_bridge),
-signing in through JARVIS's browser (jarvis.integrations.mcp_oauth), the voice tools' draft-then-confirm flow
-(jarvis.tools.connections) and the control panel's Connections actions. Nothing reaches the network: every HTTP
-exchange is answered here. Run with: make test"""
+"""Tests for MCP connections: registry, HTTP bridge, OAuth sign-in, voice draft/confirm, panel actions (no network)."""
 
 import asyncio
 import base64
@@ -16,7 +12,7 @@ import httpx
 import pytest
 from ai_armory.toolsets.google import drafts
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
-from test_mcp_servers import LISTED, fresh  # noqa: F401  (the fixture)
+from test_mcp_servers import LISTED, fresh  # noqa: F401  (fixture)
 
 from jarvis import panel, tools
 from jarvis.brain import cli
@@ -27,7 +23,7 @@ from jarvis.safety import draft_gate
 from jarvis.state import activity
 from jarvis.tools import connections
 
-# As the registry lists them (GitHub's is its real entry, trimmed)
+# Registry entries (GitHub's is its real entry, trimmed)
 GITHUB = {
     "name": "io.github.github/github-mcp-server", "title": "GitHub", "version": "2.0.2",
     "description": "Connect AI assistants to GitHub.", "repository": {"url": "https://github.com/github/github-mcp-server"},
@@ -106,7 +102,7 @@ def test_a_container_gets_its_token_through_the_environment_never_its_command_li
 def test_a_package_takes_its_settings_said_and_its_keys_apart(runners):
     way = mcp_registry.ways(NOTES)[0][0]
     server, still = mcp_registry.build(NOTES, way, "notes", "Notes")
-    assert [n.var for n in still] == ["NOTES_REGION"]  # asked for out loud: it isn't secret
+    assert [n.var for n in still] == ["NOTES_REGION"]  # asked for out loud, so not secret
     server, still = mcp_registry.build(NOTES, way, "notes", "Notes", {"NOTES_REGION": "eu"})
     assert still == [] and (server.command, server.args) == ("npx", ["-y", "@example/notes-mcp@1.4.0"])
     assert server.env == {"NOTES_REGION": "eu", "NOTES_DEBUG": "0"}
@@ -153,7 +149,7 @@ def test_a_server_found_on_the_web_is_unverified_with_where_it_came_from():
 # ── The bridge ──────────────────────────────────────────────────
 
 def bridged(server: Server, lines: list[dict], handler) -> list[dict]:
-    """What the bridge writes back for the CLI's `lines`, with the server's side answered by `handler`."""
+    """Lines the bridge writes back for the CLI's `lines`; `handler` answers the server side."""
     out = io.StringIO()
 
     async def go():
@@ -177,7 +173,7 @@ def notes_http() -> Server:
 
 def test_the_bridge_adds_the_key_carries_the_session_and_reads_event_streams(fresh):
     vault.ensure()
-    vault.put("notes.notes_key", "Bearer k-123")  # pasted with its Bearer
+    vault.put("notes.notes_key", "Bearer k-123")  # pasted with its Bearer prefix
     seen = []
 
     def answer(request: httpx.Request) -> httpx.Response:
@@ -202,7 +198,7 @@ def test_the_bridge_adds_the_key_carries_the_session_and_reads_event_streams(fre
     assert "mcp-session-id" not in seen[0].headers
     assert all(r.headers["mcp-session-id"] == "s-1" and r.headers["mcp-protocol-version"] == "2025-06-18"
                for r in seen[1:])
-    assert seen[-1].method == "DELETE"  # the session ended with the CLI's input
+    assert seen[-1].method == "DELETE"  # the session ends when the CLI's input does
 
 
 def test_the_bridge_answers_a_request_the_server_refused_so_the_cli_isnt_left_waiting(fresh):
@@ -232,13 +228,13 @@ def test_the_bridge_refreshes_a_sign_in_the_server_refused_once(fresh):
 
     assert bridged(wiki, [LIST], answer) == [{"jsonrpc": "2.0", "id": 1, "result": {"tools": []}}]
     kept = json.loads(vault.get("wiki.oauth"))
-    assert kept["access_token"] == "new" and kept["refresh_token"] == "r-1"  # the refresh token kept when not sent again
+    assert kept["access_token"] == "new" and kept["refresh_token"] == "r-1"  # refresh token kept when not re-sent
 
 
 # ── Signing in ──────────────────────────────────────────────────
 
 class Auth:
-    """A server that asks for a sign-in, its authorization server, and the browser the user signs in with."""
+    """OAuth-protected server, its authorization server, and the user's browser."""
 
     def __init__(self, registers: bool = True) -> None:
         self.registers = registers
@@ -271,7 +267,7 @@ class Auth:
         return httpx.Response(404)
 
     async def browser(self, url: str, back_to: str, state: str | None = None) -> str:
-        """The user signing in: the page is the authorize endpoint, and it sends the browser back with a code."""
+        """Sign in at the authorize endpoint; redirect back with a code."""
         query = {k: v[0] for k, v in parse_qs(urlsplit(url).query).items()}
         assert url.startswith("https://auth.wiki.example/authorize?") and back_to == mcp_oauth.REDIRECT
         assert query["code_challenge_method"] == "S256" and query["client_id"] == "c-1"
@@ -334,7 +330,7 @@ def run(name: str, args: dict):
 
 
 def confirm(gate, draft_id: str) -> tuple[str, str]:
-    """connection_confirm held for the question, then a yes; what JARVIS asked and what was then done."""
+    """Hold connection_confirm for the question, then say yes; returns (what was asked, what was done)."""
     gate.new_turn("connect it")
     assert isinstance(asyncio.run(gate("mcp__jarvis__connection_confirm", {"draft_id": draft_id}, None)),
                       PermissionResultDeny)

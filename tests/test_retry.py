@@ -1,6 +1,4 @@
-"""Tests for the shared retry and error policy (jarvis.brain.retry): failures told apart by the SDK's exception types,
-API statuses and rate-limit events, never by their words; a Policy's schedule; retry() running a call under one; and
-the timeout every sdk.ask has. Run with: make test"""
+"""Tests for jarvis.brain.retry: typed failure kinds, Policy schedules, retry(), and sdk.ask timeouts."""
 
 import asyncio
 import logging
@@ -102,7 +100,7 @@ def test_each_call_sites_schedule_is_its_policy():
 
 
 class Calls:
-    """A call failing with each of `failures` in turn, then answering "done"; the waits it was given, in `slept`."""
+    """Fails with each of `failures` in turn, then returns "done"; records the waits in `slept`."""
 
     def __init__(self, *failures: BaseException) -> None:
         self.failures, self.made, self.slept = list(failures), 0, []
@@ -151,7 +149,7 @@ def test_retries_are_logged_by_type_and_kind_alone(caplog):
     assert "the summary failed (passing: CallFailed)" in caplog.text and "secret" not in caplog.text
 
 
-# ── sdk.ask: typed failures, and a timeout on every call ────────
+# ── sdk.ask: typed failures and timeouts ────────────────────────
 
 
 def ended(**fields) -> ResultMessage:
@@ -210,7 +208,7 @@ def test_the_summaries_fail_rather_than_hang(monkeypatch):
     assert asyncio.run(command_jobs.triage("Build", "make", "/tmp", "exit code 1", 5, "boom", True)) is None
 
 
-# ── A task's run says what kind of failure ended it ─────────────
+# ── Failure kind of a task's run ────────────────────────────────
 
 
 @pytest.mark.parametrize("ending, kind", [
@@ -238,7 +236,7 @@ def test_a_run_that_succeeds_has_no_kind(monkeypatch):
     assert worker_run(monkeypatch, FakeClient([result("Did it.", 0.1)]), Reporter()).kind == ""
 
 
-# ── watch_tasks follows the runner's events again after they stop ──
+# ── watch_tasks reconnects ──────────────────────────────────────
 
 
 def test_watch_tasks_follows_the_events_again_whatever_ended_them(monkeypatch):

@@ -1,5 +1,4 @@
-"""Whisper and Kokoro load once, in LiveKit's shared inference process (jarvis.voice.speech): job processes send them
-audio and text and load no model, and a down or stuck shared process fails a call clearly instead of hanging it."""
+"""Tests for jarvis.voice.speech: Whisper/Kokoro load once in the shared process; a down or stuck one fails fast."""
 
 import asyncio
 import json
@@ -21,7 +20,7 @@ from jarvis.voice.speech_gate import Measure, SpeechGate
 
 
 class FakeExecutor:
-    """Stands in for the worker's link to the shared process."""
+    """Fake link from the worker to the shared process."""
 
     def __init__(self, reply=b"", error: Exception | None = None, hang: bool = False) -> None:
         self.reply, self.error, self.hang = reply, error, hang
@@ -89,7 +88,7 @@ def test_a_call_hears_through_the_shared_process():
     event = asyncio.run(stt._recognize_impl([rtc.AudioFrame(pcm.tobytes(), 48000, 1, len(pcm))],
                                             conn_options=DEFAULT_API_CONNECT_OPTIONS))
     assert event.alternatives[0].text == "What's on today?" and stt.hearing == 0
-    assert len(speech.read_whisper_request(executor.calls[0][1])[0]) == 1600  # resampled to 16 kHz before it's sent
+    assert len(speech.read_whisper_request(executor.calls[0][1])[0]) == 1600  # resampled to 16 kHz before sending
 
 
 def test_kokoro_sends_the_sentence_with_its_voice():
@@ -140,7 +139,7 @@ def test_the_whisper_runner_transcribes_what_it_is_sent(monkeypatch):
     monkeypatch.setattr(speech, "transcribe", fake_transcribe)
     monkeypatch.setattr(speech, "limit_mlx_cache", lambda: None)
     runner = speech.WhisperRunner()
-    runner.initialize()  # its warm-up goes through the same transcribe
+    runner.initialize()  # its warm-up uses the same transcribe
     clip = np.full(160, 0.25, np.float32)
     reply = runner.run(speech.whisper_request(clip, "JARVIS, Zoë."))
     assert json.loads(reply) == {"text": "Hello.", "no_speech": 0.2, "avg_logprob": -0.3}
@@ -154,7 +153,7 @@ def test_an_older_shared_process_without_logprob_still_works():
 
 
 def test_transcribe_averages_the_logprob_over_every_token(monkeypatch):
-    """Each clip is heard on its own (no conditioning on the last one), and a long segment counts for more."""
+    """Each clip is heard alone (no conditioning on the last); longer segments weigh more."""
     calls = []
 
     def fake(audio, **kwargs):
@@ -190,7 +189,7 @@ def test_the_kokoro_runner_renders_int16_pcm():
 
 @pytest.mark.parametrize("seconds, level, slow", [(0.0, "INFO", False), (3.0, "WARNING", True)])
 def test_the_kokoro_runner_logs_each_pieces_render_time_against_its_speech(caplog, monkeypatch, seconds, level, slow):
-    """At the agent's normal log level, so pieces rendered slower than speech (pauses between them) show up."""
+    """Logged at the agent's normal level so pieces slower than speech (audible pauses) show up."""
     class FakeKokoro:
         def create(self, text, voice, speed, lang):
             clock[0] += seconds
@@ -214,7 +213,7 @@ def test_the_kokoro_runner_logs_each_pieces_render_time_against_its_speech(caplo
 def test_kokoro_loads_the_chosen_model_or_the_first_fallback_there_is(tmp_path):
     chosen = tmp_path / "custom.onnx"
     full, small = tmp_path / "kokoro-v1.0.onnx", tmp_path / "kokoro-v1.0.int8.onnx"
-    assert speech.kokoro_model(chosen, (full, small)) == full  # nothing there: the loader's error names the full one
+    assert speech.kokoro_model(chosen, (full, small)) == full  # none present: the loader's error names the full model
     small.touch()
     assert speech.kokoro_model(chosen, (full, small)) == small
     full.touch()
@@ -224,7 +223,7 @@ def test_kokoro_loads_the_chosen_model_or_the_first_fallback_there_is(tmp_path):
 
 
 def test_the_full_kokoro_model_is_the_default():
-    """The 8-bit one rendered 30-60% slower on an M2 Air, slower than speech under load."""
+    """The 8-bit model rendered 30-60% slower on an M2 Air, slower than speech under load."""
     from jarvis.core import config
 
     if not os.environ.get("JARVIS_TTS_MODEL"):
@@ -233,11 +232,11 @@ def test_the_full_kokoro_model_is_the_default():
 
 
 @pytest.mark.parametrize("setting, cores, threads", [
-    ("", 4, 3),  # M1/M2: a performance core left for the call
+    ("", 4, 3),  # M1/M2: leave a performance core for the call
     ("", 2, 2), ("", 1, 2),  # never fewer than 2
-    ("", 12, 4),  # a Pro or Max: more didn't help
+    ("", 12, 4),  # Pro/Max: more didn't help
     ("6", 4, 6), ("0", 4, 0),  # set; 0 = ONNX Runtime's default
-    ("lots", 4, 3),  # not a number: chosen as if empty
+    ("lots", 4, 3),  # not a number: treated as empty
 ])
 def test_kokoro_threads(setting, cores, threads):
     assert speech.kokoro_threads(setting, cores) == threads
@@ -264,7 +263,7 @@ def fake_mlx(monkeypatch) -> list[int]:
 
 
 def test_the_whisper_runner_caps_mlx_cache_before_it_loads(monkeypatch):
-    """MLX keeps Whisper's freed GPU buffers for reuse; uncapped, they held 0.7 GB after a single clip."""
+    """MLX keeps freed GPU buffers for reuse; uncapped, Whisper held 0.7 GB after one clip."""
     order = []
     monkeypatch.setattr(speech, "limit_mlx_cache", lambda: order.append("cap"))
     monkeypatch.setattr(speech, "transcribe", lambda audio: order.append("load") or {"text": ""})
@@ -281,14 +280,14 @@ def test_the_mlx_cache_cap_is_in_mb_and_minus_one_leaves_it(monkeypatch):
 
 
 def test_without_mlx_the_cap_only_warns(monkeypatch, caplog):
-    monkeypatch.setitem(sys.modules, "mlx.core", None)  # importing it raises, as without a Metal device
+    monkeypatch.setitem(sys.modules, "mlx.core", None)  # import raises, as without a Metal device
     speech.limit_mlx_cache(64)
     assert "couldn't cap MLX's cache at 64 MB" in caplog.text
 
 
 @pytest.mark.parametrize("arena", [False, True])
 def test_kokoro_session_sets_the_memory_arena(monkeypatch, tmp_path, arena):
-    """Without the arena a long sentence's buffers are freed after it, not kept for good."""
+    """Without the arena, a long sentence's buffers are freed after it rather than kept."""
     made = fake_session(monkeypatch)
     speech.kokoro_session(tmp_path / "kokoro.onnx", 3, arena=arena)
     assert {k: made[k] for k in ("path", "arena", "providers")} == {
@@ -307,7 +306,7 @@ def fake_session(monkeypatch) -> dict:
 
 @pytest.mark.parametrize("threads", [3, 0])  # 0 is ONNX Runtime's default
 def test_kokoro_session_limits_threads_and_stops_them_spinning(monkeypatch, tmp_path, threads):
-    """Spinning threads kept cores busy between sentences, taking CPU from the call's own process."""
+    """Spinning threads kept cores busy between sentences, starving the call's own process."""
     made = fake_session(monkeypatch)
     speech.kokoro_session(tmp_path / "kokoro.onnx", threads)
     assert made["threads"] == threads and made["spinning"] == "0"

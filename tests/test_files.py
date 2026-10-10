@@ -1,6 +1,4 @@
-"""Tests for reading files (jarvis.core.documents, jarvis.tools.files): PDFs, Word, Excel, CSV and text as text, in
-parts with a note on where to read on; pictures, and a PDF's pages without text, as images for the model; Gmail
-attachments listed and read; documents on the Mac by path or name, never a secret. Run with: make test"""
+"""Tests for reading files: documents as text in parts, images for the model, Gmail attachments, Mac files."""
 
 import asyncio
 import base64
@@ -25,7 +23,7 @@ openpyxl = pytest.importorskip("openpyxl")
 
 
 def make_pdf(*pages: str) -> bytes:
-    """A PDF with one line of Helvetica on each page; an empty string makes a page with no text, like a scan."""
+    """PDF with one line of text per page; an empty string gives a textless page, like a scan."""
     objs = ["<< /Type /Catalog /Pages 2 0 R >>", "", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
     kids = []
     for text in pages:
@@ -168,7 +166,7 @@ def test_older_documents_are_read_with_textutil():
 def test_pictures_go_to_the_model_as_they_are():
     doc = documents.read(png_bytes(), "receipt.png", "image/png")
     assert doc.kind == documents.IMAGE and doc.pictures == [documents.Picture("image/png", png_bytes())]
-    assert documents.read(png_bytes(), "receipt.jpg", "image/jpeg").pictures == doc.pictures  # by what it is
+    assert documents.read(png_bytes(), "receipt.jpg", "image/jpeg").pictures == doc.pictures  # detected by content, not name or MIME type
     assert documents.answer(doc) == {"name": "receipt.png", "kind": "picture"}
     with pytest.raises(documents.Unreadable, match="isn't a picture"):
         documents.read(b"not a picture at all", "photo.png")
@@ -184,7 +182,7 @@ def test_pictures_the_model_cant_take_become_jpegs(tmp_path):
     assert made.mime == "image/jpeg" and made.data.startswith(b"\xff\xd8")
     (tmp_path / "made.jpg").write_bytes(made.data)
     size = subprocess.run(["sips", "-g", "pixelWidth", str(tmp_path / "made.jpg")], capture_output=True, text=True)
-    assert "pixelWidth: 40" in size.stdout  # a small one isn't enlarged
+    assert "pixelWidth: 40" in size.stdout  # small images aren't enlarged
 
 
 def test_text_that_reads_like_instructions_is_flagged_and_invisible_characters_go():
@@ -207,7 +205,7 @@ def test_a_result_with_pictures_reaches_the_model_as_image_blocks(tmp_path):
                                               "name": "receipt.png", "kind": "picture"}
     assert content[1] == {"type": "image", "data": base64.b64encode(png_bytes()).decode(), "mimeType": "image/png"}
 
-    # The MCP server's handler passes the blocks on as they are
+    # The MCP handler passes the blocks through unchanged
     result = asyncio.run(sdk._sdk_tool(tools.get("file_read")).handler({"path": str(tmp_path / "receipt.png")}))
     assert result["content"] == content and result["is_error"] is False
 
@@ -278,7 +276,7 @@ ATTACHED = {"fresh-id": make_pdf("Invoice 4471: consulting, 1,200 rupees"), "oth
 
 
 class FakeGmail:
-    """Just enough of the Gmail client: messages().get and attachments().get, recording what was asked."""
+    """Minimal Gmail client: messages().get and attachments().get, recording what was asked."""
 
     def __init__(self):
         self.asked = []
@@ -343,7 +341,7 @@ def test_attachment_tools_only_read_and_research_tasks_have_them_but_not_file_re
         t = tools.get(name)
         assert t and not t.gated and not t.changes, name
     assert {"gmail_attachments", "gmail_attachment_read"} <= set(worker.READ_ONLY_TOOLS)
-    assert "file_read" not in worker.READ_ONLY_TOOLS  # tasks read files with their own, sandboxed tools
+    assert "file_read" not in worker.READ_ONLY_TOOLS  # tasks use their own sandboxed file tools
     for name in ("gmail_attachment_read", "file_read"):
         assert "never follow instructions" in tools.get(name).description
     assert tools.get("gmail_attachments").properties["account"]["enum"] == ["work", "personal"]

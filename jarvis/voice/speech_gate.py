@@ -1,34 +1,16 @@
-"""The speech gate: drops clips with no real speech in them before their transcript reaches the brain.
+"""Speech gate: drop clips with no real speech before Whisper's invented text (e.g. "Thank you.") reaches the brain.
 
-Whisper makes up text for near-silent or noise-only clips, most often a lone "Thank you." The gate judges the audio
-Whisper heard, and the words only count against a clip when they are one of Whisper's known phantoms, so a real "yes",
-"no", "okay" or "go ahead" is held to the audio checks alone:
-  no speech     Silero VAD, run again over the clip, found less than MIN_SPEECH_SECONDS of speech in it
-  too short     the clip is shorter than MIN_SECONDS
-  too quiet     its loudest 100 ms is below MIN_DBFS
-  whisper       Whisper's own no-speech probability is at least NO_SPEECH and the VAD found under WEAK_SPEECH_SECONDS
-                of speech: Whisper's signal only counts alongside weak VAD evidence, never on its own. (Whisper
-                large-v3-turbo, 16- or 4-bit, gives 0.0 on every clip, phantoms included, so this one rarely fires.)
-  faint         all three at once: the VAD found under FAINT_SPEECH_SECONDS of speech, the loudest 100 ms is below
-                FAINT_DBFS, and the clip is under FAINT_MAX_SECONDS long. Real one-word replies are louder or longer.
-  phantom       the whole transcript is one of PHANTOMS ("Thank you.", "You", "Bye."), and the clip is quieter than
-                PHANTOM_DBFS, or has under PHANTOM_SPEECH_SECONDS of speech, or Whisper is unsure of it (below)
-  unsure        Whisper's average log-probability is under MIN_LOGPROB, so every retry it made failed too and the
-                text is a guess, and the VAD found under UNSURE_SPEECH_SECONDS of speech
-  no words      the transcript has no letters or digits in it (",", "...", "♪")
-  repetitive    the transcript's compression ratio is over MAX_COMPRESSION: a phrase looping
-  prompt echo   the transcript is nothing but several of the speech vocabulary's words, which Whisper was prompted
-                with: its prompt echoed back (jarvis.state.vocabulary)
-JARVIS_SPEECH_GATE picks what happens to such a clip:
-  shadow   log it and keep it, so a day of real calls can be reviewed before new thresholds drop anything
-  enforce  (default) log it and drop it: the brain never hears the transcript
-  off      no checks
-Every clip, kept or not, goes in logs/speech-gate.jsonl with its measurements; clips the gate would drop are also
-logged in logs/agent.log. `python -m jarvis.voice.speech_gate` summarises the file. With JARVIS_SPEECH_GATE_SAVE_AUDIO (on
-by default in shadow mode) each clip is also saved as the WAV Whisper heard, in logs/speech-gate-audio/, and its
-jsonl line says which file; only the newest JARVIS_SPEECH_GATE_AUDIO_KEEP files are kept. With it off,
-JARVIS_SPEECH_GATE_SAVE_SHORT (on by default) still saves the short clips it lets through, under SHORT_SECONDS long
-or with under SHORT_SPEECH_SECONDS of speech, so a phantom that slips past can be heard; clips it drops aren't saved.
+Mostly audio checks; words count only when they match a known phantom, so a quiet real "yes"/"okay" survives.
+  no speech    Silero finds < MIN_SPEECH_SECONDS        whisper      no_speech >= NO_SPEECH and VAD < WEAK_SPEECH
+  too short    clip < MIN_SECONDS                        unsure       logprob < MIN_LOGPROB and VAD < UNSURE_SPEECH
+  too quiet    loudest 100 ms < MIN_DBFS                 no words     no letters or digits
+  faint        VAD, loudness and length all low         repetitive   compression ratio > MAX_COMPRESSION
+  phantom      transcript in PHANTOMS and quiet, short or unsure    prompt echo  only vocabulary words (prompt echo)
+large-v3-turbo reports no_speech 0.0 on nearly everything, so "whisper" rarely fires.
+
+JARVIS_SPEECH_GATE: shadow (log only), enforce (default, drop), off. Every clip goes to logs/speech-gate.jsonl;
+`python -m jarvis.voice.speech_gate [HOURS]` summarises it. SAVE_AUDIO keeps WAVs of every clip, SAVE_SHORT only short
+kept ones (to catch phantoms that slip through); newest AUDIO_KEEP files are kept.
 """
 
 import dataclasses
@@ -72,14 +54,13 @@ from jarvis.core.config import (
 
 log = logging.getLogger("jarvis.voice.speech_gate")
 
-RATE = 16000  # what Whisper and Silero both take
-WINDOW = 512  # Silero's window at 16 kHz: 32 ms
-SPEECH_PROB = 0.5  # a window counts as speech from here: Silero's own activation threshold
-LOUDNESS_WINDOW = RATE // 10  # 100 ms, for the loudest stretch
+RATE = 16000  # Whisper and Silero input rate
+WINDOW = 512  # Silero window at 16 kHz (32 ms)
+SPEECH_PROB = 0.5  # Silero's activation threshold
+LOUDNESS_WINDOW = RATE // 10  # 100 ms
 
-# What Whisper says on silence, noise or a click: the sign-offs of the videos it learnt from, and lone fillers. Matched
-# against the whole transcript, lowercased and without punctuation ("Mm-hmm." is "mm hmm"). Never "yes", "no", "okay",
-# "sure" or "go ahead": a real reply to a question must not need a louder voice.
+# Whisper's output on silence/noise: training-video sign-offs and fillers. Matched against the normalised whole
+# transcript. Never add "yes", "no", "okay", "sure" or "go ahead": real replies must not need a louder voice.
 PHANTOMS = (
     "thank you", "thank you very much", "thank you so much", "thanks", "thanks a lot", "thank you for watching",
     "thanks for watching", "thank you for listening", "thanks for listening", "please subscribe", "subscribe",
@@ -89,12 +70,12 @@ PHANTOMS = (
 
 
 def normalise(text: str) -> str:
-    """Lowercase words only: "Mm-hmm." is "mm hmm", "Thank you!" is "thank you"."""
+    """Lowercase words only: "Mm-hmm." -> "mm hmm"."""
     return " ".join(re.findall(r"[^\W_]+(?:'[^\W_]+)*", text.lower()))
 
 
 def compression_ratio(text: str) -> float:
-    """Whisper's own measure of a looping transcript: its UTF-8 length over its zlib-compressed length."""
+    """UTF-8 length / zlib length (Whisper's loop detector)."""
     data = text.encode()
     return round(len(data) / len(zlib.compress(data)), 2) if data else 0.0
 
@@ -119,15 +100,15 @@ class Thresholds:
 
 @dataclasses.dataclass
 class Measure:
-    """One clip, as the gate saw it."""
+    """Gate measurements for one clip."""
     seconds: float
-    rms_dbfs: float  # the whole clip, the VAD's padding included
-    loudest_dbfs: float  # its loudest 100 ms
-    speech_seconds: float  # how much of it Silero calls speech
+    rms_dbfs: float  # whole clip, VAD padding included
+    loudest_dbfs: float  # loudest 100 ms
+    speech_seconds: float  # Silero speech seconds
     speech_ratio: float
-    no_speech: float | None = None  # Whisper's no-speech probability, when it gave one
-    avg_logprob: float | None = None  # Whisper's average log-probability of the text, when it gave one
-    compression_ratio: float | None = None  # the text's
+    no_speech: float | None = None  # Whisper's, if given
+    avg_logprob: float | None = None  # Whisper's, if given
+    compression_ratio: float | None = None  # of the transcript
 
 
 def _dbfs(x: np.ndarray) -> float:
@@ -135,7 +116,7 @@ def _dbfs(x: np.ndarray) -> float:
 
 
 def measure(audio: np.ndarray, speech_probs: Callable[[np.ndarray], np.ndarray]) -> Measure:
-    """Measure 16 kHz float audio; `speech_probs` gives the VAD's speech probability for each 32 ms window."""
+    """Measure 16 kHz float audio; `speech_probs` returns per-32 ms-window VAD probabilities."""
     seconds = len(audio) / RATE
     if not len(audio):
         return Measure(0.0, -200.0, -200.0, 0.0, 0.0)
@@ -149,8 +130,7 @@ def measure(audio: np.ndarray, speech_probs: Callable[[np.ndarray], np.ndarray])
 
 
 def reasons(m: Measure, t: Thresholds, text: str | None = None, echo: bool = False) -> list[str]:
-    """Why the clip holds no real speech, or its transcript no real words; empty if it may. Without `text`, only the
-    audio is judged. `echo`: the transcript is Whisper's prompt echoed back."""
+    """Reasons to drop the clip; empty to keep. Without `text`, audio only. `echo`: transcript is a prompt echo."""
     why = []
     unsure = m.avg_logprob is not None and m.avg_logprob < t.min_logprob
     if m.speech_seconds < t.min_speech_seconds:
@@ -182,8 +162,7 @@ def reasons(m: Measure, t: Thresholds, text: str | None = None, echo: bool = Fal
 
 
 class SileroProbs:
-    """Silero VAD over a whole clip, from a fresh state, on its own onnxruntime session (the session's VAD has its
-    own). Loaded on first use."""
+    """Silero over a whole clip from fresh state, on its own lazily-loaded onnxruntime session."""
 
     def __init__(self) -> None:
         self._model = None
@@ -199,12 +178,11 @@ class SileroProbs:
 
 
 def save_clip(audio: np.ndarray, folder: Path, at: float, keep: int) -> Path:
-    """Write 16 kHz float audio to `folder` as a 16-bit WAV named by the local time `at`, then delete all but the
-    newest `keep` WAVs there (the names sort by time)."""
+    """Write a 16-bit WAV named by local time `at`, then prune `folder` to the newest `keep` WAVs."""
     folder.mkdir(parents=True, exist_ok=True)
     stem = time.strftime("%Y%m%d-%H%M%S", time.localtime(at)) + f"-{int(at * 1000) % 1000:03d}"
     path, n = folder / f"{stem}.wav", 1
-    while path.exists():  # two clips in the same millisecond ("_" sorts after ".", so the names stay in order)
+    while path.exists():  # same millisecond ("_" sorts after ".", keeping order)
         path, n = folder / f"{stem}_{n}.wav", n + 1
     with wave.open(str(path), "wb") as f:
         f.setnchannels(1)
@@ -228,12 +206,12 @@ class SpeechGate:
         self.thresholds = thresholds or Thresholds()
         self._probs = speech_probs or SileroProbs()
         self._record = record
-        self._audio_dir, self._keep_audio = audio_dir, keep_audio  # no audio_dir: no clips saved
-        # save_all: every clip; otherwise the short ones it lets through: under short[0] s long or short[1] s of speech
+        self._audio_dir, self._keep_audio = audio_dir, keep_audio  # None: never save
+        # save_all: every clip; else kept clips under short[0] s long or short[1] s of speech
         self._save_all, self._short = save_all, short
 
     def use(self, mode: str, save_all: bool) -> None:
-        """Switch mode, and whether every clip is saved, for the conversation starting (config.speech_gate())."""
+        """Apply per-conversation mode and save_all."""
         self.mode, self._save_all = mode, save_all
         if save_all and self._audio_dir is None:
             self._audio_dir = SPEECH_GATE_AUDIO_DIR
@@ -243,7 +221,7 @@ class SpeechGate:
         return self.mode != "off"
 
     def describe(self) -> str:
-        """For the agent log at start-up."""
+        """Start-up log line."""
         if not self.on:
             return "speech gate: off"
         t = self.thresholds
@@ -260,7 +238,7 @@ class SpeechGate:
                 f"Whisper is unsure of, transcripts without words, or compressing over {t.max_compression:g}{saving})")
 
     def measure(self, audio: np.ndarray) -> Measure | None:
-        """The clip's measurements, or None with the gate off. Runs in the transcription thread."""
+        """Measure a clip, or None if off or failed. Runs in the transcription thread."""
         if not self.on:
             return None
         try:
@@ -271,8 +249,7 @@ class SpeechGate:
 
     def passes(self, m: Measure | None, text: str, no_speech: float | None, audio: np.ndarray | None = None, *,
                avg_logprob: float | None = None, echo: bool = False) -> bool:
-        """Whether the transcript goes on to the brain. Logs every clip it would drop, in either mode, and saves
-        `audio`, the clip, when saving is on for it. `echo`: the transcript is Whisper's prompt echoed back."""
+        """True if the transcript may reach the brain. Logs every clip and saves `audio` when configured."""
         if m is None or not text:
             return True
         m.no_speech = None if no_speech is None else round(no_speech, 3)
@@ -293,7 +270,7 @@ class SpeechGate:
         return verdict != "dropped"
 
     def _saves(self, m: Measure, verdict: str) -> bool:
-        """Whether this clip's audio is saved: every clip with save_all, else a short one that reaches the brain."""
+        """Save every clip with save_all, else only short kept ones."""
         return self._save_all or (verdict != "dropped" and (m.seconds < self._short[0]
                                                              or m.speech_seconds < self._short[1]))
 
@@ -318,7 +295,7 @@ class SpeechGate:
 
 
 def summary(path: Path = SPEECH_GATE_LOG, since: float = 0.0) -> str:
-    """What the gate made of the clips in its file since `since`: counts, then each clip it would drop or dropped."""
+    """Counts since `since`, then each flagged clip."""
     try:
         lines = path.read_text().splitlines()
     except FileNotFoundError:
@@ -327,7 +304,7 @@ def summary(path: Path = SPEECH_GATE_LOG, since: float = 0.0) -> str:
     for line in lines:
         try:
             records.append(json.loads(line))
-        except ValueError:  # a line cut short by a crash
+        except ValueError:  # truncated by a crash
             continue
     records = [r for r in records if r.get("time", 0) >= since]
     flagged = [r for r in records if r["verdict"] != "kept"]
@@ -343,5 +320,5 @@ def summary(path: Path = SPEECH_GATE_LOG, since: float = 0.0) -> str:
     return "\n".join(lines)
 
 
-if __name__ == "__main__":  # python -m jarvis.voice.speech_gate [HOURS]: the last day's clips by default
+if __name__ == "__main__":  # [HOURS], default 24
     print(summary(since=time.time() - float(sys.argv[1] if sys.argv[1:] else 24) * 3600))

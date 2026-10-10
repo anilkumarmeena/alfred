@@ -1,35 +1,18 @@
-"""How long each voice turn takes, stage by stage, so the wait between the user stopping and JARVIS speaking can be
-measured and its slow part found.
+"""Per-stage latency of each voice turn, to find where the user-stops-to-JARVIS-speaks wait goes.
 
-Each turn that reaches JARVIS is one line in logs/voice-turns.jsonl, and a readable one in the agent log, once its
-reply has been spoken, or once the user's next turn or the session's end has cut it off. Each stage is the seconds
-since the user stopped speaking (LiveKit's VAD end of speech; for a typed turn, since it arrived):
+One JSON line per turn in logs/voice-turns.jsonl (plus a readable agent-log line), written when the reply is spoken
+or cut off. Stages are seconds since the user stopped speaking (or a typed turn arrived):
 
-  transcript   Whisper's text was ready (LiveKit's transcription_delay)
-  turn_end     the turn detector decided they'd finished (LiveKit's end_of_turn_delay)
-  brain        the reply started (JarvisAgent.llm_node)
-  sent         the words went to the claude CLI: after any yes-or-no check, a command still running, photos
-  first_text   the reply's first words
-  first_tool   the model began its first tool call, if it made one
-  first_audio  JARVIS's voice started
-  done         the model's reply ended
+  transcript   Whisper text ready          first_text   first reply words
+  turn_end     turn detector decided       first_tool   first tool call began
+  brain        reply started (llm_node)    first_audio  JARVIS's voice started
+  sent         prompt sent to claude CLI   done         model reply ended
 
-With them: `speech` (seconds the user spoke), `words` (in their turn), `tts_first` (Kokoro's time from its first text
-to its first audio, LiveKit's tts_node_ttfb), `ack` (what was said before the first tool call: the acknowledgement),
-`tools` (how many calls), `spoke` (seconds JARVIS spoke), and how it `ended`: spoken, interrupted (talked over while
-speaking), unspoken (the user went on before any of it was heard) or closed (the session ended first). An unspoken
-turn also has `resumed`, the seconds from the user stopping to their speaking again: a pause mid-thought.
+Other fields: speech, words, tts_first, ack (said before first tool), tools, tool_names, spoke, ended
+(spoken|interrupted|unspoken|closed), resumed (unspoken only), eot, judge, judge_s, wait (short|long), speaker,
+logprob, piece (words in first spoken piece), model (when not the voice brain's own).
 
-How the turn's end was decided (jarvis.voice.turn): `eot`, the audio turn detector's probability at the last pause;
-`judge`, the fast model's verdict when it was asked (yes, no, unsure, or none when it failed or was slow) and
-`judge_s`, how long it took; `wait`, whether the short or the long delay ended the turn. And who spoke and how well
-they were heard: `speaker` (the voiceprint matched, or the owner) and `logprob`, Whisper's average log-probability.
-`piece` is how many words the reply's first spoken piece had, and `model` the model that answered when it wasn't the
-voice brain's own (jarvis.brain.route).
-
-The brain marks its own stages through mark() and tool(), which do nothing outside a timed turn.
-
-python -m jarvis.voice.timing [HOURS] (make voice-timing) summarises the last day's turns.
+mark()/tool()/note() are no-ops outside a timed turn. `python -m jarvis.voice.timing [HOURS]` summarises recent turns.
 """
 
 import json
@@ -47,17 +30,16 @@ from jarvis.core.config import VOICE_TURNS_LOG
 log = logging.getLogger("jarvis.voice.timing")
 
 STAGES = ("transcript", "turn_end", "brain", "sent", "first_text", "first_tool", "first_audio", "done")
-# The waits between stages that the summary breaks a turn into: (name, from, to)
+# Summary gaps: (name, from, to)
 GAPS = (("waiting for the turn to end", None, "turn_end"), ("before the model", "turn_end", "sent"),
         ("model to first words", "sent", "first_text"), ("first words to voice", "first_text", "first_audio"))
 
-CURRENT: ContextVar["Turn | None"] = ContextVar("jarvis_voice_turn", default=None)  # the turn being replied to
-LATEST: "Turn | None" = None  # the same, for what runs outside the reply's own task
+CURRENT: ContextVar["Turn | None"] = ContextVar("jarvis_voice_turn", default=None)  # turn being replied to
+LATEST: "Turn | None" = None  # same, for code outside the reply's task
 
 
 class Turn:
-    """One user turn's timing. `metrics` are LiveKit's for the user's message (llm.MetricsReport); none for a typed
-    turn."""
+    """One user turn's timing. `metrics` is LiveKit's MetricsReport for the message; empty for a typed turn."""
 
     def __init__(self, n: int, said: str, metrics: dict, clock: Callable[[], float] = time.time) -> None:
         self.clock = clock
@@ -73,11 +55,11 @@ class Turn:
                 self.record[stage] = round(value, 3)
 
     def mark(self, stage: str, at: float | None = None) -> None:
-        """`stage` was reached now (or at `at`, a time.time()); only the first time counts."""
+        """Record `stage` at now (or `at`, epoch seconds); first call wins."""
         self.record.setdefault(stage, round((self.clock() if at is None else at) - self.end, 3))
 
     def tool(self, said: str, name: str = "") -> None:
-        """The model began a call to tool `name`, having said `said` so far in this reply."""
+        """Record a tool call; `said` is reply text so far (the first one becomes `ack`)."""
         if "first_tool" not in self.record and said.strip():
             self.record["ack"] = said.strip()
         self.mark("first_tool")
@@ -97,32 +79,32 @@ def tool(said: str, name: str = "") -> None:
 
 
 def note(key: str, value) -> None:
-    """Something about the turn being replied to, such as the model that answered it."""
+    """Set a field on the current turn's record."""
     if (turn := CURRENT.get()) is not None:
         turn.record[key] = value
 
 
 def piece(text: str) -> None:
-    """The reply's first piece went to Kokoro (jarvis.voice.clauses). Speech runs in a task of LiveKit's own, which
-    doesn't see CURRENT, so this goes to the turn replied to last."""
+    """Record the first piece sent to Kokoro. TTS runs in LiveKit's own task (no CURRENT), so this uses LATEST."""
     if LATEST is not None:
         LATEST.record.setdefault("piece", len(text.split()))
 
 
 class Timings:
-    """A voice session's turns, timed one at a time, each written when it's over."""
+    """A session's turn timings, one at a time, each written when it ends."""
 
     def __init__(self, path: Path | None = VOICE_TURNS_LOG, clock: Callable[[], float] = time.time,
                  written: Callable[[dict], None] | None = None) -> None:
         self.path = path
         self.clock = clock
-        self.written = written  # told each record once its turn is over (jarvis.voice.turn.Pacing)
+        self.written = written  # gets each finished record (turn.Pacing)
         self.turn: Turn | None = None
         self.n = 0
 
     def heard(self, said: str, metrics: dict, how: dict | None = None) -> dict | None:
-        """A user turn ended (Agent.on_user_turn_completed); `how` is how its end was decided and who said it. One
-        before it not yet heard was cut off by it: that one's record is returned."""
+        """Start timing a user turn; `how` holds end-of-turn and speaker fields.
+
+        Returns the previous turn's record if it was still pending (written as "unspoken"), else None."""
         cut = None
         if self.turn is not None:
             if started := metrics.get("started_speaking_at"):
@@ -134,8 +116,7 @@ class Timings:
         return cut
 
     def replying(self) -> Turn:
-        """The reply to the latest turn starts (JarvisAgent.llm_node): the turn the brain's marks go to. A turn that
-        came with no user turn ended, a typed one, is timed from now."""
+        """Mark the reply's start and make its turn CURRENT. A reply with no pending turn (typed) is timed from now."""
         global LATEST
         if self.turn is None or "brain" in self.turn.record:
             self.heard("", {})
@@ -145,9 +126,7 @@ class Timings:
         return self.turn
 
     def spoke(self, metrics: dict, interrupted: bool) -> None:
-        """JARVIS finished saying something (conversation_item_added, an assistant message); its metrics are LiveKit's.
-        Only a reply to the turn under way ends it: not the greeting, nor a reply cut off before the user ended this
-        turn, which started speaking before they stopped."""
+        """Close the turn on an assistant message. Ignores the greeting and speech that began before the turn ended."""
         turn, started = self.turn, metrics.get("started_speaking_at")
         if turn is None or "brain" not in turn.record or not started or started < turn.end:
             return
@@ -159,7 +138,7 @@ class Timings:
         self._write("interrupted" if interrupted else "spoken")
 
     def close(self) -> None:
-        """The session ended."""
+        """Write any pending turn as "closed"."""
         if self.turn is not None:
             self._write("closed")
 
@@ -184,7 +163,7 @@ class Timings:
 
 
 def describe(r: dict) -> str:
-    """One turn's record as a line for the agent log."""
+    """One-line agent-log form of a record."""
     heard = "typed" if r.get("typed") else f"{r.get('speech', 0):.1f} s of speech"
     stages = ", ".join(f"{s.replace('_', ' ')} {r[s]:.2f}" for s in STAGES if s in r) or "no stages"
     tools = r.get("tools", 0)
@@ -209,7 +188,7 @@ def _spread(values: list[float]) -> str:
 
 
 def summary(path: Path = VOICE_TURNS_LOG, since: float = 0.0, slowest: int = 5) -> str:
-    """The turns in `path` since `since`: how they ended, each stage's and each wait's spread, and the slowest turns."""
+    """Report on turns since `since`: outcomes, per-stage and per-gap spread, slowest turns."""
     try:
         lines = path.read_text().splitlines()
     except FileNotFoundError:
@@ -218,7 +197,7 @@ def summary(path: Path = VOICE_TURNS_LOG, since: float = 0.0, slowest: int = 5) 
     for line in lines:
         try:
             records.append(json.loads(line))
-        except ValueError:  # a line cut short by a crash
+        except ValueError:  # truncated by a crash
             continue
     records = [r for r in records if r.get("time", 0) >= since]
     if not records:
@@ -264,5 +243,5 @@ def summary(path: Path = VOICE_TURNS_LOG, since: float = 0.0, slowest: int = 5) 
     return "\n".join(out)
 
 
-if __name__ == "__main__":  # python -m jarvis.voice.timing [HOURS]: the last day's turns by default
+if __name__ == "__main__":  # [HOURS], default 24
     print(summary(since=time.time() - float(sys.argv[1] if sys.argv[1:] else 24) * 3600))

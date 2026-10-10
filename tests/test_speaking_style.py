@@ -1,4 +1,4 @@
-"""Tests for how the voice prompt (jarvis.brain.PERSONA) tells JARVIS to speak. Run with: make test"""
+"""Tests for how the voice prompt (jarvis.brain.PERSONA) tells JARVIS to speak."""
 
 from jarvis.brain import persona
 

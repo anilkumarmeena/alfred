@@ -1,6 +1,4 @@
-"""Tests for speaking sooner: a reply's first piece goes to Kokoro as soon as it's a short sentence or a clause
-(jarvis.voice.clauses), and a lighter model may answer turns a fast model judges simple (jarvis.brain.route), in the
-same CLI session. Run with: make test"""
+"""Tests for speaking sooner: first clause goes to Kokoro early; a lighter model answers simple turns, same session."""
 
 import asyncio
 
@@ -100,7 +98,7 @@ def test_a_slow_verdict_leaves_the_main_model(monkeypatch):
 
 
 class SessionClient:
-    """Stands in for the voice brain's ClaudeSDKClient."""
+    """Fake ClaudeSDKClient for the voice brain."""
 
     def __init__(self) -> None:
         self.models: list[str] = []

@@ -1,9 +1,7 @@
-"""Files JARVIS made that the phone may fetch, such as an audio file read aloud (jarvis.voice.audio_file).
+"""Generated files the phone may fetch (e.g. rendered audio), by random token, served at /api/files/TOKEN.
 
-Each shared file gets a long random token, kept with its path in data/shared_files.json for SHARE_DAYS. The web app
-serves it at /api/files/TOKEN (jarvis.server) to whoever has the link, which only ever travels in JARVIS's own
-pushes to the user's devices; nothing else on the Mac can be fetched that way, and an unknown or expired token finds
-nothing.
+Tokens map to paths in the profile's shared_files.json for SHARE_DAYS. Links are sent only in JARVIS's own pushes;
+only shared paths are reachable, and unknown or expired tokens find nothing.
 """
 
 import fcntl
@@ -18,12 +16,12 @@ from jarvis.core import profile
 from jarvis.core.files import write_atomic
 
 SHARE_DAYS = 7
-TOKEN = r"[A-Za-z0-9_-]{32,64}"  # as the server's route matches it
+TOKEN = r"[A-Za-z0-9_-]{32,64}"  # must match the server route
 
 
 @contextmanager
 def _changing(file: Path):
-    """The shared files, without the expired ones, to change; saved on the way out. Locked, as two processes write it."""
+    """Yield the live share map for editing, saved on exit. File-locked: multiple processes write it."""
     file.parent.mkdir(parents=True, exist_ok=True)
     with open(file.with_name(f".{file.name}.lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -47,7 +45,7 @@ def _live(shared: dict, now: float | None = None) -> dict:
 
 
 def share(path: Path, file: Path | None = None) -> str:
-    """Share `path` with the user's devices; returns its token."""
+    """Share `path`; return its token."""
     token = secrets.token_urlsafe(32)
     with _changing(file or profile.current().shared_files) as shared:
         shared[token] = {"path": str(Path(path).resolve()), "shared": time.time()}
@@ -55,7 +53,7 @@ def share(path: Path, file: Path | None = None) -> str:
 
 
 def shared(token: str, file: Path | None = None) -> Path | None:
-    """The file a token shares, while it's shared and still there; else None."""
+    """Path for a live token whose file still exists, else None."""
     found = _live(_load(file or profile.current().shared_files)).get(token)
     if not found:
         return None
@@ -64,6 +62,5 @@ def shared(token: str, file: Path | None = None) -> Path | None:
 
 
 def link(token: str, name: str) -> str:
-    """Where tapping a push about a shared file opens JARVIS: the page shows the file `name`, and plays it if it's
-    audio."""
+    """Web-app URL for a push about a shared file; the page shows it (and plays audio)."""
     return "/?" + urlencode({"file": token, "name": name})

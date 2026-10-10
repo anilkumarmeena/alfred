@@ -1,4 +1,4 @@
-"""background_lookup: slow reading handed to a side job, so the conversation carries on (jarvis.brain.side)."""
+"""background_lookup: hand slow reading to a side job (jarvis.brain.side)."""
 
 from jarvis.state import conversation
 from jarvis.tools import tool

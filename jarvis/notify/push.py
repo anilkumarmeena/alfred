@@ -1,15 +1,9 @@
 """Web Push: heartbeat alerts and task updates reach the phone even when JARVIS isn't open.
 
-The home-screen web app (web/) registers a service worker, subscribes with JARVIS's VAPID
-public key when the user taps Enable notifications, and posts the subscription to jarvis.server,
-which keeps it in data/push_subscriptions.json, one per device. The task runner calls
-send_push() for heartbeat alerts and for tasks that finish, fail or ask a question. Each push
-is encrypted to the device and signed with the VAPID private key, generated on first use into
-secrets/ (mode 600) and never logged. A push service answering 404 or 410 means the device
-has unsubscribed or the app was removed, so its subscription is dropped. send_push() also reaches the JARVIS
-iPhone app, which registers with APNs instead (jarvis.notify.apns).
-
-On unless JARVIS_PUSH=off, and nothing is sent until a device has subscribed.
+The home-screen web app subscribes with JARVIS's VAPID public key; subscriptions live in data/push_subscriptions.json.
+Pushes are encrypted per device and signed with the VAPID private key (generated on first use into secrets/, mode
+600, never logged). A 404/410 drops the subscription. send_push() also reaches the native app via jarvis.notify.apns.
+Callers skip sending when JARVIS_PUSH=off.
 """
 
 import asyncio
@@ -39,24 +33,22 @@ if TYPE_CHECKING:
     from jarvis.notify import apns
 
 log = logging.getLogger("jarvis.notify.push")
-# Where browsers' push services live; a subscription pointing anywhere else is refused, so the
-# runner never posts to an arbitrary host. Apple (Safari, iOS home-screen apps), Google (Chrome),
-# Mozilla (Firefox), Microsoft (Edge).
+# Allowed push service hosts (Apple, Google, Mozilla, Microsoft), so the runner never posts to an arbitrary host
 PUSH_HOSTS = ("push.apple.com", "fcm.googleapis.com", "push.services.mozilla.com", "notify.windows.com")
-MAX_DEVICES = 10  # the oldest subscription goes when an eleventh arrives
-TTL = 12 * 3600  # how long a push service keeps trying a phone that's offline
+MAX_DEVICES = 10  # oldest dropped beyond this
+TTL = 12 * 3600  # seconds a push service retries an offline phone
 SEND_TIMEOUT = 20
-_KEY = re.compile(r"^[A-Za-z0-9_-]{16,200}={0,2}$")  # base64url, as browsers encode p256dh and auth
+_KEY = re.compile(r"^[A-Za-z0-9_-]{16,200}={0,2}$")  # base64url p256dh/auth
 
 Push = Callable[[str, str, str, str], Awaitable[object]]  # title, body, url, tag
 
 
 @contextmanager
 def _locked(path: Path):
-    """An exclusive lock between processes: the web app adds subscriptions, the runner drops them."""
+    """Cross-process exclusive lock (web app adds, runner drops)."""
     with open(path.with_name(path.name + ".lock"), "a") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
-        yield  # closing the file releases the lock
+        yield  # released when the file closes
 
 
 def _host(endpoint: str) -> str:
@@ -64,8 +56,7 @@ def _host(endpoint: str) -> str:
 
 
 def task_target(task_id: int) -> tuple[str, str]:
-    """Where tapping a task's notification opens JARVIS, and its tag: a newer push about the same
-    task, from the runner or the heartbeat, replaces the older one."""
+    """(url, tag) for a task's notification; the tag makes newer pushes replace older ones."""
     return f"/?task={task_id}", f"task-{task_id}"
 
 
@@ -73,7 +64,7 @@ def task_target(task_id: int) -> tuple[str, str]:
 
 
 def validate(info: object) -> dict:
-    """A browser's PushSubscription.toJSON(), checked and trimmed to what sending needs."""
+    """Validate a PushSubscription.toJSON() and keep only what sending needs."""
     if not isinstance(info, dict):
         raise ValueError("subscription must be an object")
     endpoint, keys = info.get("endpoint"), info.get("keys")
@@ -89,7 +80,7 @@ def validate(info: object) -> dict:
 
 
 class Subscriptions:
-    """The devices to push to, in a JSON file shared by the web app and the task runner."""
+    """Push subscriptions; JSON file shared by the web app and task runner."""
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or profile.current().push_subscriptions
@@ -116,7 +107,7 @@ class Subscriptions:
         return sub
 
     def remove(self, endpoints: Iterable[str]) -> int:
-        """Forget these endpoints; returns how many were stored."""
+        """Forget these endpoints; returns how many were removed."""
         gone = set(endpoints)
         with _locked(self.path):
             subs = self.all()
@@ -130,15 +121,15 @@ class Subscriptions:
 
 
 def vapid(path: Path | None = None) -> Vapid:
-    """JARVIS's VAPID key pair, generated the first time it's needed."""
+    """VAPID key pair, generated on first use."""
     return _vapid(path or VAPID_KEY_FILE)
 
 
-@functools.cache  # the key never changes while JARVIS runs
+@functools.cache  # constant for the process lifetime
 def _vapid(path: Path) -> Vapid:
     if not path.exists():
         with _locked(path):
-            if not path.exists():  # another process may have made it while this one waited
+            if not path.exists():  # re-check: another process may have created it
                 key = Vapid()
                 key.generate_keys()
                 write_atomic(path, key.private_pem(), mode=0o600)
@@ -147,15 +138,15 @@ def _vapid(path: Path) -> Vapid:
 
 
 def public_key(path: Path | None = None) -> str:
-    """The public half, as the browser's pushManager.subscribe() wants it: base64url, uncompressed point."""
+    """Public key for pushManager.subscribe(): base64url uncompressed point."""
     return b64urlencode(vapid(path).public_key.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint))
 
 
 # ── Sending ─────────────────────────────────────────────────────
 
 def contact() -> str:
-    """Who push services may reach about JARVIS's pushes: JARVIS_PUSH_CONTACT, else the default Google account's
-    address. Apple refuses a made-up one (BadJwtToken), so the example address is only the last resort."""
+    """VAPID `sub` contact: JARVIS_PUSH_CONTACT, else the default Google account's address. Apple rejects fake
+    addresses (BadJwtToken), so example.com is a last resort."""
     if PUSH_CONTACT:
         return PUSH_CONTACT
     from jarvis.integrations import accounts
@@ -166,12 +157,12 @@ def contact() -> str:
 
 
 async def _send(sub: dict, payload: str, key: Vapid) -> str:
-    """"ok" if the push service took it, "gone" if the subscription has expired, else "failed"."""
+    """"ok", "gone" (subscription expired) or "failed"."""
     try:
         await webpush_async(
             {"endpoint": sub["endpoint"], "keys": sub["keys"]}, payload,
             vapid_private_key=key,
-            vapid_claims={"sub": contact()},  # a fresh dict each time: webpush fills in aud for the endpoint's host
+            vapid_claims={"sub": contact()},  # fresh dict: webpush sets aud per endpoint host
             ttl=TTL, headers={"Urgency": "high"}, timeout=aiohttp.ClientTimeout(total=SEND_TIMEOUT),
         )
         return "ok"
@@ -181,7 +172,7 @@ async def _send(sub: dict, payload: str, key: Vapid) -> str:
         detail = f"HTTP {e.status_code}"
     except Exception as e:
         detail = type(e).__name__
-    # the endpoint is a capability URL and the response may echo it, so only the host and status are logged
+    # endpoint is a capability URL (and may be echoed back), so log host and status only
     log.warning("push to %s (%s) failed: %s", sub.get("device") or "a device", _host(sub["endpoint"]), detail)
     return "failed"
 
@@ -190,16 +181,15 @@ async def send_push(title: str, body: str, url: str = "/", tag: str = "",
                     subscriptions: Subscriptions | None = None, key_file: Path | None = None,
                     app_devices: "apns.Devices | None" = None, *, subtitle: str = "", category: str = "",
                     data: dict | None = None) -> int:
-    """Show a notification on every subscribed device and every registered JARVIS app. Tapping it opens
-    `url` in JARVIS; a later push with the same `tag` replaces it. Returns how many were accepted.
-    In the app, `category` gives it action buttons (JARVIS_APPROVAL: Approve and Deny), and `data` goes along
-    for them; Web Push has no buttons, so it gets neither."""
+    """Notify every Web Push subscription and native app; returns how many were accepted. Tapping opens `url`; a
+    later push with the same `tag` replaces it. `category` (e.g. JARVIS_APPROVAL) and `data` add action buttons in
+    the native app only."""
     from jarvis.notify import apns
 
     sent = await asyncio.gather(_send_web(title, body, url, tag, subscriptions, key_file),
                                 apns.send(title, body, url, tag, app_devices, subtitle=subtitle, category=category, data=data),
                                 return_exceptions=True)
-    for r in sent:  # one failing doesn't stop the other
+    for r in sent:  # both channels run before any error is raised
         if isinstance(r, BaseException):
             raise r
     return sum(r for r in sent if isinstance(r, int))

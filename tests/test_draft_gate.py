@@ -1,6 +1,4 @@
-"""Tests for the gate that holds the Google tools' sends and deletes for a spoken yes (jarvis.safety.draft_gate): a Chat
-message, calendar invites, a Google Doc deletion or a Sheet tab's, each drafted by AI Armory and done only once the
-user has heard the draft and said yes. Run with: make test"""
+"""Tests for jarvis.safety.draft_gate: Google sends/deletes (Chat, invites, Doc, Sheet tab) wait for a spoken yes."""
 
 import asyncio
 
@@ -40,7 +38,7 @@ def gate(clock):
 
 
 def chat_draft(text="I'll join at four", to="Alice Carter") -> str:
-    """A Chat draft as chat_draft keeps it: the summary is who it goes to and the exact text."""
+    """Chat draft as chat_draft keeps it: summary is recipient plus exact text."""
     return drafts.keep("chat_send", "work", f"To {to}: {text}.", f"chat to {to}: {text}", {"text": text}).id
 
 
@@ -54,7 +52,7 @@ def send(gate, draft_id, tool="chat_send"):
 
 
 def asked(gate, draft_id, spoken="Here's the draft.", tool="chat_send"):
-    """A turn that tried to act on `draft_id` and got as far as the question; returns what was said."""
+    """Try `draft_id` in a turn up to the question; returns what was said."""
     gate.new_turn("tell alice I'll join at four")
     assert isinstance(send(gate, draft_id, tool), PermissionResultDeny)
     return gate.question(spoken)
@@ -118,7 +116,7 @@ def test_a_no_drops_the_question_and_talk_in_between_leaves_it_open(gate):
     asked(gate, draft_id)
     gate.new_turn("What time is it?")
     gate.question("")
-    assert gate.new_turn("Okay.") == []  # after other talk, a bare okay may be about that: not enough on its own
+    assert gate.new_turn("Okay.") == []  # after other talk, a bare okay is ambiguous: not enough
     gate.question("")
     assert gate.new_turn("Yes, send it.") == [draft_gate.PREFIX + draft_id]
     other = chat_draft("Running late")
@@ -184,7 +182,7 @@ def test_the_model_is_told_what_was_agreed_and_the_log_says_what_was_done(gate):
 
 
 def test_without_the_gates_approval_ai_armory_does_nothing(clock, monkeypatch):
-    """Even if a send or delete got past the gate somehow, an unapproved draft isn't acted on."""
+    """Defence in depth: an unapproved draft isn't acted on even past the gate."""
     monkeypatch.setattr(common, "service", lambda *args, **kwargs: pytest.fail("no Google call without a yes"))
     for tool, draft_id in (("docs_delete", doc_draft()), ("chat_send", chat_draft())):
         content, is_error = asyncio.run(tools.run(tool, {"draft_id": draft_id}))
@@ -197,7 +195,7 @@ def text_event(text):
 
 
 class SendingClient:
-    """Stands in for ClaudeSDKClient: the model has drafted, then calls chat_send, which meets the gate."""
+    """Fake ClaudeSDKClient: the model has drafted, then calls chat_send and meets the gate."""
 
     def __init__(self, gate, draft_id):
         self.gate, self.draft_id = gate, draft_id

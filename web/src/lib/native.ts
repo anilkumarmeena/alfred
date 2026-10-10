@@ -1,40 +1,36 @@
-// The JARVIS app's native voice session, for the web page: copy this file to the jarvis repo as
-// web/src/lib/native.ts (see web-hook/README.md for the rest of the change).
-//
-// In the iOS and Android apps the JarvisAudio plugin runs the LiveKit session natively, so the mic keeps going
-// in the background and the earphone button mutes it. The page then doesn't open a Room of its own: it asks the
-// plugin to start, stop, mute and send text, and follows the plugin's events. In a browser nativeAudio() is null
-// and nothing here runs. No imports: Capacitor's bridge puts the plugin on window.Capacitor.
-// The iPhone app's notifications go through the plugin too (appNotifications): the web view has no Web Push.
+// Bridge to the native apps' JarvisAudio plugin, which runs the LiveKit session natively (mic survives background,
+// earphone button mutes). The page opens no Room; it drives the plugin and follows its events.
+// In a browser nativeAudio() is null. No imports: Capacitor exposes the plugin on window.Capacitor.
+// iPhone notifications also go through the plugin (appNotifications): the web view has no Web Push.
 
 type Handle = { remove(): Promise<void> | void };
 type Listener = (e: any) => void;
 
-/** iOS's Mic Mode: `active` is processing the mic now, `preferred` is what the user picked in Control Center. */
+/** iOS Mic Mode: `active` is in effect now, `preferred` is the user's Control Center choice. */
 export interface MicMode { active: string; preferred: string }
 
-/** The mic and speaker as they were when a phone call came in: what the app offers to restore once it's over. */
+/** Mic and speaker state when a phone call came in, offered for restore afterwards. */
 export interface BeforeCall { muted: boolean; speakerOff: boolean }
 
-/** The part of the JarvisAudio plugin the page uses (the full API is in jarvis-app's packages/jarvis-audio). */
+/** JarvisAudio plugin subset used by the page. Optional methods may be missing in older app builds. */
 export interface NativeAudio {
   start(o: { serverUrl?: string; passcode: string; device?: string; muted?: boolean; speakerOff?: boolean }): Promise<unknown>;
   stop(): Promise<void>;
   setMuted(o: { muted: boolean }): Promise<{ muted: boolean }>;
-  setSpeaker?(o: { off: boolean }): Promise<{ off: boolean }>;  // newer builds: speaker off, JARVIS replies in text only
-  restoreAfterCall?(o: { restore: boolean }): Promise<void>;  // newer builds: the answer to the offer after a call
+  setSpeaker?(o: { off: boolean }): Promise<{ off: boolean }>;  // off = text-only replies
+  restoreAfterCall?(o: { restore: boolean }): Promise<void>;
   sendText(o: { text: string }): Promise<void>;
   getStatus(): Promise<{ connection: string; agent?: string; muted: boolean; interrupted: boolean; startedAt?: number; micMode?: MicMode;
     speakerOff?: boolean; afterCall?: BeforeCall }>;
-  showMicModes?(): Promise<void>;  // iOS only: Apple's Mic Mode picker
+  showMicModes?(): Promise<void>;  // iOS only
   checkPermissions?(): Promise<{ notifications?: string }>;
   requestPermissions?(o?: { permissions: string[] }): Promise<{ notifications?: string }>;
-  registerNotifications?(o: { serverUrl?: string; passcode: string }): Promise<{ notifications?: string }>;  // newer builds: asks, then hands the token to the Mac now
-  openSettings?(): Promise<unknown>;  // newer builds: JARVIS's notification settings in iOS Settings
+  registerNotifications?(o: { serverUrl?: string; passcode: string }): Promise<{ notifications?: string }>;  // asks, then sends the token to the Mac
+  openSettings?(): Promise<unknown>;  // JARVIS's page in iOS Settings
   addListener(event: string, fn: Listener): Promise<Handle> | Handle;
 }
 
-/** The plugin when running inside the JARVIS app, else null. */
+/** The plugin inside the JARVIS app, else null. */
 export function nativeAudio(win: any = globalThis): NativeAudio | null {
   const cap = win?.Capacitor;
   if (!cap?.isNativePlatform?.()) return null;
@@ -47,20 +43,19 @@ export function nativePlatform(win: any = globalThis): string {
   return cap?.isNativePlatform?.() ? String(cap.getPlatform?.() ?? "") : "";
 }
 
-/** What iOS says about JARVIS's notifications: "prompt" until the user has been asked. */
+/** Notification permission; "prompt" until the user has been asked. */
 export type Permission = "granted" | "denied" | "prompt";
 
-// UIApplication.openSettingsURLString: JARVIS's page in iOS Settings. Capacitor hands a top-level link it doesn't
-// serve to iOS, so this opens it even in builds whose plugin has no openSettings.
+// UIApplication.openSettingsURLString. Capacitor passes unserved top-level links to iOS, so this works without
+// the plugin's openSettings.
 export const APP_SETTINGS = "app-settings:";
 
-/** The iPhone app's own notifications (APNs, registered by the plugin), for the page's switch. */
+/** iPhone app notifications (APNs via the plugin). */
 export interface AppNotifications {
   state(): Promise<Permission>;
-  /** Asks iOS (it only shows its dialog the first time). `registered`: the token went to the Mac now, rather than
-   * when the next session starts, as older builds do. */
+  /** Ask iOS (dialog shows only once). `registered`: token already sent to the Mac, not deferred to next session. */
   request(passcode: string): Promise<{ state: Permission; registered: boolean }>;
-  /** Opens JARVIS in iOS Settings, the only place notifications can be allowed again once refused. */
+  /** Open iOS Settings, the only way to re-allow notifications once refused. */
   openSettings(): Promise<void>;
 }
 
@@ -87,43 +82,42 @@ export function appNotifications(plugin: NativeAudio, origin = globalThis.locati
   };
 }
 
-/** What the session needs from the page: session.ts implements it with its store. */
+/** Page callbacks the native session drives. */
 export interface NativePage {
   setLink(v: "off" | "linking" | "on"): void;
-  setState(s: string): void;  // an AgentState, or "connecting" / "reconnecting"
-  setConnected(v: boolean): void;  // a session exists, live or still connecting
-  setLive(v: boolean, startedAt?: number): void;  // connected with audio going
+  setState(s: string): void;  // AgentState, "connecting" or "reconnecting"
+  setConnected(v: boolean): void;  // session exists, live or connecting
+  setLive(v: boolean, startedAt?: number): void;  // connected with audio flowing
   setMuted(v: boolean): void;
-  setPaused(v: "" | "recovering"): void;  // a call or Siri has the mic for now
+  setPaused(v: "" | "recovering"): void;  // a call or Siri holds the mic
   setQuality(q: string | null): void;
-  line(id: string, who: "you" | "jarvis", text: string): void;  // a caption: replace the line with this id
-  ended(message?: string): void;  // back to no session, saying why if it wasn't the user
-  unauthorized(message: string): void;  // the passcode was refused: ask again
-  setMicMode?(m: MicMode | null): void;  // iOS: the Mic Mode in use during a session, null without one
-  setSpeakerOff?(v: boolean): void;  // the plugin turned the speaker off or on: a phone call, or the answer to its offer
-  setAfterCall?(was: BeforeCall | null): void;  // a call ended: offer to put the mic and speaker back as they were
+  line(id: string, who: "you" | "jarvis", text: string): void;  // caption; replaces the line with this id
+  ended(message?: string): void;  // message set unless the user ended it
+  unauthorized(message: string): void;  // passcode refused
+  setMicMode?(m: MicMode | null): void;  // iOS; null outside a session
+  setSpeakerOff?(v: boolean): void;  // plugin changed it (phone call, or the after-call answer)
+  setAfterCall?(was: BeforeCall | null): void;  // call ended: offer to restore mic and speaker
 }
 
 export interface NativeSession {
-  /** A session exists (connecting, live or reconnecting). */
+  /** Session exists (connecting, live or reconnecting). */
   connected(): boolean;
   muted(): boolean;
-  /** The app can turn the speaker off (newer builds). */
+  /** The app build supports speaker off. */
   canSilence: boolean;
   connect(o: { passcode: string; muted?: boolean; speakerOff?: boolean }): Promise<void>;
   hangup(): Promise<void>;
   setMuted(m: boolean): Promise<void>;
   setSpeakerOff(off: boolean): Promise<void>;
-  /** The answer to the offer after a phone call: put the mic and speaker back as they were, or leave them off. */
+  /** After a phone call: restore mic and speaker, or leave them off. */
   restoreAfterCall(restore: boolean): Promise<void>;
-  /** Starts a muted session first if there's none, as the page does for typed messages. */
+  /** Starts a muted session first if needed. */
   sendText(text: string, passcode: string, speakerOff?: boolean): Promise<void>;
-  /** Voice levels from 0 to 1, for the reactor. */
+  /** Voice levels 0..1, for the reactor. */
   levels(): { mic: number; agent: number };
-  /** Shows the plugin's state as it is now: a session it kept running while the page reloaded, or what changed
-   * while the page was off screen, where its JavaScript is paused and events can be missed. */
+  /** Resync with the plugin's current state (after a reload, or events missed while the page was paused). */
   adopt(): Promise<void>;
-  /** iOS: opens Apple's Mic Mode picker. */
+  /** iOS: open the system Mic Mode picker. */
   showMicModes(): void;
 }
 
@@ -133,9 +127,9 @@ export function bindNative(plugin: NativeAudio, page: NativePage, origin = globa
   const levels = { mic: 0, agent: 0 };
   const micMode = (m?: MicMode) => { if (m?.active) page.setMicMode?.({ active: m.active, preferred: m.preferred || m.active }); };
 
-  // state is "connecting", "reconnecting" or "connected"
+  // state: "connecting" | "reconnecting" | "connected"
   function up(state: string, startedAt?: number) {
-    if (state === last) return;  // start() resolving repeats the event that already came
+    if (state === last) return;  // start() resolving repeats an event already seen
     last = state;
     page.setConnected(true);
     page.setLink(state === "connected" ? "on" : "linking");
@@ -186,13 +180,13 @@ export function bindNative(plugin: NativeAudio, page: NativePage, origin = globa
   async function adopt() {
     const s = await plugin.getStatus().catch(() => null);
     if (!s) return;
-    if (s.connection === "disconnected") {  // it ended while the page wasn't looking (not still starting)
+    if (s.connection === "disconnected") {  // ended while the page was paused (and not mid-start)
       if (connected() && !starting) down("server");
       return;
     }
     if (s.agent) agentKnown = true;
     muted = s.muted; page.setMuted(s.muted);
-    page.setPaused(s.interrupted ? "recovering" : "");  // "Mic paused" only while a call or Siri really has it
+    page.setPaused(s.interrupted ? "recovering" : "");  // only while a call or Siri actually holds the mic
     if (s.speakerOff != null) page.setSpeakerOff?.(s.speakerOff);
     page.setAfterCall?.(s.afterCall ?? null);
     micMode(s.micMode);
@@ -208,10 +202,10 @@ export function bindNative(plugin: NativeAudio, page: NativePage, origin = globa
     async hangup() { await plugin.stop(); if (connected()) down("hangup"); },
     async setMuted(m) {
       if (!connected()) return;
-      // Refused (the mic couldn't start, or the session is gone): show what the plugin has, not what was asked.
+      // On refusal show the plugin's actual state.
       try { muted = (await plugin.setMuted({ muted: m })).muted; page.setMuted(muted); } catch { await adopt(); }
     },
-    async setSpeakerOff(off) {  // with no session the page just keeps the choice, for the next one's start
+    async setSpeakerOff(off) {  // no session: the page keeps the choice for the next start
       if (!connected() || !plugin.setSpeaker) return;
       try { page.setSpeakerOff?.((await plugin.setSpeaker({ off })).off); } catch { await adopt(); }
     },
@@ -229,7 +223,7 @@ export function bindNative(plugin: NativeAudio, page: NativePage, origin = globa
   };
 }
 
-/** Something the reactor can read like an analyser Tap, drawn from a level: a soft spectrum that follows it. */
+/** Fake analyser Tap for the reactor: a soft spectrum synthesised from a level. */
 export function levelTap(level: () => number) {
   const freq = new Uint8Array(128);
   return {
