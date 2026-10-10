@@ -71,7 +71,7 @@ async def audio_file(text: str = "", path: str = "", title: str = "", format: st
     if not render.can_make(fmt):
         how = "brew install ffmpeg" if platform.MAC else "install it with the system's package manager"
         raise ValueError(f"No {fmt} encoder on this computer: {fmt} needs {render.programs(fmt)} ({how})"
-                         + (". m4a works without it." if fmt != "m4a" else "."))
+                         + (". m4a works without it." if fmt != "m4a" and render.can_make("m4a") else "."))
     voice = voice.strip() or config.tts_voice()
     if not re.fullmatch(r"[a-z]{2}_[a-z0-9]+", voice):
         raise ValueError(f"{voice} isn't a Kokoro voice name; they look like bm_george or af_heart.")

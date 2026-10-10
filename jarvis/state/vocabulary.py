@@ -30,7 +30,9 @@ ECHO_TERMS = 3  # this many prompt terms and nothing else = echo
 HEADER = ("# Vocabulary\n\nNames and words speech recognition should expect, one per line: the right spelling, then what "
           "it has been misheard as. JARVIS adds to it as it learns.\n\n")
 SEED = [("JARVIS", ("Yavis", "Cajarves", "Jarves"))]
-DICTIONARY = Path("/usr/share/dict/words")
+# The system word list: built into macOS; on Linux from a package such as wamerican (Debian/Ubuntu) or words (Fedora)
+DICTIONARIES = (Path("/usr/share/dict/words"), Path("/usr/share/dict/american-english"),
+                Path("/usr/share/dict/british-english"))
 # Fallback everyday words when the system dictionary is missing
 COMMON = frozenset("""a an and are as at be but by can do for from go has have he her his how i if in is it its me my no
 not of on or our out say see she so that the them then there they this to up us was we what when who will with yes you
@@ -175,10 +177,12 @@ def remove(word: str) -> str:
 @cache
 def _dictionary() -> frozenset[str]:
     """Lowercase system-dictionary words (capitalised ones are names) plus COMMON."""
-    try:
-        return frozenset(w for w in DICTIONARY.read_text().split() if w.islower()) | COMMON
-    except OSError:
-        return COMMON
+    for path in DICTIONARIES:
+        try:
+            return frozenset(w for w in path.read_text().split() if w.islower()) | COMMON
+        except OSError:
+            continue
+    return COMMON
 
 
 def everyday(token: str) -> bool:

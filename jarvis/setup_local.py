@@ -180,10 +180,13 @@ def _systemctl(*args: str) -> str:
 
 
 def _require_systemd() -> None:
-    """Exit with a hint when there's no systemd user manager to run services (e.g. WSL2 without systemd)."""
-    if not shutil.which("systemctl") or _systemctl("show-environment"):
-        sys.exit("systemd isn't running for this user, so JARVIS can't install its services. On WSL2, add\n"
-                 "  [boot]\n  systemd=true\nto /etc/wsl.conf and run `wsl --shutdown` from Windows. "
+    """Exit with a hint when the systemd user manager can't be reached (WSL2 without systemd, no session bus)."""
+    error = "systemctl isn't installed" if not shutil.which("systemctl") else _systemctl("show-environment")
+    if error:
+        sys.exit(f"JARVIS can't reach systemd's user manager ({error}), so it can't install its services.\n"
+                 "- On WSL2: add\n    [boot]\n    systemd=true\n  to /etc/wsl.conf and run `wsl --shutdown` from Windows.\n"
+                 "- Over SSH or su: log in as yourself so XDG_RUNTIME_DIR is set, and install dbus-user-session; "
+                 "after installing it, log out and back in.\n"
                  "Or run everything in the foreground with `make dev`.")
 
 

@@ -399,10 +399,18 @@ def test_the_tool_refuses_what_it_cant_read(jobs, args, problem):
     assert error and problem in said and not jobs.launched
 
 
-def test_mp3_needs_an_encoder_and_says_how_to_get_one(jobs, monkeypatch):
-    monkeypatch.setattr(af, "encoders", lambda fmt: [])
+@pytest.mark.parametrize("mac, how", [(True, "brew install ffmpeg"), (False, "system's package manager")])
+def test_mp3_needs_an_encoder_and_says_how_to_get_one(jobs, monkeypatch, mac, how):
+    monkeypatch.setattr(platform, "MAC", mac)
+    monkeypatch.setattr(af, "encoders", lambda fmt: [] if fmt == "mp3" else [lambda wav, out: ["enc"]])
     said, error = run(text="Hello.", format="mp3")
-    assert error and "brew install ffmpeg" in said and "m4a works without it" in said
+    assert error and how in said and "m4a works without it" in said
+
+
+def test_without_any_encoder_m4a_is_not_offered_instead(jobs, monkeypatch):
+    monkeypatch.setattr(af, "encoders", lambda fmt: [])  # Linux without ffmpeg: m4a needs it too
+    said, error = run(text="Hello.", format="mp3")
+    assert error and "m4a works without it" not in said
 
 
 def test_the_tool_is_the_voices_and_not_tasks():

@@ -92,17 +92,19 @@ brew install uv node   # plus the Claude Code CLI
 
 ### 🐧 Linux
 
-**Packages** — Debian and Ubuntu names; Fedora's are alike (`portaudio` for `libportaudio2`, `libnotify` for `libnotify-bin`):
+**Packages** — Debian and Ubuntu names; Fedora's are alike (`portaudio` for `libportaudio2`, `libnotify` for `libnotify-bin`, `words` for `wamerican`):
 
 ```sh
-sudo apt install bubblewrap socat libportaudio2 curl git make   # required
+sudo apt install bubblewrap socat dbus-user-session libportaudio2 wamerican curl git make   # required
 sudo apt install ffmpeg libnotify-bin xdg-utils wl-clipboard    # optional (xclip on X11)
 ```
 
 | | Package | What for |
 |:-:|---|---|
 | 🧱 | `bubblewrap` · `socat` | **Required.** bubblewrap walls in background tasks' commands; both are needed by Claude Code's own sandbox (the voice shell) |
+| 🚌 | `dbus-user-session` | `systemctl --user`, which runs JARVIS's services (most desktops have it; log out and in after installing) |
 | 🎤 | `libportaudio2` | The terminal mic: `make console` and `make voiceprint` |
+| 📖 | `wamerican` | A word list, so the learning review can tell everyday words from real mishearings |
 | ⬇️ | `curl`, `sha256sum`, `tar` | Fetching LiveKit and the models |
 | 🔔 | `libnotify-bin` · `xdg-utils` | Desktop notifications · opening links, files and folders |
 | 📋 | `wl-clipboard`, or `xclip` / `xsel` | The clipboard |

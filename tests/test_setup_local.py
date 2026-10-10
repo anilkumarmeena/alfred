@@ -325,7 +325,9 @@ def test_without_systemd_it_says_how_to_turn_it_on(units, monkeypatch):
     monkeypatch.setattr(setup_local.subprocess, "run", run)
     with pytest.raises(SystemExit) as exit:
         setup_local.start_services()
-    assert "systemd=true" in str(exit.value.code) and "/etc/wsl.conf" in str(exit.value.code)
+    said = str(exit.value.code)
+    assert "systemd=true" in said and "/etc/wsl.conf" in said  # WSL2
+    assert "No medium found" in said and "dbus-user-session" in said  # the actual error, and the SSH/su case
 
 
 def test_a_unit_that_wont_start_fails_the_start(units, monkeypatch, capsys):

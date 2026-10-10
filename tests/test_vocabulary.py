@@ -152,6 +152,11 @@ def test_an_echo_of_the_prompt_is_only_several_of_its_words_and_nothing_else():
     assert not Vocabulary().echo("anything")
 
 
+needs_dictionary = pytest.mark.skipif(not any(p.exists() for p in vocabulary.DICTIONARIES),
+                                      reason="no system word list (Linux: apt install wamerican)")
+
+
+@needs_dictionary
 def test_the_review_keeps_only_mishearings_that_are_not_everyday_words():
     assert vocabulary.plausible_mishearing("Yavis", "JARVIS")
     assert vocabulary.plausible_mishearing("cajarves", "JARVIS")
@@ -161,7 +166,7 @@ def test_the_review_keeps_only_mishearings_that_are_not_everyday_words():
 
 
 def test_without_the_system_dictionary_a_short_list_of_common_words_stands_in(monkeypatch, tmp_path):
-    monkeypatch.setattr(vocabulary, "DICTIONARY", tmp_path / "missing")
+    monkeypatch.setattr(vocabulary, "DICTIONARIES", (tmp_path / "missing",))
     vocabulary._dictionary.cache_clear()
     try:
         assert not vocabulary.plausible_mishearing("the", "Zed") and vocabulary.plausible_mishearing("Yavis", "JARVIS")
@@ -172,6 +177,7 @@ def test_without_the_system_dictionary_a_short_list_of_common_words_stands_in(mo
 # ── Learned by the review, without asking ───────────────────────
 
 
+@needs_dictionary
 def test_a_learned_word_is_checked_and_kept_only_with_unusual_mishearings(words):
     edit = data_edits.check({"action": "vocabulary", "word": " Priya ", "heard_as": ["Pria", "free", "pria"],
                              "reason": "Alex spelt it out."}, "review")
