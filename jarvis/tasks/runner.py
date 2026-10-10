@@ -174,7 +174,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         if not cut and [e["text"] for e in self.store.history(task["id"], limit=1)] == [RESUMED_LOG]:
             return "it was resumed after the last restart, and the runner stopped again without a clean shutdown", ""
         if cut.get("on_mac"):
-            return f"it was cut off running {few(cut['on_mac'])} on the Mac", ""
+            return f"it was cut off running {few(cut['on_mac'])} on the computer", ""
         if self.store.approvals(task["id"]):
             return "it's waiting for a go-ahead", ""
         if task["question"] or task["wants"]:
@@ -210,7 +210,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         self.store.set(task_id, question=question, wait_kind=WAIT_QUESTION)
 
     def flag(self, task_id: int, text: str) -> None:
-        """Report content left out as hidden instructions: task log, bell and Mac notification."""
+        """Report content left out as hidden instructions: task log, bell and desktop notification."""
         self.store.log(task_id, "flagged", text)
         bell.add(f"Task {task_id}: {text}", "warn", task_id)
         self._background(self._notify(f"JARVIS · task {task_id}", text[:200]))
@@ -268,7 +268,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         self.services.append(self._background(coro))
 
     async def shutdown(self, wait: float = SHUTDOWN_SECONDS) -> None:
-        """Stop cleanly on SIGTERM: refuse new work, mark active tasks `interrupted` (with in-flight Mac commands and
+        """Stop cleanly on SIGTERM: refuse new work, mark active tasks `interrupted` (with in-flight host commands and
         launch prompt), then cancel them silently. The next start resumes what it can."""
         self.closing = True
         for loop in self.services:
@@ -279,7 +279,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             self.store.set(task_id, interrupted=json.dumps(
                 {"at": time.time(), "on_mac": on_mac, "prompt": self.prompts.get(task_id)}, ensure_ascii=False))
             self.store.log(task_id, "interrupted", "JARVIS is shutting down" + (
-                f", while it ran {few(on_mac)} on the Mac" if on_mac else ""))
+                f", while it ran {few(on_mac)} on the computer" if on_mac else ""))
         for job in cut.values():
             job.cancel()
         if cut:

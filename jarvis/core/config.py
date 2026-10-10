@@ -6,11 +6,14 @@ variable that is set, so code they start (e.g. the MCP launcher) sees defaults."
 import os
 import pwd
 import sqlite3
+import subprocess
 from contextlib import closing
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
+
+from jarvis.core import desktop, platform
 
 ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT / ".env")
@@ -79,7 +82,7 @@ def _number(value: str, default: float, low: float, high: float) -> float:
 
 
 def mac_name() -> str:
-    """First name of the Mac user account ("Sam" from "Sam Lee"); "" if none."""
+    """First name of the computer's user account ("Sam" from "Sam Lee"); "" if none."""
     try:
         full = pwd.getpwuid(os.getuid()).pw_gecos
     except KeyError:
@@ -88,9 +91,32 @@ def mac_name() -> str:
 
 
 def mac_timezone() -> str:
-    """Mac time zone from the /etc/localtime symlink target; "" if unknown."""
+    """This machine's time zone from the /etc/localtime symlink target, else (Linux) /etc/timezone, timedatectl or
+    TZ; "" if unknown."""
     _, found, zone = os.path.realpath("/etc/localtime").partition("/zoneinfo/")
-    return zone if found and zone_ok(zone) else ""
+    if found and zone_ok(zone):
+        return zone
+    if not platform.LINUX:
+        return ""
+    for zone in _linux_zones():
+        zone = zone.strip().lstrip(":")
+        if zone and zone_ok(zone):
+            return zone
+    return ""
+
+
+def _linux_zones(etc_timezone: Path = Path("/etc/timezone")):
+    """Time zone candidates where Linux keeps them when /etc/localtime is a copy, not a symlink."""
+    try:
+        yield etc_timezone.read_text()
+    except OSError:
+        pass
+    try:
+        yield subprocess.run(["timedatectl", "show", "-p", "Timezone", "--value"], capture_output=True, text=True,
+                             timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        pass
+    yield os.environ.get("TZ", "")
 
 
 def zone_ok(zone: str) -> bool:
@@ -231,24 +257,34 @@ PUSH_ENABLED = _flag("JARVIS_PUSH", True)  # sends nothing until a device subscr
 # VAPID "sub" claim (mailto: or https:); unset = default Google account's address
 PUSH_CONTACT = os.environ.get("JARVIS_PUSH_CONTACT", "").strip()
 VAPID_KEY_FILE = SECRETS_DIR / "vapid_private.pem"  # generated on first use
-# APNs (jarvis.notify.apns) for the iPhone app, whose web view lacks Web Push. Key from developer.apple.com > Keys;
+# APNs (jarvis.notify.apns) for the iOS app, whose web view lacks Web Push. Key from developer.apple.com > Keys;
 # its key id is in the vault.
 APNS_KEY_FILE = SECRETS_DIR / "apns_key.p8"
 APNS_TEAM_ID = os.environ.get("JARVIS_APNS_TEAM_ID", "").strip()  # Membership details
+# FCM (jarvis.notify.fcm) for the Android app: a Firebase service-account key (Project settings > Service accounts)
+FCM_SERVICE_ACCOUNT_FILE = SECRETS_DIR / "fcm_service_account.json"
 
-# On-device voice: Whisper (MLX) in, Kokoro out. 4-bit Whisper uses ~0.5 GB vs 1.6 GB at 16-bit (matters on 8 GB).
-STT_MODEL = os.environ.get("JARVIS_STT", "") or "mlx-community/whisper-large-v3-turbo-q4"
+# On-device voice: Whisper in, Kokoro out. Whisper runs on MLX on Apple silicon, else on faster-whisper
+# (jarvis.core.whisper). JARVIS_STT names the model: on MLX 4-bit uses ~0.5 GB vs 1.6 GB at 16-bit (matters on 8 GB);
+# empty elsewhere = large-v3-turbo on an NVIDIA GPU, small.en on the CPU.
+STT_MODEL = os.environ.get("JARVIS_STT", "") or (
+    "mlx-community/whisper-large-v3-turbo-q4" if platform.APPLE_SILICON else "")
+# faster-whisper's device: cuda or cpu; empty = cuda when an NVIDIA GPU is usable
+STT_DEVICE = os.environ.get("JARVIS_STT_DEVICE", "").strip().lower()
+# Recordings (jarvis.core.transcribe) can be in any language: empty off Apple silicon = a multilingual default
+TRANSCRIBE_MODEL = os.environ.get("JARVIS_TRANSCRIBE_MODEL", "") or (STT_MODEL if platform.APPLE_SILICON else "")
 # Prompt Whisper with the speech vocabulary (jarvis.state.vocabulary); off = only fix known mishearings
 STT_PROMPT = _flag("JARVIS_STT_PROMPT", True)
 # Warm spare job processes so calls connect instantly (~300 MB each; models live in the shared speech process).
 # 0 saves the memory; a call then waits a few seconds.
 VOICE_IDLE_PROCESSES = max(0, int(os.environ.get("JARVIS_VOICE_IDLE_PROCESSES", "") or "1"))
 # MLX buffer-cache cap in MB (freed Whisper buffers, ~0.7 GB per clip uncapped). 256 costs nothing measurable;
-# 64 saves 0.2 GB for ~25 ms/clip; 0 = free after every clip; -1 = no cap.
+# 64 saves 0.2 GB for ~25 ms/clip; 0 = free after every clip; -1 = no cap. Apple silicon only.
 MLX_CACHE_MB = int(os.environ.get("JARVIS_MLX_CACHE_MB", "") or "256")
 # Kokoro ONNX memory arena: never shrinks (~1 GB after a 20 s sentence) and gave no speedup, so off by default
 TTS_MEMORY_ARENA = _flag("JARVIS_TTS_MEMORY_ARENA", False)
-# macOS malloc large-block cache for voice child processes. Off so freed memory returns to the system.
+# Allocator caching of large freed blocks in voice child processes (macOS's large cache, glibc's growing mmap
+# threshold). Off so freed memory returns to the system.
 VOICE_MALLOC_LARGE_CACHE = _flag("JARVIS_VOICE_MALLOC_LARGE_CACHE", False)
 # Minutes between voice-process memory logs (jarvis.voice.ram); 0 = never
 VOICE_MEMORY_LOG_MINUTES = max(0.0, float(os.environ.get("JARVIS_VOICE_MEMORY_LOG_MINUTES", "") or "10"))
@@ -289,7 +325,7 @@ TTS_MODEL_FALLBACKS = (ROOT / "models/kokoro-v1.0.onnx", ROOT / "models/kokoro-v
 TTS_THREADS = os.environ.get("JARVIS_TTS_THREADS", "").strip()
 # Audio files (jarvis.voice.audio_file): text-to-file in a separate low-priority Kokoro process, leaving cores for the
 # live voice. AUDIO_MODEL falls back to TTS_MODEL. AUDIO_THREADS 0 = a quarter of the cores, at least 2.
-AUDIO_DIR = Path(os.environ.get("JARVIS_AUDIO_DIR", "") or "~/Downloads").expanduser()
+AUDIO_DIR = Path(os.environ.get("JARVIS_AUDIO_DIR", "") or desktop.user_dir("DOWNLOAD", "Downloads")).expanduser()
 AUDIO_FORMATS = ("m4a", "mp3", "wav")
 AUDIO_FORMAT = (os.environ.get("JARVIS_AUDIO_FORMAT", "").strip().lower() or "m4a").removeprefix(".")
 if AUDIO_FORMAT not in AUDIO_FORMATS:
@@ -424,13 +460,15 @@ def injection_model() -> str:
     return preference("injection_model") or DEFAULTS["injection_model"]
 
 
-# launchd labels are SERVICE_PREFIX.<name>; change the prefix only for a second install under the same Mac account
+# Services are SERVICE_PREFIX.<name>: launchd labels on macOS, systemd user units (<label>.service) on Linux. Change
+# the prefix only for a second install under the same user account.
 SERVICE_NAMES = ("livekit", "agent", "web", "tasks")
 SERVICE_PREFIX = os.environ.get("JARVIS_SERVICE_PREFIX", "").strip().strip(".") or "com.jarvis"
 
 
 def service_label(name: str) -> str:
-    """launchd label for a service in SERVICE_NAMES ("agent" -> com.jarvis.agent)."""
+    """launchd label, or systemd unit name without .service, for a service in SERVICE_NAMES ("agent" ->
+    com.jarvis.agent)."""
     return f"{SERVICE_PREFIX}.{name}"
 
 

@@ -187,7 +187,7 @@ def test_long_text_is_trimmed_to_fit_a_push(devices, tmp_path, monkeypatch):
 
 @pytest.fixture
 def pushes(tmp_path, monkeypatch):
-    """Runner on a temp database, Mac notifications off, pushes recorded."""
+    """Runner on a temp database, desktop notifications off, pushes recorded."""
     use_profile(monkeypatch, tmp_path)
     monkeypatch.setattr(events, "PUSH_ENABLED", True)
     sent = []

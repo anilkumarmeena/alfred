@@ -92,8 +92,8 @@ def test_the_ways_jarvis_cant_run_each_say_why(runners, monkeypatch):
         "it's nuget JARVIS can't run"]
     monkeypatch.setattr(mcp_registry, "which", lambda name: None)
     [way] = mcp_registry.ways(entry(packages=[{"registryType": "pypi", "identifier": "notes-mcp"}]))[1]
-    assert way.problem == "uvx isn't installed on this Mac"
-    assert way.said() == "on this Mac, as a Python package (notes-mcp)"
+    assert way.problem == "uvx isn't installed on this computer"
+    assert way.said() == "on this computer, as a Python package (notes-mcp)"
 
 
 def test_a_way_says_what_it_needs_briefly():
@@ -102,7 +102,7 @@ def test_a_way_says_what_it_needs_briefly():
     assert way.brief(2) == {"way": 2, "runs": "hosted at mcp.notes.example", "needs": [
         {"name": "REGION", "what": "x" * 200, "optional": True, "default": "eu", "choices": ["eu", "us"]}]}
     assert Way("npm", {"identifier": "a"}, problem="no").brief(0) == {
-        "way": 0, "runs": "on this Mac, as an npm package (a)", "cant": "no"}
+        "way": 0, "runs": "on this computer, as an npm package (a)", "cant": "no"}
 
 
 # ── Making the entry ────────────────────────────────────────────

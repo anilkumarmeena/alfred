@@ -1,7 +1,7 @@
 // Bridge to the native apps' JarvisAudio plugin, which runs the LiveKit session natively (mic survives background,
 // earphone button mutes). The page opens no Room; it drives the plugin and follows its events.
 // In a browser nativeAudio() is null. No imports: Capacitor exposes the plugin on window.Capacitor.
-// iPhone notifications also go through the plugin (appNotifications): the web view has no Web Push.
+// iOS app notifications also go through the plugin (appNotifications): the web view has no Web Push.
 
 type Handle = { remove(): Promise<void> | void };
 type Listener = (e: any) => void;
@@ -25,7 +25,7 @@ export interface NativeAudio {
   showMicModes?(): Promise<void>;  // iOS only
   checkPermissions?(): Promise<{ notifications?: string }>;
   requestPermissions?(o?: { permissions: string[] }): Promise<{ notifications?: string }>;
-  registerNotifications?(o: { serverUrl?: string; passcode: string }): Promise<{ notifications?: string }>;  // asks, then sends the token to the Mac
+  registerNotifications?(o: { serverUrl?: string; passcode: string }): Promise<{ notifications?: string }>;  // asks, then sends the token to JARVIS
   openSettings?(): Promise<unknown>;  // JARVIS's page in iOS Settings
   addListener(event: string, fn: Listener): Promise<Handle> | Handle;
 }
@@ -50,10 +50,10 @@ export type Permission = "granted" | "denied" | "prompt";
 // the plugin's openSettings.
 export const APP_SETTINGS = "app-settings:";
 
-/** iPhone app notifications (APNs via the plugin). */
+/** iOS app notifications (APNs via the plugin). */
 export interface AppNotifications {
   state(): Promise<Permission>;
-  /** Ask iOS (dialog shows only once). `registered`: token already sent to the Mac, not deferred to next session. */
+  /** Ask iOS (dialog shows only once). `registered`: token already sent to JARVIS, not deferred to next session. */
   request(passcode: string): Promise<{ state: Permission; registered: boolean }>;
   /** Open iOS Settings, the only way to re-allow notifications once refused. */
   openSettings(): Promise<void>;

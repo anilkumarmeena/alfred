@@ -1,12 +1,13 @@
 <div align="center">
 
-<img src="docs/assets/banner.svg" alt="JARVIS — a personal voice assistant that lives on your Mac" width="100%">
+<img src="docs/assets/banner.svg" alt="JARVIS — a personal voice assistant that lives on your computer" width="100%">
 
 <br>
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-4fd1ff?style=flat-square)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776ab?style=flat-square&logo=python&logoColor=white)](pyproject.toml)
-[![macOS · Apple silicon](https://img.shields.io/badge/macOS-Apple%20silicon-111?style=flat-square&logo=apple&logoColor=white)](docs/setup.md)
+[![Platforms: macOS · Linux · WSL2](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20WSL2-111?style=flat-square)](docs/setup.md#-pick-your-platform)
+[![iOS · Android](https://img.shields.io/badge/phone-iOS%20%C2%B7%20Android-3ddc84?style=flat-square&logo=android&logoColor=white)](docs/mobile.md)
 [![Claude](https://img.shields.io/badge/brain-Claude-d97757?style=flat-square&logo=anthropic&logoColor=white)](docs/architecture.md)
 [![LiveKit](https://img.shields.io/badge/voice-LiveKit-1f2937?style=flat-square)](docs/voice.md)
 
@@ -16,7 +17,7 @@
 
 ---
 
-JARVIS listens, thinks and speaks **on your own Mac**. Speech recognition, speech synthesis, noise filtering and speaker verification all run **on-device**; only the thinking goes to **Claude**. Talk to it from the terminal, a browser, or your **iPhone**. It reads and drafts your mail, runs your calendar, does **code and research tasks in the background** while you keep talking, and tells you what's new **before you ask**.
+JARVIS listens, thinks and speaks **on your own computer**: macOS, Linux, or Windows via WSL2. Speech recognition, speech synthesis, noise filtering and speaker verification all run **on-device**; only the thinking goes to **Claude**. Talk to it from the terminal, a browser, or your **phone** (iOS or Android). It reads and drafts your mail, runs your calendar, does **code and research tasks in the background** while you keep talking, and tells you what's new **before you ask**.
 
 <table>
 <tr>
@@ -29,7 +30,7 @@ Whisper, Kokoro, the noise filter and your voiceprint run locally. Data, secrets
 <td width="33%" valign="top">
 
 ### 🧠 A real brain
-The `claude` CLI with JARVIS's own tools, web search, a sandboxed shell and Google, MCP and Mac integrations.
+The `claude` CLI with JARVIS's own tools, web search, a sandboxed shell and Google, MCP and desktop integrations.
 
 </td>
 <td width="33%" valign="top">
@@ -48,7 +49,7 @@ Background tasks, a heartbeat, a scheduler and a learning review keep going afte
 <td width="50%" valign="top">
 
 **🗣️ Voice**<br>
-Whisper large-v3-turbo on the Apple GPU in, Kokoro out. A turn detector decides when you've finished; a speech gate and voiceprint make sure only **you** get answered.
+Whisper in (MLX on Apple silicon, faster-whisper elsewhere), Kokoro out. A turn detector decides when you've finished; a speech gate and voiceprint make sure only **you** get answered.
 
 </td>
 <td width="50%" valign="top">
@@ -81,16 +82,16 @@ Finds and connects MCP servers (GitHub, GitLab, Notion, …) from the official r
 </td>
 <td valign="top">
 
-**📱 iPhone app**<br>
-An installable web app with a control panel, push notifications, typing instead of talking and earphone controls.
+**📱 Phone app**<br>
+iOS and Android: an installable web app with a control panel, push notifications, typing instead of talking and earphone controls.
 
 </td>
 </tr>
 <tr>
 <td valign="top">
 
-**💻 Mac and web**<br>
-Notifications, apps, Shortcuts, volume, screenshots, documents and recordings; a read-only Chrome profile for pages behind your logins.
+**💻 Desktop and web**<br>
+Notifications, apps, volume, clipboard, screenshots, documents and recordings (Shortcuts on macOS); a read-only Chrome profile for pages behind your logins.
 
 </td>
 <td valign="top">
@@ -106,9 +107,9 @@ Claude Code-format skills written together by voice, plus long-term memory and a
 
 ```mermaid
 flowchart TB
-    You(["📱 iPhone · 💻 browser · ⌨️ terminal"])
+    You(["📱 phone · 💻 browser · ⌨️ terminal"])
 
-    subgraph Mac["🖥️ Your Mac"]
+    subgraph Host["🖥️ Your computer"]
         direction LR
         Web["🌐 Web server<br/>app · control panel"]
         LK["📡 LiveKit<br/>real-time audio"]
@@ -136,15 +137,21 @@ flowchart TB
     class You you
     class Web,LK,Agent,Runner mac
     class Claude,World cloud
-    style Mac fill:#f8fafc,stroke:#94a3b8
+    style Host fill:#f8fafc,stroke:#94a3b8,color:#334155
 ```
 
-Four **launchd services** keep it running: LiveKit, the voice agent, the web app and the task runner. The full picture, including one spoken turn step by step, is in **[Architecture](docs/architecture.md)**.
+Four **services** keep it running (launchd on macOS, systemd user units on Linux): LiveKit, the voice agent, the web app and the task runner. The full picture, including one spoken turn step by step, is in **[Architecture](docs/architecture.md)**.
 
 ## 🚀 Quickstart
 
+| | Platform | What you need |
+|:-:|---|---|
+| 🍎 | **macOS** on Apple silicon (M1 or later, 8 GB is enough) | [Homebrew](https://brew.sh) |
+| 🐧 | **Linux** with systemd (x86_64 or arm64) | Distro packages, including **bubblewrap** and **socat** |
+| 🪟 | **Windows** via WSL2 | Ubuntu in WSL2 with **systemd** on, then the Linux steps |
+
 > [!IMPORTANT]
-> JARVIS needs **macOS on Apple silicon** (M1 or later, 8 GB is enough), [Homebrew](https://brew.sh), [uv](https://docs.astral.sh/uv/), Node.js and the **Claude Code CLI** with a Claude account.
+> Everywhere you also need [uv](https://docs.astral.sh/uv/), Node.js and the **Claude Code CLI** with a Claude account. Package lists and per-platform steps are in **[Setup](docs/setup.md#-pick-your-platform)**.
 
 **1. Install** — LiveKit, Python packages, models and the web app:
 
@@ -163,13 +170,13 @@ make setup            # shows your passcode once: note it down
 **3. Talk to it** — straight away in the terminal, or as always-on services:
 
 ```sh
-make console          # talk through the Mac's mic, no server needed
-make services-install # or install the four launchd services
-open http://localhost:8787
+make console          # talk through this computer's mic, no server needed
+make services-install # or install the four services
+open http://localhost:8787   # xdg-open on Linux
 ```
 
 > [!TIP]
-> Next: Google accounts, the iPhone over Tailscale, projects for code tasks and running with the lid closed are all in **[Setup](docs/setup.md)**.
+> Next: Google accounts, your phone over Tailscale, projects for code tasks and running with the lid closed are all in **[Setup](docs/setup.md)**.
 
 <details>
 <summary><b>Optional extras</b></summary>
@@ -178,10 +185,12 @@ open http://localhost:8787
 
 | Extra | Unlocks |
 |---|---|
-| **Tailscale** | Reaching JARVIS from the iPhone over HTTPS |
+| **Tailscale** | Reaching JARVIS from your phone over HTTPS |
 | **Google Cloud OAuth client** | Gmail, Calendar, Docs, Sheets, Slides, Drive and Chat |
 | **`gh`** | The heartbeat's GitHub checks |
-| **`ffmpeg`** | mp3 audio files |
+| **`ffmpeg`** | mp3 audio files (and m4a on Linux) |
+| **Linux desktop packages** | Notifications, opening files, clipboard, volume and screenshots ([list](docs/setup.md#-linux)) |
+| **NVIDIA GPU** (Linux) | Whisper large-v3-turbo instead of small.en on the CPU |
 | **Google Chrome** | The web browser tool (Playwright's Chromium otherwise) |
 | **claude.ai subscription** | Tasks publishing artifacts |
 
@@ -210,7 +219,7 @@ Run **`make help`** for the full list.
 <td width="50%" valign="top">
 
 **[🚀 Setup](docs/setup.md)**<br>
-Install, Claude login, Google, iPhone, projects, running 24/7
+Install on macOS, Linux or WSL2, Claude login, Google, your phone, running 24/7
 
 **[⚙️ Configuration](docs/configuration.md)**<br>
 Every `.env` setting with its default
@@ -227,8 +236,8 @@ Background tasks, approvals, scheduler, heartbeat
 **[🔌 Integrations](docs/integrations.md)**<br>
 Google, MCP connections, browser, files, skills
 
-**[📱 iPhone](docs/iphone.md)**<br>
-The web app, notifications, the native app
+**[📱 Mobile](docs/mobile.md)**<br>
+iOS and Android: web app, notifications, native app
 
 **[👩‍💻 Development](docs/development.md)**<br>
 Code map, tests, web app, adding a tool
@@ -247,19 +256,19 @@ JARVIS acts on your behalf, so what it may do alone is deliberately narrow. Ever
 | | Guard | What it means |
 |:-:|---|---|
 | 🗣️ | **Spoken yes** | Emails, messages, invites and deletions are drafted, read aloud and sent only after a clear yes |
-| ✋ | **Approvals** | Deleting, pushing, installing, killing processes or sending data off the Mac waits for you |
-| 📦 | **Sandboxes** | The voice shell runs in Claude Code's sandbox; tasks run under a `sandbox-exec` profile that hides secrets |
+| ✋ | **Approvals** | Deleting, pushing, installing, killing processes or sending data off the computer waits for you |
+| 📦 | **Sandboxes** | The voice shell runs in Claude Code's sandbox; tasks run walled in, secrets hidden: **Seatbelt** on macOS, **bubblewrap** on Linux |
 | 🔌 | **Gated connections** | MCP tools that change things need a yes; unsorted tools are refused |
 | 🔒 | **Encrypted vault** | Tokens and keys are AES-256-GCM encrypted; keys are pasted, never spoken |
 | 🛡️ | **Injection checks** | Mail, pages, documents and tool results are screened for hidden instructions |
-| 🏠 | **Local only** | The web app binds to 127.0.0.1; the iPhone gets in over Tailscale with a per-person passcode |
+| 🏠 | **Local only** | The web app binds to 127.0.0.1; your phone gets in over Tailscale with a per-person passcode |
 
 > [!NOTE]
-> `.env`, `data/` and `secrets/` stay on your Mac and are git-ignored. What you say, and what tools read, goes to Claude. Known limits are listed in **[Architecture](docs/architecture.md)**.
+> `.env`, `data/` and `secrets/` stay on your computer and are git-ignored. What you say, and what tools read, goes to Claude. Known limits are listed in **[Architecture](docs/architecture.md)**.
 
 ## 🙏 Built with
 
-[Claude Code](https://docs.anthropic.com/en/docs/claude-code) · [LiveKit Agents](https://github.com/livekit/agents) · [MLX Whisper](https://github.com/ml-explore/mlx-examples) · [Kokoro](https://github.com/thewh1teagle/kokoro-onnx) · [Silero VAD](https://github.com/snakers4/silero-vad) · [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet) · [WeSpeaker](https://github.com/wenet-e2e/wespeaker) · [Playwright](https://playwright.dev) · [Preact](https://preactjs.com) · [AI Armory](https://github.com/anilkumarmeena/ai-armory)
+[Claude Code](https://docs.anthropic.com/en/docs/claude-code) · [LiveKit Agents](https://github.com/livekit/agents) · [MLX Whisper](https://github.com/ml-explore/mlx-examples) · [faster-whisper](https://github.com/SYSTRAN/faster-whisper) · [Kokoro](https://github.com/thewh1teagle/kokoro-onnx) · [Silero VAD](https://github.com/snakers4/silero-vad) · [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet) · [WeSpeaker](https://github.com/wenet-e2e/wespeaker) · [bubblewrap](https://github.com/containers/bubblewrap) · [Playwright](https://playwright.dev) · [Preact](https://preactjs.com) · [AI Armory](https://github.com/anilkumarmeena/ai-armory)
 
 ## 🤝 Contributing
 

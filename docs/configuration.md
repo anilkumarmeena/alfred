@@ -6,7 +6,7 @@
 
 **Every setting JARVIS reads from `.env`, grouped by area, with its default.**
 
-[🏠 Home](../README.md) · [🚀 Setup](setup.md) · **⚙️ Configuration** · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 iPhone](iphone.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md)
+[🏠 Home](../README.md) · [🚀 Setup](setup.md) · **⚙️ Configuration** · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md)
 
 </div>
 
@@ -16,7 +16,7 @@
 
 > [!IMPORTANT]
 > **How settings work**
-> - **Where:** `.env` in the repo root, copied from `.env.example`. It stays on your Mac (mode 600).
+> - **Where:** `.env` in the repo root, copied from `.env.example`. It stays on JARVIS's computer (mode 600).
 > - **`.env` wins:** a few settings can also be changed in the app's **Settings** ([below](#-changed-in-the-app)). When the variable is set in `.env`, **it wins** and the app only shows it.
 > - **Empty = default:** a setting that is present but empty counts as unset.
 > - **On/off values:** `1` `on` `true` `yes` · `0` `off` `false` `no`.
@@ -36,7 +36,7 @@
 | 👤 | [You, access and services](#-you-access-and-services) | Name, time zone, ports, data folder |
 | 🧠 | [Brain](#-brain) | The voice brain's models, effort and tools |
 | 🔒 | [Safety](#-safety) | Approvals, consent, injection checks |
-| 🎤 | [Speech in and out](#-speech-in-and-out) | Whisper, Kokoro, turn-taking, noise filter, memory, audio files |
+| 🎤 | [Speech in and out](#-speech-in-and-out) | Whisper (MLX or faster-whisper), Kokoro, turn-taking, noise filter, memory, audio files |
 | 🔇 | [Speech gate](#-speech-gate) | Dropping phantom clips |
 | 👂 | [Speaker check](#-speaker-check) | Answering only your voice |
 | 🧰 | [Background tasks](#-background-tasks) | Task limits, models, goal loop |
@@ -58,7 +58,7 @@ A few settings live in the settings table of `data/tasks.db` and are changed in 
 | 🧰 | **Background work**: tasks at once, web browser, browser window | `JARVIS_MAX_TASKS`<br>`JARVIS_BROWSER`<br>`JARVIS_BROWSER_WINDOW` | Task limit: runner restart<br>Browser: next conversation |
 | 🔒 | **Safety**: hidden instruction check, checked by | `JARVIS_INJECTION_CHECK`<br>`JARVIS_INJECTION_MODEL` | Next conversation or task |
 
-On the Mac, the same preferences are shown and changed from a terminal:
+On JARVIS's computer, the same preferences are shown and changed from a terminal:
 
 ```sh
 uv run python -m jarvis.state.settings prefs                 # show them
@@ -69,18 +69,24 @@ uv run python -m jarvis.state.settings prefs voice bm_lewis  # change one
 
 | Setting | Default | What it does |
 |---|---|---|
-| `JARVIS_USER_NAME` | Mac account's first name | What JARVIS calls you in prompts, logs and task instructions |
-| `JARVIS_TIMEZONE` | The Mac's, else `UTC` | Your time zone, e.g. `Europe/London` |
+| `JARVIS_USER_NAME` | Your user account's first name | What JARVIS calls you in prompts, logs and task instructions |
+| `JARVIS_TIMEZONE` | The computer's, else `UTC` | Your time zone, e.g. `Europe/London` |
 | `JARVIS_PASSCODE` | Made by setup | **First setup only**: becomes your login, then is taken out of `.env` |
 | `LIVEKIT_API_KEY`<br>`LIVEKIT_API_SECRET` | Made by setup | Moved into the vault on first start |
 | `LIVEKIT_URL` | `ws://127.0.0.1:7880` | The local LiveKit server |
 | `JARVIS_WEB_PORT` | `8787` | The web app's port (on 127.0.0.1) |
-| `JARVIS_SERVICE_PREFIX` | `com.jarvis` | Start of the launchd labels; change only to run a second JARVIS |
+| `JARVIS_SERVICE_PREFIX` | `com.jarvis` | Start of the service names (below); change only to run a second JARVIS |
 | `JARVIS_DATA_DIR`<br>`JARVIS_DB_FILE` | `data/`<br>`data/tasks.db` | Where the data folder and database live |
 | `GOOGLE_CLIENT_SECRET` | `secrets/client_secret*.json` | A Google OAuth client file, until one is pasted into the vault |
 
 - **`JARVIS_PASSCODE`** is stored hashed in `secrets/logins.json`.
-- **`JARVIS_SERVICE_PREFIX`** is for a second JARVIS under the **same Mac account**.
+- **`JARVIS_TIMEZONE`** is read from `/etc/localtime`; on Linux, failing that, `/etc/timezone`, `timedatectl` or `TZ`.
+- **`JARVIS_SERVICE_PREFIX`** is for a second JARVIS under the **same user account**. Each service is `<prefix>.<name>` (`livekit`, `agent`, `web`, `tasks`):
+
+| | macOS | Linux |
+|---|---|---|
+| **Service manager** | launchd | systemd, **user** units |
+| **`com.jarvis.agent` is** | The launchd label | The unit `com.jarvis.agent.service` in `~/.config/systemd/user/` |
 
 ## 🧠 Brain
 
@@ -125,12 +131,14 @@ uv run python -m jarvis.state.settings prefs voice bm_lewis  # change one
 
 | Setting | Default | What it does |
 |---|---|---|
-| `JARVIS_STT` | `mlx-community/whisper-large-v3-turbo-q4` | Whisper model (Hugging Face repo) |
+| `JARVIS_STT` | Per backend (below) | Whisper model for live voice |
+| `JARVIS_STT_DEVICE` | *(auto)* | faster-whisper only: `cuda` or `cpu`; empty uses an NVIDIA GPU when one works |
+| `JARVIS_TRANSCRIBE_MODEL` | Per backend (below) | Whisper model for [recordings](integrations.md#-recordings), which can be in any language |
 | `JARVIS_STT_PROMPT` | `on` | Give Whisper the speech vocabulary and project names as its prompt |
 | `JARVIS_TTS_VOICE` | `bm_george` | Kokoro voice: `bm_*`/`bf_*` British, `am_*`/`af_*` American |
 | `JARVIS_TTS_SPEED` | `1.05` | Speaking speed, 0.5 to 2.0 |
 | `JARVIS_TTS_MODEL` | `kokoro-v1.0.onnx` | Kokoro model in `models/` |
-| `JARVIS_TTS_THREADS` | One fewer than performance cores (2–4) | Kokoro's ONNX Runtime threads; `0` uses every core |
+| `JARVIS_TTS_THREADS` | One fewer than performance cores (every core counts on Linux), 2–4 | Kokoro's ONNX Runtime threads; `0` uses every core |
 | `JARVIS_TURN_MIN_DELAY`<br>`JARVIS_TURN_MAX_DELAY` | `0.9`<br>`4.0` | Starting seconds of silence before your turn ends (below) |
 | `JARVIS_TURN_JUDGE`<br>`JARVIS_TURN_JUDGE_SECONDS` | `on`<br>`2` | When the turn detector is unsure, a fast model decides; gives up after this long |
 | `JARVIS_VAD_MIN_SILENCE` | `0.55` | Silence that ends an utterance; the floor under every reply's wait |
@@ -139,7 +147,16 @@ uv run python -m jarvis.state.settings prefs voice bm_lewis  # change one
 | `JARVIS_DENOISE` | `on` | Noise filter: `on` everywhere, `vad` only for the VAD, `off` |
 | `JARVIS_DENOISE_ATTEN_DB` | `18` | Most the filter takes off any sound, in dB (`0` no limit) |
 
-- **Whisper sizes:** the 4-bit default is ~0.5 GB, the 16-bit original ~1.6 GB.
+**Whisper defaults** depend on the machine ([how each runs](voice.md#-whisper-in-kokoro-out)):
+
+| Backend | `JARVIS_STT` (live voice) | `JARVIS_TRANSCRIBE_MODEL` (recordings) |
+|---|---|---|
+| **MLX**, Apple silicon | `mlx-community/whisper-large-v3-turbo-q4` | Same as `JARVIS_STT` |
+| **faster-whisper**, NVIDIA GPU | `large-v3-turbo` | `large-v3-turbo` |
+| **faster-whisper**, CPU | `small.en` | `small` (multilingual) |
+
+- **Whisper names:** MLX takes a Hugging Face repo; faster-whisper a size (`base.en`, `small.en`, `large-v3-turbo`...) or a CTranslate2 folder. An `mlx-community/` model elsewhere falls back to the default.
+- **Whisper sizes:** on MLX the 4-bit default is ~0.5 GB, the 16-bit original ~1.6 GB. On a slow CPU, `JARVIS_STT=base.en` answers quicker.
 - **Kokoro 8-bit:** `kokoro-v1.0.int8.onnx` saves ~230 MB but renders 30–60% slower.
 - **Turn delays:** the min applies when you sound finished, the max at most mid-thought. Each speaker's delays then follow their pace.
 
@@ -151,9 +168,9 @@ uv run python -m jarvis.state.settings prefs voice bm_lewis  # change one
 | Setting | Default | What it does |
 |---|---|---|
 | `JARVIS_VOICE_IDLE_PROCESSES` | `1` | Warm spare voice processes (~300 MB each) so a call connects at once |
-| `JARVIS_MLX_CACHE_MB` | `256` | GPU memory MLX keeps for reuse after Whisper; `0` frees after every clip, `-1` no cap |
+| `JARVIS_MLX_CACHE_MB` | `256` | **Apple silicon only.** GPU memory MLX keeps for reuse after Whisper; `0` frees after every clip, `-1` no cap |
 | `JARVIS_TTS_MEMORY_ARENA` | `off` | Kokoro's ONNX memory arena (grows to ~1 GB after a long sentence) |
-| `JARVIS_VOICE_MALLOC_LARGE_CACHE` | `off` | Let macOS's malloc keep large freed blocks in voice processes |
+| `JARVIS_VOICE_MALLOC_LARGE_CACHE` | `off` | Let the allocator keep large freed blocks in voice processes (macOS's large cache, glibc's growing mmap threshold) |
 | `JARVIS_VOICE_MEMORY_LOG_MINUTES` | `10` | How often `logs/agent.log` gets a `voice memory` line (`0` never) |
 
 `uv run python -m jarvis.voice.ram` prints the voice memory line on demand.
@@ -167,10 +184,12 @@ uv run python -m jarvis.state.settings prefs voice bm_lewis  # change one
 
 | Setting | Default | What it does |
 |---|---|---|
-| `JARVIS_AUDIO_DIR` | `~/Downloads` | Where [audio files](integrations.md#-audio-files) go (`data/audio/` if macOS blocks it) |
-| `JARVIS_AUDIO_FORMAT` | `m4a` | `m4a`, `mp3` (needs `ffmpeg` or `lame`) or `wav` |
+| `JARVIS_AUDIO_DIR` | Your download folder | Where [audio files](integrations.md#-audio-files) go; JARVIS's own folder if it can't write there |
+| `JARVIS_AUDIO_FORMAT` | `m4a` | `m4a` (Linux: needs `ffmpeg`), `mp3` (needs `ffmpeg` or `lame`) or `wav` |
 | `JARVIS_AUDIO_MODEL` | `kokoro-v1.0.onnx` | The Kokoro model audio files are read with |
 | `JARVIS_AUDIO_THREADS` | A quarter of the cores, at least 2 | CPU threads for rendering, leaving the rest to the live voice |
+
+The download folder is `~/Downloads` on macOS, and on Linux the XDG one from `~/.config/user-dirs.dirs` (maybe translated, like `~/Téléchargements`).
 
 </details>
 
@@ -318,10 +337,11 @@ Answers only your enrolled voice. What each case means is in **[🗣️ Voice](v
 |---|---|---|
 | `JARVIS_PUSH` | `on` | Send heartbeat alerts and task updates to subscribed phones |
 | `JARVIS_PUSH_CONTACT` | Default Google account's address | `mailto:` or `https:` contact push services may use |
-| `JARVIS_APNS_TEAM_ID` | *(none)* | Apple developer team id, for the [native app](iphone.md#-native-app) |
+| `JARVIS_APNS_TEAM_ID` | *(none)* | Apple developer team id, for the [native app](mobile.md#-native-app) |
 | `JARVIS_APNS_KEY_ID` | *(none)* | The APNs key id; moved into the vault on start |
 
 - **`JARVIS_APNS_KEY_ID`** can also be entered in **Settings → Logins and keys**.
+- **Android app push** needs no setting: save the Firebase service-account key as `secrets/fcm_service_account.json` ([how](mobile.md#android-push-on-the-computer)).
 
 ---
 

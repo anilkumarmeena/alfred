@@ -4,8 +4,9 @@
   answer(doc, start)              -> tool result: MAX_CHARS from `start`, continuation note, injection warning
 
 File content is untrusted: it is scanned (jarvis.safety.scan) and never to be followed as instructions.
-Readers: pypdfium2 (PDF) and openpyxl (Excel), imported lazily; .docx XML; textutil for .doc/.rtf/.odt; pictures via
-jarvis.state.pictures.fit. Recordings are transcribed instead (jarvis.core.transcribe).
+Readers: pypdfium2 (PDF) and openpyxl (Excel), imported lazily; .docx XML; .doc/.rtf/.odt via macOS's textutil, else
+LibreOffice or pandoc; pictures via jarvis.state.pictures.fit. Recordings are transcribed instead
+(jarvis.core.transcribe).
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from struct import pack
 from typing import NamedTuple
 from xml.etree import ElementTree
 
-from jarvis.core import profile
+from jarvis.core import platform, profile
 from jarvis.safety import scan
 from jarvis.state import pictures as images
 
@@ -45,7 +46,7 @@ _EXTENSIONS = {
     TEXT: {".txt", ".md", ".csv", ".tsv", ".json", ".xml", ".log", ".ics", ".vcf", ".yaml", ".yml", ".eml"},
 }
 # Recordings go to the (slow) transcription tools instead
-TRANSCRIBE = ("It's a recording: transcribe it with audio_transcribe (a file on the Mac) or "
+TRANSCRIBE = ("It's a recording: transcribe it with audio_transcribe (a file on the computer) or "
               "gmail_attachment_transcribe (an email's attachment).")
 _TYPES = {
     "application/pdf": PDF,
@@ -237,7 +238,7 @@ def png(width: int, height: int, scanlines: bytes) -> bytes:
 # ── Pictures ────────────────────────────────────────────────────
 
 def picture(data: bytes) -> Picture:
-    """Picture in a model-ready format via pictures.fit (HEIC, TIFF or oversized become JPEG via sips)."""
+    """Picture in a model-ready format via pictures.fit (HEIC, TIFF or oversized become JPEG)."""
     with tempfile.TemporaryDirectory() as tmp:
         given = Path(tmp) / "given"
         given.write_bytes(data)
@@ -344,7 +345,9 @@ def _xlsx(data: bytes, _name: str) -> str:
 
 
 def _textutil(data: bytes, name: str) -> str:
-    """Text of .doc/.rtf/.odt via macOS textutil."""
+    """Text of .doc/.rtf/.odt via macOS textutil, else LibreOffice, else pandoc (not .doc)."""
+    if not platform.MAC:
+        return _converted(data, name)
     if not shutil.which("textutil"):
         raise Unreadable(f"Can't read {Path(name).suffix or 'this kind of'} files here: macOS's textutil isn't here.")
     with tempfile.TemporaryDirectory() as tmp:
@@ -355,6 +358,36 @@ def _textutil(data: bytes, name: str) -> str:
     if done.returncode:
         raise Unreadable(f"Couldn't read it: {done.stderr.decode(errors='replace').strip()[:200]}")
     return _decoded(done.stdout).strip()
+
+
+def _converted(data: bytes, name: str) -> str:
+    """Text of .doc/.rtf/.odt on Linux: LibreOffice if installed, else pandoc for .rtf and .odt."""
+    suffix = Path(name).suffix.lower() or ".doc"
+    office = shutil.which("libreoffice") or shutil.which("soffice")
+    pandoc = shutil.which("pandoc") if suffix in (".rtf", ".odt") else None
+    if not office and not pandoc:
+        either = " or pandoc" if suffix in (".rtf", ".odt") else ""
+        raise Unreadable(f"Can't read {suffix} files here: install LibreOffice (libreoffice-writer){either}.")
+    with tempfile.TemporaryDirectory() as tmp:
+        given = Path(tmp) / f"file{suffix}"
+        given.write_bytes(data)
+        if office:
+            # Its own profile: with the user's, a LibreOffice already open takes the job and nothing is written
+            argv = [office, f"-env:UserInstallation={(Path(tmp) / 'profile').as_uri()}", "--headless",
+                    "--convert-to", "txt:Text (encoded):UTF8", "--outdir", str(Path(tmp) / "out"), str(given)]
+        else:
+            argv = [pandoc, "--to", "plain", "--wrap", "none", str(given)]
+        try:
+            done = subprocess.run(argv, capture_output=True, timeout=120, check=False)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise Unreadable(f"Couldn't read it: {Path(argv[0]).name} didn't finish ({e}).") from None
+        if not done.returncode:
+            if not office:
+                return _decoded(done.stdout).strip()
+            if (made := Path(tmp) / "out" / "file.txt").is_file():
+                return _decoded(made.read_bytes()).strip()
+        said = (done.stderr or done.stdout).decode(errors="replace").strip()[:200]
+        raise Unreadable(f"Couldn't read it: {said or f'{Path(argv[0]).name} wrote no text'}")
 
 
 def _html(data: bytes, _name: str) -> str:

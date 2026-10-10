@@ -1,16 +1,26 @@
-"""Tests for host commands: Seatbelt profile (text only; `make host-check` runs it), env, time limits, task jobs."""
+"""Tests for host commands: the walls as text (Seatbelt profile, bubblewrap mounts; `make host-check` runs them),
+env, time limits, jobs, and Linux's /proc process tracking. Tests that need a real bwrap run on Linux only."""
 
 import asyncio
 import json
+import logging
 import os
 import re
+import shutil
+import signal
+import subprocess
+import time
+from types import SimpleNamespace
 
 import pytest
 
-from jarvis.core import profile as profiles
+from jarvis.core import platform, profile as profiles
 from jarvis.core.config import DATA_DIR, ROOT, TASK_CACHE_DIR, WORKTREES_DIR
 from jarvis.safety import host
 from jarvis.safety.commands import HOME_SECRETS, SECRET_DIRS
+
+MAC = SimpleNamespace(MAC=True, LINUX=False)
+LINUX = SimpleNamespace(MAC=False, LINUX=True)
 
 # ── The profile ─────────────────────────────────────────────────
 
@@ -29,7 +39,7 @@ def test_the_profile_allows_by_default_and_denies_only_what_must_stay_closed():
 
 def test_the_setuid_ps_that_could_read_mcp_servers_tokens_cant_run():
     assert '(deny process-exec (literal "/bin/ps"))' in host.profile()
-    assert any("ps eww" in what and not should for what, _, should in host._checks())
+    assert any("ps eww" in what and not should for what, _, should in host._mac_checks())
 
 
 def test_secrets_are_unreadable_but_the_voice_session_logs_are_readable():
@@ -82,9 +92,202 @@ def test_paths_are_escaped_for_the_profile(tmp_path):
 
 
 def test_commands_never_run_without_the_walls(monkeypatch):
+    monkeypatch.setattr(host, "platform", MAC)
     monkeypatch.setattr(host, "SANDBOX_EXEC", "/nowhere/sandbox-exec")
     with pytest.raises(RuntimeError, match="can't run safely"):
         host.walled(["/bin/echo", "hi"])
+
+
+def test_without_bubblewrap_linux_commands_never_run(monkeypatch):
+    monkeypatch.setattr(host, "platform", LINUX)
+    monkeypatch.setattr(host, "BWRAP", "/nowhere/bwrap")
+    monkeypatch.setattr(host.shutil, "which", lambda name: None)
+    with pytest.raises(RuntimeError, match="bubblewrap .*isn't installed.*apt install bubblewrap"):
+        host.walled(["/bin/echo", "hi"])
+
+
+def test_a_bwrap_that_cant_build_its_sandbox_refuses_saying_how_to_fix_it(monkeypatch, tmp_path):
+    """Ubuntu 24.04's AppArmor, or user namespaces switched off."""
+    bwrap = tmp_path / "bwrap"
+    bwrap.write_text("#!/bin/sh\n")
+    bwrap.chmod(0o755)
+    monkeypatch.setattr(host, "platform", LINUX)
+    monkeypatch.setattr(host, "BWRAP", str(bwrap))
+    monkeypatch.setattr(host, "_bwrap_ready", "")
+    monkeypatch.setattr(host.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(
+        argv, 1, "", "bwrap: setting up uid map: Permission denied"))
+    with pytest.raises(RuntimeError, match="uid map: Permission denied.*apparmor_restrict_unprivileged_userns"):
+        host.walled(["/bin/echo", "hi"])
+    assert host._bwrap_ready == ""  # tried again next time, once it's fixed
+
+
+def test_no_other_os_gets_commands_run_unwalled(monkeypatch):
+    monkeypatch.setattr(host, "platform", SimpleNamespace(MAC=False, LINUX=False))
+    with pytest.raises(RuntimeError, match="no walls"):
+        host.walled(["/bin/echo", "hi"])
+
+
+def test_the_login_shell_falls_back_to_bash_then_sh(monkeypatch):
+    monkeypatch.setattr(host, "platform", LINUX)
+    monkeypatch.setattr(host.pwd, "getpwuid", lambda uid: SimpleNamespace(pw_shell="/usr/bin/fish"))
+    present = {"/bin/bash"}
+    monkeypatch.setattr(host.os, "access", lambda path, mode: path in present)
+    monkeypatch.setattr(host.shutil, "which", lambda name: None)
+    assert host._login_shell() == ("/bin/bash", "-lc")  # fish isn't one to run sh-style commands in
+    present.clear()
+    assert host._login_shell() == ("/bin/sh", "-lc")
+    present.add("/usr/bin/zsh")
+    monkeypatch.setattr(host.pwd, "getpwuid", lambda uid: SimpleNamespace(pw_shell="/usr/bin/zsh"))
+    assert host._login_shell() == ("/usr/bin/zsh", "-lc")  # the user's own, for their PATH
+    monkeypatch.setattr(host, "platform", MAC)
+    assert host._login_shell() == ("/bin/zsh", "-lc")
+
+
+# ── The walls on Linux, as bubblewrap options ───────────────────
+
+
+def mounts(args: list[str]) -> list[tuple[str, ...]]:
+    """bwrap options as (option, operands...)."""
+    arity = {"--bind": 2, "--ro-bind": 2, "--dev-bind-try": 2, "--symlink": 2, "--tmpfs": 1, "--remount-ro": 1,
+             "--dev": 1, "--proc": 1, "--unshare-pid": 0}
+    out, i = [], 0
+    while i < len(args):
+        n = arity[args[i]]
+        out.append(tuple(args[i:i + n + 1]))
+        i += n + 1
+    return out
+
+
+@pytest.fixture
+def linux_home(tmp_path, monkeypatch):
+    """A home with logins, start-up files, a project and a runtime folder with a session bus."""
+    home = tmp_path / "home"
+    for path, text in {".bashrc": "x", ".ssh/id_ed25519": "KEY", ".ssh/known_hosts": "h", ".ssh/config": "c",
+                       ".netrc": "n", "proj/.env": "S=1", "proj/certs/ca.pem": "ca", "proj/server.pem": "k",
+                       "proj/node_modules/pkg/.env": "e", "proj/src/app.py": "", "dotfiles/zshrc": "z",
+                       ".config/app/settings": "", ".config/systemd/user/a.service": "", ".ssh/agent.sock": ""}.items():
+        (home / path).parent.mkdir(parents=True, exist_ok=True)
+        (home / path).write_text(text)
+    (home / ".zshrc").symlink_to(home / "dotfiles/zshrc")
+    run = tmp_path / "run"
+    for name in ("bus", "pipewire-0", "systemd/private", "gcr/ssh"):
+        (run / name).parent.mkdir(parents=True, exist_ok=True)
+        (run / name).write_text("")
+    (tmp_path / "dbus-session").write_text("")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(run))
+    monkeypatch.setenv("SSH_AUTH_SOCK", str(home / ".ssh/agent.sock"))
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", f"unix:path={tmp_path / 'dbus-session'},guid=1;unix:abstract=/x")
+    return os.path.realpath(home), os.path.realpath(run), os.path.realpath(tmp_path / "dbus-session")
+
+
+def where(ops, path: str) -> list[tuple[str, ...]]:
+    return [op for op in ops if op[-1] == path]
+
+
+def test_bwrap_mounts_everything_then_hides_and_locks_what_seatbelt_denies(linux_home):
+    home, run, bus = linux_home
+    args = host.bwrap_args(home)
+    ops = mounts(args)
+    assert args[:8] == ["--unshare-pid", "--bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
+    assert "--new-session" not in args and "--die-with-parent" not in args  # jobs keep their session and outlive it
+    # Home: rebuilt read-only, so a missing start-up file can't be made; its entries come back writable
+    assert where(ops, home) == [("--tmpfs", home), ("--remount-ro", home)]
+    assert where(ops, f"{home}/proj") == [("--bind", f"{home}/proj", f"{home}/proj")]
+    assert not any(f"{home}/.bash_profile" in op for op in ops)
+    assert where(ops, f"{home}/.bashrc") == [("--ro-bind", f"{home}/.bashrc", f"{home}/.bashrc")]
+    assert where(ops, f"{home}/.zshrc") == [("--symlink", f"{home}/dotfiles/zshrc", f"{home}/.zshrc")]
+    assert ("--ro-bind", f"{home}/dotfiles/zshrc", f"{home}/dotfiles/zshrc") in ops  # a linked dotfile's target too
+    assert where(ops, f"{home}/.config") == [("--tmpfs", f"{home}/.config"), ("--remount-ro", f"{home}/.config")]
+    assert ("--bind", f"{home}/.config/app", f"{home}/.config/app") in ops
+    assert ("--ro-bind", f"{home}/.config/systemd", f"{home}/.config/systemd") in ops  # JARVIS's services are there
+    # Secrets: hidden, keys included, but ssh can check hosts and sign through the agent
+    assert where(ops, f"{home}/.ssh") == [("--tmpfs", f"{home}/.ssh"), ("--remount-ro", f"{home}/.ssh")]
+    for shown in ("known_hosts", "config", "agent.sock"):
+        assert where(ops, f"{home}/.ssh/{shown}") == [("--ro-bind", f"{home}/.ssh/{shown}", f"{home}/.ssh/{shown}")]
+    assert "id_ed25519" not in " ".join(args)
+    for secret in (".netrc", "proj/.env", "proj/server.pem"):
+        assert where(ops, f"{home}/{secret}") == [("--ro-bind", "/dev/null", f"{home}/{secret}")], secret
+    assert not where(ops, f"{home}/proj/certs/ca.pem")  # CA bundles stay readable for TLS
+    # The session bus (Secret Service, systemd-run) is left out; the rest of the runtime folder stays
+    assert where(ops, run) == [("--tmpfs", run)]  # writable: sockets get made there
+    assert ("--bind", f"{run}/pipewire-0", f"{run}/pipewire-0") in ops and ("--bind", f"{run}/gcr", f"{run}/gcr") in ops
+    assert not any(op[-1] in (f"{run}/bus", f"{run}/systemd") for op in ops)
+    assert where(ops, bus) == [("--ro-bind", "/dev/null", bus)]
+
+
+def test_bwrap_keeps_jarvis_own_files_read_only_and_the_runner_socket_out(linux_home):
+    home, _, _ = linux_home
+    ops = mounts(host.bwrap_args(home))
+    root, data = os.path.realpath(ROOT), os.path.realpath(DATA_DIR)
+    assert ("--ro-bind", root, root) in ops
+    assert where(ops, data) == [("--tmpfs", data), ("--remount-ro", data)]  # rebuilt: a remade socket stays out
+    assert not any("runner.sock" in part for op in ops for part in op)
+    for kept_open in (WORKTREES_DIR, TASK_CACHE_DIR, DATA_DIR / "tasks"):
+        if kept_open.exists():
+            assert ("--bind", os.path.realpath(kept_open), os.path.realpath(kept_open)) in ops
+    if (ROOT / ".git").is_dir():
+        assert ("--bind", f"{root}/.git", f"{root}/.git") in ops
+        assert ("--ro-bind", f"{root}/.git/hooks", f"{root}/.git/hooks") in ops
+        assert ("--ro-bind", f"{root}/.git/config", f"{root}/.git/config") in ops
+    if (ROOT / ".env").exists():
+        assert ("--ro-bind", "/dev/null", f"{root}/.env") in ops
+    if (ROOT / "secrets").is_dir():
+        assert ("--tmpfs", f"{root}/secrets") in ops and ("--remount-ro", f"{root}/secrets") in ops
+        logs = os.path.realpath(profiles.current().voice_logs)
+        if os.path.exists(logs):
+            assert ("--ro-bind", logs, logs) in ops  # the voice session logs stay readable
+
+
+def test_bwrap_mounts_a_folder_before_anything_inside_it(linux_home):
+    """A mount hides what's already mounted below it, so the shallower must go first."""
+    home, _, _ = linux_home
+    ops = [op for op in mounts(host.bwrap_args(home)) if op[0] not in ("--remount-ro", "--unshare-pid")]
+    for i, op in enumerate(ops):
+        for later in ops[i + 1:]:
+            assert not op[-1].startswith(later[-1].rstrip("/") + "/"), (op, later)
+
+
+def test_nothing_under_a_hidden_folder_comes_back(tmp_path, monkeypatch):
+    """A project inside a folder named `secrets` stays hidden, writable worktree or not."""
+    home = tmp_path / "home"
+    (home / "work/secrets/app").mkdir(parents=True)
+    ops = mounts(host.bwrap_args(home))
+    hidden = os.path.realpath(home / "work/secrets")
+    assert ("--tmpfs", hidden) in ops and not any(op[-1].startswith(hidden + "/") for op in ops)
+
+
+def test_the_secret_walk_is_bounded_and_says_so(tmp_path, monkeypatch, caplog):
+    for i in range(10):
+        (tmp_path / f"d{i}").mkdir()
+        (tmp_path / f"d{i}" / ".env").write_text("")
+    (tmp_path / "node_modules/x").mkdir(parents=True)
+    (tmp_path / "node_modules/x/.env").write_text("")
+    assert len(host._walk([str(tmp_path)], set())) == 10  # node_modules isn't looked into
+    monkeypatch.setattr(host, "_WALK_ENTRIES", 5)
+    with caplog.at_level(logging.WARNING, "jarvis.safety.host"):
+        assert len(host._walk([str(tmp_path)], set())) < 10
+    assert "secret walk stopped" in caplog.text
+
+
+def test_only_path_session_buses_can_be_hidden(monkeypatch):
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus;unix:abstract=/tmp/dbus-x,guid=1")
+    assert host._bus_paths() == ["/run/user/1000/bus"]
+
+
+def test_linux_host_commands_lose_the_session_bus_address(monkeypatch):
+    monkeypatch.setattr(host, "dotenv_values", lambda path: {})
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus")
+    monkeypatch.setattr(host, "platform", LINUX)
+    assert "DBUS_SESSION_BUS_ADDRESS" not in host.task_env()
+    monkeypatch.setattr(host, "platform", MAC)
+    assert "DBUS_SESSION_BUS_ADDRESS" in host.task_env()
+
+
+def test_linux_checks_cover_what_the_mac_ones_do():
+    linux = {what for what, _, _ in host._linux_checks()}
+    assert {"reads JARVIS's .env", "reads an SSH key file", "reaches the SSH agent", "writes tasks.db",
+            "reaches the runner's socket", "reads the voice session logs", "writes the task cache"} <= linux
+    assert any("environments" in what for what in linux) and any("session bus" in what for what in linux)
 
 
 # ── The environment ─────────────────────────────────────────────
@@ -209,3 +412,139 @@ def test_stopping_a_task_stops_its_jobs(jobs, tmp_path):
 def test_a_job_needs_a_real_folder(jobs, tmp_path):
     with pytest.raises(ValueError, match="isn't a folder"):
         jobs.launch("ls", "a listing", tmp_path / "missing")
+
+
+# ── Which processes are whose, on Linux (/proc) ─────────────────
+
+
+def stat_line(pid: int, name: str, state: str, sid: int, ticks: int) -> str:
+    """A /proc/<pid>/stat line: fields 3 (state), 6 (session) and 22 (start, in clock ticks since boot) matter."""
+    return f"{pid} ({name}) {state} 1 {sid} {sid} " + " ".join(["0"] * 15) + f" {ticks} 0 0\n"
+
+
+@pytest.fixture
+def fake_proc(tmp_path, monkeypatch):
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    (proc / "stat").write_text("cpu 1 2 3\nbtime 1000\nprocesses 9\n")
+    for pid, name, state, sid, ticks in [(10, "sh", "S", 10, 500), (11, "sleep", "S", 10, 700),
+                                         (12, "odd) (name", "R", 10, 600), (13, "gone", "Z", 10, 650),
+                                         (20, "other", "S", 20, 100)]:
+        (proc / str(pid)).mkdir()
+        (proc / str(pid) / "stat").write_text(stat_line(pid, name, state, sid, ticks))
+    (proc / "self").mkdir()
+    monkeypatch.setattr(host, "_PROC", proc)
+    monkeypatch.setattr(host, "platform", LINUX)
+    monkeypatch.setattr(host, "_clock_ticks", lambda: 100)
+    return proc
+
+
+def test_linux_sessions_come_from_proc(fake_proc):
+    assert sorted(host._pids()) == [10, 11, 12, 13, 20]
+    assert sorted(host.session_members(10)) == [10, 11, 12]  # not the zombie, not another session's
+    assert host.lingering(10) == [(12, "odd) (name"), (13, "gone"), (11, "sleep")]  # oldest first
+    assert host.started_at(10) == 1005.0 and host.started_at(99) is None
+    assert host._unchanged(10, 1004.0) and not host._unchanged(10, 900.0)  # a reused pid is never taken as its own
+
+
+def test_without_a_boot_time_no_pid_is_ever_taken_as_its_own(fake_proc):
+    (fake_proc / "stat").write_text("cpu 1 2 3\n")
+    assert not host._unchanged(10, 1005.0)
+
+
+def test_sessions_on_this_computer():
+    """Real sessions (libproc on macOS, /proc on Linux): a shell leads one, and what it leaves behind stays in it."""
+    shell = subprocess.Popen(["/bin/sh", "-c", "sleep 30 & sleep 30 & wait"], start_new_session=True)
+    at = time.time()
+    try:
+        until = time.monotonic() + 5
+        while len(left := host.lingering(shell.pid)) < 2 and time.monotonic() < until:
+            time.sleep(0.05)
+        assert [name for _, name in left] == ["sleep", "sleep"]
+        assert abs(host.started_at(shell.pid) - at) <= 2
+        assert sorted(host.session_members(shell.pid)) == sorted([shell.pid, *(pid for pid, _ in left)])
+        assert all(host.in_sessions(pid, [(shell.pid, at)]) for pid, _ in left)
+        assert not host.in_sessions(left[0][0], [(shell.pid, at - 3600)])  # a leader that started another time
+    finally:
+        os.killpg(shell.pid, signal.SIGKILL)
+        shell.wait()
+
+
+# ── The walls for real, on Linux ────────────────────────────────
+
+
+def _bwrap_works() -> bool:
+    if not platform.LINUX or not shutil.which("bwrap"):
+        return False
+    try:
+        host._bwrap()
+    except RuntimeError:
+        return False
+    return True
+
+
+needs_bwrap = pytest.mark.skipif(not _bwrap_works(), reason="needs Linux with a working bubblewrap")
+
+
+def walled_run(command: str, home, cwd) -> subprocess.CompletedProcess:
+    return subprocess.run(host.walled(["/bin/sh", "-c", command], home=home), cwd=cwd, env=host.task_env(),
+                          capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL, check=False)
+
+
+@needs_bwrap
+def test_bwrap_walls_hold_for_real(linux_home, tmp_path):
+    home, _, _ = linux_home
+    works = lambda command: walled_run(command, home, tmp_path).returncode == 0
+    assert not works(f"cat {home}/.ssh/id_ed25519") and works(f"cat {home}/.ssh/known_hosts")
+    assert not works(f"ls -A {home}/.ssh | grep -q id_ed25519")
+    assert not works(f"grep -q . {home}/.netrc") and not works(f"grep -q S= {home}/proj/.env")
+    assert works(f"cat {home}/proj/certs/ca.pem")
+    assert not works(f"touch {home}/.bash_profile") and not os.path.exists(f"{home}/.bash_profile")
+    assert not works(f"echo x >> {home}/.bashrc") and not works(f"echo x >> {home}/dotfiles/zshrc")
+    assert not works(f"mkdir {home}/.config/autostart")
+    assert works(f"touch {home}/proj/new") and os.path.exists(f"{home}/proj/new")  # the rest of home stays open
+    assert not works(f"touch {ROOT}/.host-test")
+    assert works(f"touch {TASK_CACHE_DIR}/.host-test && rm {TASK_CACHE_DIR}/.host-test")
+    assert not works(f"head -c1 /proc/{os.getpid()}/environ")  # other processes are out of sight
+    assert int(walled_run("ls /proc | grep -c '^[0-9]'", home, tmp_path).stdout) < 10
+    assert not works(f"test -e {os.environ['XDG_RUNTIME_DIR']}/bus")
+    assert not works("sudo -n true")
+
+
+@needs_bwrap
+def test_a_walled_job_is_stopped_whole_even_what_left_its_session(tmp_path):
+    """Killing the pid namespace's init ends a process that called setsid, which session tracking alone would miss."""
+    jobs = host.Jobs(tmp_path / "jobs", shell=("/bin/sh", "-c"), notify=False, walls=True)
+    jobs.poll, jobs.grace = 0.02, 0.5
+    marker = "31.4159"
+
+    def leftovers() -> list[str]:
+        found = []
+        for cmdline in host._PROC.glob("[0-9]*/cmdline"):
+            try:
+                if marker in cmdline.read_bytes().decode(errors="replace"):
+                    found.append(cmdline.parent.name)
+            except OSError:
+                pass
+        return found
+
+    async def main():
+        job = jobs.launch(f"setsid sleep {marker} & sh -c 'trap \"\" TERM; sleep {marker}' & wait", "stubborn",
+                          tmp_path)
+        for _ in range(250):
+            if len(leftovers()) >= 2:
+                break
+            await asyncio.sleep(0.02)
+        assert len(leftovers()) >= 2
+        await jobs.stop(job["id"])
+        await asyncio.sleep(0.5)
+
+    asyncio.run(main())
+    assert leftovers() == []
+
+
+@needs_bwrap
+def test_a_walled_command_that_leaves_something_running_ends_at_its_time_limit(tmp_path):
+    ran = asyncio.run(host.run("echo started; sleep 30 >/dev/null 2>&1 &", tmp_path, timeout=2,
+                               shell=("/bin/sh", "-c")))
+    assert ran.code is None and "started" in ran.output and ran.seconds < 15

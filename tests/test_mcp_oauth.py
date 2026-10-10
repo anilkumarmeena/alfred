@@ -131,7 +131,7 @@ def test_a_server_on_this_mac_or_out_of_reach_cant_be_signed_in_to(fresh):
     async def never(url, back):
         raise AssertionError("no page should open")
 
-    with pytest.raises(mcp_oauth.SignInError, match="runs on this Mac"):
+    with pytest.raises(mcp_oauth.SignInError, match="runs on this computer"):
         asyncio.run(mcp_oauth.sign_in(Server("local", "Local", command="local-mcp"), never))
 
     def unreachable(request):

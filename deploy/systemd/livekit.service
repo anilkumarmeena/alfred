@@ -1,0 +1,17 @@
+# LiveKit media server, localhost signalling, a systemd user unit. Label, folders and the livekit-server path are
+# filled in by jarvis.setup_local.
+[Unit]
+Description=JARVIS LiveKit server (${LABEL})
+
+[Service]
+Type=exec
+WorkingDirectory=${ROOT}
+Environment="PATH=${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+ExecStart="${LIVEKIT}" --config "${ROOT}/secrets/livekit.yaml"
+Restart=always
+RestartSec=10
+StandardOutput=append:${ROOT}/logs/livekit.log
+StandardError=append:${ROOT}/logs/livekit.log
+
+[Install]
+WantedBy=default.target

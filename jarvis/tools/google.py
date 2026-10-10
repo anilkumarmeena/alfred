@@ -18,7 +18,7 @@ from jarvis.safety.commands import JARVIS_SECRETS
 from . import register_toolsets
 
 SIGN_IN = "uv run python -m jarvis.integrations.accounts login {label}"
-IMAGE_FOLDER = "JARVIS doc images"  # Drive staging folder for Mac images inserted into docs
+IMAGE_FOLDER = "JARVIS doc images"  # Drive staging folder for local images inserted into docs
 
 
 def settings(found: accounts.Accounts) -> GoogleSettings:

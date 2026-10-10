@@ -246,7 +246,7 @@ test("the switch reads iOS's answer, and an older build asks through requestPerm
   assert.equal(await n.state(), "granted");
 });
 
-test("a newer build registers with the Mac straight away", async () => {
+test("a newer build registers with JARVIS straight away", async () => {
   const { plugin, calls } = fakePlugin();
   plugin.requestPermissions = async () => { calls.push("requestPermissions"); return { notifications: "granted" }; };
   plugin.registerNotifications = async (o) => { calls.push(`register ${o.serverUrl} ${o.passcode}`); return { notifications: "granted" }; };

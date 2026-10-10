@@ -1,4 +1,4 @@
-"""Audio/video transcription with mlx-whisper, saved to the profile's transcripts folder.
+"""Audio/video transcription with Whisper (jarvis.core.whisper), saved to the profile's transcripts folder.
 
   start(path, ...) / start_data(data, ...)  -> Job; deduplicated by content hash + language
   wait(job, seconds)                        -> Job when finished, or progress after `seconds`
@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import resource
 import subprocess
 import sys
 import threading
@@ -30,9 +31,8 @@ from pathlib import Path
 
 import numpy as np
 
-from jarvis.core import documents
-from jarvis.core import profile
-from jarvis.core.config import MLX_CACHE_MB, ROOT, STT_MODEL
+from jarvis.core import documents, platform, profile, whisper
+from jarvis.core.config import MLX_CACHE_MB, ROOT, TRANSCRIBE_MODEL
 from jarvis.safety import scan
 
 log = logging.getLogger("jarvis.transcribe")
@@ -48,7 +48,7 @@ def sources() -> Path:
 
 
 LOG_FILE = ROOT / "logs" / "transcribe.log"
-MODEL = os.environ.get("JARVIS_TRANSCRIBE_MODEL", "") or STT_MODEL
+MODEL = TRANSCRIBE_MODEL  # "" = the backend's multilingual default
 
 RATE = 16000  # Whisper input: 16 kHz mono
 CHUNK_SECONDS = 600  # per chunk, keeps memory flat
@@ -215,27 +215,21 @@ class Paragraphs:
 def _whisper(audio: np.ndarray, language: str) -> tuple[list[tuple[float, str]], str]:
     """Transcribe one chunk: ([(start s, text)], language code). condition_on_previous_text is off so one misheard
     stretch can't seed the rest."""
-    import mlx_whisper
-
-    result = mlx_whisper.transcribe(audio, path_or_hf_repo=MODEL, language=language or None, verbose=None,
-                                    condition_on_previous_text=False)
+    result = whisper.run(audio, MODEL, multilingual=True, language=language or None, verbose=None,
+                         condition_on_previous_text=False)
     return [(s["start"], s["text"]) for s in result.get("segments", [])], result.get("language") or ""
 
 
 def _language(given: str) -> str:
     """Whisper language code from a name or code; "" = detect."""
-    from mlx_whisper.tokenizer import LANGUAGES, TO_LANGUAGE_CODE
-
-    code = given if given in LANGUAGES else TO_LANGUAGE_CODE.get(given, "")
+    code = given if given in whisper.LANGUAGES else whisper.TO_LANGUAGE_CODE.get(given, "")
     if given and not code:
         raise documents.Unreadable(f"Whisper doesn't know the language '{given}'. Leave it out to have it worked out.")
     return code
 
 
 def _language_name(code: str) -> str:
-    from mlx_whisper.tokenizer import LANGUAGES
-
-    return LANGUAGES.get(code, code).title()
+    return whisper.LANGUAGES.get(code, code).title()
 
 
 def transcribe(job: Job) -> None:
@@ -287,7 +281,14 @@ def main(name: str) -> None:
             job = load(name) or job
             job.state, job.started, job.pid = RUNNING, time.time(), os.getpid()
             save(job)
-        import mlx.core as mx
+        if whisper.backend() != whisper.MLX:
+            took = time.time()
+            transcribe(job)
+            peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (2**20 if platform.MAC else 2**10)
+            log.info("%s %s: %s in %.0f s; at most %.0f MB in memory", job.state, job.title, spoken_length(job.done),
+                     time.time() - took, peak)
+            return
+        import mlx.core as mx  # pyright: ignore[reportMissingImports]  # Apple silicon only
 
         if MLX_CACHE_MB >= 0:  # cap MLX buffer cache, as the voice does
             mx.set_cache_limit(MLX_CACHE_MB * 2**20)
@@ -358,8 +359,7 @@ def _slug(title: str) -> str:
 def _environment() -> dict[str, str]:
     """Child env with HF_HUB_OFFLINE=1 once the model is cached, so startup needs no network."""
     env = dict(os.environ)
-    hub = Path(env.get("HF_HUB_CACHE") or Path(env.get("HF_HOME") or Path.home() / ".cache/huggingface") / "hub")
-    if Path(MODEL).is_dir() or (hub / f"models--{MODEL.replace('/', '--')}" / "snapshots").is_dir():
+    if whisper.cached(MODEL, multilingual=True):
         env["HF_HUB_OFFLINE"] = "1"
     return env
 

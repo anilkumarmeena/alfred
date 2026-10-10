@@ -1,4 +1,4 @@
-"""Runner mixin for telling the user about tasks: GET /events (voice), the panel bell, Mac notifications and pushes.
+"""Runner mixin for telling the user about tasks: GET /events (voice), the panel bell, desktop notifications and pushes.
 
 `_finish` records a run's end and announces it through all of these.
 """
@@ -7,6 +7,7 @@ import logging
 
 from ai_armory.toolsets.mac import notify as mac_notify
 
+from jarvis.core import desktop, platform
 from jarvis.core.config import PUSH_ENABLED
 from jarvis.core.database import APPROVED, DENIED
 from jarvis.notify.push import send_push, task_target
@@ -50,7 +51,7 @@ class Events(RunnerBase):
         """Record a run's end and announce it unless `quiet`.
 
         `title` replaces the task number in the push (e.g. a scheduled job). `alert=False` or do-not-disturb skips the
-        Mac notification and push; it's still spoken in a live session or at the next greeting."""
+        desktop notification and push; it's still spoken in a live session or at the next greeting."""
         fields.setdefault("seen", 0 if status in PUSH_TITLES else 1)
         if status != "waiting":  # orders apply only to the work just finished
             fields["orders"] = None
@@ -67,8 +68,12 @@ class Events(RunnerBase):
             self._background(self._push(title or PUSH_TITLES[status].format(id=task_id), spoken, *task_target(task_id)))
 
     async def _notify(self, title: str, text: str) -> None:
+        """A Mac notification, or notify-send's on a Linux desktop; skipped where there's neither."""
         try:
-            await mac_notify(title, text)
+            if platform.MAC:
+                await mac_notify(title, text)
+            elif desktop.can_notify():
+                await desktop.notify(title, text)
         except Exception as e:
             log.warning("notification failed: %s", e)
 

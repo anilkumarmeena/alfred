@@ -341,9 +341,10 @@ def test_the_guard_reads_https_and_plain_http_requests():
 
 
 def test_a_refused_load_says_why():
-    refused = {"localhost": "localhost is on this Mac or its local network."}
+    refused = {"localhost": "localhost is on this computer or its local network."}
     assert browser._why("Page.goto: net::ERR_TUNNEL_CONNECTION_FAILED at https://localhost/\nCall log: ...",
-                        "https://localhost/", refused) == "Not opened: localhost is on this Mac or its local network."
+                        "https://localhost/", refused) == \
+        "Not opened: localhost is on this computer or its local network."
     assert "Couldn't reach nowhere.example" in browser._why("net::ERR_TUNNEL_CONNECTION_FAILED",
                                                            "https://nowhere.example/", {})
     assert "didn't load within 30 seconds" in browser._why("Timeout 30000ms exceeded.", "https://slow.example/", {})
@@ -377,7 +378,7 @@ def test_the_browser_goes_through_the_guard_with_webrtc_kept_to_it(monkeypatch, 
     assert seen["headless"] is False and seen["no_viewport"] and not seen["accept_downloads"]
 
 
-# ── A real browser, against a page on this Mac ──────────────────
+# ── A real browser, against a page on this computer ─────────────
 
 PAGE = b"""<!doctype html><html><head><title>Test page</title></head><body>
 <nav>Menu</nav><main><h1>Welcome</h1><p>%s</p><a href="/two">Second page</a> <a href="https://example.com/">Out</a>
@@ -396,7 +397,7 @@ def site(monkeypatch, tmp_path):
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             asked.append(self.path)
-            if self.path == "/redirect":  # redirects to this Mac's own address
+            if self.path == "/redirect":  # redirects to this computer's own address
                 self.send_response(302)
                 self.send_header("Location", f"http://localhost:{port}/secret")
                 self.end_headers()

@@ -1,13 +1,16 @@
-"""Run commands on the Mac outside Claude Code's sandbox: task host_run/start_job and voice-shell long jobs.
+"""Run commands on the host outside Claude Code's sandbox: task host_run/start_job and voice-shell long jobs.
 
-Task commands run under `sandbox-exec` with `profile()`: allow by default, deny only
+Task commands run inside walls: allow by default, deny only
   - reading secrets (JARVIS secrets/ and .env, home logins/keys, secret-named files in home; commands.py lists)
   - writing JARVIS's folder, except task worktrees, cache, data/tasks/ and git objects
-  - writing home logins, shell start-up files and launch agents; the runner socket; setuid /bin/ps
-Network and other writes stay open (Xcode, package caches). `task_env()` strips .env keys and credential-named
-vars but keeps SSH_AUTH_SOCK. Approved brew/port installs (commands.own_sandbox) can't nest and run `walls=False`.
+  - writing home logins, shell start-up files and launch agents / systemd user units; the runner socket
+On macOS that's `sandbox-exec` with `profile()` (plus: no setuid /bin/ps). On Linux it's bubblewrap with
+`bwrap_args()`: the same rules as mounts, plus a pid namespace (no other process's /proc/<pid>/environ) and no session
+D-Bus (Secret Service, systemd-run). Network and other writes stay open (Xcode, package caches). `task_env()` strips
+.env keys and credential-named vars but keeps SSH_AUTH_SOCK. Approved brew/port installs (commands.own_sandbox) can't
+nest and run `walls=False` on macOS.
 
-  uv run python -m jarvis.safety.host check    runs the profile's own checks on this Mac
+  uv run python -m jarvis.safety.host check    runs the walls' own checks on this computer
 """
 
 import asyncio
@@ -16,27 +19,47 @@ import functools
 import json
 import logging
 import os
+import pwd
 import re
+import shutil
 import signal
 import subprocess
 import sys
 import time
+from collections import deque
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import dotenv_values
 
-from jarvis.core import credentials, logins, profile as profiles
+from jarvis.core import credentials, logins, platform, profile as profiles
 from jarvis.core.config import DATA_DIR, DB_FILE, ROOT, RUNNER_SOCKET, TASK_CACHE_DIR, WORKTREES_DIR
 from jarvis.core.files import write_atomic
 from jarvis.safety.commands import HOME_SECRETS, JARVIS_SECRETS, SECRET_DIRS, secret_file_names
 
 log = logging.getLogger("jarvis.safety.host")
 
+
+def _login_shell() -> tuple[str, str]:
+    """zsh on macOS; on Linux the user's own zsh or bash, else bash, else sh. A login shell, for the user's PATH."""
+    if platform.MAC:
+        return "/bin/zsh", "-lc"
+    try:
+        mine = pwd.getpwuid(os.getuid()).pw_shell
+    except KeyError:
+        mine = ""
+    for shell in (mine if Path(mine).name in ("zsh", "bash") else "", "/bin/bash", "/usr/bin/bash",
+                  shutil.which("bash") or ""):
+        if shell and os.access(shell, os.X_OK):
+            return shell, "-lc"
+    return "/bin/sh", "-lc"
+
+
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
+BWRAP = "/usr/bin/bwrap"  # else the first bwrap on PATH
 PS = "/bin/ps"  # setuid root: can show any process's environment
-SHELL = ("/bin/zsh", "-lc")  # login shell, for Homebrew's and the user's PATH
+SHELL = _login_shell()
 TASK_DATA_DIR = DATA_DIR / "tasks"  # research task folders and task jobs
 TASK_JOBS_DIR = TASK_DATA_DIR / "jobs"
 MAX_OUTPUT = 30_000  # chars of host_run output kept (head and tail)
@@ -50,6 +73,11 @@ _PEM_KEPT = r"/(site-packages|dist-packages|node_modules|Cellar)/|/(ca|cert|cert
 # Home files that could run something later, outside the walls
 _STARTUP_FILES = [".zshrc", ".zprofile", ".zshenv", ".zlogin", ".bashrc", ".bash_profile", ".profile", ".gitconfig"]
 _STARTUP_DIRS = ["Library/LaunchAgents", ".config/git"]
+# Linux adds login, X session and systemd user unit files (JARVIS's own services are in ~/.config/systemd/user)
+_LINUX_STARTUP_FILES = [".bash_login", ".bash_logout", ".zlogout", ".xprofile", ".xsession", ".xsessionrc", ".xinitrc",
+                        ".pam_environment"]
+_LINUX_STARTUP_DIRS = [".config/systemd", ".config/autostart", ".config/environment.d", ".config/fish",
+                       ".local/share/systemd"]
 # Variable names that carry a credential
 SENSITIVE = re.compile(r"TOKEN|SECRET|PASSWORD|PASSCODE|API_?KEY|PRIVATE_KEY|MASTER_KEY|CREDENTIAL|AUTH",
                         re.IGNORECASE)
@@ -129,15 +157,243 @@ def scrubbed_env() -> dict[str, str]:
 
 
 def task_env() -> dict[str, str]:
-    """scrubbed_env() minus credential-named vars, keeping SSH_AUTH_SOCK."""
-    return {k: v for k, v in scrubbed_env().items() if k in _KEPT or not SENSITIVE.search(k)}
+    """scrubbed_env() minus credential-named vars, keeping SSH_AUTH_SOCK. On Linux also without the session bus."""
+    dropped = {"DBUS_SESSION_BUS_ADDRESS"} if platform.LINUX else set()
+    return {k: v for k, v in scrubbed_env().items()
+            if k in _KEPT or not (SENSITIVE.search(k) or k in dropped)}
 
 
 def walled(argv: list[str], home: Path | str | None = None) -> list[str]:
-    """Wrap argv in the host profile. Raises RuntimeError if sandbox-exec is missing (never runs unwalled)."""
-    if not Path(SANDBOX_EXEC).exists():
-        raise RuntimeError("sandbox-exec isn't on this Mac, so host commands can't run safely")
-    return [SANDBOX_EXEC, "-p", profile(home), *argv]
+    """Wrap argv in the host walls. Raises RuntimeError if they can't go up (never runs unwalled)."""
+    if platform.MAC:
+        if not Path(SANDBOX_EXEC).exists():
+            raise RuntimeError("sandbox-exec isn't on this computer, so host commands can't run safely")
+        return [SANDBOX_EXEC, "-p", profile(home), *argv]
+    if platform.LINUX:
+        bwrap = _bwrap()
+        for folder in (WORKTREES_DIR, TASK_CACHE_DIR, TASK_DATA_DIR):  # can't be made from inside
+            folder.mkdir(parents=True, exist_ok=True)
+        return [bwrap, *bwrap_args(home), *argv]
+    raise RuntimeError(f"host commands have no walls on {sys.platform}, so they can't run safely")
+
+
+# ── The walls on Linux (bubblewrap) ─────────────────────────────
+# The Seatbelt rules as mounts over the whole filesystem (bound read-write, as macOS allows by default):
+#   denied reads   a read-only empty tmpfs over a folder, /dev/null over a file
+#   denied writes  a read-only bind
+#   home, ~/.config, JARVIS's data folder  rebuilt: a tmpfs with each existing entry bound back. Missing start-up files
+#                  and logins then can't be created, and the runner socket (left out) stays out even if it's remade.
+# Mounts go shallowest first, so a deeper one (a task worktree, ~/.ssh/known_hosts) lands on top. --unshare-pid hides
+# other processes and their environments; the session is the bwrap process's, so jobs are tracked and stopped as on
+# macOS (killing the namespace's init ends everything inside). No --new-session: it would start a session of its own,
+# and with no controlling terminal and a fresh /dev/pts there's no terminal to inject into. No --die-with-parent: jobs
+# outlive the runner. bwrap sets no_new_privs, so setuid programs (sudo) can't gain root.
+# Weaker than Seatbelt's regexes: secret-named files are found by a bounded walk at launch (_WALK_*), so one deeper,
+# in a skipped folder, or made later is readable; a masked file replaced by rename during a long job shows through.
+
+# The walk for secret-named files under home and JARVIS's folder
+_WALK_ENTRIES = 100_000  # directory entries looked at per launch, breadth first
+_WALK_DEPTH = 8  # folder levels below each root
+_WALK_REUSE = 60  # seconds a walk's findings are reused (a big home takes a second or two)
+_WALK_SKIPPED = {"node_modules", ".git", "__pycache__", "site-packages", "dist-packages", ".venv", "venv", ".tox",
+                 ".cache", ".npm", ".rustup", ".gradle", ".m2", "snap", "Library", ".Trash"}
+# Hardware some host work needs (emulators, GPUs, a phone over USB); none of it holds secrets
+_DEVICES = ["/dev/kvm", "/dev/dri", "/dev/bus/usb"]
+_BWRAP_MISSING = ("bubblewrap (bwrap) isn't installed, so host commands can't run safely. Install it "
+                  "(sudo apt install bubblewrap, or sudo dnf install bubblewrap) and try again")
+
+# Rules, weakest first: a path keeps the strictest given
+RW, LINK, TMPFS_RW, TMPFS, RO, MASK = "rw", "link", "tmpfs-rw", "tmpfs", "ro", "mask"
+_RANK = {RW: 0, LINK: 1, TMPFS_RW: 2, TMPFS: 3, RO: 4, MASK: 5}
+
+_bwrap_ready = ""  # the bwrap that has started a sandbox here
+
+
+def _bwrap() -> str:
+    """bwrap's path, once it's shown it can build a sandbox here; else RuntimeError saying how to fix it."""
+    global _bwrap_ready
+    path = BWRAP if os.access(BWRAP, os.X_OK) else shutil.which("bwrap")
+    if not path:
+        raise RuntimeError(_BWRAP_MISSING)
+    if path == _bwrap_ready:
+        return path
+    try:
+        probe = subprocess.run([path, "--unshare-pid", "--bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
+                                "/bin/sh", "-c", "exit 0"], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                               timeout=30, check=False)
+        why = (probe.stderr.strip() or f"exit code {probe.returncode}") if probe.returncode else ""
+    except (OSError, subprocess.TimeoutExpired) as e:
+        why = str(e)
+    if why:
+        raise RuntimeError(
+            f"bubblewrap can't build its sandbox here ({why[:300]}), so host commands can't run safely. Unprivileged "
+            "user namespaces are probably off: on Ubuntu 23.10 and later AppArmor restricts them (give bwrap an "
+            "AppArmor profile that allows userns, or sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0); "
+            "elsewhere check sysctl kernel.unprivileged_userns_clone and user.max_user_namespaces")
+    _bwrap_ready = path
+    return path
+
+
+_walks: dict[tuple, tuple[float, list[str]]] = {}  # (roots, skip) -> (when, found)
+
+
+def _secret_matches(roots: list[str], skip: set[str]) -> list[str]:
+    """_walk's findings, reused for _WALK_REUSE seconds."""
+    key = (tuple(roots), frozenset(skip))
+    if (kept := _walks.get(key)) and time.monotonic() - kept[0] < _WALK_REUSE:
+        return kept[1]
+    _walks.clear()
+    found = _walk(roots, skip)
+    _walks[key] = time.monotonic(), found
+    return found
+
+
+def _walk(roots: list[str], skip: set[str]) -> list[str]:
+    """Secret-named files and folders under `roots`, breadth first within _WALK_DEPTH and _WALK_ENTRIES."""
+    names = re.compile(_SECRET_FILE_NAMES, re.IGNORECASE)
+    pem_kept = re.compile(_PEM_KEPT)
+    found: list[str] = []
+    seen = 0
+    roots = [r for r in dict.fromkeys(roots) if os.path.isdir(r)]
+    queue = deque((r, 0) for r in roots)
+    skip = skip | set(roots)  # each root is walked once, not again from inside another
+    while queue:
+        folder, depth = queue.popleft()
+        try:
+            entries = list(os.scandir(folder))
+        except OSError:
+            continue
+        for entry in entries:
+            seen += 1
+            if seen > _WALK_ENTRIES:
+                log.warning("secret walk stopped after %d entries: deeper secret-named files stay readable", _WALK_ENTRIES)
+                return found
+            if entry.path in skip:
+                continue
+            try:
+                is_dir = entry.is_dir()
+                linked = entry.is_symlink()
+            except OSError:
+                continue
+            if entry.name in SECRET_DIRS:
+                found.append(entry.path)
+            elif is_dir:
+                if not linked and entry.name not in _WALK_SKIPPED and depth < _WALK_DEPTH:
+                    queue.append((entry.path, depth + 1))
+            elif names.fullmatch(entry.name) or (entry.name.lower().endswith(".pem") and not pem_kept.search(entry.path)):
+                found.append(entry.path)
+    return found
+
+
+def _bus_paths() -> list[str]:
+    """Socket paths in DBUS_SESSION_BUS_ADDRESS. An abstract one can't be hidden without cutting the network."""
+    paths = []
+    for address in os.environ.get("DBUS_SESSION_BUS_ADDRESS", "").split(";"):
+        if address.startswith("unix:"):
+            paths += [kv[5:] for kv in address[5:].split(",") if kv.startswith("path=")]
+    return paths
+
+
+def _ancestors(path: str) -> Iterator[str]:
+    while (parent := os.path.dirname(path)) != path:
+        yield (path := parent)
+
+
+def bwrap_args(home: Path | str | None = None) -> list[str]:
+    """bubblewrap options for a task's host commands on Linux: profile()'s rules as mounts. The command follows."""
+    home = _real(home or Path.home())
+    root, data, sock = _real(ROOT), _real(DATA_DIR), _real(RUNNER_SOCKET)
+    rules: dict[str, str] = {}
+    rebuilt: dict[str, tuple[str, set[str]]] = {}  # folder -> (its entries' rule, names left out)
+
+    def put(path: str, rule: str) -> None:
+        if os.path.lexists(path) and _RANK[rule] > _RANK.get(rules.get(path, ""), -1):
+            rules[path] = rule
+
+    def rebuild(folder: str, entries: str, base: str = TMPFS, left_out: Iterable[str] = ()) -> None:
+        if os.path.isdir(folder):
+            put(folder, base)
+            rebuilt[folder] = entries, set(left_out)
+
+    # Writes: JARVIS's folder only in task worktrees, cache, task folders and git objects (not hooks or config)
+    put(root, RO)
+    if os.path.dirname(sock) == data:
+        rebuild(data, RO, left_out=[os.path.basename(sock)])
+    else:
+        rebuild(data, RO)
+        put(sock, MASK)
+    for folder in (WORKTREES_DIR, TASK_CACHE_DIR, TASK_DATA_DIR):
+        put(_real(folder), RW)
+    git = f"{root}/.git"
+    put(git, RW)
+    put(f"{git}/hooks", RO)
+    put(f"{git}/config", RO)
+    rebuild(home, RW)
+    rebuild(_real(f"{home}/.config"), RW)
+    for name in [*_STARTUP_FILES, *_STARTUP_DIRS, *_LINUX_STARTUP_FILES, *_LINUX_STARTUP_DIRS]:
+        put(_real(f"{home}/{name}"), RO)  # a linked dotfile's target too
+    # Reads
+    secret_paths = [_real(p) for p in JARVIS_SECRETS] + [_real(p.replace("~", home, 1)) for p in HOME_SECRETS]
+    for path in secret_paths:
+        put(path, MASK)
+    shown = [_real(profiles.current().voice_logs), *(_real(f"{home}/.ssh/{name}") for name in _SSH_READABLE)]
+    if agent := os.environ.get("SSH_AUTH_SOCK"):
+        shown.append(_real(agent))  # the agent signs without giving out keys, even from inside ~/.ssh
+    walked = {p for p, rule in rules.items() if rule == MASK} | set(shown)
+    for path in _secret_matches([root, home], walked):
+        put(_real(path), MASK)
+    # The session bus: the Secret Service hands out keyring passwords, systemd-run starts anything outside the walls
+    runtime = _real(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+    rebuild(runtime, RW, TMPFS_RW, left_out=["bus", "systemd"])
+    for path in _bus_paths():
+        put(_real(path), MASK)
+
+    links: dict[str, str] = {}
+    for folder, (rule, left_out) in rebuilt.items():
+        if rules.get(folder) not in (TMPFS, TMPFS_RW):
+            continue  # masked instead
+        try:
+            entries = sorted(os.scandir(folder), key=lambda e: e.name)
+        except OSError as e:
+            raise RuntimeError(f"can't list {folder} to wall it in ({e}), so host commands can't run safely") from e
+        for entry in entries:
+            if entry.name in left_out or entry.path in rules:
+                continue
+            if entry.is_symlink():
+                links[entry.path] = os.readlink(entry.path)
+                rules[entry.path] = LINK
+            else:
+                rules[entry.path] = rule
+
+    # Nothing under a hidden folder comes back, except what's shown
+    hidden = {p for p, rule in rules.items() if rule == MASK and os.path.isdir(p)}
+    rules = {p: rule for p, rule in rules.items() if hidden.isdisjoint(_ancestors(p))}
+    shown = [p for p in dict.fromkeys(shown) if os.path.lexists(p) and not hidden.isdisjoint(_ancestors(p))]
+
+    args = ["--unshare-pid", "--bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
+    for device in _DEVICES + sorted(str(p) for p in Path("/dev").glob("nvidia*")):
+        args += ["--dev-bind-try", device, device]
+    read_only_tmpfs = []
+    for path in sorted(rules, key=lambda p: (p.count("/"), p)):
+        rule = rules[path]
+        if rule == RW:
+            args += ["--bind", path, path]
+        elif rule == RO:
+            args += ["--ro-bind", path, path]
+        elif rule == LINK:
+            args += ["--symlink", links[path], path]
+        elif rule == TMPFS_RW:
+            args += ["--tmpfs", path]
+        elif rule == TMPFS or path in hidden:
+            args += ["--tmpfs", path]
+            read_only_tmpfs.append(path)
+        else:  # a masked file
+            args += ["--ro-bind", "/dev/null", path]
+    for path in shown:
+        args += ["--ro-bind", path, path]
+    for path in read_only_tmpfs:  # after what's mounted inside them
+        args += ["--remount-ro", path]
+    return args
 
 
 # ── Commands ────────────────────────────────────────────────────
@@ -196,8 +452,10 @@ async def run(command: str, cwd: Path, timeout: float = RUN_TIMEOUT, walls: bool
     """
     argv = [*shell, command]
     start = time.monotonic()
+    if walls:
+        argv = await asyncio.to_thread(walled, argv)  # on Linux it walks home for secret-named files
     proc = await asyncio.create_subprocess_exec(
-        *(walled(argv) if walls else argv), cwd=cwd, env=task_env() | (env or {}), stdin=subprocess.DEVNULL,
+        *argv, cwd=cwd, env=task_env() | (env or {}), stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
     if started:
         started(proc.pid)
@@ -210,7 +468,8 @@ async def run(command: str, cwd: Path, timeout: float = RUN_TIMEOUT, walls: bool
     reader = asyncio.ensure_future(read())
     try:
         await asyncio.wait_for(asyncio.shield(reader), timeout)
-        code = await proc.wait()
+        # Under bubblewrap the leader also waits for everything left in its pid namespace, so this is bounded too
+        code = await asyncio.wait_for(proc.wait(), max(timeout - (time.monotonic() - start), 5))
     except TimeoutError:
         _kill(proc.pid)
         try:  # a child in its own session may still hold the output open
@@ -262,6 +521,11 @@ def _info(pid: int) -> _BsdInfo | None:
 
 def _pids() -> list[int]:
     """Every process's pid."""
+    if _procfs():
+        try:
+            return [int(name) for name in os.listdir(_PROC) if name.isdigit()]
+        except OSError:
+            return []
     if (lib := _libproc()) is None or (count := lib.proc_listallpids(None, 0)) <= 0:
         return []
     buffer = (ctypes.c_int * (count + 64))()
@@ -273,8 +537,53 @@ def _start(info: _BsdInfo) -> float:
     return info.start_sec + info.start_usec / 1e6
 
 
+# Linux: /proc/<pid>/stat has the session, state, start time and name
+_PROC = Path("/proc")
+
+
+def _procfs() -> bool:
+    return platform.LINUX
+
+
+@dataclass(frozen=True)
+class _Process:
+    pid: int
+    start: float  # epoch seconds
+    name: str
+    zombie: bool  # ended, not yet reaped
+
+
+@functools.cache
+def _clock_ticks() -> int:
+    return os.sysconf("SC_CLK_TCK")
+
+
+def _boot_time() -> float:
+    """Boot time, epoch seconds. NaN if unknown, so no start time ever matches and nothing is signalled."""
+    try:
+        for line in (_PROC / "stat").read_text().splitlines():
+            if line.startswith("btime "):
+                return float(line.split()[1])
+    except (OSError, ValueError):
+        pass
+    return float("nan")
+
+
+def _stat(pid: int) -> tuple[int, _Process] | None:
+    """(session id, process) for a running pid on Linux, or None."""
+    try:
+        raw = (_PROC / str(pid) / "stat").read_text(errors="replace")
+        name, rest = raw[raw.index("(") + 1:raw.rindex(")")], raw[raw.rindex(")") + 2:].split()
+        state, sid, ticks = rest[0], int(rest[3]), int(rest[19])  # fields 3, 6 and 22 of proc(5)
+    except (OSError, ValueError, IndexError):
+        return None
+    return sid, _Process(pid, _boot_time() + ticks / _clock_ticks(), name, state in ("Z", "X"))
+
+
 def started_at(pid: int) -> float | None:
     """Process start time (epoch seconds), or None if not running."""
+    if _procfs():
+        return found[1].start if (found := _stat(pid)) else None
     return _start(info) if (info := _info(pid)) else None
 
 
@@ -299,8 +608,13 @@ def in_sessions(pid: int, sessions: Iterable[tuple[int, float]]) -> bool:
 _SZOMB = 5  # zombie: ended, not yet reaped (sys/proc.h)
 
 
-def _session(leader: int) -> Iterator[tuple[int, _BsdInfo]]:
-    """(pid, info) for every process in a session, across process groups."""
+def _session(leader: int) -> Iterator[_Process]:
+    """Every process in a session, across process groups."""
+    if _procfs():
+        for pid in _pids():
+            if (found := _stat(pid)) and found[0] == leader:
+                yield found[1]
+        return
     for pid in _pids():
         try:
             if os.getsid(pid) != leader:
@@ -308,32 +622,34 @@ def _session(leader: int) -> Iterator[tuple[int, _BsdInfo]]:
         except OSError:
             continue
         if info := _info(pid):
-            yield pid, info
+            yield _Process(pid, _start(info), (info.name or info.comm).decode(errors="replace"), info.status == _SZOMB)
 
 
 def session_members(leader: int) -> list[int]:
     """Live (non-zombie) pids in a session, across process groups."""
-    return [pid for pid, info in _session(leader) if info.status != _SZOMB]
+    return [p.pid for p in _session(leader) if not p.zombie]
 
 
 def lingering(leader: int) -> list[tuple[int, str]]:
     """(pid, program name) of non-leader processes in a session, oldest first."""
-    found = sorted((_start(info), pid, (info.name or info.comm).decode(errors="replace"))
-                   for pid, info in _session(leader) if pid != leader)
+    found = sorted((p.start, p.pid, p.name) for p in _session(leader) if p.pid != leader)
     return [(pid, name) for _, pid, name in found]
 
 
 # ── Long jobs ───────────────────────────────────────────────────
 
-# Runs the command, writes its exit status, and posts a Mac notification even if nobody is listening.
+# Runs the command, writes its exit status, and posts a desktop notification even if nobody is listening.
 # Not `status`: it's read-only in zsh and assigning it would abort before the exit file is written.
-_JOB_SCRIPT = """(eval "$JARVIS_JOB_COMMAND")
+_NOTIFY = ("""  osascript -e 'on run argv' -e 'display notification (item 1 of argv) with title "JARVIS"' -e 'end run' \\
+    -- "Job $JARVIS_JOB_ID, $JARVIS_JOB_TITLE, $word." >/dev/null 2>&1""" if platform.MAC else
+           """  command -v notify-send >/dev/null 2>&1 && notify-send --app-name=JARVIS -- "JARVIS" \\
+    "Job $JARVIS_JOB_ID, $JARVIS_JOB_TITLE, $word." >/dev/null 2>&1""")
+_JOB_SCRIPT = f"""(eval "$JARVIS_JOB_COMMAND")
 exit_code=$?
 echo "$exit_code" > "$JARVIS_JOB_EXIT"
 if [ -n "$JARVIS_JOB_NOTIFY" ]; then
   if [ "$exit_code" -eq 0 ]; then word=finished; else word=failed; fi
-  osascript -e 'on run argv' -e 'display notification (item 1 of argv) with title "JARVIS"' -e 'end run' \
-    -- "Job $JARVIS_JOB_ID, $JARVIS_JOB_TITLE, $word." >/dev/null 2>&1
+{_NOTIFY}
 fi
 exit "$exit_code"
 """
@@ -402,9 +718,10 @@ class Jobs:
             "JARVIS_JOB_TITLE": title, "JARVIS_JOB_NOTIFY": "1" if self.notify else "",
         }
         argv = [*self.shell, _JOB_SCRIPT]
+        argv = walled(argv) if self.walls and walls else argv  # before the log, so a refusal leaves none
         # Popen, not asyncio subprocesses, which kill their child when the loop drops them
         with open(f"{base}.log", "wb") as out:
-            proc = subprocess.Popen(walled(argv) if self.walls and walls else argv, cwd=cwd, env=env,
+            proc = subprocess.Popen(argv, cwd=cwd, env=env,
                                     stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
         job = {"id": job_id, "title": title, "command": command, "folder": str(cwd), "pid": proc.pid, "started": time.time()}
         if task is not None:
@@ -543,9 +860,9 @@ class Jobs:
         return stopped
 
 
-# ── Checking the walls on this Mac ──────────────────────────────
+# ── Checking the walls on this computer ─────────────────────────
 
-def _checks() -> list[tuple[str, str, bool]]:  # (what, command, should succeed)
+def _mac_checks() -> list[tuple[str, str, bool]]:  # (what, command, should succeed)
     return [
         ("reads JARVIS's .env", f"head -c1 {ROOT / '.env'}", False),
         ("reads secrets/", f"ls {JARVIS_SECRETS[0]}", False),
@@ -568,11 +885,51 @@ def _checks() -> list[tuple[str, str, bool]]:  # (what, command, should succeed)
     ]
 
 
+def _linux_checks() -> list[tuple[str, str, bool]]:  # (what, command, should succeed)
+    # A hidden folder is an empty tmpfs and a hidden file /dev/null, so "blocked" means nothing seen, not an error
+    db_read = (f"sqlite3 -readonly {DB_FILE} 'select count(*) from tasks' || python3 -c 'import sqlite3, sys; "
+               f"sqlite3.connect(\"file:\" + sys.argv[1] + \"?mode=ro\", uri=True).execute(\"select count(*) from tasks\")' {DB_FILE}")
+    return [
+        ("reads JARVIS's .env", f"head -c1 {ROOT / '.env'} | grep -q ''", False),
+        ("sees what's in secrets/", f"ls -A {JARVIS_SECRETS[0]} | grep -q .", False),
+        ("sees more of ~/.ssh than known_hosts and config", "ls -A ~/.ssh | grep -vxE 'known_hosts2?|config' | grep -q .",
+         False),
+        ("reads an SSH key file", "head -c1 ~/.ssh/id_ed25519 || head -c1 ~/.ssh/id_rsa || head -c1 ~/.ssh/id_ecdsa", False),
+        ("reaches the SSH agent", "ssh-add -l >/dev/null 2>&1; test $? -ne 2", True),
+        ("signs in to GitHub over SSH, through the agent",
+         "ssh -o BatchMode=yes -o ConnectTimeout=15 -T git@github.com 2>&1 | grep -q 'successfully authenticated'", True),
+        ("sees the keyring files", "ls -A ~/.local/share/keyrings | grep -q .", False),
+        ("reaches the session bus (Secret Service, systemd-run)", 'test -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus"',
+         False),
+        ("writes tasks.db", f"touch {DB_FILE}", False),
+        ("writes in JARVIS's folder", f"touch {ROOT / '.host-check'} && rm {ROOT / '.host-check'}", False),
+        ("creates a file at the top of home (a shell start-up file)", "touch ~/.host-check && rm ~/.host-check", False),
+        ("writes systemd user units", ("mkdir -p ~/.config/systemd/user && touch ~/.config/systemd/user/.host-check "
+                                       "&& rm ~/.config/systemd/user/.host-check"), False),
+        ("reaches the runner's socket", f"curl -s --max-time 5 --unix-socket {RUNNER_SOCKET} http://runner/tasks", False),
+        ("keeps JARVIS's keys out of its environment", 'test -z "$JARVIS_PASSCODE$LIVEKIT_API_SECRET"', True),
+        ("reads other processes' environments (/proc)", f"head -c1 /proc/{os.getpid()}/environ | grep -q ''", False),
+        ("gains root through sudo", "sudo -n true", False),
+        ("reads the voice session logs", f"ls {profiles.current().voice_logs}", True),
+        ("reads tasks.db", db_read, True),
+        ("writes the task cache", f"touch {TASK_CACHE_DIR / '.host-check'} && rm {TASK_CACHE_DIR / '.host-check'}", True),
+        ("reaches PyPI over HTTPS", "curl -sI --max-time 20 https://pypi.org/simple/ | head -1 | grep -q 200", True),
+    ]
+
+
+def _checks() -> list[tuple[str, str, bool]]:
+    return _mac_checks() if platform.MAC else _linux_checks()
+
+
 async def check() -> bool:
     """Run each check under the profile; True if all behave as expected."""
     good = True
     for what, command, should in _checks():
-        ran = await run(command, TASK_CACHE_DIR if TASK_CACHE_DIR.is_dir() else Path.home(), timeout=60)
+        try:
+            ran = await run(command, TASK_CACHE_DIR if TASK_CACHE_DIR.is_dir() else Path.home(), timeout=60)
+        except RuntimeError as e:  # the walls can't go up here
+            print(f"FAIL  {e}")
+            return False
         worked = ran.code == 0
         ok = worked == should
         good &= ok

@@ -251,7 +251,7 @@ def problems(where: Path, name: str | None = None) -> list[str]:
     if extra := [str(k) for k in meta if k not in KEPT]:
         found.append(f"its frontmatter has {', '.join(extra)}, which JARVIS doesn't allow")
     if linked := links(where):
-        found.append(f"it holds links ({', '.join(linked[:3])}), which could point anywhere on the Mac")
+        found.append(f"it holds links ({', '.join(linked[:3])}), which could point anywhere on the computer")
     return found
 
 

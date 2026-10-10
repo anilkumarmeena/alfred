@@ -3,7 +3,7 @@
 A profile has a name, time zone, data folder, database and secrets folder. Install-wide state (code, models, Claude
 login, runner socket, worktrees, caches) stays in config.
 
-The "owner" profile uses data/ and data/tasks.db; its name/time zone come from .env, then the table, then the Mac.
+The "owner" profile uses data/ and data/tasks.db; its name/time zone come from .env, then the table, then the computer.
 current() resolves: context (`using`) > process (`activate`) > owner, re-read at most every FRESH_SECONDS so
 Settings changes apply without a restart.
 """
@@ -31,8 +31,8 @@ ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")  # used as a folder name
 _SCHEMA = """
 create table profiles (
     id text primary key,
-    name text not null default '',      -- '' = Mac account's first name
-    timezone text not null default '',  -- '' = Mac's time zone
+    name text not null default '',      -- '' = computer account's first name
+    timezone text not null default '',  -- '' = computer's time zone
     data_dir text,                      -- null = data/ (owner) or data/profiles/<id>
     db_file text,                       -- null = config.DB_FILE (owner) or <data_dir>/tasks.db
     created real not null
@@ -102,6 +102,10 @@ class Profile:
         return self.data / "push_devices.json"  # APNs tokens, one per app install
 
     @property
+    def fcm_devices(self) -> Path:
+        return self.data / "fcm_devices.json"  # FCM tokens, one per Android app install
+
+    @property
     def audio(self) -> Path:
         return self.data / "audio"  # audio files being rendered
 
@@ -139,7 +143,7 @@ def _seed() -> None:
 
 
 def resolve(row: dict) -> Profile:
-    """Build a Profile from a row, filling gaps from .env (owner only), then the Mac, then defaults."""
+    """Build a Profile from a row, filling gaps from .env (owner only), then the computer, then defaults."""
     from jarvis.core import config
     pid, owner = row["id"], row["id"] == OWNER
     env = (lambda key: os.environ.get(config.PREFERENCES[key], "").strip()) if owner else (lambda key: "")

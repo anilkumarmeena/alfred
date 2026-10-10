@@ -7,7 +7,7 @@
 Safety: every tool call passes TaskGate (also as a PreToolUse hook, since skills' allowed-tools become allow rules).
 Reads stay in task folders, TASK_READ_DIRS and voice logs; writes in the worktree. Secrets are hidden from file tools
 and the sandbox. code_change shell runs sandboxed (writes: worktree + cache; network: open); escaping is denied.
-Mac-level work goes through host tools (host_tools), gated by `_host_gate`. The CLI's env has .env values blanked.
+Host-level work goes through host tools (host_tools), gated by `_host_gate`. The CLI's env has .env values blanked.
 Tasks never write JARVIS's data files; they propose edits. Extra access (jarvis.tasks.access) shapes `_options`.
 Code tasks load the project's Claude setup (project_claude); JARVIS's enabled skills load as a plugin. JARVIS's
 helper subagents win name clashes. A run doesn't end while background subagents run, nor without a final report.
@@ -49,7 +49,7 @@ from jarvis.core.config import (
     TASK_MODEL,
     TASK_READ_DIRS,
 )
-from jarvis.core import profile
+from jarvis.core import platform, profile
 from jarvis.integrations import mcp_servers
 from jarvis.safety import host
 from jarvis.skills import home as skills
@@ -94,8 +94,9 @@ ARTIFACT_ENV = {"CLAUDE_CODE_ARTIFACT": "1"}  # undocumented; the CLI omits Arti
 
 
 # "*" allows every domain through the sandbox proxy. configd (macOS network settings) is needed by uv and other
-# Rust tools that read the system proxy, or they crash on start.
-OPEN_NETWORK = {"allowedDomains": ["*"], "allowMachLookup": ["com.apple.SystemConfiguration.configd"]}
+# Rust tools that read the system proxy, or they crash on start; Mach lookups are a Seatbelt rule, so Mac only.
+OPEN_NETWORK = {"allowedDomains": ["*"]} | (
+    {"allowMachLookup": ["com.apple.SystemConfiguration.configd"]} if platform.MAC else {})
 
 
 def _cache_env() -> dict[str, str]:
@@ -269,7 +270,7 @@ def _describe(block: ToolUseBlock) -> str | None:
     if name == ARTIFACT and (args.get("action") or "publish") == "publish":
         return f"publishing {Path(args.get('file_path') or '').name} to claude.ai"
     if name == HOST_RUN:
-        return f"running on the Mac: {args.get('command', '')[:80]}"
+        return f"running on the computer: {args.get('command', '')[:80]}"
     if name == START_JOB:
         return f"starting job: {args.get('title') or args.get('command', '')[:60]}"
     if name == JOB_WAIT:

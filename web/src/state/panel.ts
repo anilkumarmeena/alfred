@@ -348,7 +348,7 @@ export async function forgetRule(rule: Rule) {
 
 // ── Activity, toasts, palette ───────────────────────────────────
 
-// Activity bell: shared across devices, stored on the Mac. Read state is per device (newest seen id in localStorage).
+// Activity bell: shared across devices, stored on JARVIS's computer. Read state is per device (newest seen id in localStorage).
 export const activity = signal<Activity[]>([]);
 export const activityOpen = signal(false);
 const seenActivity = signal(Number(storage.get(ACTIVITY_KEY)) || 0);

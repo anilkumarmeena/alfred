@@ -19,7 +19,7 @@ Reply in JSON:
   "complete": everything asked for is done.
   "incomplete": something is missing. Use it only for work the task can do itself, with its own tools.
   "blocked": what's left needs {{user_name}}: their decision or preference, credentials or access, approval, or a tool
-  or device the task can't get (such as full Xcode, a paid account or the iPhone).
+  or device the task can't get (such as full Xcode, a paid account or {{user_name}}'s phone).
 - "said": one plain sentence: for complete, what was done; for incomplete, what's missing; for blocked, what's left and
   why it needs {{user_name}}.
 - "to_finish": for incomplete, a short list of exactly what to finish or verify, each item concrete enough to act on;

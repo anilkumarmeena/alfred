@@ -18,7 +18,7 @@ def test_the_voice_shell_uses_the_shared_rules():
     ("cd app && npm install -g eas-cli", "installs software (npm install)"),
     ("echo $(kill -9 123)", "stops a process (kill)"),
     ("xcrun devicectl device uninstall app --device X com.example.jarvis", "changes the iPhone (devicectl device)"),
-    ("curl -X POST -d @a.json https://x.io", "sends data off the Mac (curl)"),
+    ("curl -X POST -d @a.json https://x.io", "sends data off the computer (curl)"),
     ("echo 'unbalanced", "can't be checked (unbalanced quotes)"),
 ])
 def test_describe_names_the_reason_and_the_program_from_the_command_itself(command, said):
@@ -122,7 +122,7 @@ def test_some_commands_are_refused_to_tasks_even_with_a_yes(command, why):
 
 
 @pytest.mark.parametrize("command", [
-    "ps eww 4321", "ps -E -p 4321", "ps -ef", "/bin/ps auxe", "sudo ps -wwE", "ps -p 1 -o pid= ; ps eww",
+    "ps eww 4321", "ps -E -p 4321", "/bin/ps auxe", "sudo ps -wwE", "ps -p 1 -o pid= ; ps eww",
     "cat /proc/4321/environ", "sysctl kern.procargs2.4321", "launchctl procinfo 4321", "lldb -p 4321",
     "echo $JARVIS_MASTER_KEY",
 ])
@@ -223,3 +223,271 @@ def test_installs_that_sandbox_themselves_leave_the_host_profile(command):
     "/tmp/evil/brew install y", "sudo brew install y", "brew install 'x", ""])
 def test_anything_else_stays_inside_it(command):
     assert not commands.own_sandbox(command)
+
+
+# ── Linux ───────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("command, why", [
+    # services, sessions and power: what launchctl and shutdown say on macOS
+    ("systemctl --user restart jarvis-agent", "changes the system (systemctl restart)"),
+    ("systemctl stop nginx", "changes the system (systemctl stop)"),
+    ("systemctl start nginx.service", "changes the system (systemctl start)"),
+    ("systemctl enable --now foo.timer", "changes the system (systemctl enable)"),
+    ("systemctl --user disable foo", "changes the system (systemctl disable)"),
+    ("systemctl mask bluetooth", "changes the system (systemctl mask)"),
+    ("systemctl --user daemon-reload", "changes the system (systemctl daemon-reload)"),
+    ("systemctl -H box kill sshd", "changes the system (systemctl kill)"),
+    ("systemctl edit nginx", "changes the system (systemctl edit)"),
+    ("systemctl poweroff", "stops the computer (systemctl poweroff)"),
+    ("systemctl suspend", "stops the computer (systemctl suspend)"),
+    ("poweroff", "stops the computer (poweroff)"),
+    ("systemd-run --user --unit x sleep 9", "changes the system (systemd-run)"),
+    ("loginctl terminate-user bob", "changes the system (loginctl terminate-user)"),
+    ("loginctl enable-linger", "changes the system (loginctl enable-linger)"),
+    ("service nginx restart", "changes the system (service nginx)"),
+    ("journalctl --vacuum-time=2d", "deletes files (journalctl)"), ("journalctl --vacuum-size 1G", "deletes files (journalctl)"),
+    ("journalctl --rotate", "changes the system (journalctl)"), ("journalctl --flush", "changes the system (journalctl)"),
+    # packages: what brew install says
+    ("apt install ffmpeg", "installs software (apt install)"), ("apt-get -y remove x", "installs software (apt-get remove)"),
+    ("apt -o Debug=1 upgrade", "installs software (apt upgrade)"),
+    ("dnf install ffmpeg", "installs software (dnf install)"), ("dnf --repo list install x", "installs software (dnf install)"),
+    ("yum remove x", "installs software (yum remove)"), ("dnf history undo 3", "installs software (dnf history)"),
+    ("zypper in vim", "installs software (zypper in)"), ("zypper --non-interactive dup", "installs software (zypper dup)"),
+    ("apk add curl", "installs software (apk add)"), ("apk del curl", "installs software (apk del)"),
+    ("pacman -S ffmpeg", "installs software (pacman)"), ("pacman -Syu", "installs software (pacman)"),
+    ("pacman -Rns x", "installs software (pacman)"), ("pacman -U x.pkg.tar.zst", "installs software (pacman)"),
+    ("pacman --sync --refresh", "installs software (pacman)"), ("yay", "installs software (yay)"),
+    ("paru -S x", "installs software (paru)"),
+    ("snap install code --classic", "installs software (snap install)"), ("snap refresh", "installs software (snap refresh)"),
+    ("snap remove x", "installs software (snap remove)"), ("snap stop x", "stops a process (snap stop)"),
+    ("snap connect x:camera", "changes permissions (snap connect)"),
+    ("flatpak install flathub org.x.Y", "installs software (flatpak install)"),
+    ("flatpak uninstall org.x.Y", "installs software (flatpak uninstall)"),
+    ("flatpak update", "installs software (flatpak update)"), ("flatpak kill org.x.Y", "stops a process (flatpak kill)"),
+    ("flatpak override --filesystem=home org.x.Y", "changes permissions (flatpak override)"),
+    ("dpkg -i x.deb", "installs software (dpkg)"), ("dpkg --purge x", "installs software (dpkg)"),
+    ("rpm -ivh x.rpm", "installs software (rpm)"), ("rpm -e x", "installs software (rpm)"),
+    ("add-apt-repository ppa:x/y", "installs software (add-apt-repository)"),
+    # network and firewall
+    ("nmcli connection up home", "changes the system (nmcli connection)"),
+    ("nmcli c delete home", "changes the system (nmcli)"), ("nmcli radio wifi off", "changes the system (nmcli radio)"),
+    ("nmcli networking off", "changes the system (nmcli networking)"),
+    ("nmcli device wifi connect x password y", "changes the system (nmcli device)"),
+    ("nmcli general hostname box", "changes the system (nmcli general)"),
+    ("nmcli d s", "changes the system (nmcli)"),  # s could be set: asked
+    ("ip link set eth0 down", "changes the system (ip link)"), ("ip addr add 10.0.0.2/24 dev eth0", "changes the system (ip addr)"),
+    ("ip route del default", "changes the system (ip route)"), ("ip -4 route flush cache", "changes the system (ip route)"),
+    ("ip netns exec x bash", "changes the system (ip netns)"), ("ip -batch cmds.txt", "changes the system (ip)"),
+    ("iptables -A INPUT -j DROP", "changes the system (iptables)"), ("iptables -F", "changes the system (iptables)"),
+    ("iptables -L -Z", "changes the system (iptables)"), ("ip6tables -P INPUT DROP", "changes the system (ip6tables)"),
+    ("iptables-restore < rules", "changes the system (iptables-restore)"),
+    ("nft add rule inet filter input drop", "changes the system (nft add)"), ("nft -f rules.nft", "changes the system (nft)"),
+    ("nft flush ruleset", "changes the system (nft flush)"),
+    ("ufw allow 22", "changes the system (ufw allow)"), ("ufw disable", "changes the system (ufw disable)"),
+    ("firewall-cmd --zone=public --add-port=80/tcp", "changes the system (firewall-cmd)"),
+    ("firewall-cmd --reload", "changes the system (firewall-cmd)"),
+    # desktop settings, the system's settings, users, disks
+    ("gsettings set org.gnome.desktop.interface clock-format 12h", "changes the system (gsettings set)"),
+    ("gsettings reset org.gnome.x y", "changes the system (gsettings reset)"),
+    ("dconf write /org/x 1", "changes the system (dconf write)"), ("dconf load / < x", "changes the system (dconf load)"),
+    ("xdg-settings set default-web-browser x.desktop", "changes the system (xdg-settings set)"),
+    ("xdg-mime default x.desktop text/html", "changes the system (xdg-mime default)"),
+    ("update-alternatives --set editor /usr/bin/vim", "changes the system (update-alternatives)"),
+    ("update-alternatives --config java", "changes the system (update-alternatives)"),
+    ("timedatectl set-timezone Europe/London", "changes the system (timedatectl set-timezone)"),
+    ("timedatectl set-ntp false", "changes the system (timedatectl set-ntp)"),
+    ("hostnamectl set-hostname box", "changes the system (hostnamectl set-hostname)"),
+    ("hostnamectl hostname box", "changes the system (hostnamectl hostname)"),
+    ("localectl set-locale LANG=C", "changes the system (localectl set-locale)"),
+    ("hostname box", "changes the system (hostname box)"),
+    ("sysctl -w net.ipv4.ip_forward=1", "changes the system (sysctl)"), ("sysctl kern.x=1", "changes the system (sysctl)"),
+    ("sysctl --system", "changes the system (sysctl)"), ("sysctl -p", "changes the system (sysctl)"),
+    ("modprobe vfio", "changes the system (modprobe)"), ("rmmod x", "changes the system (rmmod)"),
+    ("crontab -e", "changes the system (crontab)"), ("crontab -r", "changes the system (crontab)"),
+    ("chsh -s /bin/zsh", "changes the system (chsh)"), ("usermod -aG docker me", "changes the system (usermod)"),
+    ("passwd", "changes the system (passwd)"), ("useradd bob", "changes the system (useradd)"),
+    ("mount /dev/sdb1 /mnt", "changes the system (mount)"), ("mount -a", "changes the system (mount)"),
+    ("umount /mnt", "changes the system (umount)"), ("swapoff -a", "changes the system (swapoff)"),
+    ("wipefs -a /dev/sdb", "writes a disk (wipefs)"), ("mkfs.ext4 /dev/sdb1", "writes a disk (mkfs.ext4)"),
+    ("parted /dev/sdb mklabel gpt", "writes a disk (parted)"),
+    ("chattr +i f", "changes permissions (chattr)"), ("setfacl -m u:x:r f", "changes permissions (setfacl)"),
+    ("pkexec ls", "runs as root (pkexec)"), ("run0 ls", "runs as root (run0)"),
+    ("dbus-send --session --dest=org.x / x.y", "controls apps (dbus-send)"),
+    ("busctl call org.x / x y", "controls apps (busctl call)"), ("gdbus call --session -d x -o / -m y", "controls apps (gdbus call)"),
+    ("xdotool type hi", "controls apps (xdotool)"),
+    # keychains: asked here, refused to tasks
+    ("secret-tool lookup service github", "reads the keychain (secret-tool)"),
+    ("secret-tool search --all service x", "reads the keychain (secret-tool)"),
+    ("kwallet-query -r github kdewallet", "reads the keychain (kwallet-query)"), ("pass show email", "reads the keychain (pass)"),
+    ("nmcli -s connection show home", "reads the keychain (nmcli connection)"),
+    ("nmcli --show-secrets c s home", "reads the keychain (nmcli)"),
+    ("nmcli device wifi show-password", "reads the keychain (nmcli device)"),
+])
+def test_linux_commands_that_change_things_need_a_yes(command, why):
+    assert describe(command) == why, command
+
+
+@pytest.mark.parametrize("command", [
+    "systemctl", "systemctl status nginx", "systemctl --user status jarvis-agent", "systemctl list-units --failed",
+    "systemctl --user list-units --type=service", "systemctl -t service list-units", "systemctl list-timers --all",
+    "systemctl is-active nginx", "systemctl is-enabled nginx", "systemctl show -p ActiveState nginx",
+    "systemctl cat nginx", "systemctl list-unit-files", "loginctl", "loginctl list-sessions", "loginctl show-user me",
+    "service nginx status", "service --status-all", "journalctl -u nginx -n 50", "journalctl --user -f",
+    "journalctl -b -p err", "journalctl --disk-usage",
+    "apt list --installed", "apt search ffmpeg", "apt show ffmpeg", "apt policy ffmpeg", "apt-get check",
+    "dnf list installed", "dnf search ffmpeg", "dnf info x", "dnf check-update", "yum repolist", "zypper se vim",
+    "zypper --non-interactive lr", "apk info", "apk search curl", "pacman -Ss ffmpeg", "pacman -Si x", "pacman -Qi bash",
+    "pacman -Q", "pacman -Ql x", "pacman -F /usr/bin/x", "yay -Ss x", "snap list", "snap info code", "snap find x",
+    "snap services", "flatpak list", "flatpak info org.x.Y", "flatpak run org.x.Y", "flatpak remotes", "dpkg -l",
+    "dpkg -L x", "dpkg -S /usr/bin/x", "rpm -qa", "rpm -qi bash", "rpm -V x",
+    "nmcli", "nmcli device status", "nmcli connection show", "nmcli c show", "nmcli con show home", "nmcli -t -f NAME c s",
+    "nmcli device wifi list", "nmcli d wifi", "nmcli general status", "nmcli general hostname", "nmcli radio",
+    "nmcli networking connectivity check", "nmcli monitor",
+    "ip addr", "ip a", "ip -br a", "ip -4 addr show dev eth0", "ip link", "ip route", "ip route get 1.1.1.1",
+    "ip -s link show eth0", "ip neigh", "ip netns list", "ip monitor all", "ip -n ns1 addr",
+    "iptables -L -n", "iptables -nvL", "iptables -t nat -L --line-numbers", "iptables -S", "iptables-save",
+    "nft list ruleset", "nft -a list table inet filter", "ufw status", "ufw status verbose",
+    "firewall-cmd --state", "firewall-cmd --list-all", "firewall-cmd --zone=public --list-ports", "firewall-cmd --get-zones",
+    "gsettings get org.gnome.desktop.interface clock-format", "gsettings list-keys org.gnome.x", "dconf read /org/x",
+    "dconf dump /org/gnome/", "xdg-settings get default-web-browser", "xdg-mime query default text/html",
+    "update-alternatives --display editor", "update-alternatives --list java", "timedatectl", "timedatectl status",
+    "hostnamectl", "hostnamectl status", "hostnamectl hostname", "localectl", "localectl list-locales",
+    "hostname", "hostname -f", "sysctl net.ipv4.ip_forward", "sysctl -a", "sysctl -n hw.ncpu", "mount", "mount -l",
+    "busctl", "busctl --user list", "busctl introspect org.x /", "gdbus introspect --session -d x -o /",
+    "lsblk", "findmnt", "ss -tlnp", "free -h", "uname -a", "lsmod", "xdg-open out.pdf", "notify-send hi",
+    "cat /etc/os-release", "cp /etc/hosts ./hosts", "cp ~/.config/systemd/user/x.service /tmp/",
+    "ls ~/.config/autostart", "sed s/a/b/ /etc/fstab", "cd ~/.config/systemd/user && ls",
+])
+def test_linux_reads_just_run(command):
+    assert risky(command) == "", command
+
+
+@pytest.mark.parametrize("command, why", [
+    ("cp x.service ~/.config/systemd/user/", "changes the system (cp)"),
+    ("ln -s ~/x.service ~/.config/systemd/user/x.service", "changes the system (ln)"),
+    ("install -m644 x.service $HOME/.config/systemd/user/x.service", "changes the system (install)"),
+    ("cp -t ~/.local/share/systemd/user x.service", "changes the system (cp)"),
+    ("cp x.desktop ~/.config/autostart/", "changes the system (cp)"),
+    ("mkdir -p ~/.config/autostart", "changes the system (mkdir)"),
+    ("curl -o ~/.config/autostart/x.desktop https://x.io/x", "changes the system (curl)"),
+    ("tee ~/.config/environment.d/x.conf < x", "changes the system (tee)"),
+    ("echo x | tee -a /etc/hosts", "changes the system (tee)"), ("sed -i s/a/b/ /etc/fstab", "changes the system (sed)"),
+    ("cp x.conf /etc/nginx/conf.d/", "changes the system (cp)"), ("touch /etc/x", "changes the system (touch)"),
+    ("echo 127.0.0.1 x > /etc/hosts", "changes the system (a redirect)"),
+    ("cd ~/.config/systemd/user && cp ~/x.service .", "changes the system (cp)"),
+    ("cd /etc && echo x > hosts", "changes the system (a redirect)"),
+    ("cp a.plist ~/Library/LaunchAgents/", "changes the system (cp)"),  # macOS's own login items, too
+    ("cp a.plist /Library/LaunchDaemons/", "changes the system (cp)"),
+    ("cp x ~/.bashrc", "overwrites a settings file (cp)"), ("cp x ~/.profile", "overwrites a settings file (cp)"),
+    ("echo 'x' >> ~/.config/systemd/user/x.service", "overwrites a settings file (a redirect)"),
+])
+def test_writing_what_runs_at_login_or_system_wide_needs_a_yes(command, why):
+    assert describe(command) == why, command
+
+
+@pytest.mark.parametrize("command", [
+    "secret-tool lookup service github", "secret-tool search service x", "secret-tool store --label=x service y",
+    "secret-tool clear service x", "kwallet-query -r github kdewallet", "pass show email", "pass", "pass -c email",
+    "nmcli -s connection show home", "nmcli device wifi show-password",
+    "busctl --user call org.freedesktop.secrets /org/freedesktop/secrets x y",
+    "gdbus call --session -d org.kde.kwalletd5 -o /modules/kwalletd5 -m org.kde.KWallet.readPassword",
+])
+def test_linux_keychain_reads_are_refused_to_tasks_like_the_macs(command):
+    assert refused(command) == "it reads or changes passwords in the keychain", command
+
+
+@pytest.mark.parametrize("command", ["pkexec ls", "run0 systemctl restart x"])
+def test_linux_root_tools_are_refused_like_sudo(command):
+    assert "password typed in a terminal" in refused(command)
+
+
+@pytest.mark.parametrize("command", ["secret-tool lock --collection=x", "nmcli c show", "systemctl status x"])
+def test_linux_commands_that_read_no_password_are_not_refused(command):
+    assert refused(command) == ""
+
+
+@pytest.mark.parametrize("command, target", [
+    ("make services-restart", "make services-restart"),
+    ("cd ~/jarvis && make -C . services-stop", "make services-stop"),
+    ("systemctl --user restart com.jarvis.agent", ""), ("systemctl --user -q enable foo.service", ""),
+    ("systemd-run --user --scope sleep 1", ""),
+])
+def test_on_linux_tasks_leave_the_users_systemd_session_to_them(command, target, monkeypatch):
+    monkeypatch.setattr(commands.platform, "LINUX", True)
+    why = refused(command)
+    assert (f"ask them to run {target}" in why) if target else why == commands.USER_BUS, command
+    monkeypatch.setattr(commands.platform, "LINUX", False)
+    assert refused(command) == ""  # the Mac's launchd is reachable: nothing to refuse
+
+
+@pytest.mark.parametrize("command", ["systemctl --user status com.jarvis.agent", "systemctl --user", "make test",
+                                     "systemctl restart nginx", "make services"])
+def test_on_linux_other_systemd_and_make_commands_are_not_refused_for_the_bus(command, monkeypatch):
+    monkeypatch.setattr(commands.platform, "LINUX", True)
+    assert refused(command) == ""
+
+
+@pytest.mark.parametrize("text", [
+    "ls ~/.local/share/keyrings", "cat ~/.local/share/keyrings/login.keyring", "ls ~/.local/share/kwalletd",
+    "cat ~/.password-store/email.gpg", "cp -r ~/.config/Bitwarden /tmp", "certutil -L -d ~/.pki/nssdb",
+])
+def test_linux_credential_stores_are_secrets(text):
+    assert names_secret(text), text
+    assert "secrets" in refused(text)
+
+
+def test_linux_credential_stores_are_secret_paths_wherever_home_is():
+    from pathlib import Path
+
+    for rel in (".local/share/keyrings/login.keyring", ".password-store/x.gpg", ".local/share/kwalletd/kdewallet.kwl",
+                ".config/Bitwarden/data.json", ".pki/nssdb/key4.db"):
+        assert commands.secret_path(Path.home() / rel), rel
+
+
+@pytest.mark.parametrize("command", ["ps -ef", "ps -e -o pid,comm", "ps -elf"])
+def test_ps_e_lists_every_process_on_linux_without_their_environments(monkeypatch, command):
+    monkeypatch.setattr(commands.platform, "MAC", True)
+    assert reads_environment(command)  # on macOS, -e shows environments
+    monkeypatch.setattr(commands.platform, "MAC", False)
+    monkeypatch.setattr(commands.platform, "LINUX", True)
+    assert not reads_environment(command), command
+    assert reads_environment("ps eww 1") and reads_environment("ps auxe") and reads_environment("cat /proc/1/environ")
+
+
+@pytest.mark.parametrize("command", ["strace -p 4321", "sudo gdb -p 4321", "pkexec --user root ps eww"])
+def test_attaching_to_another_process_reads_its_environment(command):
+    assert reads_environment(command), command
+
+
+@pytest.mark.parametrize("said, command", [
+    ("Restart nginx.", "systemctl restart nginx"),
+    ("Restart the nginx service.", "systemctl --user restart nginx.service"),
+    ("Stop the jarvis agent.", "systemctl --user stop jarvis-agent"),
+    ("Install ffmpeg.", "dnf install ffmpeg"), ("Install ffmpeg.", "apt install ffmpeg"),
+    ("Install ffmpeg.", "apt-get install -y ffmpeg"),
+])
+def test_ordering_a_linux_service_or_install_is_its_go_ahead(said, command):
+    assert commands.ordered(said, command), (said, command)
+
+
+@pytest.mark.parametrize("said, command", [
+    ("Restart nginx.", "systemctl restart sshd"),  # each unit by name
+    ("Stop it.", "systemctl stop nginx"), ("Restart the service.", "systemctl restart nginx.service"),
+    ("Restart nginx.", "systemctl enable --now nginx"), ("Restart nginx.", "systemctl daemon-reload"),
+    ("Install ffmpeg.", "pacman -S ffmpeg"),  # no subcommand to check against what was said
+])
+def test_other_linux_service_changes_are_still_asked(said, command):
+    assert not commands.ordered(said, command), (said, command)
+
+
+@pytest.mark.parametrize("command, remembered", [
+    ("dnf install ffmpeg", True), ("apt-get install -y x", True), ("pacman -S x", True), ("snap stop x", True),
+    ("flatpak override --filesystem=home x", True),
+    ("systemctl restart nginx", False), ("secret-tool lookup a b", False), ("cp x.service ~/.config/systemd/user/", False),
+])
+def test_linux_kinds_reuse_the_remembered_kinds(command, remembered):
+    from jarvis.safety import remembered as rules
+
+    offered = rules.pieces(command)
+    assert (not offered["never"]) is remembered, offered

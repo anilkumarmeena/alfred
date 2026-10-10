@@ -45,7 +45,7 @@ APNS_KEY_ID = Credential("apns.key_id", "JARVIS_APNS_KEY_ID", "APNs key ID", r"[
                          "The 10-character ID of the APNs auth key in secrets/apns_key.p8, from developer.apple.com.")
 GOOGLE_CLIENT = Credential("google.client", "GOOGLE_CLIENT_SECRET", "Google OAuth client", "",
                            "The Desktop app client's JSON from Google Cloud (APIs & Services → Credentials), pasted "
-                           "whole. Used when a Google account signs in on the Mac.")
+                           "whole. Used when a Google account signs in on this computer.")
 ALL = {c.name: c for c in (LIVEKIT_KEY, LIVEKIT_SECRET, APNS_KEY_ID, GOOGLE_CLIENT)}
 VARS = [c.var for c in ALL.values()]  # stripped from every session/command env
 

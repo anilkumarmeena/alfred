@@ -6,22 +6,22 @@
 
 **How JARVIS hears you, decides you've finished, ignores what isn't you, and where the wait before it speaks goes.**
 
-[🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · **🗣️ Voice** · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 iPhone](iphone.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md)
+[🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · **🗣️ Voice** · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md)
 
 </div>
 
 ---
 
-Everything on this page runs **on the Mac**. One spoken turn passes through these stages:
+Everything on this page runs **on JARVIS's computer**. One spoken turn passes through these stages:
 
 ```mermaid
 flowchart TB
     subgraph Hear["👂 Hearing you"]
         direction LR
-        Mic(["🎤 Your mic<br/>iPhone · browser"]) --> NF["🔉 Noise filter<br/>DeepFilterNet 3"]
+        Mic(["🎤 Your mic<br/>phone · browser"]) --> NF["🔉 Noise filter<br/>DeepFilterNet 3"]
         NF --> VAD["⌛ VAD + turn detector<br/>Silero · LiveKit"]
-        VAD --> STT["📝 Whisper<br/>MLX · Apple GPU"]
-        VAD --> Spk["🔐 Speaker check<br/>CPU, alongside Whisper"]
+        VAD --> STT["📝 Whisper<br/>MLX · faster-whisper"]
+        VAD --> Spk["🔐 Speaker check<br/>alongside Whisper"]
     end
 
     subgraph Answer["💬 Answering"]
@@ -81,7 +81,7 @@ Your mic goes through **[DeepFilterNet 3](https://github.com/Rikorose/DeepFilter
 | **Runs on** | ONNX Runtime, one CPU core: ~1.4 ms per 10 ms of audio, ~40 ms added delay |
 | **Model** | `models/deepfilternet3-streaming.onnx` (16 MB), downloaded by `make models`, checked by hash |
 | **If it's missing** | The agent log says so and JARVIS uses the original audio |
-| **Not filtered** | Terminal console mode (`make console`) |
+| **Not filtered** | Terminal console mode (`make console`), which uses this computer's own mic |
 
 **Knobs**
 
@@ -112,16 +112,32 @@ Your mic goes through **[DeepFilterNet 3](https://github.com/Rikorose/DeepFilter
 
 ## 📝 Whisper in, Kokoro out
 
-**Whisper** (MLX, on the Apple GPU) turns each utterance into text; **Kokoro** speaks the reply. All knobs are in [Speech in and out](configuration.md#-speech-in-and-out).
+**Whisper** turns each utterance into text; **Kokoro** speaks the reply, on the CPU everywhere. All knobs are in [Speech in and out](configuration.md#-speech-in-and-out).
+
+Whisper runs on whichever backend suits the machine, picked at start:
+
+| | Machine | Backend | Live voice model |
+|:-:|---|---|---|
+| 🍎 | **Apple silicon** | MLX Whisper on the Apple GPU | `large-v3-turbo`, 4-bit (~0.5 GB) |
+| 🟩 | **NVIDIA GPU** (Linux, WSL2) | faster-whisper, CUDA float16 | `large-v3-turbo` |
+| 💻 | **CPU only** (other Linux, Intel Macs) | faster-whisper, int8, a thread per physical core | `small.en` |
+
+- **CPU speed:** `small.en` takes **0.61 s per 5 s clip** on an M-series CPU; expect **~1–1.5 s** on a 4–8 core x86. Large models would take several seconds a clip on a CPU, hence the smaller default.
+- **Weak CPU?** `JARVIS_STT=base.en` trades a little accuracy for speed.
+- **GPU** needs CUDA 12's cuBLAS and cuDNN 9, from the system or pip (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`). If it fails to load, JARVIS falls back to the CPU and logs why; `JARVIS_STT_DEVICE=cpu` skips trying.
+- **Recordings** use their own model, multilingual (`small` on a CPU): see [`JARVIS_TRANSCRIBE_MODEL`](configuration.md#-speech-in-and-out).
+- **`make models`** downloads the models this machine will use.
+- **Intel Macs** get faster-whisper too (MLX needs Apple silicon), but are **untested**.
 
 | Knob | Default | Effect |
 |---|---|---|
-| `JARVIS_STT` | `whisper-large-v3-turbo-q4` | Whisper model; 4-bit is ~0.5 GB |
+| `JARVIS_STT` | Per backend (above) | Whisper model for live voice |
+| `JARVIS_STT_DEVICE` | *(auto)* | faster-whisper: `cuda` or `cpu` |
 | `JARVIS_STT_PROMPT` | `on` | Gives Whisper the speech vocabulary and project names |
 | `JARVIS_TTS_VOICE` | `bm_george` | Kokoro voice: `bm_*`/`bf_*` British, `am_*`/`af_*` American |
 | `JARVIS_TTS_SPEED` | `1.05` | Speaking speed, 0.5 to 2.0 |
 
-**Inspect:** `make voice-timing` reports `transcript` (Whisper's text ready) and `tts_first` (Kokoro's first audio) per turn.
+**Inspect:** `make voice-timing` reports `transcript` (Whisper's text ready) and `tts_first` (Kokoro's first audio) per turn. `logs/agent.log` names the Whisper model, device and threads when it loads.
 
 ## 🚫 Speech gate
 
@@ -165,7 +181,7 @@ uv run python -m jarvis.voice.speech_gate 72      # the last three days
 | Where | Shows |
 |---|---|
 | `logs/speech-gate.jsonl` | Every clip, kept or not: length, loudness, VAD speech, Whisper's probabilities, transcript, WAV path (`audio`) |
-| `logs/speech-gate-audio/` | 16 kHz WAVs of what Whisper heard; play one with `afplay`. The newest 300 are kept |
+| `logs/speech-gate-audio/` | 16 kHz WAVs of what Whisper heard; play one with `afplay` (macOS) or `aplay` (Linux). The newest 300 are kept |
 
 - **A real reply among the drops?** Loosen the threshold named in brackets.
 - In `enforce` mode, short clips the gate lets through are still saved (`JARVIS_SPEECH_GATE_SAVE_SHORT`), so a phantom that slips past can be heard.
@@ -177,7 +193,7 @@ Real speech from someone else (a TV, a colleague on a call) would otherwise reac
 > [!NOTE]
 > **Without a voiceprint, nothing changes.** If the model fails, clips go through as if no voiceprint existed, and the agent log says so.
 
-- **How.** A [WeSpeaker ResNet34](https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM) embedding (25 MB, ONNX) of each utterance's speech, compared with your voiceprint by cosine similarity. It runs on the **CPU while Whisper uses the GPU**, so it adds no wait.
+- **How.** A [WeSpeaker ResNet34](https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM) embedding (25 MB, ONNX) of each utterance's speech, compared with your voiceprint by cosine similarity. It runs on the **CPU alongside Whisper**, so it adds no wait.
 - **Stored** in `data/tasks.db` (`voiceprints` table), never in the code.
 
 ### Enrolling
@@ -188,7 +204,7 @@ Each way **replaces** the previous voiceprint:
 |:-:|---|---|
 | 🗣️ | **By voice** (best) | Say "learn my voice" and talk for about thirty seconds; same mic and filter later calls use |
 | 📱 | **In the app** | Settings → Preferences → Voice ID → **Enroll my voice**, then read the text shown (hang up first) |
-| 💻 | **On the Mac** | `make voiceprint ARGS=enroll`, then read the passage it prints |
+| 💻 | **On the computer** | `make voiceprint ARGS=enroll`, then read the passage it prints (uses its own mic) |
 
 ### What a clip needs
 
@@ -226,6 +242,9 @@ make voiceprint ARGS=log         # the last day's verdicts with score range, and
 make voiceprint ARGS=test        # records 5 s and says how alike it is
 ```
 
+> [!NOTE]
+> **Terminal mic on Linux:** `make console` and `make voiceprint` record through **PortAudio**; install it first (`sudo apt install libportaudio2` on Debian/Ubuntu). macOS needs nothing extra.
+
 `logs/speaker-check.jsonl` has every clip and barge-in: score, what it needed, verdict, transcript.
 
 | If… | Then |
@@ -235,26 +254,26 @@ make voiceprint ARGS=test        # records 5 s and says how alike it is
 
 ## 🎧 Earphones and switching apps
 
-On the iPhone:
+On a phone (iOS or Android):
 
 <table>
 <tr>
 <td width="50%" valign="top">
 
 **🎧 Stem press to mute**<br>
-While JARVIS is on screen, pressing the AirPods (or wired earphone) button mutes or unmutes the mic: a **falling tone** for muted, a **rising** one for listening. The on-screen mute follows.
+While JARVIS is on screen, pressing the earphone button (AirPods, wired or Bluetooth) mutes or unmutes the mic: a **falling tone** for muted, a **rising** one for listening. The on-screen mute follows.
 
 </td>
 <td width="50%" valign="top">
 
-**🔄 Coming back to the app**<br>
+**🔄 Coming back to the app (iOS)**<br>
 iOS takes the mic from a Home Screen web app in the background. On return, JARVIS shows **Mic paused**, takes the mic back and carries on (muted if you'd muted), reconnecting if the session dropped.
 
 </td>
 </tr>
 </table>
 
-- Presses are traced to `logs/web.log` (lines starting `iphone:`). **Phones and tablets only**, so a Mac's media keys still control music.
+- Presses are traced to `logs/web.log` (lines starting `iphone:` or `android:`). **Phones and tablets only**, so a computer's media keys still control music.
 - If iOS won't hand the mic back, the page says *Tap the core to turn the mic back on*.
 
 ## 📈 Voice timing

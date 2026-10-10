@@ -26,7 +26,7 @@ from livekit import api
 from jarvis import panel
 from jarvis.core import credentials, logins
 from jarvis.core.config import LIVEKIT_URL, PUSH_ENABLED, ROOT, WEB_PORT
-from jarvis.notify import apns, push
+from jarvis.notify import apns, fcm, push
 from jarvis.state import activity, pictures, shared_files
 from jarvis.tasks import client
 from jarvis.voice import quiet
@@ -37,7 +37,8 @@ NOT_BUILT = "The JARVIS web app isn't built. Run `make web-build`, then restart 
 MAX_FAILURES, FAILURE_WINDOW = 10, 300  # wrong credentials per 5 min, across all clients
 MAX_LOG_LINES = 50  # per /api/log request
 _failures: list[float] = []
-PUSH_OFF = "Notifications are off on the Mac. Remove JARVIS_PUSH=off from .env, then restart JARVIS."
+PUSH_OFF = ("Notifications are off on the computer JARVIS runs on. Remove JARVIS_PUSH=off from .env, then restart "
+            "JARVIS.")
 PING_SECONDS = 25  # /api/events keepalive interval
 ACTIVITY_SECONDS = 2  # /api/events poll interval for activity entries (written by other processes)
 RUNNER_DOWN = "JARVIS's task runner isn't running."
@@ -149,17 +150,19 @@ async def push_unsubscribe(_: web.Request, body: dict) -> web.Response:
 
 @authed
 async def push_native(_: web.Request, body: dict) -> web.Response:
-    """Register the app's APNs token {"passcode", "device", "token", "environment", "topic"}. Stored even before APNs
-    is configured; `sending` says whether pushes will go out."""
+    """Register a native app's push token {"passcode", "device", "token", "topic"}: APNs for iOS ("environment"), FCM
+    for Android ("service": "fcm"). Stored even before sending is set up; `sending` says whether pushes will go out."""
     if not PUSH_ENABLED:
         return web.json_response({"error": PUSH_OFF}, status=409)
+    service = fcm if body.get("service") == "fcm" else apns
     try:
-        dev = apns.Devices().add(body, _device(body))
+        dev = service.Devices().add(body, _device(body))
     except ValueError as e:
         return web.json_response({"error": f"That device token wasn't accepted: {e}."}, status=400)
-    sending = apns.configured()
-    log.info("app push token saved for %s (%s)%s", dev["device"], dev["environment"], "" if sending else "; " + apns.NOT_SET_UP)
-    return web.json_response({"ok": True, "sending": sending} | ({} if sending else {"error": apns.NOT_SET_UP}))
+    sending = await asyncio.to_thread(service.configured)
+    where = dev.get("environment") or "fcm"
+    log.info("app push token saved for %s (%s)%s", dev["device"], where, "" if sending else "; " + service.NOT_SET_UP)
+    return web.json_response({"ok": True, "sending": sending} | ({} if sending else {"error": service.NOT_SET_UP}))
 
 
 @authed

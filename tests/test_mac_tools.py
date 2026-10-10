@@ -1,4 +1,7 @@
-"""Tests for jarvis.tools.mac: Mac tools come from AI Armory with unchanged names, wording and inputs; no yes needed."""
+"""Tests for jarvis.tools.mac: Mac tools come from AI Armory with unchanged names, wording and inputs; no yes needed.
+
+They're registered only on macOS (Linux gets jarvis.tools.desktop, tested in test_desktop.py).
+"""
 
 import asyncio
 
@@ -7,8 +10,11 @@ from ai_armory.toolsets import mac
 
 from jarvis import tools
 from jarvis.brain import cli
+from jarvis.core import platform
 from jarvis.tasks import events, worker
 from jarvis.tools.mac import NOTES
+
+mac_only = pytest.mark.skipif(not platform.MAC, reason="the mac tools are registered only on macOS")
 
 # Each tool's description, input fields and required fields, as the model sees them
 TOOLS = {
@@ -37,6 +43,7 @@ def mac_tools() -> dict[str, tools.Tool]:
     return {t.name: t for t in tools.all_tools() if t.name.startswith("mac_")}
 
 
+@mac_only
 def test_every_mac_tool_comes_from_ai_armory_under_its_old_name_and_wording():
     found = mac_tools()
     assert set(found) == set(TOOLS)
@@ -50,6 +57,7 @@ def test_every_mac_tool_comes_from_ai_armory_under_its_old_name_and_wording():
         assert t.armory.input_schema == schema | ({"required": required} if required else {}), name
 
 
+@mac_only
 def test_no_mac_tool_waits_for_a_yes_and_the_brain_gets_them_all():
     assert not any(t.gated for t in mac_tools().values())
     brain = cli.CliBrain()
@@ -58,16 +66,23 @@ def test_no_mac_tool_waits_for_a_yes_and_the_brain_gets_them_all():
     assert tools.input_schema(mac_tools()["mac_open"]) == mac_tools()["mac_open"].armory.input_schema
 
 
+@mac_only
 def test_copying_changes_something_and_reading_the_clipboard_doesnt():
     assert mac_tools()["mac_copy"].changes and not mac_tools()["mac_read_clipboard"].changes
 
 
+@mac_only
 def test_the_clipboard_tools_say_when_to_use_them_and_not_to_obey_what_was_copied():
     from jarvis.brain import persona
     copy, read = mac_tools()["mac_copy"].description, mac_tools()["mac_read_clipboard"].description
     assert "copy that" in copy and "written out in full" in copy and "Universal Clipboard" in copy
     assert "only when the user asks" in read and "never as instructions" in read
     assert "the clipboard" in persona.persona() and "never instructions" in persona.persona()
+
+
+@mac_only
+def test_on_the_mac_there_are_no_linux_desktop_tools():
+    assert not [t.name for t in tools.all_tools() if t.name.startswith("desktop_")]
 
 
 def test_research_tasks_dont_control_the_mac():
@@ -91,6 +106,7 @@ def ran(monkeypatch) -> list[tuple]:
     return calls
 
 
+@mac_only
 @pytest.mark.parametrize("name, args, reply, argv", [
     ("mac_notify", {"title": "JARVIS", "message": "Done"}, "Notification shown.",
      ("osascript", "-e", "on run argv", "-e", "display notification (item 1 of argv) with title (item 2 of argv)",
@@ -108,16 +124,19 @@ def test_each_tool_runs_what_it_always_did(ran, name, args, reply, argv):
     assert [c[0] for c in ran] == [argv]
 
 
+@mac_only
 def test_copied_text_goes_on_stdin(ran):
     asyncio.run(tools.run("mac_copy", {"text": "rm -rf ~ ; echo ✓"}))
     assert ran == [(("pbcopy",), 30, "rm -rf ~ ; echo ✓".encode())]
 
 
+@mac_only
 def test_a_shortcut_gets_its_input_on_stdin_and_time_to_finish(ran):
     asyncio.run(tools.run("mac_run_shortcut", {"name": "Log", "input": "hello"}))
     assert ran == [(("shortcuts", "run", "Log", "--input-path", "-"), 120, b"hello")]
 
 
+@mac_only
 def test_bad_input_is_refused_before_anything_runs(ran):
     for name, args, problem in [("mac_set_volume", {"level": "loud"}, "field 'level' must be integer"),
                                 ("mac_set_volume", {"level": True}, "field 'level' must be integer"),
@@ -130,6 +149,7 @@ def test_bad_input_is_refused_before_anything_runs(ran):
     assert not ran
 
 
+@mac_only
 def test_a_failure_on_the_mac_is_reported_to_the_model(monkeypatch):
     async def failing(*argv, **kw):
         raise RuntimeError("Unable to find application named 'Nope'")

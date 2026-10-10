@@ -219,7 +219,7 @@ def enroll(audio: np.ndarray, *, name: str = OWNER, via: str = "panel", embed: E
     """Make (and by default save) a voiceprint from a 16 kHz recording. Raises ValueError with user-facing advice."""
     embed = embed or Embedder()
     if not embed.available:
-        raise ValueError("The speaker model isn't on this Mac: run make models, then try again.")
+        raise ValueError("The speaker model isn't on this computer: run make models, then try again.")
     speech = speech_only(np.asarray(audio, dtype=np.float32), speech_probs or silero())
     made = voiceprint(speech, embed, name=name, via=via)
     return voiceprints.save(made) if save else made
@@ -477,7 +477,8 @@ class SpeakerCheck:
 
         Finishes (via announce) at SPEAKER_ENROLL_SECONDS, or at the minimum plus an idle pause."""
         if not self._embed.available:
-            return "The speaker model isn't installed on the Mac: run make models there, then restart JARVIS."
+            return ("The speaker model isn't installed on the computer JARVIS runs on: run make models there, then "
+                    "restart JARVIS.")
         self.cancel_enrollment()
         self._enrolling = {"name": name, "speech": [], "seconds": 0.0, "started": self._clock()}
         self.rearm()
@@ -664,7 +665,8 @@ def main(argv: list[str] | None = None, record: Callable[[float], np.ndarray] = 
                                      description="JARVIS's speaker check: the voiceprint and what it did with it.")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status", help="the voiceprints, and the check's settings")
-    enroll_ = commands.add_parser("enroll", help="record about 30 seconds from the Mac's mic and keep the voiceprint")
+    enroll_ = commands.add_parser("enroll", help="record about 30 seconds from the computer's mic and keep the "
+                                                 "voiceprint")
     enroll_.add_argument("--name", default=OWNER, help=f"whose voice ({OWNER}, the default, is the user JARVIS works for)")
     enroll_.add_argument("--seconds", type=float, default=RECORD_SECONDS)
     remove_ = commands.add_parser("remove", help="forget a voiceprint")

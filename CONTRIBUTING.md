@@ -13,7 +13,7 @@
 ---
 
 > [!IMPORTANT]
-> You need a **Mac on Apple silicon**, Homebrew, [uv](https://docs.astral.sh/uv/) and Node.js. The full requirements are in the **[README](README.md#-quickstart)**.
+> You need **macOS on Apple silicon**, **Linux** with systemd, or **Windows through WSL2**, plus [uv](https://docs.astral.sh/uv/), Node.js and the platform's packages (Homebrew on macOS; bubblewrap, socat and friends on Linux). The full list per platform is in **[Setup](docs/setup.md#-pick-your-platform)**.
 
 ## 🚀 Your first pull request
 
@@ -35,9 +35,11 @@ make setup            # .env and local keys
 
 | | Command | Must |
 |:-:|---|---|
-| 🧪 | `make test` | Pass: pytest, plus the web app's vitest tests with `web/node_modules` installed |
+| 🧪 | `make test` | Pass, on macOS and on Linux: pytest, plus the web app's vitest tests with `web/node_modules` installed |
 | 🔍 | `make check` | Pass: byte-compile, pyright (errors only), web type-check, imports |
-| 🧱 | `make host-check` | Pass, if you touched `jarvis/safety/` or how tasks run commands |
+| 🧱 | `make host-check` | Pass, if you touched `jarvis/safety/` or how tasks run commands (Seatbelt on macOS, bubblewrap on Linux) |
+
+Tests that need one OS's programs (`sips`, `afconvert`, a working `bwrap`) skip themselves elsewhere, so a green run on one platform doesn't prove the other: say in the PR which one you ran.
 
 ## 🎨 Code style
 
@@ -46,7 +48,8 @@ make setup            # .env and local keys
 - **Every module starts with a short docstring** saying what it's for and how it fits.
 - **Tests describe behaviour.** Name them for what the user or caller sees (`test_a_prompt_is_filled_in_and_its_comment_left_out`), and add one for every bug fixed and every behaviour added.
 - **Model verdicts are JSON**, read through `ask_json` against a schema, never keywords picked out of prose.
-- **Safety stays in code.** Anything that sends, deletes, spends or reaches outside the Mac goes through the existing gates (`jarvis/safety/`); don't rely on the prompt to hold it back.
+- **Both platforms stay working.** Code that differs by OS branches on `jarvis.core.platform` (`MAC`, `LINUX`, `WSL`) and keeps **both paths**; tests cover each by faking `platform.MAC` / `platform.LINUX` with `monkeypatch`. Say "the computer", not "the Mac", in prompts and messages.
+- **Safety stays in code.** Anything that sends, deletes, spends or reaches outside the computer goes through the existing gates (`jarvis/safety/`); don't rely on the prompt to hold it back.
 - **No personal data** in code, tests, prompts or docs: use placeholder names and `example.com`.
 - **Settings** go in `jarvis/core/config.py` with a default, and in [Configuration](docs/configuration.md).
 
@@ -57,7 +60,7 @@ A good pull request is easy to review and easy to trust:
 | | What | How |
 |:-:|---|---|
 | 🎯 | **One change** | With a title that says what it does |
-| 📝 | **A clear description** | What changed and why, how you tested it, anything you couldn't test (say, on an iPhone) |
+| 📝 | **A clear description** | What changed and why, how you tested it, anything you couldn't test (say, on a phone) |
 | 📚 | **Docs updated** | The pages that describe the behaviour you changed |
 | 🧹 | **Focused commits** | Rebased on `main` before asking for review |
 

@@ -1,9 +1,12 @@
-"""Mac control tools from AI Armory: notifications, open, Shortcuts, volume, clipboard.
+"""Mac control tools from AI Armory: notifications, open, Shortcuts, volume, clipboard. Registered only on macOS.
 
 Each runs a macOS program with argv, never through a shell. Clipboard content is untrusted data, read only on request.
+Linux gets JARVIS's own desktop tools instead (jarvis.tools.desktop).
 """
 
 from ai_armory import load_many
+
+from jarvis.core import platform
 
 from . import register_toolsets
 
@@ -20,4 +23,5 @@ NOTES = {
                           "to do.",
 }
 
-register_toolsets(load_many(["mac"]), NOTES)
+if platform.MAC:
+    register_toolsets(load_many(["mac"]), NOTES)

@@ -217,4 +217,4 @@ def test_the_frame_processor_keeps_up_in_real_time():
         out = processor._process(frame)
         took.append(time.perf_counter() - start)
         assert (out.sample_rate, out.samples_per_channel, out.num_channels) == (24000, 1200, 1)
-    assert np.mean(took[5:]) < 0.025  # at most half of each 50 ms frame; about 7 ms on the Mac
+    assert np.mean(took[5:]) < 0.025  # at most half of each 50 ms frame; about 7 ms on an M-series Mac

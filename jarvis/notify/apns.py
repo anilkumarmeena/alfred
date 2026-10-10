@@ -1,4 +1,4 @@
-"""APNs push for the native iPhone app (its web view can't do Web Push); same alerts as jarvis.notify.push.
+"""APNs push for the native iOS app (its web view can't do Web Push); same alerts as jarvis.notify.push.
 
 The app posts its device token to /api/push/native; tokens live in data/push_devices.json. Each push is an HTTP/2
 request authenticated with an ES256 JWT from secrets/apns_key.p8, its key id (vault) and JARVIS_APNS_TEAM_ID.
@@ -31,8 +31,8 @@ MAX_PAYLOAD = 4096  # bytes, APNs alert limit
 _TOKEN = re.compile(r"^[0-9a-f]{64,200}$")
 _TOPIC = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,154}$")  # bundle id
 GONE = {"BadDeviceToken", "Unregistered", "DeviceTokenNotForTopic"}
-NOT_SET_UP = ("APNs isn't set up on the Mac: put the APNs auth key in secrets/apns_key.p8, enter its key ID in the "
-              "control panel (Settings → Logins and keys) and set JARVIS_APNS_TEAM_ID in .env, then restart JARVIS.")
+NOT_SET_UP = ("APNs isn't set up on this computer: put the APNs auth key in secrets/apns_key.p8, enter its key ID in "
+              "the control panel (Settings → Logins and keys) and set JARVIS_APNS_TEAM_ID in .env, then restart JARVIS.")
 
 
 def key_id() -> str:
@@ -65,6 +65,8 @@ def validate(info: object) -> dict:
 class Devices:
     """Registered app installs; JSON file shared by the web app and task runner."""
 
+    validate = staticmethod(validate)  # subclasses (jarvis.notify.fcm) check their own token format
+
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or profile.current().push_devices
 
@@ -80,7 +82,7 @@ class Devices:
 
     def add(self, info: object, device: str = "") -> dict:
         """Store a device's token, replacing any earlier entry with the same token."""
-        dev = validate(info) | {"device": device[:40], "added": time.time()}
+        dev = self.validate(info) | {"device": device[:40], "added": time.time()}
         with _locked(self.path):
             devices = [d for d in self.all() if d["token"] != dev["token"]]
             write_atomic(self.path, json.dumps((devices + [dev])[-MAX_DEVICES:], indent=1), mode=0o600)

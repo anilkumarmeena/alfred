@@ -69,8 +69,8 @@ def lookup() -> AgentDefinition:
     """Read-only lookup subagent on a cheap model, so file lookups don't slow the spoken reply."""
     data = profile.current().data
     return AgentDefinition(
-        description="Fast read-only lookup in files on the Mac: finds a file, a setting, a version, a function or a "
-                    "line and answers in a sentence or two. Tell it which folder to look in; with none it searches "
+        description="Fast read-only lookup in files on the computer: finds a file, a setting, a version, a function "
+                    "or a line and answers in a sentence or two. Tell it which folder to look in; with none it searches "
                     "JARVIS's own folder, and it knows where JARVIS keeps its data. It can't run commands or change "
                     "anything.",
         prompt=prompts.load("lookup_agent", user_name=profile.name(), root=ROOT,

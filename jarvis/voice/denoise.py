@@ -130,7 +130,7 @@ def _pcm(frames: list[rtc.AudioFrame]) -> np.ndarray:
 class DeepFilterNet(rtc.FrameProcessor[rtc.AudioFrame]):
     """LiveKit frame processor on the room mic input, before VAD and Whisper.
 
-    Runs on the event loop, so must stay real-time: ~8 ms CPU per 50 ms frame on the Mac."""
+    Runs on the event loop, so must stay real-time: ~8 ms CPU per 50 ms frame on an M-series Mac."""
 
     def __init__(self, session, atten_db: float = DENOISE_ATTEN_DB) -> None:
         self._denoiser = Denoiser(session, atten_db)

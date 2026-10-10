@@ -2,7 +2,8 @@
 
 The home-screen web app subscribes with JARVIS's VAPID public key; subscriptions live in data/push_subscriptions.json.
 Pushes are encrypted per device and signed with the VAPID private key (generated on first use into secrets/, mode
-600, never logged). A 404/410 drops the subscription. send_push() also reaches the native app via jarvis.notify.apns.
+600, never logged). A 404/410 drops the subscription. send_push() also reaches the native apps via jarvis.notify.apns (iOS) and
+jarvis.notify.fcm (Android).
 Callers skip sending when JARVIS_PUSH=off.
 """
 
@@ -30,7 +31,7 @@ from jarvis.core.config import PUSH_CONTACT, VAPID_KEY_FILE
 from jarvis.core.files import write_atomic
 
 if TYPE_CHECKING:
-    from jarvis.notify import apns
+    from jarvis.notify import apns, fcm
 
 log = logging.getLogger("jarvis.notify.push")
 # Allowed push service hosts (Apple, Google, Mozilla, Microsoft), so the runner never posts to an arbitrary host
@@ -180,16 +181,17 @@ async def _send(sub: dict, payload: str, key: Vapid) -> str:
 async def send_push(title: str, body: str, url: str = "/", tag: str = "",
                     subscriptions: Subscriptions | None = None, key_file: Path | None = None,
                     app_devices: "apns.Devices | None" = None, *, subtitle: str = "", category: str = "",
-                    data: dict | None = None) -> int:
+                    data: dict | None = None, android_devices: "fcm.Devices | None" = None) -> int:
     """Notify every Web Push subscription and native app; returns how many were accepted. Tapping opens `url`; a
     later push with the same `tag` replaces it. `category` (e.g. JARVIS_APPROVAL) and `data` add action buttons in
-    the native app only."""
-    from jarvis.notify import apns
+    the iOS app only."""
+    from jarvis.notify import apns, fcm
 
     sent = await asyncio.gather(_send_web(title, body, url, tag, subscriptions, key_file),
                                 apns.send(title, body, url, tag, app_devices, subtitle=subtitle, category=category, data=data),
+                                fcm.send(title, body, url, tag, android_devices, subtitle=subtitle),
                                 return_exceptions=True)
-    for r in sent:  # both channels run before any error is raised
+    for r in sent:  # every channel runs before any error is raised
         if isinstance(r, BaseException):
             raise r
     return sum(r for r in sent if isinstance(r, int))

@@ -216,7 +216,7 @@ Opener = Callable[[str, str], Awaitable[str]]
 async def sign_in(server: Server, open_page: Opener, client: httpx.AsyncClient | None = None) -> str:
     """Run the browser sign-in and store the tokens. Returns a spoken confirmation; raises SignInError."""
     if server.transport != "http":
-        raise SignInError(f"{server.label} runs on this Mac, so it takes a key, not a sign-in.")
+        raise SignInError(f"{server.label} runs on this computer, so it takes a key, not a sign-in.")
     own = client is None
     client = client or httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True)
     try:

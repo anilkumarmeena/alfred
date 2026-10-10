@@ -4,22 +4,22 @@
 
 # 🚀 Setup
 
-**From a fresh clone to JARVIS answering on your iPhone and running around the clock.**
+**From a fresh clone to JARVIS answering on your phone and running around the clock, on macOS, Linux or Windows through WSL2.**
 
-[🏠 Home](../README.md) · **🚀 Setup** · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 iPhone](iphone.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md)
+[🏠 Home](../README.md) · **🚀 Setup** · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md)
 
 </div>
 
 ---
 
-Each step builds on the one before. Steps **1–3** get JARVIS talking; steps **4–7 are optional**; step **8** keeps it running.
+Each step builds on the one before. Steps **1–3** get JARVIS talking; steps **4–7 are optional**; step **8** keeps it running. Only steps **1** and **8** differ by platform.
 
 ```mermaid
 flowchart LR
     I["📦 1 · Install"] --> L["🔑 2 · Claude login"] --> C["🔧 3 · Local config"]
     C --> T["💻 4 · Try it"]
     C --> G["📬 5 · Google"]
-    C --> P["📱 6 · iPhone"]
+    C --> P["📱 6 · Phone"]
     C --> R["📁 7 · Projects"]
     T & G & P & R --> S["🔁 8 · Run 24/7"]
 
@@ -29,9 +29,6 @@ flowchart LR
     class T,G,P,R you
 ```
 
-> [!IMPORTANT]
-> You need **macOS on Apple silicon** (M1 or later, 8 GB is enough), [Homebrew](https://brew.sh), [uv](https://docs.astral.sh/uv/), Node.js and the **Claude Code CLI** with a Claude account. Optional extras are listed in the [README](../README.md#-quickstart).
-
 <details>
 <summary><b>📑 On this page</b></summary>
 
@@ -39,34 +36,167 @@ flowchart LR
 
 | | Step | What you get |
 |:-:|---|---|
+| 🧭 | [Pick your platform](#-pick-your-platform) | macOS, Linux or Windows through WSL2 |
 | 📦 | [1. Install](#-1-install) | Tools, Python packages, models and the web app |
 | 🔑 | [2. Claude login](#-2-claude-login) | JARVIS's own Claude account, apart from your everyday Claude Code |
 | 🔧 | [3. Local config](#-3-local-config) | `.env`, LiveKit keys, the vault key and your passcode |
-| 💻 | [4. Try it on the Mac](#-4-try-it-on-the-mac) | Talking in the terminal or the browser |
+| 💻 | [4. Try it](#-4-try-it) | Talking in the terminal or the browser |
 | 📬 | [5. Google](#-5-google) | Gmail, Calendar, Sheets, Docs, Slides, Drive and Chat |
-| 📱 | [6. iPhone over Tailscale](#-6-iphone-over-tailscale) | The home-screen app on your phone |
+| 📱 | [6. Your phone over Tailscale](#-6-your-phone-over-tailscale) | The home-screen app on your phone |
 | 📁 | [7. Projects for code tasks](#-7-projects-for-code-tasks) | Repos background tasks can work on |
-| 🔁 | [8. Run it 24/7](#-8-run-it-247) | Four launchd services that never stop |
+| 🔁 | [8. Run it 24/7](#-8-run-it-247) | Four services that never stop: launchd or systemd |
 | 📂 | [Where things live](#-where-things-live) | Every file and folder JARVIS keeps |
 
 </details>
 
+## 🧭 Pick your platform
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+**[🍎 macOS](#-macos)**<br>
+**Apple silicon** (M1 or later, 8 GB is enough). Homebrew, **launchd** services, MLX Whisper on the GPU.
+
+</td>
+<td width="33%" valign="top">
+
+**[🐧 Linux](#-linux)**<br>
+**x86_64 or arm64** with **systemd**. Distro packages, systemd **user** units, faster-whisper on a CUDA GPU or the CPU.
+
+</td>
+<td width="33%" valign="top">
+
+**[🪟 Windows](#-windows-wsl2)**<br>
+**Through WSL2** (Ubuntu) with systemd turned on; from there, the Linux steps. Native Windows isn't supported.
+
+</td>
+</tr>
+</table>
+
+> [!IMPORTANT]
+> Everywhere you need [uv](https://docs.astral.sh/uv/), Node.js 18 or later and the **Claude Code CLI** with a Claude account. Optional extras are listed in the [README](../README.md#-quickstart).
+
+- **Intel Macs** get faster-whisper instead of MLX (which needs Apple silicon); they're untested.
+- **Beyond install and services**, Linux differs in two places: tasks are walled in by **bubblewrap** instead of Seatbelt, and the Mac's tools (Shortcuts, opening apps by name) give way to Linux desktop tools where their programs exist. See **[🔌 Integrations](integrations.md)** and **[🏗️ Architecture](architecture.md)**.
+
 ## 📦 1. Install
 
-**Install everything** — tools, Python packages, models and the web app:
+**Get your platform's prerequisites**, then run the same `make install` everywhere.
+
+### 🍎 macOS
 
 ```sh
+brew install uv node   # plus the Claude Code CLI
+```
+
+### 🐧 Linux
+
+**Packages** — Debian and Ubuntu names; Fedora's are alike (`portaudio` for `libportaudio2`, `libnotify` for `libnotify-bin`):
+
+```sh
+sudo apt install bubblewrap socat libportaudio2 curl git make   # required
+sudo apt install ffmpeg libnotify-bin xdg-utils wl-clipboard    # optional (xclip on X11)
+```
+
+| | Package | What for |
+|:-:|---|---|
+| 🧱 | `bubblewrap` · `socat` | **Required.** bubblewrap walls in background tasks' commands; both are needed by Claude Code's own sandbox (the voice shell) |
+| 🎤 | `libportaudio2` | The terminal mic: `make console` and `make voiceprint` |
+| ⬇️ | `curl`, `sha256sum`, `tar` | Fetching LiveKit and the models |
+| 🔔 | `libnotify-bin` · `xdg-utils` | Desktop notifications · opening links, files and folders |
+| 📋 | `wl-clipboard`, or `xclip` / `xsel` | The clipboard |
+| 🔉 | `wireplumber` (`wpctl`) or `pulseaudio-utils` (`pactl`) | Setting the volume |
+| 📸 | `grim` (Wayland/wlroots), `gnome-screenshot`, `spectacle` (KDE), `scrot` or `imagemagick` (X11) | Screenshots |
+| 🎵 | `ffmpeg` (plus `lame` for mp3) | m4a and mp3 audio files |
+| 📄 | `libreoffice-writer` or `pandoc` | `.doc`, `.rtf` and `.odt` documents (`pandoc` can't read `.doc`) |
+
+Each desktop tool is offered only when its program is installed and a display is present.
+
+**Then the tools** — [uv](https://docs.astral.sh/uv/getting-started/installation/), Node.js 18+ (your distro's, [NodeSource](https://github.com/nodesource/distributions) or nvm) and the Claude Code CLI. Make sure **`~/.local/bin` is on your `PATH`**: the LiveKit server goes there.
+
+> [!WARNING]
+> **Ubuntu 23.10 and later (24.04 included)** restrict unprivileged user namespaces through AppArmor, which stops bubblewrap. Background tasks' commands then **refuse to run**, with a message saying how to fix it. Run `make host-check` after `make install` to find out early.
+
+<details>
+<summary><b>🧱 Letting bubblewrap build its sandbox on Ubuntu</b></summary>
+
+<br>
+
+Either give `bwrap` an AppArmor profile that allows user namespaces, in `/etc/apparmor.d/bwrap`:
+
+```text
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+  include if exists <local/bwrap>
+}
+```
+
+then `sudo systemctl reload apparmor`. Or lift the restriction for the whole machine:
+
+```sh
+sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0
+```
+
+On other distributions, check `sysctl kernel.unprivileged_userns_clone` and `user.max_user_namespaces`.
+
+</details>
+
+### 🪟 Windows (WSL2)
+
+**1. Install Ubuntu in WSL2** — in PowerShell: `wsl --install -d Ubuntu`.
+
+**2. Turn on systemd** — the services need it. Inside Ubuntu, make sure `/etc/wsl.conf` has:
+
+```ini
+[boot]
+systemd=true
+```
+
+then run `wsl --shutdown` from Windows and open Ubuntu again.
+
+**3. Follow the [Linux](#-linux) steps** inside Ubuntu, with the checkout in your Linux home rather than under `/mnt/c`.
+
+- **Screenshots** aren't available: WSL2 can't see the Windows screen. The clipboard and notifications work only under WSLg.
+- `make awake` has no effect: **Windows decides** when the computer sleeps.
+- Your **phone** reaches JARVIS through **Tailscale installed inside WSL2** ([step 6](#-6-your-phone-over-tailscale)).
+
+### ✅ Then, everywhere
+
+```sh
+git clone <repo-url> jarvis && cd jarvis
 make install
 ```
 
 | | It runs | What for |
 |:-:|---|---|
-| 🍺 | `brew install livekit` | The local LiveKit server, only if it's missing |
+| 🍺 | `brew install livekit` | **macOS:** the local LiveKit server, only if it's missing |
+| 📡 | `make livekit-bin` | **Linux:** the same, as the pinned **1.13.7** release (amd64 or arm64), **sha256-checked**, into `~/.local/bin`; no sudo |
 | 🐍 | `uv sync` | Python 3.12+ and every dependency, into `.venv` |
-| 🧠 | `make models` | Speech, VAD, turn, noise and speaker models (below) |
+| 🧠 | `make models` | Speech, VAD, turn, noise and speaker models for this machine (below) |
 | 🌐 | `make web-build` | `npm install` (once) and a build into `web/dist` |
 
-`make models` fetches **Kokoro** (TTS), **Whisper large-v3-turbo 4-bit**, **Silero VAD**, the **turn detector**, **DeepFilterNet 3** (noise filter) and **WeSpeaker ResNet34** (speaker check) into `models/` and the Hugging Face cache. The noise-filter and speaker models are pinned and **checked by hash**.
+`make models` fetches **Kokoro** (TTS), **Whisper**, **Silero VAD**, the **turn detector**, **DeepFilterNet 3** (noise filter) and **WeSpeaker ResNet34** (speaker check) into `models/` and the Hugging Face cache. The noise-filter and speaker models are pinned and **checked by hash**. Which Whisper depends on the machine:
+
+| | Whisper on | Live voice | Recordings |
+|:-:|---|---|---|
+| 🍎 | **Apple silicon** (MLX) | large-v3-turbo 4-bit | the same |
+| 🟩 | **CUDA GPU** (faster-whisper) | large-v3-turbo | large-v3-turbo |
+| 🧮 | **CPU** (faster-whisper, int8) | `small.en` | `small` (any language) |
+
+<details>
+<summary><b>🧮 Speech without Apple silicon: GPU or CPU</b></summary>
+
+<br>
+
+- **GPU:** used when one works, which needs **CUDA 12 cuBLAS and cuDNN 9**, from the system or pip (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`).
+- **CPU:** int8, one thread per physical core. `small.en` took 0.61 s per 5 s clip on an M-series CPU; expect about **1–1.5 s on a 4–8 core x86**. On a weak CPU, set `JARVIS_STT=base.en`.
+- `JARVIS_STT_DEVICE` forces `cuda` or `cpu` (empty: pick automatically); `JARVIS_TRANSCRIBE_MODEL` picks the recordings model. All settings: **[⚙️ Configuration](configuration.md)**.
+
+</details>
 
 ## 🔑 2. Claude login
 
@@ -120,17 +250,17 @@ uv run python -m jarvis.state.settings about --from me.txt           # from a fi
 uv run python -m jarvis.state.settings about --clear
 ```
 
-## 💻 4. Try it on the Mac
+## 💻 4. Try it
 
 | | Where | How |
 |:-:|---|---|
-| ⌨️ | **Terminal** | `make console` talks through the Mac's mic; no server needed |
-| 🌐 | **Browser** | `make dev` (foreground) or `make services-install` (launchd), then open the app and enter your passcode |
+| ⌨️ | **Terminal** | `make console` talks through this computer's mic (Linux needs `libportaudio2`); no server needed |
+| 🌐 | **Browser** | `make dev` (foreground) or `make services-install` (services), then open the app and enter your passcode |
 
 ```sh
 make console                  # talk in this terminal
 make dev                      # or run every part, then:
-open http://localhost:8787
+open http://localhost:8787    # macOS; xdg-open on Linux
 ```
 
 ## 📬 5. Google
@@ -161,11 +291,11 @@ make services-restart
 
 Managing accounts, permissions and Chat set-up: **[🔌 Integrations](integrations.md#-google-accounts)**.
 
-## 📱 6. iPhone over Tailscale
+## 📱 6. Your phone over Tailscale
 
-**1. Install Tailscale** — on the Mac and the iPhone, signed in to the same account.
+**1. Install Tailscale** — on the computer and your phone (iOS or Android), signed in to the same account. On Windows, install it **inside WSL2** (the Linux package), not the Windows app. On Linux, `sudo tailscale set --operator=$USER` lets the next steps run without sudo.
 
-**2. Rerun setup** — so LiveKit advertises the Mac's Tailscale address for audio:
+**2. Rerun setup** — so LiveKit advertises the computer's Tailscale address for audio:
 
 ```sh
 make setup
@@ -177,14 +307,14 @@ make setup
 make tailscale-serve   # tailscale serve --bg 8787, and /rtc → 127.0.0.1:7880
 ```
 
-**4. Add it to the Home Screen** — on the iPhone, open `https://<mac-name>.<tailnet>.ts.net` in Safari, enter the passcode, then **Share → Add to Home Screen**.
+**4. Add it to the Home Screen** — open `https://<computer-name>.<tailnet>.ts.net`, enter the passcode, then add it: **Share → Add to Home Screen** in Safari on iOS, **⋮ → Add to Home screen** in Chrome on Android.
 
-**5. Optional** — an Apple Shortcut that opens that URL, on the Action Button.
+**5. Optional** — a shortcut that opens that URL: an Apple Shortcut on the Action Button, or a home-screen shortcut on Android.
 
 > [!WARNING]
-> **No audio on the phone?** Make sure you reran `make setup` after installing Tailscale. If macOS asks whether `livekit-server` may accept incoming connections, **allow it**: audio uses **UDP port 7882**.
+> **No audio on the phone?** Make sure you reran `make setup` after installing Tailscale. Audio uses **UDP port 7882**: if macOS asks whether `livekit-server` may accept incoming connections, **allow it**; on Linux, open that port if a firewall such as ufw is on.
 
-Notifications, earphones and the native app: **[📱 iPhone](iphone.md)**.
+Notifications, earphones and the native app on iOS and Android: **[📱 Mobile](mobile.md)**.
 
 ## 📁 7. Projects for code tasks
 
@@ -208,7 +338,7 @@ Changes apply at once. **In place** (the default) vs **worktrees** is explained 
 
 ## 🔁 8. Run it 24/7
 
-**Install the services** — installs and starts four launchd services, logging to `logs/`:
+**Install the services** — installs and starts four services, logging to `logs/`:
 
 ```sh
 make services-install
@@ -221,17 +351,33 @@ make services-install
 | 🌐 | `com.jarvis.web` | The web app and control panel on 127.0.0.1:8787 |
 | ⚙️ | `com.jarvis.tasks` | The task runner: background tasks, heartbeat, scheduler, learning review |
 
+| | On | They run as |
+|:-:|---|---|
+| 🍎 | **macOS** | **launchd** agents |
+| 🐧 | **Linux** and WSL2 | systemd **user** units in `~/.config/systemd/user/com.jarvis.<name>.service`; the task runner at low CPU and idle disk priority |
+
+**On Linux, once:** let the services run without a login session and start at boot. `make services-install` prints this hint when it's needed:
+
+```sh
+sudo loginctl enable-linger $USER
+```
+
+- Installing and starting hand your desktop session's display and D-Bus variables to the user manager, so **notifications, the clipboard and screenshots** work from the services.
+- **No systemd** (say, WSL2 without it turned on)? `make services-install` stops with a hint; `make dev` still runs everything in the foreground.
+- `uv run python -m jarvis.setup_local status` shows the units' state (`--help` for the rest).
+
 **Keeping it running:**
 
 | | To | Do |
 |:-:|---|---|
-| 🔌 | Keep the Mac awake on the charger | Nothing: the agent's service runs under `caffeinate` |
-| 💤 | Keep running with the lid closed | `make awake` (`sudo pmset -a disablesleep 1`) |
+| 🔌 | Keep the computer awake while JARVIS runs | Nothing: the agent's service runs under `caffeinate` on macOS (on the charger), `systemd-inhibit` on Linux when allowed |
+| 💤 | Keep running with the lid closed | `make awake`: `sudo pmset -a disablesleep 1` on macOS; masks the sleep targets (sudo) on Linux; no effect on WSL2 |
 | 🌙 | Restore normal sleep | `make sleep-normal` |
 | 🔁 | Apply a `.env` change or pulled code | `make services-restart` |
 | ⏯️ | Stop or start them | `make services-stop` · `make services-start` |
+| 📊 | Check on them | `make status` |
 
-`JARVIS_SERVICE_PREFIX` changes the `com.jarvis` part, to **run a second JARVIS** under the same Mac account; `make services-restart` moves the services to the new labels.
+`JARVIS_SERVICE_PREFIX` changes the `com.jarvis` part, to **run a second JARVIS** under the same user account; `make services-restart` moves the services to the new labels.
 
 ## 📂 Where things live
 
@@ -247,7 +393,7 @@ make services-install
 | 📦 | `models/` | Downloaded models |
 | 📜 | `logs/` | Service logs, voice timing, speech gate and speaker check logs |
 
-🔒 All of `data/`, `secrets/`, `models/`, `logs/` and `.env` are **git-ignored** and stay on your Mac.
+🔒 All of `data/`, `secrets/`, `models/`, `logs/` and `.env` are **git-ignored** and stay on your computer.
 
 ---
 

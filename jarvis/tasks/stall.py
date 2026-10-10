@@ -6,7 +6,7 @@ A running task with none for TASK_STALL_MINUTES is stalled unless the quiet is e
   a command still within its time limit (host_run, Bash, job_wait), or a running start_job job.
 Queued and waiting tasks never count.
 
-The pulse is in memory only. Task views show `stalled` at once; the heartbeat flags it once per stall (voice, Mac
+The pulse is in memory only. Task views show `stalled` at once; the heartbeat flags it once per stall (voice, desktop
 notification, push), so within HEARTBEAT_MINUTES and not in quiet hours or do-not-disturb. Never stops a task itself.
 """
 
@@ -24,7 +24,8 @@ from jarvis.tasks.host_tools import HOST_RUN, JOB_WAIT, call_minutes
 GRACE = 120  # seconds of slack past a command's own time limit
 BASH_DEFAULT, BASH_MOST = 120, 600  # seconds: Bash tool default and maximum timeout
 # Excuse shown for a quiet task, per still-running command tool
-DOING = {"Bash": "running a command", HOST_RUN: "running a command on the Mac", JOB_WAIT: "waiting for one of its jobs"}
+DOING = {"Bash": "running a command", HOST_RUN: "running a command on the computer",
+         JOB_WAIT: "waiting for one of its jobs"}
 
 
 def lasts(block: ToolUseBlock) -> float:

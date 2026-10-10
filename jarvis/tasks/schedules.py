@@ -1,6 +1,6 @@
 """Scheduled jobs (schedules table in data/tasks.db). Voice tools add/change/cancel; the runner's scheduler runs them.
 
-  reminder  say `text` (Mac notification, phone push, aloud in a live session)
+  reminder  say `text` (desktop notification, phone push, aloud in a live session)
   task      start a background task with `text` as instruction (`task_kind`, default research)
   watch     every `every` minutes until `text` happens or `until`: probe task (model), or cheap url/gmail/chat probes
   command   run shell `text` in `folder` as a model-free command task; a model only summarises or (auto_fix) fixes it

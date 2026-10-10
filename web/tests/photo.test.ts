@@ -46,7 +46,7 @@ test("a photo is scaled down to fit, never up", () => {
   assert.deepEqual(fitSize(0, 0), [1, 1]);
 });
 
-test("a photo picked goes to the Mac at once, and waits for the next turn", async () => {
+test("a photo picked goes to JARVIS at once, and waits for the next turn", async () => {
   attach(file());
   assert.equal(photo.value?.state, "sending");
   assert.equal(await photoReady(), true);
@@ -66,7 +66,7 @@ test("the next thing the user says or types takes it", async () => {
   assert.equal(photo.value, null);
 });
 
-test("removing it before asking takes it back off the Mac", async () => {
+test("removing it before asking takes it back off JARVIS", async () => {
   attach(file());
   await photoReady();
   const id = photo.value!.id;

@@ -6,7 +6,7 @@
 
 **Everything JARVIS does in the background: tasks you start by voice, shell jobs, approvals, the scheduler, the heartbeat and the learning review.**
 
-[🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · **🛠️ Tasks** · [🔌 Integrations](integrations.md) · [📱 iPhone](iphone.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md)
+[🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · **🛠️ Tasks** · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md)
 
 </div>
 
@@ -22,7 +22,7 @@ flowchart TB
     Runner --> S["⏰ Scheduler<br/>reminders · watches"]
     Runner --> H["💓 Heartbeat<br/>every 15 min"]
     Runner --> L["🧠 Learning<br/>after each chat"]
-    T & C & S & H & L --> Tell(["🔔 Said aloud · Mac notification · phone push"])
+    T & C & S & H & L --> Tell(["🔔 Said aloud · desktop notification · phone push"])
 
     classDef you fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
     classDef mac fill:#ecfdf5,stroke:#059669,color:#064e3b
@@ -110,17 +110,17 @@ To-dos live in the `todos` table of `data/tasks.db`, not in memory.
 
 | Say | What happens |
 |---|---|
-| "Add build an iPhone app to my list" | Adds it |
+| "Add build a phone app to my list" | Adds it |
 | "What's on my list?" | Reads it back, open items first |
-| "Tick off the iPhone app" | Marks it done |
-| "Start a task on the iPhone app from my list" | A task linked to the item |
+| "Tick off the phone app" | Marks it done |
+| "Start a task on the phone app from my list" | A task linked to the item |
 
 - A **linked task**, once checked finished, ticks its item off, or JARVIS offers to reword the item to what's left.
 - A task started **without naming an item** is matched against your open items as it finishes; a clear match is **offered** for ticking off, never ticked unasked.
 
 ## 💻 Shell commands and long jobs
 
-JARVIS runs everyday commands itself: checks, builds, tests, renders, git commits. **Only risky ones wait for your yes**: deleting files, pushing, installing or removing software, stopping processes, changing system settings, sending data off the Mac.
+JARVIS runs everyday commands itself: checks, builds, tests, renders, git commits. **Only risky ones wait for your yes**: deleting files, pushing, installing or removing software, stopping processes, changing system settings, sending data off the computer.
 
 It asks **"Okay to go ahead?"**; answer within **five minutes**, even after talking about something else.
 
@@ -131,6 +131,8 @@ It asks **"Okay to go ahead?"**; answer within **five minutes**, even after talk
 | ➖ | A lone "thank you" or "bye" | **Neither** |
 
 A reply the word lists can't read goes to a short model call that sees only your words and what's waiting (`JARVIS_CONSENT`).
+
+These voice commands run in Claude Code's own sandbox, which on Linux needs **bubblewrap** and **socat** installed.
 
 ### Long jobs
 
@@ -176,7 +178,7 @@ flowchart LR
 
 ## ✋ Approvals
 
-Background tasks run their commands on the Mac under a **sandbox profile** that hides secrets and JARVIS's own files. A **risky** command becomes a request that waits for your answer, up to `JARVIS_TASK_APPROVAL_HOURS` (**12 h**).
+Background tasks run their commands on JARVIS's computer **inside walls** that hide secrets and JARVIS's own files. A **risky** command becomes a request that waits for your answer, up to `JARVIS_TASK_APPROVAL_HOURS` (**12 h**).
 
 ```mermaid
 flowchart LR
@@ -206,6 +208,40 @@ flowchart LR
 - A task **deleting files in its own folders**, or stopping processes it started, doesn't ask.
 - The request is **withdrawn** once the task no longer needs it (finished, failed, stopped).
 
+### The sandbox
+
+| | macOS | Linux (and WSL2) |
+|---|---|---|
+| **Walls** | Seatbelt (`sandbox-exec`) | **bubblewrap** (`bwrap`), required |
+| **Without them** | Always there | Commands **refuse to run**, saying how to fix it |
+| **Restarting JARVIS** | A task runs `make services-restart` itself | A task can't reach systemd, so it **asks you** to run it |
+| **Other processes** | Visible, their environments not | **Invisible**: a PID namespace of its own |
+| **Keyrings** | Keychain reads refused | Keyring files and the Secret Service hidden |
+| **Secret-named files** | Hidden anywhere, by a pattern rule | Found by a walk at launch (100k entries, 8 levels deep) |
+
+- **Overall** the Linux walls match macOS's on most rules: **stricter** on processes and keyrings, **weaker** on secret-named files deep in your home.
+- **Linux only:** your home and `~/.config` take **no new top-level entries**, so a tool that makes its own folder on first use (`~/.cargo`, say) must be **run once yourself**, outside JARVIS. **`sudo`**, setuid programs and **snap-packaged tools** don't work inside.
+- **What host commands are for:** what the inner sandbox blocks: signed Xcode builds, `devicectl` and Homebrew on macOS; Docker, `adb` and emulators on Linux.
+- **`make host-check`** tests the walls on either system.
+
+> [!IMPORTANT]
+> **Ubuntu 23.10 and later (24.04 too)** restrict user namespaces through AppArmor, and bubblewrap then can't start, so background tasks' commands refuse to run. Install bubblewrap (`sudo apt install bubblewrap`), then give `bwrap` an AppArmor profile that allows user namespaces, or set `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`.
+
+### What counts as risky
+
+On every system: **deleting**, **pushing**, **installing or removing software**, **stopping processes**, **changing permissions**, **system settings**, **running as root** and **sending data off the computer**. On Linux the checker also knows:
+
+| | Kind | Linux commands that ask |
+|:-:|---|---|
+| 🧩 | **Services** | `systemctl`, `systemd-run`, `loginctl` (status listings are fine) |
+| 📦 | **Packages** | `apt`, `dnf`/`yum`, `zypper`, `apk`, `pacman` (and AUR helpers), `snap`, `flatpak`, `dpkg`, `rpm` (searches and listings are fine) |
+| 🌐 | **Network and firewall** | `nmcli`, `ip`, `iptables`, `nft`, `ufw`, `firewall-cmd` |
+| 🎨 | **Desktop settings** | `gsettings`, `dconf`, `xdg-settings` |
+| 🕰️ | **Machine settings** | `timedatectl`, `hostnamectl`, `localectl` |
+| 👥 | **Users and the kernel** | User and group commands, `mount`, `modprobe`, `sysctl -w` |
+| 🚀 | **Startup files** | Writes into `~/.config/systemd`, `~/.config/autostart`, `/etc` and shell startup files |
+| 🔑 | **Keyrings** | `secret-tool`, `kwallet-query`, `pass` and `nmcli --show-secrets`: **refused** to tasks |
+
 ### Remembered approvals
 
 A yes can go:
@@ -216,10 +252,10 @@ A yes can go:
 | ⏳ | **For this session** | The task, or the conversation, at most 12 h |
 | ♾️ | **Always** | Until you withdraw it in **Settings → Approvals** |
 
-Only some kinds can be remembered: **installing software, stopping processes, changing permissions, changing the iPhone or a simulator**. What a rule would cover is always read out or shown before an "always" is saved.
+Only some kinds can be remembered: **installing software, stopping processes, changing permissions, installing onto an iPhone (`devicectl`, macOS) or a simulator**. What a rule would cover is always read out or shown before an "always" is saved.
 
 > [!WARNING]
-> These **always ask**, every time, and can never be remembered: **deleting**, **pushing**, **sending data off the Mac**, **system settings** and **secrets**.
+> These **always ask**, every time, and can never be remembered: **deleting**, **pushing**, **sending data off the computer**, **system settings** and **secrets**.
 
 ## ⏰ Scheduler
 
@@ -227,7 +263,7 @@ Beside the heartbeat, the runner runs what you schedule by voice, once or on a r
 
 | | Kind | Say | What happens |
 |:-:|---|---|---|
-| 🔔 | **Reminder** | "Remind me at five to call the bank" | Mac notification, phone push, spoken if you're in a session |
+| 🔔 | **Reminder** | "Remind me at five to call the bank" | Desktop notification, phone push, spoken if you're in a session |
 | 🛠️ | **Task** | "Every weekday at nine, give me a morning brief" | A background task on a lighter model, with a **notepad** |
 | 👀 | **Watch** | "Tell me when the deploy is live" · "tell me when Sam replies" | Checks until it happens (you hear once) or it ends |
 | 💻 | **Command** | "Run `scripts/report.sh weekly` in my reports project every Monday at seven" | A [command task](#long-jobs) per run, no model while it works |
@@ -281,7 +317,7 @@ Every 15 minutes the runner checks for what's new, **read-only**:
 | 🔑 | **Sign-ins** | A Google account, `gh`, or a GitHub/GitLab token signed out or expiring within a week |
 
 - **Choose sources** in **Settings → Heartbeat** (on/off, meeting lead time, Gmail searches, extra titled searches) or by voice ("stop flagging GitHub", "flag mail from my bank too").
-- **You hear about it** as a Mac notification, a phone push if enabled, and **spoken at the next pause** if you're in a session.
+- **You hear about it** as a desktop notification, a phone push if enabled, and **spoken at the next pause** if you're in a session.
 - **Rules:** nothing flagged twice; nothing checked in quiet hours (23:00–08:00) or do not disturb; the first check only records what's already there.
 - **`make heartbeat`** dry-runs one check. Each check writes a line to `logs/tasks.log`.
 

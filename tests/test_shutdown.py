@@ -26,7 +26,7 @@ def cut_off(task: dict) -> dict:
 
 
 def hangs(on_mac: str | None = None):
-    """Fake run: starts its session, then works until stopped, running `on_mac` on the Mac if given."""
+    """Fake run: starts its session, then works until stopped, running `on_mac` on the computer if given."""
     async def body(task, prompt, reporter) -> Outcome:
         reporter.session(task["id"], f"s{task['id']}")
         if on_mac:
@@ -69,7 +69,7 @@ def test_a_shutdown_notes_tasks_as_interrupted_and_says_nothing(env, monkeypatch
     assert cut_off(plain)["on_mac"] == [] and cut_off(plain)["prompt"] == "Find flights to Goa."
     assert cut_off(on_mac)["on_mac"] == ["xcodebuild -scheme App"]
     assert cut_off(queued)["prompt"] == "Find a hotel."
-    assert logged(r, on_mac["id"]) == ["JARVIS is shutting down, while it ran xcodebuild -scheme App on the Mac"]
+    assert logged(r, on_mac["id"]) == ["JARVIS is shutting down, while it ran xcodebuild -scheme App on the computer"]
     assert logged(r, plain["id"]) == ["JARVIS is shutting down"]
     assert events.empty() and all(t["spoken"] is None for t in (plain, on_mac, queued))  # nothing announced
 
@@ -272,7 +272,7 @@ def test_tasks_cut_off_mid_command_or_waiting_on_the_user_stop_as_before(env, mo
         task = r.store.get(t["id"])
         assert task["status"] == "stopped" and task["error"] == runner.RESTARTED and task["interrupted"] is None
     assert r.store.get(check["id"])["status"] == "stopped" and r.store.get(check["id"])["error"] is None
-    assert logged(r, on_mac["id"]) == ["not resumed on its own: it was cut off running brew install jq on the Mac"]
+    assert logged(r, on_mac["id"]) == ["not resumed on its own: it was cut off running brew install jq on the computer"]
     assert logged(r, approval["id"]) == ["not resumed on its own: it's waiting for a go-ahead"]
     assert logged(r, asked["id"]) == logged(r, wants["id"]) == ["not resumed on its own: it's waiting for an answer"]
 

@@ -1,6 +1,6 @@
 """JARVIS voice entry point (LiveKit side; per-call state lives in VoiceSession).
 
-  uv run python -m jarvis.voice.agent console   talk via the Mac's mic and speakers in the terminal
+  uv run python -m jarvis.voice.agent console   talk via the computer's mic and speakers in the terminal
   uv run python -m jarvis.voice.agent dev       serve rooms on the local LiveKit server, with reload
   uv run python -m jarvis.voice.agent start     serve rooms on the local LiveKit server (launchd, 24/7)
 
@@ -17,7 +17,7 @@ from livekit.plugins import silero
 
 from jarvis.brain import make_brain
 from jarvis.brain.route import Router
-from jarvis.core import config, credentials
+from jarvis.core import config, credentials, platform
 from jarvis.notify import push
 from jarvis.state import conversation, vocabulary, voiceprints
 from jarvis.voice import denoise, quiet, ram, speech, timing, turn
@@ -72,7 +72,7 @@ def prewarm(proc: JobProcess) -> None:
 
 
 # Whisper and Kokoro load once, in LiveKit's shared inference process: a copy per job process (spares included)
-# makes an 8 GB Mac swap. Spares hold only the VAD and noise filter.
+# makes an 8 GB machine swap. Spares hold only the VAD and noise filter.
 speech.register_runners()
 os.environ["LIVEKIT_URL"] = config.LIVEKIT_URL  # the worker reads it from env
 # LiveKit keys from the vault (or .env on first setup)
@@ -159,12 +159,15 @@ async def _to_phone(text: str) -> None:
 
 
 def _child_memory() -> None:
-    """Make child processes return freed memory to macOS (unless JARVIS_VOICE_MALLOC_LARGE_CACHE).
+    """Make child processes return freed memory to the system (unless JARVIS_VOICE_MALLOC_LARGE_CACHE).
 
     macOS malloc caches large freed blocks; Kokoro's buffers for one long sentence kept the speech process 1 GB bigger.
+    glibc does the same once its mmap threshold has grown to the largest block freed, so it's pinned at its default.
     Read at process start, so it must be set before the worker spawns children."""
     if not config.VOICE_MALLOC_LARGE_CACHE:
         os.environ.setdefault("MallocLargeCache", "0")
+        if platform.LINUX:
+            os.environ.setdefault("MALLOC_MMAP_THRESHOLD_", "131072")
 
 
 if __name__ == "__main__":

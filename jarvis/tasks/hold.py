@@ -1,6 +1,6 @@
 """Do not disturb ("pause all"): hold unasked output until a time or until resumed.
 
-While on: the scheduler runs nothing (items stay due), the heartbeat checks nothing, and task updates skip Mac
+While on: the scheduler runs nothing (items stay due), the heartbeat checks nothing, and task updates skip desktop
 notifications and phone pushes (still said in a live session). Approval requests still come through.
 On end: held reminders are said with their due time, each held task/watch runs once, the heartbeat catches up.
 

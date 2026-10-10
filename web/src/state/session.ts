@@ -178,7 +178,7 @@ function tellSpeaker(r: Room) {
     .catch((e) => { if (room === r) showError(`Couldn't change the speaker: ${(e as Error).message || e}`); });
 }
 
-// iPhone app: after a phone call turned mic and speaker off, restore them or leave them off.
+// Native app: after a phone call turned mic and speaker off, restore them or leave them off.
 export function restoreAfterCall(restore: boolean) { native?.restoreAfterCall(restore); }
 
 function micChanged(r: Room) {  // LiveKit (un)muted the mic, by request or because the track ended

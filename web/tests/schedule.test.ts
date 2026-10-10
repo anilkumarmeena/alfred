@@ -112,7 +112,7 @@ test("tasks a job started are tagged with its name in the task list", async () =
   assert.equal(cards[1]!.querySelector(".tag.job"), null);
 });
 
-test("pause, resume and cancel ask the Mac and show the list it sends back", async () => {
+test("pause, resume and cancel ask JARVIS and show the list it sends back", async () => {
   await act(() => { render(h(ui.TaskList, {}), box); });
   answers.schedule_pause = [{ ...JOB, status: "paused" }, WATCH];
   await act(() => { (box.querySelector(".sched button.btn") as HTMLButtonElement).click(); });

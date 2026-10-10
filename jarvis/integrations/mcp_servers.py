@@ -640,7 +640,7 @@ def main(argv: list[str] | None = None) -> int:
             for tool in args.forget or []:
                 tools.pop(tool, None)
             if tools != server.tools or not server.reviewed:
-                save(replace(server, tools=tools, reviewed=True))  # sorted by hand on the Mac counts as reviewed
+                save(replace(server, tools=tools, reviewed=True))  # sorted by hand at the command line counts as reviewed
                 print(f"Changed the {server.name} server's tools. {APPLIES}")
             for tool, spec in sorted(tools.items()):
                 print(f"  {tool:<40} {spec.access}" + (f"  says: {spec.says}" if spec.says else ""))

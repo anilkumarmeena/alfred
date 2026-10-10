@@ -1,13 +1,15 @@
-"""Local setup, safe to rerun: uv run python -m jarvis.setup_local [--install | start | stop | labels]
+"""Local setup, safe to rerun: uv run python -m jarvis.setup_local [--install | start | stop | status | labels]
 
   (default)  fill missing LiveKit keys, passcode and vault master key in .env (mode 600), move keys into the vault
              and the passcode into logins (shown once); ask once for the projects folder; write secrets/livekit.yaml
-  --install  also (re)install and start the launchd services from deploy/*.plist
+  --install  also (re)install and start the services: launchd agents from deploy/*.plist on macOS, systemd user
+             units from deploy/systemd/*.service on Linux
   start      load installed services, installing missing ones
   stop       unload services (they stay installed)
+  status     print each service's state
   labels     print the service labels
 
-Plists this checkout installed under old labels (e.g. a changed JARVIS_SERVICE_PREFIX) are stale: stop unloads them;
+Services this checkout installed under old labels (e.g. a changed JARVIS_SERVICE_PREFIX) are stale: stop unloads them;
 start and --install remove them before loading the current ones.
 """
 
@@ -24,14 +26,17 @@ from string import Template
 
 from dotenv import load_dotenv
 
-from jarvis.core import config, credentials, logins, vault
+from jarvis.core import config, credentials, logins, platform, vault
 from jarvis.core.config import ROOT, SECRETS_DIR
 from jarvis.core.files import write_atomic
 
 ENV = ROOT / ".env"
 LIVEKIT_CONFIG = SECRETS_DIR / "livekit.yaml"
 LAUNCH_AGENTS = Path.home() / "Library/LaunchAgents"
-SERVICES = config.SERVICE_NAMES  # deploy/<name>.plist -> <label>.plist
+SYSTEMD_USER = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd/user"
+# deploy/<name>.plist -> <label>.plist; deploy/systemd/<name>.service -> <label>.service
+SERVICES = config.SERVICE_NAMES
+MANAGER = platform.SERVICE_MANAGER  # "launchd" or "systemd"
 TAILSCALE_CLIS = ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]
 
 
@@ -80,49 +85,81 @@ def ask_projects_folder(text: str, ask=input) -> str:
     return text
 
 
-# ── launchd services ────────────────────────────────────────────
+# ── Services: launchd on macOS, systemd user units on Linux ─────
+
+
+def livekit_server() -> str:
+    """livekit-server on PATH, else where make install puts it on Linux."""
+    return shutil.which("livekit-server") or str(Path.home() / ".local/bin/livekit-server")
+
+
+def _fill(template: Path, name: str) -> str:
+    """`template` with ${LABEL}, ${ROOT}, ${HOME}, ${NODE} (current node's bin dir plus ":", or "") and ${LIVEKIT}
+    (the livekit-server binary) substituted."""
+    node = shutil.which("node")
+    return Template(template.read_text()).substitute(
+        LABEL=config.service_label(name), ROOT=ROOT, HOME=Path.home(), NODE=f"{Path(node).parent}:" if node else "",
+        LIVEKIT=livekit_server())
 
 
 def service_plist(name: str) -> str:
-    """deploy/<name>.plist with ${LABEL}, ${ROOT}, ${HOME} and ${NODE} (current node's bin dir plus ":", or "")
-    substituted."""
-    node = shutil.which("node")
-    return Template((ROOT / "deploy" / f"{name}.plist").read_text()).substitute(
-        LABEL=config.service_label(name), ROOT=ROOT, HOME=Path.home(), NODE=f"{Path(node).parent}:" if node else "")
+    """deploy/<name>.plist, filled in."""
+    return _fill(ROOT / "deploy" / f"{name}.plist", name)
+
+
+def service_unit(name: str) -> str:
+    """deploy/systemd/<name>.service, filled in."""
+    return _fill(ROOT / "deploy" / "systemd" / f"{name}.service", name)
+
+
+def _systemd() -> bool:
+    return MANAGER == "systemd"
 
 
 def installed(name: str) -> Path:
-    """~/Library/LaunchAgents/<label>.plist."""
+    """~/Library/LaunchAgents/<label>.plist, or ~/.config/systemd/user/<label>.service on Linux."""
+    if _systemd():
+        return SYSTEMD_USER / f"{config.service_label(name)}.service"
     return LAUNCH_AGENTS / f"{config.service_label(name)}.plist"
 
 
-def _service(plist: Path) -> str:
-    """Service name from a plist: com.jarvis.agent.plist -> "agent"."""
-    return plist.stem.rpartition(".")[2]
+def _service(path: Path) -> str:
+    """Service name from a plist or unit: com.jarvis.agent.plist -> "agent"."""
+    return path.stem.rpartition(".")[2]
 
 
 def _write(name: str) -> Path:
-    """Write the service plist, creating LaunchAgents/ and logs/ if needed."""
+    """Write the service's plist or unit, creating its folder and logs/ if needed."""
     dest = installed(name)
     dest.parent.mkdir(parents=True, exist_ok=True)
     (ROOT / "logs").mkdir(exist_ok=True)
-    dest.write_text(service_plist(name))
+    dest.write_text(service_unit(name) if _systemd() else service_plist(name))
     return dest
 
 
+def _log_file(path: Path) -> object:
+    """Where an installed plist or unit sends its output; None if unreadable."""
+    try:
+        if _systemd():
+            found = re.search(r"^StandardOutput=append:(.+)$", path.read_text(), re.M)
+            return found and found.group(1).strip()
+        return plistlib.loads(path.read_bytes()).get("StandardOutPath", "")
+    except (OSError, plistlib.InvalidFileException, ValueError):
+        return None
+
+
 def stale() -> list[Path]:
-    """Plists from this checkout under unused labels: named *.<service> and logging into this checkout's logs/."""
+    """Plists or units from this checkout under unused labels: named *.<service> and logging into this checkout's
+    logs/."""
     current = {installed(name) for name in SERVICES}
+    folder, pattern = (SYSTEMD_USER, "*.service") if _systemd() else (LAUNCH_AGENTS, "*.plist")
     found = []
-    for plist in sorted(LAUNCH_AGENTS.glob("*.plist")):
-        if plist in current or _service(plist) not in SERVICES:
+    for path in sorted(folder.glob(pattern)):
+        if path in current or _service(path) not in SERVICES:
             continue
-        try:
-            logs = plistlib.loads(plist.read_bytes()).get("StandardOutPath", "")
-        except (OSError, plistlib.InvalidFileException, ValueError):
-            continue
+        logs = _log_file(path)
         if isinstance(logs, str) and Path(logs).parent == ROOT / "logs":
-            found.append(plist)
+            found.append(path)
     return found
 
 
@@ -133,67 +170,183 @@ def _launchctl(action: str, plist: Path) -> str:
     return "" if done.returncode == 0 else (done.stderr or done.stdout or f"exit {done.returncode}").strip()
 
 
+def _systemctl(*args: str) -> str:
+    """systemctl --user; "" on success, else the error."""
+    try:
+        done = subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
+    except OSError as e:
+        return str(e)
+    return "" if done.returncode == 0 else (done.stderr or done.stdout or f"exit {done.returncode}").strip()
+
+
+def _require_systemd() -> None:
+    """Exit with a hint when there's no systemd user manager to run services (e.g. WSL2 without systemd)."""
+    if not shutil.which("systemctl") or _systemctl("show-environment"):
+        sys.exit("systemd isn't running for this user, so JARVIS can't install its services. On WSL2, add\n"
+                 "  [boot]\n  systemd=true\nto /etc/wsl.conf and run `wsl --shutdown` from Windows. "
+                 "Or run everything in the foreground with `make dev`.")
+
+
+def _unload(path: Path) -> str:
+    """Stop a service from its installed plist or unit; "" on success, else the error."""
+    return _systemctl("stop", path.name) if _systemd() else _launchctl("bootout", path)
+
+
 def _running(label: str) -> bool:
     return subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/{label}"], capture_output=True).returncode == 0
 
 
-def _start(name: str, tries: int = 5) -> bool:
-    """Bootstrap a service, retrying while a just-stopped one shuts down ("5: Input/output error"). Already running
-    counts as started; prints the error on failure."""
+def _start(name: str, tries: int = 5, restart: bool = False) -> bool:
+    """Start a service; prints the error on failure. launchd: bootstrap, retrying while a just-stopped one shuts down
+    ("5: Input/output error"), and already running counts as started. systemd: enable (back at login) and start, or
+    restart to pick up a rewritten unit."""
     label, error = config.service_label(name), ""
-    for attempt in range(tries):
-        if not (error := _launchctl("bootstrap", installed(name))) or _running(label):
+    if _systemd():
+        unit = installed(name).name
+        if not (error := _systemctl("enable", unit) or _systemctl("restart" if restart else "start", unit)):
             print(f"started {label}")
             return True
-        if attempt < tries - 1:
-            time.sleep(2)
+    else:
+        for attempt in range(tries):
+            if not (error := _launchctl("bootstrap", installed(name))) or _running(label):
+                print(f"started {label}")
+                return True
+            if attempt < tries - 1:
+                time.sleep(2)
     print(f"couldn't start {label}: {error}", file=sys.stderr)
     return False
 
 
 def _retire_stale() -> None:
-    """Unload stale services and delete their plists so they don't return at login."""
-    for plist in stale():
-        _launchctl("bootout", plist)
-        plist.unlink(missing_ok=True)
-        print(f"removed {plist.stem}, now {config.service_label(_service(plist))}")
+    """Unload stale services and delete their plists or units so they don't return at login."""
+    for path in stale():
+        if _systemd():
+            _systemctl("disable", "--now", path.name)
+        else:
+            _launchctl("bootout", path)
+        path.unlink(missing_ok=True)
+        print(f"removed {path.stem}, now {config.service_label(_service(path))}")
+
+
+# The desktop session's variables, so notifications, the clipboard and screenshots work from a service
+DESKTOP_ENV = ("DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS")
+
+
+def _import_desktop_env() -> None:
+    """Hand the user manager this session's desktop variables (desktops usually do; a terminal-only login doesn't)."""
+    if found := [k for k in DESKTOP_ENV if os.environ.get(k)]:
+        _systemctl("import-environment", *found)
+
+
+def _linger_hint() -> None:
+    """Without lingering, systemd stops user services at logout and starts them only at login."""
+    user = os.environ.get("USER") or str(os.getuid())
+    try:
+        done = subprocess.run(["loginctl", "show-user", user, "-p", "Linger", "--value"], capture_output=True,
+                              text=True)
+    except OSError:
+        return
+    if done.returncode == 0 and (done.stdout or "").strip() == "no":
+        print(f"To keep JARVIS running after you log out and start it at boot, run once: "
+              f"sudo loginctl enable-linger {user}")
 
 
 def install_services() -> None:
-    """Retire stale labels, rewrite and reload every plist. Exits 1 if any service fails to start."""
+    """Retire stale labels, rewrite and reload every plist or unit. Exits 1 if any service fails to start."""
+    if _systemd():
+        _require_systemd()
     _retire_stale()
     started = True
-    for name in SERVICES:
-        _launchctl("bootout", installed(name))
-        _write(name)
-        started &= _start(name)
+    if _systemd():
+        for name in SERVICES:
+            _write(name)
+        _systemctl("daemon-reload")
+        _import_desktop_env()
+        for name in SERVICES:
+            started &= _start(name, restart=True)
+        _linger_hint()
+    else:
+        for name in SERVICES:
+            _launchctl("bootout", installed(name))
+            _write(name)
+            started &= _start(name)
     if not started:
         sys.exit(1)
 
 
 def start_services() -> None:
-    """Retire stale labels, install missing plists and load all services. Exits 1 if any fails to start."""
+    """Retire stale labels, install missing plists or units and load all services. Exits 1 if any fails to start."""
+    if _systemd():
+        _require_systemd()
     _retire_stale()
+    missing = [name for name in SERVICES if not installed(name).exists()]
+    for name in missing:
+        _write(name)
+    if _systemd():
+        _systemctl("daemon-reload")
+        _import_desktop_env()
     started = True
     for name in SERVICES:
-        if not installed(name).exists():
-            _write(name)
         started &= _start(name)
+    if _systemd():
+        _linger_hint()
     if not started:
         sys.exit(1)
 
 
 def stop_services() -> None:
-    """Unload current and stale services; plists stay (start removes stale ones)."""
-    for plist in [installed(name) for name in SERVICES] + stale():
-        if plist.exists() and not _launchctl("bootout", plist):
-            print(f"stopped {plist.stem}")
+    """Unload current and stale services; plists and units stay (start removes stale ones)."""
+    if _systemd():
+        _require_systemd()
+    for path in [installed(name) for name in SERVICES] + stale():
+        if path.exists() and not _unload(path):
+            print(f"stopped {path.stem}")
+
+
+def properties(text: str) -> dict[str, str]:
+    """systemctl show output (Key=Value lines) as a dict."""
+    return {key: value for key, found, value in (line.partition("=") for line in text.splitlines()) if found}
+
+
+def status() -> list[tuple[str, str]]:
+    """(label, "running (pid N)" | "stopped (exit N)" | "not loaded") for each service."""
+    found = []
+    if _systemd():
+        for name in SERVICES:
+            done = subprocess.run(["systemctl", "--user", "show", "-p", "LoadState,ActiveState,MainPID,ExecMainStatus",
+                                   installed(name).name], capture_output=True, text=True)
+            props = properties(done.stdout or "") if done.returncode == 0 else {}
+            if props.get("LoadState", "not-found") == "not-found":
+                state = "not loaded"
+            elif props.get("ActiveState") in ("active", "reloading"):
+                state = f"running (pid {props.get('MainPID', '?')})"
+            else:
+                state = f"stopped (exit {props.get('ExecMainStatus', '?')})"
+            found.append((config.service_label(name), state))
+        return found
+    done = subprocess.run(["launchctl", "list"], capture_output=True, text=True)
+    rows = {cols[2]: cols for line in (done.stdout or "").splitlines() if len(cols := line.split()) == 3}
+    for name in SERVICES:
+        pid, code, _ = rows.get(label := config.service_label(name), (None, None, None))
+        found.append((label, "not loaded" if pid is None else f"stopped (exit {code})" if pid == "-"
+                      else f"running (pid {pid})"))
+    return found
+
+
+def print_status() -> None:
+    if _systemd():
+        _require_systemd()
+    for label, state in status():
+        print(f"  {label:<26} {state}")
 
 
 def main() -> None:
-    services = {"start": start_services, "stop": stop_services,
+    services = {"start": start_services, "stop": stop_services, "status": print_status,
                 "labels": lambda: print(" ".join(config.service_label(name) for name in SERVICES))}
-    if command := services.get(sys.argv[1] if len(sys.argv) > 1 else ""):
+    arg = sys.argv[1] if len(sys.argv) > 1 else ""
+    if arg in ("-h", "--help", "help"):
+        return print(__doc__.strip())
+    if command := services.get(arg):
         return command()
     if not ENV.exists():
         shutil.copy(ROOT / ".env.example", ENV)

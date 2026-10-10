@@ -258,7 +258,7 @@ def describe(where: Path, rel: str, left_out: list[str]) -> Found:
         problems.append("it has no description")
     links = [f for f in left_out if f == rel or not rel or f.startswith(rel + "/")]
     if links:
-        problems.append(f"it holds links ({', '.join(links[:3])}), which could point anywhere on the Mac")
+        problems.append(f"it holds links ({', '.join(links[:3])}), which could point anywhere on the computer")
     listed = home.files(where)
     return Found(rel, name, description, listed, home.scripts(where), [str(k) for k in meta if k not in home.KEPT],
                  problems, review.scan(where))

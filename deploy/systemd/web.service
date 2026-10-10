@@ -1,0 +1,17 @@
+# Web app and token endpoint for the phone and browsers, a systemd user unit. Label and folders are filled in by
+# jarvis.setup_local.
+[Unit]
+Description=JARVIS web app (${LABEL})
+
+[Service]
+Type=exec
+WorkingDirectory=${ROOT}
+Environment="PATH=${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+ExecStart="${ROOT}/.venv/bin/python" -m jarvis.server
+Restart=always
+RestartSec=10
+StandardOutput=append:${ROOT}/logs/web.log
+StandardError=append:${ROOT}/logs/web.log
+
+[Install]
+WantedBy=default.target

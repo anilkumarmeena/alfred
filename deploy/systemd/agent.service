@@ -1,0 +1,18 @@
+# JARVIS voice agent, a systemd user unit. systemd-inhibit keeps the machine awake while it runs, when logind allows
+# it (a probe first, so a session that may not inhibit still starts the agent). PATH includes node for npx-based MCP
+# servers. Label and folders are filled in by jarvis.setup_local.
+[Unit]
+Description=JARVIS voice agent (${LABEL})
+
+[Service]
+Type=exec
+WorkingDirectory=${ROOT}
+Environment="PATH=${HOME}/.local/bin:${NODE}/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+ExecStart=/bin/sh -c 'if systemd-inhibit --what=sleep:idle --who=JARVIS --why=check true 2>/dev/null; then exec systemd-inhibit --what=sleep:idle --who=JARVIS "--why=Voice assistant" "${ROOT}/.venv/bin/python" -m jarvis.voice.agent start; else exec "${ROOT}/.venv/bin/python" -m jarvis.voice.agent start; fi'
+Restart=always
+RestartSec=10
+StandardOutput=append:${ROOT}/logs/agent.log
+StandardError=append:${ROOT}/logs/agent.log
+
+[Install]
+WantedBy=default.target

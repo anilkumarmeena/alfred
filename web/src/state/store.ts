@@ -28,7 +28,7 @@ export const joinMuted = signal(false);  // pre-session Mute: next session start
 // body[data-speaker="off"]: text-only replies. Persisted per device so a session starts silent.
 export const speakerOff = signal(storage.get(SPEAKER_KEY) === "off");
 export const canSilence = signal(true);  // false in app builds without the speaker switch
-export const afterCall = signal<BeforeCall | null>(null);  // iPhone app: call ended, offer to restore
+export const afterCall = signal<BeforeCall | null>(null);  // Native app: call ended, offer to restore
 export const phoneMuted = signal(false);  // iOS muted the mic on an unreported earphone press
 export const micPaused = signal<Exclude<Paused, "resuming">>("");  // micGuard state
 export const resuming = signal(false);  // auto-reconnecting a lost session
@@ -51,7 +51,7 @@ export const sideBySide = signal(SIDE_BY_SIDE.matches);
 SIDE_BY_SIDE.addEventListener("change", () => { sideBySide.value = SIDE_BY_SIDE.matches; });
 export const loginPrompt = signal({ shake: false });  // new object per prompt, so effects re-run
 
-// Push: server VAPID key, this device's subscription, user deferral. In the iPhone app appNotify holds the iOS
+// Push: server VAPID key, this device's subscription, user deferral. In the iOS app appNotify holds the iOS
 // permission instead ("" elsewhere).
 export const pushKey = signal("");
 export const pushSub = signal<PushSubscription | null>(null);

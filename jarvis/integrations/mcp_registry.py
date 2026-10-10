@@ -141,7 +141,7 @@ class Way:
     def said(self) -> str:
         if self.kind == "remote":
             return f"hosted at {urlsplit(self.spec.get('url', '')).hostname or 'its URL'}"
-        return f"on this Mac, as {KINDS[self.kind]} ({self.spec.get('identifier', '')})"
+        return f"on this computer, as {KINDS[self.kind]} ({self.spec.get('identifier', '')})"
 
 
 def _needs_of(items: list, secret_default: bool = False) -> list[Need]:
@@ -202,7 +202,7 @@ def ways(server: dict) -> tuple[list[Way], list[Way]]:
         elif why := _secret_on_command_line(package):
             way.problem = why
         elif not which(RUNNERS[kind]):
-            way.problem = f"{RUNNERS[kind]} isn't installed on this Mac"
+            way.problem = f"{RUNNERS[kind]} isn't installed on this computer"
         (cant if way.problem else can).append(way)
     return can, cant
 

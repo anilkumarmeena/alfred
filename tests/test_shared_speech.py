@@ -13,7 +13,7 @@ from livekit.agents import APIConnectionError
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
-from jarvis.core.config import service_label
+from jarvis.core import whisper
 from jarvis.state.vocabulary import Vocabulary
 from jarvis.voice import speech
 from jarvis.voice.speech_gate import Measure, SpeechGate
@@ -105,7 +105,7 @@ def test_a_failing_shared_process_fails_clearly(caplog):
     with pytest.raises(APIConnectionError) as raised:
         asyncio.run(tts.render("Hello."))
     assert "shared speech process" in str(raised.value) and not raised.value.retryable
-    assert f"Restarting the agent ({service_label('agent')})" in caplog.text
+    assert "Restarting the agent service restarts it" in caplog.text
 
 
 def test_a_stuck_shared_process_times_out(monkeypatch):
@@ -152,7 +152,13 @@ def test_an_older_shared_process_without_logprob_still_works():
     assert asyncio.run(stt._transcribe(np.zeros(160, np.float32)))["avg_logprob"] is None
 
 
-def test_transcribe_averages_the_logprob_over_every_token(monkeypatch):
+@pytest.fixture
+def mlx(monkeypatch):
+    """The MLX backend, as on Apple silicon (faked where it isn't)."""
+    monkeypatch.setattr(whisper, "backend", lambda: whisper.MLX)
+
+
+def test_transcribe_averages_the_logprob_over_every_token(monkeypatch, mlx):
     """Each clip is heard alone (no conditioning on the last); longer segments weigh more."""
     calls = []
 
@@ -262,7 +268,7 @@ def fake_mlx(monkeypatch) -> list[int]:
     return limits
 
 
-def test_the_whisper_runner_caps_mlx_cache_before_it_loads(monkeypatch):
+def test_the_whisper_runner_caps_mlx_cache_before_it_loads(monkeypatch, mlx):
     """MLX keeps freed GPU buffers for reuse; uncapped, Whisper held 0.7 GB after one clip."""
     order = []
     monkeypatch.setattr(speech, "limit_mlx_cache", lambda: order.append("cap"))

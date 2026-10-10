@@ -1,6 +1,6 @@
-"""Runner mixin for approval requests: a task asking to run a risky command on the Mac.
+"""Runner mixin for approval requests: a task asking to run a risky command on the computer.
 
-Requests live in tasks.db and are batched, announced (push, Mac notification, voice), answered (push, panel, voice,
+Requests live in tasks.db and are batched, announced (push, desktop notification, voice), answered (push, panel, voice,
 assistant, CLI), turned into remembered rules, auto-approved by the user's own orders, lapsed, or withdrawn.
 See jarvis.tasks.runner for the full flow.
 """
@@ -174,7 +174,7 @@ class Approvals(RunnerBase):
         return approval
 
     async def _announce_approval(self, approval_id: int, delay: float = 0) -> None:
-        """Announce a request: voice event, Mac notification, and a push carrying a one-time nonce."""
+        """Announce a request: voice event, desktop notification, and a push carrying a one-time nonce."""
         await asyncio.sleep(delay)
         approval = self.store.approval(approval_id)
         if not approval or approval["state"] != PENDING or approval["announced"]:

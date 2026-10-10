@@ -26,8 +26,8 @@ from jarvis.core import config, profile
 
 log = logging.getLogger("jarvis.integrations.browser")
 
-INSTALL = ("The browser isn't installed. On the Mac, run: uv sync, then uv run playwright install chromium "
-           "(Chrome itself is used when it's installed).")
+INSTALL = ("The browser isn't installed. On the computer JARVIS runs on, run: uv sync, then uv run playwright install "
+           "chromium (Chrome itself is used when it's installed).")
 NAV_TIMEOUT_MS = 30_000
 SETTLE_MS = 4_000  # extra wait for subresources after DOMContentLoaded
 SHOTS_KEPT = 30  # newest screenshots kept
@@ -37,7 +37,7 @@ SIGNED_IN_PAGE = ("<!doctype html><title>Signed in</title><body style='font:16px
 # ── Address checks ──────────────────────────────────────────────
 
 SCHEMES = ("http", "https")
-# Names that only resolve on this Mac or its LAN
+# Names that only resolve on this computer or its LAN
 LOCAL_NAMES = ("localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback", "broadcasthost")
 LOCAL_SUFFIXES = (".localhost", ".local", ".lan", ".home", ".internal", ".intranet", ".corp", ".home.arpa",
                   ".ts.net", ".tailscale.net")
@@ -94,7 +94,7 @@ def check_url(url: str) -> str:
     if parts.username or parts.password:
         raise Refused("Addresses with a login in them aren't opened.")
     if local_host(parts.hostname or ""):
-        raise Refused("Addresses on this Mac or its local network aren't opened.")
+        raise Refused("Addresses on this computer or its local network aren't opened.")
     return url
 
 
@@ -102,13 +102,13 @@ async def address(host: str, port: int) -> str:
     """IP to connect to for `host`. Raises Refused if the host or any resolved address is local, OSError if it
     doesn't resolve."""
     if local_host(host):
-        raise Refused(f"{host} is on this Mac or its local network.")
+        raise Refused(f"{host} is on this computer or its local network.")
     if (ip := _ip(host)) is not None:
         return str(ip)
     found = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
     ips = [_ip(str(info[4][0])) for info in found]
     if not ips or any(ip is None or local_address(ip) for ip in ips):
-        raise Refused(f"{host} looks up to an address on this Mac or its local network.")
+        raise Refused(f"{host} looks up to an address on this computer or its local network.")
     return str(ips[0])
 
 
@@ -117,7 +117,7 @@ async def address(host: str, port: int) -> str:
 NEEDS_LOGIN = (b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"JARVIS\"\r\n"
                b"Content-Length: 0\r\nConnection: close\r\n\r\n")
 FORBIDDEN = (b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n"
-             b"JARVIS's browser doesn't reach this Mac or its local network.")
+             b"JARVIS's browser doesn't reach this computer or its local network.")
 BAD_GATEWAY = b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 _DROPPED = ("proxy-authorization", "proxy-connection", "connection", "keep-alive")
 

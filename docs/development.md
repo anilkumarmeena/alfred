@@ -6,7 +6,7 @@
 
 **How the code is laid out, how to test it, and how to work on the web app and AI Armory alongside it.**
 
-[🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 iPhone](iphone.md) · **👩‍💻 Development** · [🏗️ Architecture](architecture.md)
+[🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · **👩‍💻 Development** · [🏗️ Architecture](architecture.md)
 
 </div>
 
@@ -37,26 +37,27 @@ jarvis/
 ├── brain/           Claude behind the voice: the CLI brain, Agent SDK set-up, persona,
 │                    quick routing, side lookups, usage
 ├── prompts/         the long prompts as markdown, {{name}} placeholders filled by prompts.load()
-├── tools/           what the brain can call: Google, Mac, files, memory, to-dos, tasks,
-│                    schedules, browser, skills
+├── tools/           what the brain can call: Google, Mac (macOS) or desktop (Linux), files,
+│                    memory, to-dos, tasks, schedules, browser, skills
 ├── tasks/           the task runner, its worker and client, projects, heartbeat, scheduler,
 │                    learning review
-├── safety/          command rules, the Mac sandbox, approvals (and remembered ones), consent,
+├── safety/          command rules, the host walls (Seatbelt or bubblewrap), approvals, consent,
 │                    the gates, hidden-instruction scan and injection check
 ├── integrations/    Google accounts, MCP servers (registry, launcher, relay, OAuth),
 │                    the web browser, sign-ins
 ├── skills/          skills: storage, installing, script reviews
-├── notify/          Web Push and APNs
+├── notify/          Web Push, APNs and FCM
 ├── state/           memory, settings, to-dos, vocabulary, voiceprints, history, pictures
 ├── core/            config, database, vault, credentials, logins, profiles, documents,
-│                    transcription
+│                    transcription; platform.py (which OS), whisper.py (MLX or
+│                    faster-whisper), desktop.py (the Linux desktop)
 ├── server.py        web app, token endpoint and push registration
 ├── panel.py         the control panel's actions
-└── setup_local.py   local setup and the launchd services
+└── setup_local.py   local setup and the services (launchd on macOS, systemd on Linux)
 
 web/                 the phone web app (Vite + TypeScript + Preact), served from web/dist
 tests/               pytest, plus web/tests/ (vitest)
-deploy/              launchd plists
+deploy/              launchd plists, systemd/ user unit templates
 docs/                these pages
 ```
 
@@ -70,11 +71,13 @@ docs/                these pages
 | ⚙️ | `jarvis/tasks/runner.py`, `jarvis/tasks/worker.py` | **Background tasks**: the runner, its HTTP API and one task's run |
 | 🛡️ | `jarvis/safety/` | **Every guard** |
 | 🎛️ | `jarvis/core/config.py` | **Every setting** and its default ([Configuration](configuration.md)) |
+| 🧩 | `jarvis/core/platform.py` | **Which OS**: `MAC`, `LINUX`, `WSL`, `APPLE_SILICON`, `NAME` ([Platform layer](architecture.md#-platform-layer)) |
 
 - **`VoiceSession`** routes each turn and speaks tasks' requests.
 - **`ask_json`** (in the brain) is the one way a short model call gives a verdict: JSON checked against a schema.
-- **The guards:** `commands.py` (what's risky), `shell.py` / `draft_gate.py` (spoken yes), `host.py` (sandbox profile), `injection.py` / `scan.py`.
-- **The Google and Mac tools** come from **[AI Armory](https://github.com/anilkumarmeena/ai-armory)**, a git dependency pinned to a commit in `pyproject.toml`, registered in `jarvis/tools/google.py` and `jarvis/tools/mac.py`.
+- **The guards:** `commands.py` (what's risky), `shell.py` / `draft_gate.py` (spoken yes), `host.py` (the host walls: Seatbelt on macOS, bubblewrap on Linux), `injection.py` / `scan.py`.
+- **The Google and Mac tools** come from **[AI Armory](https://github.com/anilkumarmeena/ai-armory)**, a git dependency pinned to a commit in `pyproject.toml`, registered in `jarvis/tools/google.py` and `jarvis/tools/mac.py`. The Linux desktop tools are JARVIS's own: `jarvis/tools/desktop.py` on top of `jarvis/core/desktop.py`.
+- **OS differences** stay behind `platform.MAC` / `platform.LINUX` checks; speech goes through `jarvis/core/whisper.py`, which hides whether MLX Whisper or faster-whisper runs.
 
 ## 🧪 Tests and checks
 
@@ -83,16 +86,30 @@ docs/                these pages
 | 🧪 | `make test` | The pytest suite in `tests/`, plus the web app's vitest tests |
 | 🌐 | `npm test --prefix web` | The web app's tests alone |
 | ✅ | `make check` | Byte-compiles `jarvis/`, **pyright**, web type-check, imports every entry module |
-| 🧱 | `make host-check` | The real sandbox walls around tasks' commands |
+| 🧱 | `make host-check` | The real sandbox walls around tasks' commands (Seatbelt or bubblewrap) |
 | 🖼️ | `make artifact-check` | Publishes a tiny claude.ai artifact on JARVIS's login, the way tasks do |
 
 - **`make test`** fetches pytest with `uv run --with pytest`. The vitest tests are skipped if `web/node_modules` is missing (`make web-install`).
 - **Pyright** is a pinned version, errors only. Its softer rules are listed under `[tool.pyright]` in `pyproject.toml`; `uv run --with pyright pyright` shows their warnings.
-- **`make host-check`** checks that secrets and JARVIS's files are blocked, while PyPI, the task cache, the SSH agent and code signing stay reachable.
+- **`make check`** passes with **only one speech engine installed**: MLX Whisper on Apple silicon, faster-whisper elsewhere (`pyproject.toml` picks by platform marker), and the other's imports are marked for pyright.
+- **`make host-check`** checks that secrets and JARVIS's files are blocked, while PyPI, the task cache and the SSH agent stay reachable. Each OS has its own list: macOS adds code signing; Linux adds the session bus, other processes, `sudo` and new files at the top of home.
 - **`make artifact-check`** takes `FILE=page.html` to publish a real page.
 
 > [!NOTE]
 > Tests use a **scratch data folder** (`tests/conftest.py` sets `JARVIS_DATA_DIR` and `JARVIS_DB_FILE`), so they never touch your data. The voice brain's tests run against a **fake `claude` CLI** (`tests/fake_cli.py`).
+
+#### One suite, two systems
+
+The suite runs on **macOS and Linux**.
+
+| | Kind of test | How |
+|:-:|---|---|
+| 🔀 | **Platform branches** | Run everywhere by faking the OS: `monkeypatch.setattr(platform, "MAC", False)` and `"LINUX", True` (see `tests/test_desktop.py`, `tests/test_platform.py`) |
+| 🍎 | **macOS-only** | `skipif`-marked: real `screencapture`, `sips`, `textutil`, `afconvert`, the Mac tools, memory footprints |
+| 🐧 | **Linux-only** | `skipif`-marked: the real bubblewrap walls (`needs_bwrap` in `tests/test_host.py`) |
+| 🎤 | **Speech backends** | `tests/test_whisper.py` fakes both MLX Whisper and faster-whisper, so neither needs to be installed |
+
+- **Writing a platform test:** fake `platform.MAC` / `platform.LINUX` (and `WSL` where it matters) rather than skipping, so both branches run on every machine. Skip only when the test needs a real program or OS feature.
 
 ## 🏃 Running the parts
 
@@ -100,10 +117,12 @@ docs/                these pages
 |:-:|---|---|
 | 🚀 | `make dev` | LiveKit, web app, agent (auto-reload) and runner together in the foreground |
 | 🧩 | `make agent` · `make runner` · `make web` · `make livekit` | One part on its own |
-| ⌨️ | `make console` | The agent in the terminal, no LiveKit |
+| ⌨️ | `make console` | The agent in the terminal, no LiveKit (PortAudio: Linux needs `libportaudio2`) |
+
+These work the same on macOS and Linux; `make livekit` runs the `livekit-server` that `make install` set up (Homebrew on macOS, `~/.local/bin` on Linux).
 
 > [!IMPORTANT]
-> Stop the launchd services first (`make services-stop`) so ports and the runner's socket are free.
+> Stop the services first (`make services-stop`, which stops the launchd agents or systemd user units) so ports and the runner's socket are free.
 
 ## 🌐 Web app
 
@@ -184,6 +203,6 @@ unset UV_NO_SYNC && uv sync
 
 <div align="center">
 
-[← 📱 iPhone](iphone.md) &nbsp;·&nbsp; [🏠 Home](../README.md) &nbsp;·&nbsp; [🏗️ Architecture →](architecture.md)
+[← 📱 Mobile](mobile.md) &nbsp;·&nbsp; [🏠 Home](../README.md) &nbsp;·&nbsp; [🏗️ Architecture →](architecture.md)
 
 </div>

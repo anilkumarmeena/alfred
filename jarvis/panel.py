@@ -7,7 +7,7 @@ write-only, so they're never spoken or typed to the brain.
 
 Deliberately not possible here, since anyone with a login can reach the page: showing secrets, adding MCP servers or
 changing their command or tool access, changing a project's folder, signing a Google account in. Those need voice
-with a yes, or the Mac's command line.
+with a yes, or the computer's command line.
 """
 
 import asyncio
@@ -26,7 +26,7 @@ from jarvis.brain import usage
 from jarvis.core import config, credentials, logins, vault
 from jarvis.core.database import COMMAND, WAIT_APPROVAL, edits
 from jarvis.integrations import accounts, mcp_servers
-from jarvis.notify import apns, push
+from jarvis.notify import apns, fcm, push
 from jarvis.safety import remembered
 from jarvis.skills import home as skills, review
 from jarvis.state import activity, history, memory, settings, todo, vocabulary, voiceprints
@@ -673,7 +673,9 @@ def _devices(endpoint: str = "") -> list[dict]:
             "added": s.get("added"), "this": s["endpoint"] == endpoint} for s in push.Subscriptions().all()]
     app = [{"id": _device_id(d["token"]), "kind": "app", "device": d.get("device") or "iPhone", "added": d.get("added"),
             "this": False} for d in apns.Devices().all()]
-    return web + app
+    android = [{"id": _device_id(d["token"]), "kind": "app", "device": d.get("device") or "android",
+                "added": d.get("added"), "this": False} for d in fcm.Devices().all()]
+    return web + app + android
 
 
 @action
@@ -687,7 +689,8 @@ async def device_remove(body: dict) -> list[dict]:
     gone = _text(body, "id", 32)
     subs = push.Subscriptions()
     subs.remove([s["endpoint"] for s in subs.all() if _device_id(s["endpoint"]) == gone])
-    apns.Devices().remove({d["token"] for d in apns.Devices().all() if _device_id(d["token"]) == gone})
+    for store in (apns.Devices(), fcm.Devices()):
+        store.remove({d["token"] for d in store.all() if _device_id(d["token"]) == gone})
     return _devices(str(body.get("endpoint", "")))
 
 
@@ -879,7 +882,7 @@ async def server_secret_clear(body: dict) -> list[dict]:
 
 @action
 async def server_sign_in(body: dict) -> dict:
-    """OAuth sign-in for a connection in JARVIS's browser on the Mac; waits up to SIGN_IN_MINUTES: {"name"}."""
+    """OAuth sign-in for a connection in JARVIS's browser on the computer; waits up to SIGN_IN_MINUTES: {"name"}."""
     from jarvis.integrations import mcp_oauth
     from jarvis.integrations.browser import BROWSER, Unavailable
 
@@ -951,6 +954,30 @@ async def _started(pid: int) -> float | None:
     return time.time() - seconds
 
 
+async def _systemd(label: str) -> dict:
+    """Service state from `systemctl --user show`: running (with start time), stopped (exit code) or not loaded."""
+    out = ""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl", "--user", "show", "-p", "LoadState,ActiveState,ExecMainStatus,ExecMainStartTimestampMonotonic",
+            f"{label}.service", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        raw, _ = await asyncio.wait_for(proc.communicate(), 5)
+        out = raw.decode(errors="replace") if proc.returncode == 0 else ""
+    except (OSError, TimeoutError):
+        pass
+    name = SERVICE_NAMES.get(label.rsplit(".", 1)[-1], label)
+    props = setup_local.properties(out)
+    if props.get("LoadState", "not-found") == "not-found":
+        return {"name": name, "state": "not loaded"}
+    if props.get("ActiveState") not in ("active", "reloading"):
+        status = props.get("ExecMainStatus", "")
+        return {"name": name, "state": "stopped", "exit": int(status) if status.lstrip("-").isdigit() else None}
+    # Monotonic microseconds: the same clock as time.monotonic() on Linux, and no date string to parse
+    started = props.get("ExecMainStartTimestampMonotonic", "")
+    since = time.time() - (time.monotonic() - int(started) / 1e6) if started.isdigit() and int(started) else None
+    return {"name": name, "state": "running", "since": since}
+
+
 def _vault() -> dict:
     try:
         vault.verify()
@@ -961,9 +988,10 @@ def _vault() -> dict:
 
 @action
 async def system(_: dict) -> dict:
-    found = shutil.which("launchctl")
+    systemd = setup_local.MANAGER == "systemd"
+    found, probe = (shutil.which("systemctl"), _systemd) if systemd else (shutil.which("launchctl"), _launchd)
     labels = [config.service_label(name) for name in setup_local.SERVICES]
-    services = await asyncio.gather(*(_launchd(label) for label in labels)) if found else []
+    services = await asyncio.gather(*(probe(label) for label in labels)) if found else []
     return {"services": list(services), "vault": await asyncio.to_thread(_vault)}
 
 

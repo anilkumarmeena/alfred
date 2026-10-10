@@ -1,11 +1,12 @@
-"""On-device speech for LiveKit: Whisper (MLX, Apple GPU) in, Kokoro out. Nothing leaves the Mac.
+"""On-device speech for LiveKit: Whisper in, Kokoro out. Nothing leaves the computer.
 
 Models load once in LiveKit's shared inference process (runners registered here); job processes send it audio/text
 over IPC, so concurrent calls share one Whisper and one Kokoro. Requests are serialized, and each runner locks too.
 If that process is down or a model failed to load, STT/TTS raise APIConnectionError instead of hanging.
 
-Whisper is prompted with the user's vocabulary, and known mishearings are fixed after the speech gate. Memory is kept
-lean: MLX's buffer cache is capped (JARVIS_MLX_CACHE_MB) and Kokoro's ORT arena is off by default.
+Whisper runs on MLX (Apple GPU) on Apple silicon and on faster-whisper elsewhere (jarvis.core.whisper). It is
+prompted with the user's vocabulary, and known mishearings are fixed after the speech gate. Memory is kept lean: MLX's
+buffer cache is capped (JARVIS_MLX_CACHE_MB) and Kokoro's ORT arena is off by default.
 """
 
 import asyncio
@@ -24,6 +25,7 @@ from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 
+from jarvis.core import whisper
 from jarvis.core.config import (
     MLX_CACHE_MB,
     ROOT,
@@ -34,7 +36,6 @@ from jarvis.core.config import (
     TTS_SPEED,
     TTS_THREADS,
     TTS_VOICE,
-    service_label,
 )
 from jarvis.state.vocabulary import Vocabulary
 from jarvis.voice.clauses import ClauseTokenizer
@@ -57,10 +58,7 @@ def transcribe(audio: np.ndarray, model: str = STT_MODEL, prompt: str = "") -> d
     """{text, no_speech (min over segments), avg_logprob (token-weighted)}; numbers None without segments.
 
     condition_on_previous_text is off so one phantom can't seed the next; `prompt` is the only context."""
-    import mlx_whisper
-
-    result: dict = mlx_whisper.transcribe(audio, path_or_hf_repo=model, language="en",
-                                          condition_on_previous_text=False, initial_prompt=prompt or None)
+    result = whisper.run(audio, model, language="en", condition_on_previous_text=False, initial_prompt=prompt or None)
     segments = result.get("segments", [])
     no_speech = [s["no_speech_prob"] for s in segments if "no_speech_prob" in s]
     scored = [(s["avg_logprob"], max(len(s.get("tokens", [])), 1)) for s in segments if "avg_logprob" in s]
@@ -75,7 +73,7 @@ def limit_mlx_cache(mb: int = MLX_CACHE_MB) -> None:
     if mb < 0:
         return
     try:
-        import mlx.core as mx
+        import mlx.core as mx  # pyright: ignore[reportMissingImports]  # Apple silicon only
 
         mx.set_cache_limit(mb * 2**20)
     except Exception as e:  # Whisper still runs, uncapped
@@ -84,7 +82,7 @@ def limit_mlx_cache(mb: int = MLX_CACHE_MB) -> None:
 
 def mlx_memory() -> str:
     """MLX active and cached memory, for logs."""
-    import mlx.core as mx
+    import mlx.core as mx  # pyright: ignore[reportMissingImports]
 
     return f"MLX {mx.get_active_memory() / 2**20:.0f} MB in use, {mx.get_cache_memory() / 2**20:.0f} MB cached"
 
@@ -109,11 +107,17 @@ class WhisperRunner(_InferenceRunner):
         self._ready = False
 
     def initialize(self) -> None:
-        limit_mlx_cache()
-        transcribe(np.zeros(WHISPER_RATE, dtype=np.float32))  # load and compile MLX kernels (~3 s)
+        mlx = whisper.backend() == whisper.MLX
+        if mlx:
+            limit_mlx_cache()
+        transcribe(np.zeros(WHISPER_RATE, dtype=np.float32))  # load (and on MLX compile kernels, ~3 s)
         self._ready = True
-        log.info("shared speech process: Whisper %s loaded, MLX cache capped at %s", STT_MODEL,
-                 f"{MLX_CACHE_MB} MB" if MLX_CACHE_MB >= 0 else "nothing (JARVIS_MLX_CACHE_MB=-1)")
+        if mlx:
+            log.info("shared speech process: Whisper %s loaded, MLX cache capped at %s", STT_MODEL,
+                     f"{MLX_CACHE_MB} MB" if MLX_CACHE_MB >= 0 else "nothing (JARVIS_MLX_CACHE_MB=-1)")
+        else:
+            log.info("shared speech process: Whisper %s loaded on faster-whisper (%s)", whisper.model(),
+                     whisper.device())
 
     def run(self, data: bytes) -> bytes:
         if not self._ready:  # LiveKit swallows initialize failures
@@ -122,7 +126,8 @@ class WhisperRunner(_InferenceRunner):
         with self._lock:
             heard = transcribe(audio, prompt=prompt)
             if log.isEnabledFor(logging.DEBUG):
-                log.debug("Whisper heard a %.1f s clip; %s", len(audio) / WHISPER_RATE, mlx_memory())
+                log.debug("Whisper heard a %.1f s clip%s", len(audio) / WHISPER_RATE,
+                          f"; {mlx_memory()}" if whisper.backend() == whisper.MLX else "")
         return json.dumps(heard).encode()
 
 
@@ -230,8 +235,7 @@ async def _infer(executor: InferenceExecutor | None, method: str, data: bytes) -
         async with asyncio.timeout(INFERENCE_TIMEOUT):
             result = await executor.do_inference(method, data)
     except Exception as e:
-        log.error("shared speech process failed on %s: %r. Restarting the agent (%s) restarts it",
-                  method, e, service_label("agent"))
+        log.error("shared speech process failed on %s: %r. Restarting the agent service restarts it", method, e)
         raise APIConnectionError(f"shared speech process failed on {method}", retryable=False) from e
     if result is None:
         raise APIConnectionError(f"shared speech process returned nothing for {method}", retryable=False)
@@ -291,11 +295,11 @@ class WhisperSTT(stt.STT):
 
     @property
     def model(self) -> str:
-        return self._model
+        return whisper.model(self._model)
 
     @property
     def provider(self) -> str:
-        return "mlx-whisper"
+        return whisper.backend()
 
     async def _transcribe(self, audio: np.ndarray) -> dict:
         """{text, no_speech, avg_logprob} from the shared process."""

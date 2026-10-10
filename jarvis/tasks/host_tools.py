@@ -1,9 +1,10 @@
-"""Task tools that run on the Mac outside the task sandbox (MCP server "host").
+"""Task tools that run on the host (macOS or Linux) outside the task sandbox (MCP server "host").
 
   host_run     one command, up to MAX_MINUTES
   start_job    long command that runs detached; follow with job_status / job_wait
-They run in the runner under the host Seatbelt profile, without JARVIS's keys. host_run and start_job pass
-`_host_gate` first: refused, allowed, allowed by a prior yes or rule, or sent to the user for approval.
+They run in the runner inside the host walls (Seatbelt on macOS, bubblewrap on Linux), without JARVIS's keys.
+host_run and start_job pass `_host_gate` first: refused, allowed, allowed by a prior yes or rule, or sent to the user
+for approval.
 TaskJobs tracks each task's jobs and host_run sessions so processes they leave behind count as the task's own.
 """
 
@@ -20,7 +21,7 @@ from typing import TYPE_CHECKING
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny, create_sdk_mcp_server, tool as sdk_tool
 
 from jarvis.brain.sdk import READS
-from jarvis.core import profile
+from jarvis.core import platform, profile
 from jarvis.core.config import TASK_CACHE_DIR
 from jarvis.safety import commands, host, remembered
 
@@ -76,6 +77,21 @@ class TaskJobs(host.Jobs):
 
 KEEP_SESSIONS = 200  # host_run sessions remembered per task
 
+# What host commands are for, beyond the task sandbox, as the tool descriptions say it
+MACHINE = "this computer"
+_FOR = ("signed Xcode builds, devicectl, the keychain's signing identities, Homebrew" if platform.MAC else
+        "Docker, a phone or other device over USB (adb), emulators, tools that write outside your folder")
+_SHELL = Path(host.SHELL[0]).name
+_EXAMPLE = "the iPhone release build" if platform.MAC else "the release build"
+
+
+def unwalled(command: str) -> bool:
+    """Whether an approved command runs outside the host walls: a bare Homebrew/MacPorts install, on macOS only.
+
+    macOS won't start Homebrew's own sandbox inside the host profile; on Linux nothing needs to leave the walls.
+    """
+    return platform.MAC and commands.own_sandbox(command)
+
 
 def task_temp(task_id: int) -> Path:
     """Per-task temp folder in the cache dir; sandboxed commands may write there too."""
@@ -121,7 +137,7 @@ def _host_server(task: dict, cwd: Path, jobs: TaskJobs):
 def _host_tools(task: dict, cwd: Path, jobs: TaskJobs) -> list:
     """Build the host tools. host_run/start_job re-check commands.refused after the gate as a second wall.
 
-    Commands that sandbox themselves (commands.own_sandbox) run outside the host profile.
+    Commands that sandbox themselves (`unwalled`) run outside the host walls.
     """
     task_id, in_place = task["id"], bool(task["in_place"])
 
@@ -138,11 +154,11 @@ def _host_tools(task: dict, cwd: Path, jobs: TaskJobs) -> list:
 
     @sdk_tool(
         "host_run",
-        "Run one shell command on the Mac itself, outside the sandbox, and get its output (the start and end, if it's "
-        "long) and exit code. For what the sandbox blocks: signed Xcode builds, devicectl, the keychain's signing "
-        "identities, Homebrew. Secrets stay unreadable. At most 10 minutes; use start_job for longer.",
+        f"Run one shell command on {MACHINE} itself, outside the sandbox, and get its output (the start and end, if "
+        f"it's long) and exit code. For what the sandbox blocks: {_FOR}. Secrets stay unreadable. At most 10 minutes; "
+        "use start_job for longer.",
         {"type": "object", "properties": {
-            "command": {"type": "string", "description": "The shell command, as you'd give it to Bash (zsh)."},
+            "command": {"type": "string", "description": f"The shell command, as you'd give it to Bash ({_SHELL})."},
             "folder": {"type": "string", "description": "Where to run it: your folder (the default) or a folder inside it."},
             "minutes": {"type": "number", "description": "Time limit in minutes, up to 10 (the default)."},
         }, "required": ["command"]},
@@ -151,8 +167,9 @@ def _host_tools(task: dict, cwd: Path, jobs: TaskJobs) -> list:
         command = args.get("command", "").strip()
         if why := commands.refused(command, in_place):
             return text(f"Not run: {why}.", error=True)
-        walls = not commands.own_sandbox(command)
-        log.warning("task %s runs on the Mac%s, in %s: %s", task_id, "" if walls else " outside the host profile", folder(args), command)
+        walls = not unwalled(command)
+        log.warning("task %s runs on %s%s, in %s: %s", task_id, MACHINE, "" if walls else " outside the host walls",
+                    folder(args), command)
         leaders: list[int] = []
 
         def started(pid: int) -> None:
@@ -170,11 +187,12 @@ def _host_tools(task: dict, cwd: Path, jobs: TaskJobs) -> list:
 
     @sdk_tool(
         "start_job",
-        "Start a long shell command (a full build, a big download, a long test run) on the Mac, outside the sandbox, "
-        "apart from this session: it keeps running on its own. Follow it with job_wait or job_status, and read its log.",
+        f"Start a long shell command (a full build, a big download, a long test run) on {MACHINE}, outside the "
+        "sandbox, apart from this session: it keeps running on its own. Follow it with job_wait or job_status, and read "
+        "its log.",
         {"type": "object", "properties": {
-            "command": {"type": "string", "description": "The shell command, as you'd give it to Bash (zsh)."},
-            "title": {"type": "string", "description": "A few words for it, e.g. 'the iPhone release build'."},
+            "command": {"type": "string", "description": f"The shell command, as you'd give it to Bash ({_SHELL})."},
+            "title": {"type": "string", "description": f"A few words for it, e.g. '{_EXAMPLE}'."},
             "folder": {"type": "string", "description": "Where to run it: your folder (the default) or a folder inside it."},
         }, "required": ["command", "title"]},
     )
@@ -184,7 +202,7 @@ def _host_tools(task: dict, cwd: Path, jobs: TaskJobs) -> list:
             return text(f"Not started: {why}.", error=True)
         try:
             job = jobs.launch(command, args.get("title") or command[:40], folder(args), task=task_id, env=temp_env(),
-                              walls=not commands.own_sandbox(command))
+                              walls=not unwalled(command))
         except (ValueError, OSError, RuntimeError) as e:
             return text(f"Not started: {e}", error=True)
         return text(f"Started job {job['id']}, {job['title']}. It runs on its own; its whole output goes to "
@@ -257,7 +275,7 @@ def _host_gate(task: dict, cwd: Path, reporter: "Reporter"):
         if not command:
             return PermissionResultDeny(message="Give the command to run.")
         if why := commands.refused(command, in_place):
-            log.warning("task %s refused on the Mac (%s): %s", task_id, why, command)
+            log.warning("task %s refused on %s (%s): %s", task_id, MACHINE, why, command)
             return PermissionResultDeny(message=f"Not run: {why}. If the work needs it, end with the exact command "
                                                 f"for {profile.name()} to run themselves.")
         if not _inside(args.get("folder") or str(cwd), cwd, roots):
@@ -266,11 +284,11 @@ def _host_gate(task: dict, cwd: Path, reporter: "Reporter"):
             return PermissionResultAllow()
         own = _own(task, cwd, _resolve(args.get("folder") or str(cwd), cwd), reporter.host_jobs)
         if not (why := commands.describe(command, own)):
-            log.warning("task %s runs on the Mac, deleting or stopping only its own: %s", task_id, command)
+            log.warning("task %s runs on %s, deleting or stopping only its own: %s", task_id, MACHINE, command)
             return PermissionResultAllow()
         item = approval_item(tool, args, cwd, why, own)
         if reporter.cleared(task_id, item):  # a prior yes to exactly this, or a remembered rule
-            log.warning("task %s runs on the Mac, as agreed (%s): %s", task_id, item["why"], command)
+            log.warning("task %s runs on %s, as agreed (%s): %s", task_id, MACHINE, item["why"], command)
             return PermissionResultAllow()
         if getattr(ctx, "agent_id", None):
             return PermissionResultDeny(message=f"Not run: it {item['why']}, so it needs {profile.name()}'s go-ahead, and only "

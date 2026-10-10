@@ -347,7 +347,7 @@ def test_the_launcher_relays_a_local_server_and_goes_when_the_cli_does(tmp_path)
 
 @pytest.fixture
 def summed(monkeypatch, tmp_path):
-    """Isolated task database, scripted summing up, no Mac notification or push."""
+    """Isolated task database, scripted summing up, no desktop notification or push."""
     use_profile(monkeypatch, tmp_path)
     asked = []
 

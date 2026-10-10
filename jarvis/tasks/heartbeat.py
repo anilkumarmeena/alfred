@@ -3,7 +3,7 @@
 Sources live in KINDS (extend with `register`): calendar, email, github, chat, tasks, usage, signins. Which run and
 their settings are per user (settings key `heartbeat_sources`), re-read each beat.
 
-New items go out as a Mac notification, a phone push and a spoken update. Lock-screen surfaces get only `text`,
+New items go out as a desktop notification, a phone push and a spoken update. Lock-screen surfaces get only `text`,
 never message content. Seen items live in data/heartbeat.json. Skipped during quiet hours and do-not-disturb.
 Read-only: never sends, creates or runs anything. A failing source is logged and skipped.
 """

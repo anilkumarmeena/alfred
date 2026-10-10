@@ -14,7 +14,7 @@ import pytest
 
 from conftest import use_profile
 from jarvis import server, tools
-from jarvis.core import config
+from jarvis.core import config, platform
 from jarvis.state import shared_files
 from jarvis.tasks import client as task_client, worker
 from jarvis.voice import audio_file as af
@@ -29,6 +29,9 @@ def frames(path) -> int:
     with wave.open(str(path)) as w:
         assert (w.getnchannels(), w.getsampwidth(), w.getframerate()) == (1, 2, af.RATE)
         return w.getnframes()
+
+
+mac_only = pytest.mark.skipif(not platform.MAC, reason="the Mac's encoders and wording")
 
 
 @pytest.fixture
@@ -145,6 +148,7 @@ def test_a_file_is_saved_where_asked_and_says_where(work):
     assert (work / "Music" / "Test 2.wav").is_file()
 
 
+@mac_only
 def test_without_an_encoder_the_wav_is_kept_and_it_says_why(work, monkeypatch):
     monkeypatch.setattr(af, "encoders", lambda fmt: [])
     said = af.make(spec(work, "mp3"), fake_speak, ["bm_george"])
@@ -170,6 +174,7 @@ def test_an_unknown_voice_is_refused(work):
         af.make(spec(work, voice="bm_nobody"), fake_speak, ["bm_george", "af_heart"])
 
 
+@mac_only
 def test_only_the_encoders_on_this_mac_are_used_best_first(monkeypatch):
     monkeypatch.setattr(af, "find_program", lambda name: f"/opt/homebrew/bin/{name}" if name != "ffmpeg" else None)
     [lame] = af.encoders("mp3")
@@ -178,6 +183,25 @@ def test_only_the_encoders_on_this_mac_are_used_best_first(monkeypatch):
     assert afconvert(Path("a.wav"), Path("a.m4a"))[:2] == ["/opt/homebrew/bin/afconvert", "-f"]
     assert af.encoders("wav") == [] and af.can_make("wav")
     assert af.programs("m4a") == "afconvert or ffmpeg"
+
+
+def test_on_linux_m4a_needs_ffmpeg_and_homebrew_isnt_looked_in(work, monkeypatch, tmp_path):
+    monkeypatch.setattr(platform, "MAC", False)
+    monkeypatch.setattr(platform, "LINUX", True)
+    brew = tmp_path / "brew"
+    brew.mkdir()
+    (brew / "ffmpeg").write_text("#!/bin/sh")
+    (brew / "ffmpeg").chmod(0o755)
+    monkeypatch.setattr(af, "BREW_BINS", (str(brew),))
+    monkeypatch.setattr(af.shutil, "which", lambda name: "/usr/bin/afconvert" if name == "afconvert" else None)
+    assert af.find_program("ffmpeg") is None and af.encoders("m4a") == []  # afconvert is the Mac's alone
+    assert af.programs("m4a") == "ffmpeg" and af.programs("mp3") == "ffmpeg or lame"
+    said = af.make(spec(work, "m4a"), fake_speak, ["bm_george"])
+    assert "Saved as Test.wav" in said and "no m4a encoder on this computer: install ffmpeg" in said
+    assert "Mac" not in said
+    monkeypatch.setattr(af.shutil, "which", lambda name: f"/usr/bin/{name}" if name == "ffmpeg" else None)
+    [ffmpeg] = af.encoders("m4a")
+    assert ffmpeg(Path("a.wav"), Path("a.m4a"))[0] == "/usr/bin/ffmpeg"
 
 
 def _afconvert_works() -> bool:
@@ -279,7 +303,7 @@ def test_sent_to_the_phone_as_a_push_that_plays_it(work, monkeypatch):
     assert af.make(spec(work, phone=True), fake_speak, ["bm_george"]).endswith(
         "no phone has JARVIS's notifications on.")
     monkeypatch.setattr(config, "PUSH_ENABLED", False)
-    assert "notifications are off on the Mac" in af.make(spec(work, phone=True), fake_speak, ["bm_george"])
+    assert "notifications are off on the computer" in af.make(spec(work, phone=True), fake_speak, ["bm_george"])
 
 
 class Request:

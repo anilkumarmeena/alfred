@@ -4,7 +4,7 @@ import pytest
 
 from jarvis import prompts, tools
 from jarvis.brain import persona
-from jarvis.core import profile
+from jarvis.core import platform, profile
 
 
 def test_a_prompt_is_filled_in_and_its_comment_left_out(tmp_path, monkeypatch):
@@ -18,6 +18,16 @@ def test_a_prompt_is_filled_in_and_its_comment_left_out(tmp_path, monkeypatch):
         prompts.load("hello", name="Alex", other=1)
 
 
+def test_any_prompt_may_name_the_os_without_being_given_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(prompts, "DIR", tmp_path)
+    monkeypatch.setitem(prompts.GIVEN, "os", "Linux")
+    (tmp_path / "os.md").write_text("{{name}} runs {{os}}.")
+    (tmp_path / "plain.md").write_text("Hello {{name}}.")
+    assert prompts.load("os", name="Alex") == "Alex runs Linux."
+    assert prompts.load("plain", name="Alex") == "Hello Alex."  # no complaint about an unused os
+    assert platform.NAME == ("macOS" if platform.MAC else "Linux (WSL2 on Windows)" if platform.WSL else "Linux")
+
+
 def test_every_prompt_file_loads_where_it_is_used():
     from jarvis.brain import cli
     from jarvis.safety import injection
@@ -29,6 +39,8 @@ def test_every_prompt_file_loads_where_it_is_used():
                  injection.PROMPT):
         assert "{{" not in text and "<!--" not in text
     assert persona.persona().startswith(f"You are JARVIS, {profile.name()}'s personal AI assistant")
+    assert f"You run on {profile.name()}'s computer ({platform.NAME})" in persona.persona()
+    assert f"computer ({platform.NAME})" in review.system()
     used = {"persona", "lookup_agent", "voice_lookups", "task_brief", "task_host", "goal_check", "learning_review",
             "heartbeat_triage", "skill_review", "task_announcement", "injection_check"}
     assert {p.stem for p in prompts.DIR.glob("*.md")} == used

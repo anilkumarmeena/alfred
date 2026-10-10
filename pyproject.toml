@@ -11,11 +11,16 @@ dependencies = [
     "cryptography>=46.0",
     "httpx[http2]>=0.28.1",
     "kokoro-onnx>=0.6.1",
+    # Speech recognition: MLX Whisper on Apple silicon, faster-whisper (CTranslate2) everywhere else
+    "faster-whisper>=1.1; sys_platform != 'darwin' or platform_machine != 'arm64'",
     "livekit-agents[silero,turn-detector]~=1.8",
-    "mlx-whisper>=0.4.3",
+    "mlx-whisper>=0.4.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "onnxruntime>=1.20",
     "openpyxl>=3.1",
+    "pillow>=11.0",
+    "pillow-heif>=0.18; sys_platform == 'linux'",  # iPhone HEIC photos (the Mac uses sips)
     "playwright>=1.49",
+    "psutil>=7.0",
     "pypdfium2>=4.30",
     "python-dotenv>=1.2.3",
     "pywebpush>=2.5.0",

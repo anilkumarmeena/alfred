@@ -5,7 +5,6 @@ import json
 import os
 import re
 import signal
-import subprocess
 import time
 from types import SimpleNamespace
 
@@ -14,6 +13,7 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from test_in_place import NullReporter, worker_task
 
 from conftest import use_task_cache
+from jarvis.core import platform
 from jarvis.safety import host
 from jarvis.tasks import host_tools, worker
 
@@ -210,24 +210,6 @@ def test_a_session_is_known_by_its_leader_and_when_it_started(monkeypatch):
     assert not host.in_sessions(13, sessions) and not host.in_sessions(1, sessions)
 
 
-def test_sessions_on_this_mac():
-    """Real sessions: a command's shell leads one, and what it leaves behind stays in it."""
-    shell = subprocess.Popen(["/bin/sh", "-c", "sleep 30 & sleep 30 & wait"], start_new_session=True)
-    at = time.time()
-    try:
-        until = time.monotonic() + 5
-        while len(left := host.lingering(shell.pid)) < 2 and time.monotonic() < until:
-            time.sleep(0.05)
-        assert [name for _, name in left] == ["sleep", "sleep"]
-        assert abs(host.started_at(shell.pid) - at) <= 2
-        assert all(host.in_sessions(pid, [(shell.pid, at)]) for pid, _ in left)
-        assert not host.in_sessions(left[0][0], [(shell.pid, at - 3600)])  # a leader that started another time
-        assert not host.in_sessions(os.getpid(), [(shell.pid, at)])
-    finally:
-        os.killpg(shell.pid, signal.SIGKILL)
-        shell.wait()
-
-
 def test_in_place_tasks_leave_git_to_the_user_on_the_mac_too(folder):
     opts = options(folder, in_place=1, branch="main")
     assert "leave to them" in call(opts, worker.HOST_RUN, command="git commit -am wip").message
@@ -311,6 +293,7 @@ def test_a_task_starts_and_waits_for_its_jobs(folder, unwalled):
     assert text(asyncio.run(other["job_status"]({}))) == "No jobs in the last day."
 
 
+@pytest.mark.skipif(not platform.MAC, reason="Homebrew's own sandbox is a macOS matter")
 def test_an_approved_install_runs_outside_the_host_profile(folder, monkeypatch):
     """Homebrew sandboxes its own steps, and macOS won't start that sandbox inside the host profile."""
     ran, launched = [], []
@@ -337,6 +320,23 @@ def test_an_approved_install_runs_outside_the_host_profile(folder, monkeypatch):
     assert reporter.asked[0]["why"] == "installs software (brew install)"
 
 
+def test_on_linux_even_an_approved_install_stays_inside_the_walls(monkeypatch):
+    """Nothing needs to leave bubblewrap, so nothing does."""
+    monkeypatch.setattr(host_tools, "platform", SimpleNamespace(MAC=False, LINUX=True))
+    assert not host_tools.unwalled("brew install jq")
+    monkeypatch.setattr(host_tools, "platform", SimpleNamespace(MAC=True, LINUX=False))
+    assert host_tools.unwalled("brew install jq") and not host_tools.unwalled("brew install jq && ./build.sh")
+
+
+def test_the_tools_name_the_computer_and_shell_they_run_on(folder):
+    described = {t.name: t.description + json.dumps(t.input_schema)
+                 for t in host_tools._host_tools(worker_task(worktree=str(folder)), folder, worker.TaskJobs(folder / "j"))}
+    for name in ("host_run", "start_job"):
+        assert host_tools.MACHINE in described[name] and f"Bash ({host_tools._SHELL})" in described[name]
+    if platform.LINUX:
+        assert "Xcode" not in described["host_run"] and "zsh" not in described["host_run"] + described["start_job"]
+
+
 def test_the_task_log_says_what_ran_on_the_mac():
     block = SimpleNamespace(name=worker.HOST_RUN, input={"command": "xcodebuild -scheme App build"})
-    assert worker._describe(block) == "running on the Mac: xcodebuild -scheme App build"
+    assert worker._describe(block) == "running on the computer: xcodebuild -scheme App build"

@@ -5,6 +5,7 @@ SHELL := /bin/bash
 unexport VIRTUAL_ENV  # stops uv warning about a shell-wide venv
 
 UV        := uv run
+UNAME     := $(shell uname -s)
 # Main checkout, even when run from a task's worktree (data/worktrees/jarvis-N)
 MAIN_DIR  := $(or $(patsubst %/.git,%,$(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)),$(CURDIR))
 # Main checkout's Python (services, artifact-check), also from a worktree. Override with JARVIS_PYTHON=...
@@ -13,14 +14,13 @@ JARVIS_PYTHON ?= $(UV) python
 else
 JARVIS_PYTHON ?= $(MAIN_DIR)/.venv/bin/python
 endif
-# launchd labels (com.jarvis.* or JARVIS_SERVICE_PREFIX), evaluated lazily. Service control always runs in the main
+# Service labels (com.jarvis.* or JARVIS_SERVICE_PREFIX): launchd on macOS, systemd user units on Linux; evaluated
+# lazily. Service control always runs in the main
 # checkout so a worktree never installs its own copy.
 SERVICE_CTL = cd $(MAIN_DIR) && $(JARVIS_PYTHON) -m jarvis.setup_local
 SERVICES    = $(shell $(SERVICE_CTL) labels)
 CLAUDE_DIR := $(MAIN_DIR)/secrets/claude
 KOKORO_URL := https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0
-# Whisper large-v3-turbo, 4-bit; keep in step with STT_MODEL in jarvis/core/config.py
-WHISPER   := mlx-community/whisper-large-v3-turbo-q4
 # Noise filter: DeepFilterNet 3 streaming ONNX (torchDF export), pinned and hash-checked
 DFN       := models/deepfilternet3-streaming.onnx
 DFN_URL   := https://github.com/yuyun2000/SpeechDenoiser/raw/9a1f069f562089c2f56008a8ecd897fa981fbc50/48k/denoiser_model.onnx
@@ -30,13 +30,21 @@ SPK       := models/wespeaker-voxceleb-resnet34-LM.onnx
 SPK_URL   := https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM/resolve/f0c48c298fd835726c27956a5d617bad7115627e/voxceleb_resnet34_LM.onnx
 SPK_SHA   := 7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068
 WEB_PORT  := 8787
+# Linux LiveKit server: the pinned release binary, hash-checked, into ~/.local/bin. Not get.livekit.io: it wants sudo
+# for /usr/local/bin and always takes the latest release. Keep in step with the macOS one (brew info livekit).
+LIVEKIT_VERSION := 1.13.7
+LIVEKIT_URL     := https://github.com/livekit/livekit/releases/download/v$(LIVEKIT_VERSION)
+LIVEKIT_SHA_amd64 := 6634aeeb2fb1366b6723708ae4320b9d5408106a4c63457c5e845ae3979c90e2
+LIVEKIT_SHA_arm64 := 5d167fdf52cf43c0c72972f25325364479f41f854bfef651056eab2504da5de9
+LOCAL_BIN       := $(HOME)/.local/bin
+LIVEKIT_SERVER   = $(or $(shell command -v livekit-server),$(LOCAL_BIN)/livekit-server)
 # Pinned so a new pyright release can't break make check
 PYRIGHT   := 1.1.414
 NPM       := npm --prefix web
 # web-install reruns only when the manifests change
 WEB_STAMP := web/node_modules/.install-stamp
 
-.PHONY: help install models setup console livekit web web-install web-build web-dev agent runner dev tasks heartbeat speech-gate voice-timing voiceprint test host-check artifact-check \
+.PHONY: help install livekit-bin models setup console livekit web web-install web-build web-dev agent runner dev tasks heartbeat speech-gate voice-timing voiceprint test host-check artifact-check \
         services-install services-start services-stop services-restart status logs awake sleep-normal \
         claude-login claude-status accounts about servers vault google-login chat-check tailscale-serve check clean
 
@@ -46,19 +54,36 @@ help: ## Show this list
 ## ── First-time setup ───────────────────────────────────────────
 
 install: ## Install tools, dependencies and models
+ifeq ($(UNAME),Darwin)
 	@command -v livekit-server >/dev/null || brew install livekit
+else
+	@command -v livekit-server >/dev/null || [ -x $(LOCAL_BIN)/livekit-server ] || $(MAKE) --no-print-directory livekit-bin
+endif
 	uv sync
 	$(MAKE) models web-build
 
+livekit-bin: ## Install livekit-server into ~/.local/bin (Linux)
+	@case $$(uname -m) in x86_64|amd64) arch=amd64 sha=$(LIVEKIT_SHA_amd64);; aarch64|arm64) arch=arm64 sha=$(LIVEKIT_SHA_arm64);; \
+		*) echo "no LiveKit $(LIVEKIT_VERSION) build for $$(uname -m)"; exit 1;; esac; \
+	tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
+	curl -fSL -o $$tmp/livekit.tar.gz $(LIVEKIT_URL)/livekit_$(LIVEKIT_VERSION)_linux_$$arch.tar.gz && \
+	echo "$$sha  $$tmp/livekit.tar.gz" | sha256sum -c --quiet - && \
+	tar -xzf $$tmp/livekit.tar.gz -C $$tmp livekit-server && \
+	mkdir -p $(LOCAL_BIN) && install -m 755 $$tmp/livekit-server $(LOCAL_BIN)/livekit-server && \
+	echo "livekit-server $(LIVEKIT_VERSION) installed in $(LOCAL_BIN)"
+
+# shasum on macOS; sha256sum where Perl's shasum isn't installed
+models: SHA256 = $$(command -v shasum >/dev/null && echo shasum -a 256 || echo sha256sum)
 models: ## Download speech, VAD, noise and speaker models
 	@mkdir -p models
 	@for f in kokoro-v1.0.int8.onnx kokoro-v1.0.onnx voices-v1.0.bin; do \
 		[ -f models/$$f ] || curl -fSL -o models/$$f $(KOKORO_URL)/$$f; done
 	@[ -f $(DFN) ] || { curl -fSL -o $(DFN).part $(DFN_URL) && \
-		echo "$(DFN_SHA)  $(DFN).part" | shasum -a 256 -c --quiet - && mv $(DFN).part $(DFN); }
+		echo "$(DFN_SHA)  $(DFN).part" | $(SHA256) -c --quiet - && mv $(DFN).part $(DFN); }
 	@[ -f $(SPK) ] || { curl -fSL -o $(SPK).part $(SPK_URL) && \
-		echo "$(SPK_SHA)  $(SPK).part" | shasum -a 256 -c --quiet - && mv $(SPK).part $(SPK); }
-	$(UV) python -c "from huggingface_hub import snapshot_download; snapshot_download('$(WHISPER)')"
+		echo "$(SPK_SHA)  $(SPK).part" | $(SHA256) -c --quiet - && mv $(SPK).part $(SPK); }
+# Whisper for this machine: MLX on Apple silicon, faster-whisper elsewhere (jarvis.core.whisper)
+	$(UV) python -m jarvis.core.whisper
 # os._exit skips teardown, which native plugin libraries can crash on macOS
 	$(UV) python -c "import os, sys; from livekit.agents.__main__ import main; code = main(['download-files']); \
 		sys.stdout.flush(); sys.stderr.flush(); os._exit(code)"
@@ -97,11 +122,11 @@ tailscale-serve: ## Serve web app and LiveKit on the tailnet
 
 ## ── Run in the foreground ──────────────────────────────────────
 
-console: ## Talk via the Mac's mic, no server
+console: ## Talk via this machine's mic, no server
 	$(UV) python -m jarvis.voice.agent console
 
 livekit: ## Run LiveKit server
-	livekit-server --config secrets/livekit.yaml
+	$(LIVEKIT_SERVER) --config secrets/livekit.yaml
 
 web: web-build ## Build and run web app (:8787)
 	$(UV) python -m jarvis.server
@@ -118,9 +143,9 @@ runner: ## Run task runner
 dev: ## Run LiveKit, web, agent and runner together
 	@$(MAKE) -j4 --no-print-directory livekit web agent runner
 
-## ── 24/7 services (launchd) ────────────────────────────────────
+## ── 24/7 services (launchd on macOS, systemd on Linux) ────────
 
-services-install: setup web-build ## Install and start launchd services
+services-install: setup web-build ## Install and start the services
 	$(UV) python -m jarvis.setup_local --install
 
 # Both also handle services under stale labels (e.g. an old prefix): stop unloads them, start replaces them
@@ -131,31 +156,52 @@ services-stop: ## Stop services (stay installed)
 	@$(SERVICE_CTL) stop; true
 
 # Stop+start run detached in their own session (setsid): stopping a service kills its children, so a restart started
-# by the agent or a task would die halfway. Not a child either (`& wait` still died), so poll a done file.
+# by the agent or a task would die halfway. Not a child either (`& wait` still died), so poll a done file. On Linux
+# setsid isn't enough (systemd stops a service's whole cgroup), so systemd-run starts the restart as its own unit.
 RESTART_LOG := $(MAIN_DIR)/logs/restart.log
+ifeq ($(UNAME),Darwin)
+DETACH := /usr/bin/perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV'
+else
+DETACH  = $(if $(shell command -v systemd-run),systemd-run --user --collect --quiet --setenv=PATH="$$PATH" --,setsid)
+endif
 
 services-restart: web-build ## Rebuild web app, restart services
 	@mkdir -p $(MAIN_DIR)/logs; rm -f $(RESTART_LOG).done
-	@/usr/bin/perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' \
+	@$(DETACH) \
 		sh -c '$(MAKE) --no-print-directory -C $(MAIN_DIR) services-stop services-start > $(RESTART_LOG) 2>&1; touch $(RESTART_LOG).done' \
 		</dev/null >/dev/null 2>&1 &
 	@for i in $$(seq 180); do [ -f $(RESTART_LOG).done ] && break; sleep 1; done; cat $(RESTART_LOG); \
 		[ -f $(RESTART_LOG).done ] || echo "still restarting, see $(RESTART_LOG)"
 
 status: ## Show service status
+ifeq ($(UNAME),Darwin)
 	@for s in $(SERVICES); do \
 		pid=$$(launchctl list | awk -v s=$$s '$$3 == s {print $$1}'); \
 		printf "  %-26s %s\n" $$s "$${pid:-not loaded}"; done
+else
+	@$(SERVICE_CTL) status
+endif
 
 logs: ## Follow service logs
 	@mkdir -p logs && touch logs/livekit.log logs/agent.log logs/web.log logs/tasks.log
 	tail -f logs/livekit.log logs/agent.log logs/web.log logs/tasks.log
 
+# Linux: masking the sleep targets makes suspend (lid close included) a no-op. Under WSL2 Windows decides; no effect.
+SLEEP_TARGETS := sleep.target suspend.target hibernate.target hybrid-sleep.target
+
 awake: ## Stay awake with lid closed (sudo)
+ifeq ($(UNAME),Darwin)
 	sudo pmset -a disablesleep 1
+else
+	sudo systemctl mask $(SLEEP_TARGETS)
+endif
 
 sleep-normal: ## Undo make awake
+ifeq ($(UNAME),Darwin)
 	sudo pmset -a disablesleep 0
+else
+	sudo systemctl unmask $(SLEEP_TARGETS)
+endif
 
 ## ── Background tasks ─────────────────────────────────────────
 

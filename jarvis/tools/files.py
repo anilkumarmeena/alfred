@@ -1,4 +1,4 @@
-"""File reading tools: Gmail attachments and Mac documents (via jarvis.core.documents); recordings are transcribed.
+"""File reading tools: Gmail attachments and local documents (via jarvis.core.documents); recordings are transcribed.
 
 - Documents return text in parts; pictures and requested/textless PDF pages return as images (WithPictures).
 - Recordings: transcript saved to a file; the tool returns a preview, or the text in parts.
@@ -12,7 +12,7 @@ from pathlib import Path
 
 from ai_armory.toolsets.google import common, current
 
-from jarvis.core import documents, transcribe
+from jarvis.core import desktop, documents, transcribe
 from jarvis.safety.commands import secret_path
 
 from . import WithPictures, google, tool
@@ -28,10 +28,13 @@ START = {"type": "integer", "description": "Character to start at, from a note s
 PAGES = {"type": "string", "description": f"For a PDF: pages to look at as pictures, such as '3' or '2-5', at most "
                                           f"{documents.MAX_PAGES} at a time; for charts, scans, forms and layouts the "
                                           "text alone doesn't show. Optional.", "default": ""}
-LOOK_IN = ["~/Downloads", "~/Desktop", "~/Documents"]  # searched for a bare file name
+# Searched for a bare file name: ~/Downloads, ~/Desktop, ~/Documents (on Linux, the XDG folders, maybe translated)
+LOOK_IN = [desktop.user_dir("DOWNLOAD", "Downloads"), desktop.user_dir("DESKTOP", "Desktop"),
+           desktop.user_dir("DOCUMENTS", "Documents")]
 
 
-TRANSCRIBES = (f"Transcribed on the Mac by Whisper, any language, at roughly {transcribe.SPEED_GUESS} times faster "
+TRANSCRIBES = (f"Transcribed on the computer by Whisper, any language, at roughly {transcribe.SPEED_GUESS} times "
+               f"faster "
                f"than it plays, so a long one takes minutes: if it isn't done within {transcribe.WAIT_SECONDS} seconds "
                "it carries on by itself, and you get how far it's got. Then say so and roughly how long it has left, "
                "and when the user asks again, call this again with the same file. Done, it gives the transcript's file "
@@ -183,7 +186,7 @@ if google.LABELS:
     )(gmail_attachment_transcribe)
 
 
-# ── Files on the Mac ────────────────────────────────────────────
+# ── Files on the computer ───────────────────────────────────────
 
 def _find(name: str) -> Path | None:
     """Newest file whose name contains `name` in LOOK_IN or their direct subfolders."""
@@ -222,7 +225,7 @@ def _locate(path: str) -> Path:
 
 @tool(
     "file_read",
-    f"Read a document or picture on the Mac, by its path or just its name, when the user asks for one: {READS} A "
+    f"Read a document or picture on the computer, by its path or just its name, when the user asks for one: {READS} A "
     f"name alone is looked for in Downloads, Desktop and Documents, newest first. Secrets are never read. {UNTRUSTED}",
     {"path": {"type": "string", "description": "The file's path (~ for the home folder), or its name or part of it, "
                                                "e.g. invoice.pdf"},
@@ -236,7 +239,7 @@ def file_read(path: str, start: int = 0, pages: str = "") -> dict | WithPictures
 
 
 def read_file(path: str, pages: str = "") -> tuple[Path, documents.Document]:
-    """Locate and read a Mac document by path or name; returns (path, document)."""
+    """Locate and read a local document by path or name; returns (path, document)."""
     p = _locate(path)
     if documents.kind_of(p.name) == documents.RECORDING:
         raise documents.Unreadable(documents.TRANSCRIBE)
@@ -250,7 +253,7 @@ def read_file(path: str, pages: str = "") -> tuple[Path, documents.Document]:
 
 @tool(
     "audio_transcribe",
-    f"Transcribe an audio or video recording on the Mac (a meeting or call recording, a voice memo, a video: m4a, "
+    f"Transcribe an audio or video recording on the computer (a meeting or call recording, a voice memo, a video: m4a, "
     f"mp3, wav, mp4, mov and the like), by its path or just its name, when the user asks what's in one, to sum it up "
     f"or answer questions about it. A name alone is looked for in Downloads, Desktop and Documents, newest first. "
     f"{TRANSCRIBES} {UNTRUSTED}",

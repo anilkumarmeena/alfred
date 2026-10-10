@@ -31,17 +31,32 @@ PATTERNS: list[tuple[str, re.Pattern]] = [(label, re.compile(rx, re.IGNORECASE))
     ("deletes files", r"\brm\s+-[a-z]*[rf]|\brmdir\b|shutil\.rmtree|os\.(remove|unlink|rmdir)|\.unlink\(|unlinkSync|"
                       r"rmSync|fs\.rm\b|\bshred\b|find\s.*-delete"),
     ("reads secrets or credentials", r"security\s+(find|dump|export)-|Keychains?\b|\.aws/|\.ssh/|\bid_(rsa|ed25519)\b|"
-                                     r"\.netrc|\.git-credentials|\bkeyring\b|\.env\b"),
+                                     r"\.netrc|\.git-credentials|\bkeyring\b|\.env\b|\bsecret-tool\b|kwallet|"
+                                     r"\.password-store|\bpass\s+show\b|\.local/share/keyrings|org\.freedesktop\.secrets|"
+                                     r"\bSecret\.Service\b|\blibsecret\b|--show-secrets"),
     ("reads environment variables, which can hold keys", r"os\.environ|\bgetenv\(|process\.env|\bENV\[|"
                                                          r"\$\{?\w*(TOKEN|KEY|SECRET|PASSWORD)"),
     ("runs other programs", r"\bsubprocess\b|os\.(system|popen|exec\w*)\(|child_process|execSync|\bspawn\(|"
                             r"\beval\(|\bexec\(|Popen|\bosascript\b"),
     ("downloads and runs code", r"(curl|wget)[^\n|]*\|\s*(sudo\s+)?(ba|z)?sh\b|\bpip3?\s+install|\bnpm\s+(i|install)\b|"
-                                r"\bnpx\s|\buvx\s|\bbrew\s+install|\bgo\s+install|\bcargo\s+install|\bgem\s+install"),
+                                r"\bnpx\s|\buvx\s|\bbrew\s+install|\bgo\s+install|\bcargo\s+install|\bgem\s+install|"
+                                r"\b(apt|apt-get|dnf|yum|zypper|snap|flatpak)\s+(-\S+\s+)*install\b|\bapk\s+add\b|"
+                                r"\b(pacman|yay|paru)\s+-S|\b(dpkg\s+-i|rpm\s+-[iU])"),
     ("starts at login or changes the system", r"\blaunchctl\b|LaunchAgents|LaunchDaemons|\bcrontab\b|\.zshrc|\.bashrc|"
                                               r"\.bash_profile|\.zprofile|defaults\s+write|\bchown\b|\bpmset\b|"
-                                              r"\bnetworksetup\b|\bsystemsetup\b"),
-    ("uses sudo", r"\bsudo\b"),
+                                              r"\bnetworksetup\b|\bsystemsetup\b|"
+                                              # Linux: systemd units and timers, autostart entries, login scripts
+                                              r"\bsystemctl\b|\bsystemd-run\b|\bloginctl\s+enable-linger|"
+                                              r"systemd/(user|system)\b|\.config/autostart|\bWantedBy=|"
+                                              r"\[Install\]|X-GNOME-Autostart|/\.profile\b|['\"]\.profile['\"]|\.xprofile|\.xinitrc|"
+                                              r"\.pam_environment|environment\.d/|\bupdate-rc\.d\b|\bchkconfig\b|"
+                                              r"\bgsettings\s+set\b|\bdconf\s+(write|load)\b|\bnmcli\b|\biptables\b|"
+                                              r"\bnft\s|\bufw\s|\bmodprobe\b|\bsysctl\s+-w|"
+                                              # writes to /etc
+                                              r"(>>?|\btee\b|\bcp\b|\bmv\b|\binstall\b|\bln\b|\bsed\s+-i)[^\n;|&]*\s['\"]?/etc/|"
+                                              r"open\(\s*['\"]/etc/[^'\"]*['\"]\s*,\s*['\"][wax]|"
+                                              r"(write_text|writeFileSync|appendFileSync)\(\s*['\"]/etc/"),
+    ("uses sudo", r"\b(sudo|doas|pkexec|run0)\b"),
     ("hides what it runs", r"base64\s+(-d|--decode|-D)\b|b64decode|\batob\(|fromCharCode|(\\x[0-9a-f]{2}){12,}|"
                            r"[A-Za-z0-9+/]{240,}={0,2}"),
 ]]

@@ -18,7 +18,7 @@ export interface Found { text: string; hits: Hit[]; more: boolean }
 const DAY_MS = 86_400_000;
 const utc = (date: string) => new Date(`${date}T00:00:00Z`);
 
-// "Today", "Yesterday" or "Monday 5 October" (year added if not current). `today` is the Mac's date.
+// "Today", "Yesterday" or "Monday 5 October" (year added if not current). `today` is JARVIS's computer's date.
 export function dayLabel(date: string, today: string): string {
   if (date === today) return "Today";
   const d = utc(date);

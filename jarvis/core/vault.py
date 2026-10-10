@@ -178,7 +178,7 @@ def get(name: str) -> str:
         row = db.execute("select blob, key_id from secrets where name = ?", (name,)).fetchone()
     if row is None:
         raise VaultError(f"There's no secret {name}. Enter it in the control panel's Connections page, or on the "
-                         "Mac: make servers ARGS='set-secret SERVER'")
+                         "computer: make servers ARGS='set-secret SERVER'")
     return decrypt(name, row[0], row[1], found).decode()
 
 

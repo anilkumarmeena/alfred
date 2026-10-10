@@ -9,7 +9,7 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from test_in_place import NullReporter, worker_task
 
 from conftest import use_task_cache
-from jarvis.core import profile
+from jarvis.core import platform, profile
 from jarvis.safety import shell
 from jarvis.tasks import access, briefs, gate, worker
 
@@ -115,7 +115,10 @@ def test_code_change_commands_reach_any_host_but_stay_boxed_in(mac, in_place):
     sandbox = opts.sandbox
     assert sandbox["enabled"] and not sandbox["allowUnsandboxedCommands"]
     assert sandbox["network"]["allowedDomains"] == ["*"]
-    assert "com.apple.SystemConfiguration.configd" in sandbox["network"]["allowMachLookup"]  # or uv crashes
+    if platform.MAC:  # a Seatbelt rule: Linux's sandbox has no Mach lookups
+        assert "com.apple.SystemConfiguration.configd" in sandbox["network"]["allowMachLookup"]  # or uv crashes
+    else:
+        assert "allowMachLookup" not in sandbox["network"]
     assert isinstance(call(opts, "Bash", command="curl https://example.com", dangerouslyDisableSandbox=True), PermissionResultDeny)
     assert "~/.ssh/**" in denied_paths(opts) and "~/Library/Keychains/**" in denied_paths(opts)
     assert "any host" in opts.system_prompt["append"]

@@ -2,9 +2,9 @@
 
   uv run python -m jarvis.voice.ram    per-process sizes of the running agent, plus total
 
-Size is phys_footprint (Activity Monitor's Memory column): RAM plus compressed/swapped pages and MLX's Metal buffers,
-which RSS misses. Falls back to RSS. The main process logs every JARVIS_VOICE_MEMORY_LOG_MINUTES; job processes log
-at debug after each reply.
+On macOS size is phys_footprint (Activity Monitor's Memory column): RAM plus compressed/swapped pages and MLX's Metal
+buffers, which RSS misses. On Linux, and if that can't be read, it's RSS (VmRSS). The main process logs every
+JARVIS_VOICE_MEMORY_LOG_MINUTES; job processes log at debug after each reply.
 """
 
 import ctypes
@@ -15,6 +15,8 @@ import threading
 import time
 
 import psutil
+
+from jarvis.core import platform
 
 log = logging.getLogger("jarvis.voice.ram")
 
@@ -29,11 +31,13 @@ class _RUsageInfoV0(ctypes.Structure):
 
 
 def _libproc():
+    if not platform.MAC:
+        return None
     try:
         lib = ctypes.CDLL(ctypes.util.find_library("proc") or "/usr/lib/libproc.dylib")
         lib.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.POINTER(_RUsageInfoV0)]
         return lib
-    except (OSError, AttributeError):  # not macOS
+    except (OSError, AttributeError):
         return None
 
 

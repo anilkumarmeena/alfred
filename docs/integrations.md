@@ -6,7 +6,7 @@
 
 **Everything JARVIS connects to beyond the conversation, how each one is kept safe, and how to add a tool of your own.**
 
-[🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · **🔌 Integrations** · [📱 iPhone](iphone.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md)
+[🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · **🔌 Integrations** · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md)
 
 </div>
 
@@ -65,24 +65,30 @@ Photos you send from the app, and the screen when you ask.
 <td valign="top">
 
 **[🎧 Recordings](#-recordings)**<br>
-Audio and video files transcribed on the Mac, answered from the transcript.
+Audio and video files transcribed on JARVIS's computer, answered from the transcript.
 
 </td>
 <td valign="top">
 
 **[🔊 Audio files](#-audio-files)**<br>
-Text or documents read aloud into a file in `~/Downloads`.
+Text or documents read aloud into a file in your download folder.
 
 </td>
 </tr>
 <tr>
 <td valign="top">
 
+**[💻 Desktop tools](#-desktop-tools)**<br>
+Notifications, opening things, volume and the clipboard, on macOS or a Linux desktop.
+
+</td>
+<td valign="top">
+
 **[🧩 Skills](#-skills)**<br>
 Claude Code-format how-tos, installed, written or switched on after your yes.
 
 </td>
-<td colspan="2" valign="top">
+<td valign="top">
 
 **[🔧 Adding a tool](#-adding-a-tool)**<br>
 Your own tool: one decorated function under `jarvis/tools/`, plus a test.
@@ -196,7 +202,7 @@ JARVIS finds and connects new tools for you as **MCP servers**. Say "connect Not
 | 🔍 | **Find** | The [official MCP registry](https://registry.modelcontextprotocol.io) first; failing that, the web, marked **unverified** |
 | 📦 | **Connect** | Says what it would install, from where, how it runs and what it needs. **Nothing installs until you say yes** |
 | 🔑 | **Keys** | Pasted in **Settings → Connections → Enter key**. A key said aloud is refused |
-| 🔐 | **Sign-in** | OAuth services sign in through JARVIS's own browser on the Mac |
+| 🔐 | **Sign-in** | OAuth services sign in through JARVIS's own browser on its computer |
 | 🗂️ | **Sort its tools** | **Reading** tools run at once; **changing** tools each wait for your yes |
 | 🔁 | **Later** | "What tools are connected?", "switch Notion off", "is there a newer GitHub?", "remove Notion" |
 
@@ -305,16 +311,52 @@ JARVIS has its own Chrome, driven by [Playwright](https://playwright.dev/python/
 uv run playwright install chromium
 ```
 
+## 💻 Desktop tools
+
+Small tools for the computer JARVIS runs on. **None waits for a yes**; the changing ones are listed in the bell. Clipboard text is **data**, read only when you ask ("read what I copied").
+
+| | Does | macOS | Linux |
+|:-:|---|---|---|
+| 🔔 | **Notify** | `mac_notify` | `desktop_notify` |
+| 📂 | **Open** | `mac_open`: an app by name, or a URL | `desktop_open`: a link, file or folder, **not apps by name** |
+| ⚡ | **Shortcuts** | `mac_run_shortcut`, `mac_list_shortcuts` | No equivalent |
+| 🔊 | **Volume** | `mac_set_volume` | `desktop_set_volume` |
+| 📋 | **Clipboard** | `mac_copy`, `mac_read_clipboard` | `desktop_copy`, `desktop_read_clipboard` |
+
+- **macOS:** the tools come from AI Armory and run macOS's own programs.
+- **Linux:** each tool is offered only while **its program is installed** and a **desktop session** is reachable (`DISPLAY` or `WAYLAND_DISPLAY`). Task notifications use the same program.
+- **Services on Linux:** `make services-install` and `make services-start` hand your session's display and D-Bus address to the systemd user services, so run them from a terminal in your desktop session.
+- **Your folders:** Downloads, Desktop and Documents (searched for a bare file name; audio files go to Downloads) follow the **XDG user folders** on Linux (`~/.config/user-dirs.dirs`), translated names included.
+
+**Linux packages** (Debian/Ubuntu names) for these tools and the sections below:
+
+| | For | Install |
+|:-:|---|---|
+| 🔔 | Notifications | `libnotify-bin` |
+| 📂 | Opening links, files, folders | `xdg-utils` |
+| 📋 | Clipboard | `wl-clipboard` (Wayland), or `xclip` / `xsel` (X11) |
+| 🔊 | Volume | `wireplumber` (`wpctl`), or `pulseaudio-utils` (`pactl`) |
+| 🖥️ | [Screenshots](#-pictures) | `grim` (Wayland, wlroots), `gnome-screenshot`, `spectacle` (KDE), or `scrot` / `imagemagick` (X11) |
+| 🔊 | [Audio files](#-audio-files) as m4a or mp3 | `ffmpeg` (`lame` also makes mp3) |
+| 📄 | Reading `.doc`, `.rtf`, `.odt` | `libreoffice-writer`, or `pandoc` (not `.doc`) |
+
+- **Under WSL2** JARVIS can't see the Windows screen, so **screenshots are refused**. Notifications and the clipboard work only under **WSLg**, inside Linux's own windows, not Windows'.
+
 ## 📷 Pictures
 
 | | What | How |
 |:-:|---|---|
 | 📸 | **Show JARVIS a photo** | The camera button in the message box, then ask ("what's this plant?"). Shrunk and sent with your next turn |
-| 🖥️ | **Look at the screen** | "What's this error on my screen?" takes a silent screenshot of the main display |
-| ⚙️ | **Set-up** | Allow the voice agent under System Settings → Privacy & Security → **Screen Recording**, then `make services-restart` |
+| 🖥️ | **Look at the screen** | "What's this error on my screen?" takes a silent screenshot of the computer's main display |
 | 🗓️ | **Kept** | Photos for a week, screenshots for a day |
 
 The screenshot is taken **only when your own words that turn ask for it**.
+
+| | macOS | Linux |
+|---|---|---|
+| **Photos** (HEIC, TIFF, oversized) | Converted to JPEG with `sips` | Converted with **Pillow**; HEIC through `pillow-heif`, installed with JARVIS |
+| **Screenshots** | `screencapture` | The first that works: `grim`, `gnome-screenshot`, `spectacle` (Wayland); `scrot`, ImageMagick's `import` (X11) |
+| **Set-up** | Allow the voice agent under System Settings → Privacy & Security → **Screen Recording**, then `make services-restart` | Install a screenshot program ([packages](#-desktop-tools)). A black or blank shot means the desktop refused; WSL2 can't take one |
 
 ## 🎧 Recordings
 
@@ -322,8 +364,8 @@ The screenshot is taken **only when your own words that turn ask for it**.
 
 | | What | Detail |
 |:-:|---|---|
-| 🔎 | **Finds** | m4a, mp3, wav, mp4, mov... by name in Downloads, Desktop or Documents, or attached to an email |
-| 📦 | **Nothing to install** | The same Whisper model, in a process of its own (about 0.5 GB while it works) |
+| 🔎 | **Finds** | m4a, mp3, wav, mp4, mov... by name in Downloads, Desktop or Documents ([XDG folders](#-desktop-tools) on Linux), or attached to an email |
+| 📦 | **Nothing to install** | Whisper in a process of its own: the live voice's model on Apple silicon (about 0.5 GB while it works), multilingual `small` on a CPU, `large-v3-turbo` on an NVIDIA GPU (`JARVIS_TRANSCRIBE_MODEL`) |
 | 🐢 | **Long ones** | Carry on in the background after 45 seconds; ask again later |
 | 🗓️ | **Kept** | In the transcripts folder, timestamped, for 30 days |
 
@@ -335,17 +377,25 @@ One recording at a time, up to **4 hours** each. The same recording isn't transc
 
 | | What | Detail |
 |:-:|---|---|
-| 📄 | **Reads** | Text JARVIS writes or you dictate, or a document on the Mac (PDF, Word, text...) |
+| 📄 | **Reads** | Text JARVIS writes or you dictate, or a document on the computer (PDF, Word, text...) |
 | 🗣️ | **Voice** | Kokoro, with your voice and speed |
 | ⚙️ | **Runs** | As a [long job](tasks.md#long-jobs), so the live voice is never held up |
-| 📁 | **Goes to** | `~/Downloads/Title.m4a`, never overwriting; mp3 or WAV on request |
+| 📁 | **Goes to** | Your download folder (`~/Downloads/Title.m4a`), never overwriting; mp3 or WAV on request |
 | 📱 | **To the phone** | A push when ready opens a player and a download link |
 
 - **Markdown** is read as plain speech.
 - **Long jobs** run at lower priority on a few cores, one file at a time, up to ~12 hours of audio.
 - **Settings:** `JARVIS_AUDIO_DIR` and `JARVIS_AUDIO_FORMAT`.
 - **The phone link** is valid for a week, and for that file only.
-- **mp3** needs `ffmpeg` or `lame` (`brew install ffmpeg`); m4a uses the Mac's own `afconvert`.
+
+| What it needs | macOS | Linux |
+|---|---|---|
+| **m4a** (default) | Nothing: built-in `afconvert` | `ffmpeg` |
+| **mp3** | `ffmpeg` or `lame` (`brew install ffmpeg`) | `ffmpeg` or `lame` |
+| **WAV** | Nothing | Nothing |
+| **`.doc`, `.rtf`, `.odt`** to read | Nothing: built-in `textutil` | LibreOffice, or pandoc for `.rtf` and `.odt` |
+
+Without the encoder, JARVIS says what to install. PDF, Word (`.docx`), Excel and text files read the same everywhere.
 
 ## 🧩 Skills
 
@@ -387,6 +437,6 @@ A gated tool follows the draft-then-confirm pattern in `jarvis/safety/draft_gate
 
 <div align="center">
 
-[← 🛠️ Tasks](tasks.md) &nbsp;·&nbsp; [🏠 Home](../README.md) &nbsp;·&nbsp; [📱 iPhone →](iphone.md)
+[← 🛠️ Tasks](tasks.md) &nbsp;·&nbsp; [🏠 Home](../README.md) &nbsp;·&nbsp; [📱 Mobile →](mobile.md)
 
 </div>

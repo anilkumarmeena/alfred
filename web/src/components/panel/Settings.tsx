@@ -126,7 +126,7 @@ function Accounts() {
     <>
       <ul class="list">{all.map((a) => <AccountRow key={a.label} a={a} />)}</ul>
       {!all.length && <Empty>No Google accounts yet.</Empty>}
-      <p class="hint">Adding an account or signing in again opens Google in the Mac's browser, so it's done there: make google-login LABEL=…</p>
+      <p class="hint">Adding an account or signing in again opens Google in the browser on JARVIS's computer, so it's done there: make google-login LABEL=…</p>
     </>
   );
 }
@@ -299,7 +299,7 @@ function rulesSummary() {
   return all.length ? `${all.length} remembered` : "None: every risky command asks";
 }
 
-const VIA: Record<string, string> = { voice: "by voice", panel: "in the panel", assistant: "by telling JARVIS", cli: "on the Mac" };
+const VIA: Record<string, string> = { voice: "by voice", panel: "in the panel", assistant: "by telling JARVIS", cli: "on JARVIS's computer" };
 
 function RuleRow({ r }: { r: Rule }) {
   return (
@@ -322,7 +322,7 @@ function Approvals() {
       <ul class="list">{all.map((r) => <RuleRow key={r.id} r={r} />)}</ul>
       {!all.length && <Empty>Nothing remembered: every risky command asks.</Empty>}
       <p class="hint">Made when you answer a request "for this task" or "always", here or by voice. Some always ask, every
-        time: deleting files, git push, sending data off the Mac, changing system settings, anything touching secrets.
+        time: deleting files, git push, sending data off the computer, changing system settings, anything touching secrets.
         You can also ask JARVIS what it always allows, or to withdraw one.</p>
     </>
   );
@@ -356,7 +356,7 @@ function prefsSummary(): [string, "warn" | null] {
 
 const FromEnv = ({ label, value }: { label: string; value: string }) => (
   <><label class="lbl">{label}</label><div class="field locked">{value}</div>
-    <p class="hint">Set in .env on the Mac, which wins: take it out there to change it here.</p></>
+    <p class="hint">Set in .env on JARVIS's computer, which wins: take it out there to change it here.</p></>
 );
 
 // Free-text preference, saved on button press. Empty resets to the default (shown as placeholder).
@@ -405,7 +405,7 @@ function About() {
       <PrefField k="name" label="What JARVIS calls you" />
       <PrefField k="timezone" label="Time zone" list="zones" />
       <datalist id="zones">{zones().map((z) => <option key={z} value={z} />)}</datalist>
-      <p class="hint">Left empty, the Mac's own: {pref("name")!.default} and {pref("timezone")!.default}.</p>
+      <p class="hint">Left empty, taken from JARVIS's computer: {pref("name")!.default} and {pref("timezone")!.default}.</p>
       <MarkdownEditor label="What JARVIS should know" value={text.value} onInput={(v) => { text.value = v; }}
         placeholder="Your job, your own projects, what to keep apart. One point per line. Markdown works." />
       <div class="acts end">
@@ -414,12 +414,12 @@ function About() {
           if (r) { about.value = r.text; text.value = r.text; }
         }}>Save</button>
       </div>
-      <p class="hint">JARVIS reads this when its services start: make services-restart on the Mac.</p>
+      <p class="hint">JARVIS reads this when its services start: make services-restart on JARVIS's computer.</p>
     </>
   );
 }
 
-// Choices plus the current value if it isn't one of them (set via .env or on the Mac)
+// Choices plus the current value if it isn't one of them (set via .env or on JARVIS's computer)
 const withShown = (k: PrefKey, options: [string, string][], label = (v: string) => v): [string, string][] =>
   options.some(([v]) => v === shown(k)) ? options : [...options, [shown(k), label(shown(k))]];
 
@@ -427,7 +427,7 @@ const SPEEDS: [string, string][] = ["0.9", "1", "1.05", "1.1", "1.2"].map((s) =>
 const GATE: [string, string][] = [["enforce", "Drop"], ["shadow", "Only log"], ["off", "Off"]];
 const GATE_HINT: Record<string, string> = {
   enforce: "Clips with no real speech in them, like Whisper's phantom \"Thank you.\" on silence, never reach JARVIS.",
-  shadow: "Clips it would drop are only logged, and saved as audio on the Mac, to check what it would catch.",
+  shadow: "Clips it would drop are only logged, and saved as audio on JARVIS's computer, to check what it would catch.",
   off: "Everything Whisper hears reaches JARVIS.",
 };
 
@@ -542,11 +542,11 @@ function PreferencesPage() {
 const SPEAKER: [string, string][] = [["on", "On"], ["shadow", "Only log"], ["off", "Off"]];
 const SPEAKER_HINT: Record<string, string> = {
   on: "Speech that isn't your voice, like a TV or people nearby, never reaches JARVIS, and it stays silent.",
-  shadow: "Voices it would ignore are only logged on the Mac (make voiceprint ARGS=log), to check before it ignores any.",
+  shadow: "Voices it would ignore are only logged on JARVIS's computer (make voiceprint ARGS=log), to check before it ignores any.",
   off: "JARVIS answers any voice it hears.",
 };
 const STRICTNESS: [string, string][] = [["0.25", "Lenient"], ["0.35", "Normal"], ["0.45", "Strict"]];
-const VIA_ENROLL: Record<string, string> = { voice: "by voice", panel: "here", cli: "on the Mac" };
+const VIA_ENROLL: Record<string, string> = { voice: "by voice", panel: "here", cli: "on JARVIS's computer" };
 
 function VoiceId() {
   const v = voiceprints.value, rec = useSignal<Recording | null>(null), secs = useSignal(0), lvl = useSignal(0);
@@ -619,7 +619,7 @@ function VoiceId() {
           <button class="btn sm primary" disabled={!v.model} onClick={start}>{owner ? "Enroll again" : "Enroll my voice"}</button>
         </div>
       )}
-      {!v.model && <p class="hint warn">The speaker model isn't on the Mac yet: run make models there.</p>}
+      {!v.model && <p class="hint warn">The speaker model isn't on JARVIS's computer yet: run make models there.</p>}
       <p class="hint">{connected.value && !rec.value ? "Hang up first: the conversation has the mic. " : ""}Read the text that
         appears aloud for {v.seconds} seconds, somewhere quiet. Or, in a conversation, say "learn my voice" and talk for half
         a minute: that hears you through the very mic and connection JARVIS listens on.</p>
@@ -635,10 +635,12 @@ function VoiceId() {
   );
 }
 
+const DEVICE_NAMES: Record<string, string> = { iphone: "iPhone", android: "Android" };
+
 function DeviceRow({ d }: { d: Device }) {
   return (
     <li class="row">
-      <div class="grow"><div>{d.device === "iphone" ? "iPhone" : d.device}{d.this && <> <Pill kind="running">this device</Pill></>}</div>
+      <div class="grow"><div>{DEVICE_NAMES[d.device] ?? d.device}{d.this && <> <Pill kind="running">this device</Pill></>}</div>
         <div class="sub">{d.kind === "app" ? "JARVIS app" : "Web app"}{d.added ? ` · added ${ago(d.added, now.value)}` : ""}</div></div>
       <button class="btn sm" onClick={async () => {
         if (!confirm("Stop sending notifications to this device?")) return;
@@ -650,7 +652,7 @@ function DeviceRow({ d }: { d: Device }) {
 }
 
 function Notifications() {
-  useEffect(() => { refreshAppPush(); }, []);  // iPhone app: permission may have changed since
+  useEffect(() => { refreshAppPush(); }, []);  // iOS app: permission may have changed since
   return (
     <>
       <div class="row flat">
@@ -687,7 +689,7 @@ function SystemPage() {
           <div class="grow">Vault<div class="sub">{s.vault.state === "ok" ? `key matches · ${s.vault.secrets} secret${s.vault.secrets === 1 ? "" : "s"} kept` : s.vault.problem}</div></div></li>
       </ul>
       <div class="acts"><button class="btn sm" onClick={() => load("settings", "system")}>Check again</button></div>
-      <p class="hint">A service that isn't running: make services-restart on the Mac, then make logs to see why.</p>
+      <p class="hint">A service that isn't running: make services-restart on JARVIS's computer, then make logs to see why.</p>
     </>
   );
 }
@@ -800,11 +802,11 @@ function AccessPage() {
       {!a.logins.length && <Empty>None yet: the passcode in .env lets you in, and becomes your login when JARVIS restarts.</Empty>}
       <PasscodeForm />
       <p class="hint">Each person has a passcode of their own, and it's all they enter: it says who's connecting, so no two
-        logins share one. Passcodes are kept only as hashes on the Mac. Everyone with a login can open this panel.</p>
+        logins share one. Passcodes are kept only as hashes on JARVIS's computer. Everyone with a login can open this panel.</p>
       <div class="grp">JARVIS's keys</div>
       {a.keys.map((k) => <KeyRow key={k.name} k={k} />)}
       <p class="hint">Kept encrypted in the vault, and never shown back: paste them here, never out loud. JARVIS uses a new
-        one once its services restart: make services-restart on the Mac.</p>
+        one once its services restart: make services-restart on JARVIS's computer.</p>
     </>
   );
 }

@@ -14,7 +14,7 @@ import pytest
 
 from jarvis import tools
 from jarvis.brain import sdk
-from jarvis.core import documents
+from jarvis.core import documents, platform
 from jarvis.tasks import worker
 from jarvis.tools import files
 
@@ -163,6 +163,55 @@ def test_older_documents_are_read_with_textutil():
     assert documents.read(rtf, "memo.rtf").text == "Meeting moved to Thursday."
 
 
+@pytest.fixture
+def linux_office(monkeypatch):
+    """Linux with `installed` programs; LibreOffice and pandoc faked, recording their argv."""
+    monkeypatch.setattr(platform, "MAC", False)
+    monkeypatch.setattr(platform, "LINUX", True)
+    state = {"installed": set(), "ran": []}
+    monkeypatch.setattr(documents.shutil, "which", lambda p: f"/usr/bin/{p}" if p in state["installed"] else None)
+
+    def run(argv, **kw):
+        state["ran"].append(argv)
+        given = argv[-1]
+        if "--convert-to" in argv:
+            out = documents.Path(argv[argv.index("--outdir") + 1])
+            out.mkdir()
+            (out / "file.txt").write_bytes("\ufeffMeeting moved to Thursday.\n".encode())
+            return subprocess.CompletedProcess(argv, 0, b"convert " + given.encode(), b"")
+        return subprocess.CompletedProcess(argv, 0, b"Meeting moved to Thursday.\n", b"")
+
+    monkeypatch.setattr(documents.subprocess, "run", run)
+    return state
+
+
+def test_on_linux_older_documents_are_read_with_libreoffice_in_its_own_profile(linux_office):
+    linux_office["installed"] |= {"soffice", "pandoc"}
+    assert documents.read(b"{\\rtf1 x}", "memo.rtf").text == "Meeting moved to Thursday."
+    [argv] = linux_office["ran"]
+    assert argv[0] == "/usr/bin/soffice" and argv[1].startswith("-env:UserInstallation=file://")
+    assert argv[2:5] == ["--headless", "--convert-to", "txt:Text (encoded):UTF8"] and argv[-1].endswith("file.rtf")
+
+
+def test_on_linux_without_libreoffice_pandoc_reads_rtf_and_odt_but_not_doc(linux_office):
+    linux_office["installed"].add("pandoc")
+    assert documents.read(b"PK odt", "notes.odt").text == "Meeting moved to Thursday."
+    assert linux_office["ran"][0][:3] == ["/usr/bin/pandoc", "--to", "plain"]
+    with pytest.raises(documents.Unreadable, match=r"Can't read \.doc files here: install LibreOffice"):
+        documents.read(b"\xd0\xcf\x11\xe0", "old.doc")
+    linux_office["installed"].clear()
+    with pytest.raises(documents.Unreadable, match=r"install LibreOffice \(libreoffice-writer\) or pandoc"):
+        documents.read(b"{\\rtf1 x}", "memo.rtf")
+
+
+def test_on_linux_a_conversion_that_writes_nothing_says_why(linux_office, monkeypatch):
+    linux_office["installed"].add("libreoffice")
+    monkeypatch.setattr(documents.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(
+        argv, 0, b"", b"Error: source file could not be loaded"))
+    with pytest.raises(documents.Unreadable, match="source file could not be loaded"):
+        documents.read(b"junk", "broken.doc")
+
+
 def test_pictures_go_to_the_model_as_they_are():
     doc = documents.read(png_bytes(), "receipt.png", "image/png")
     assert doc.kind == documents.IMAGE and doc.pictures == [documents.Picture("image/png", png_bytes())]
@@ -210,7 +259,7 @@ def test_a_result_with_pictures_reaches_the_model_as_image_blocks(tmp_path):
     assert result["content"] == content and result["is_error"] is False
 
 
-# ── Files on the Mac ────────────────────────────────────────────
+# ── Files on the computer ───────────────────────────────────────
 
 def test_file_read_reads_a_document_by_path(tmp_path):
     (tmp_path / "report.docx").write_bytes(make_docx())

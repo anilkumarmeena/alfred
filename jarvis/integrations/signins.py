@@ -90,7 +90,8 @@ async def google_accounts(now: datetime) -> list[Problem]:
         if state == "out":
             out.append(Problem(f"signin:google:{label}:out",
                                f"The {label} Google account is signed out, so JARVIS can't reach its mail, calendar "
-                               f"or files. Sign it in again on the Mac: {settings().sign_in(label)}"))
+                               f"or files. Sign it in again on the computer JARVIS runs on: "
+                               f"{settings().sign_in(label)}"))
     return out
 
 
@@ -137,8 +138,8 @@ async def github(now: datetime) -> list[Problem]:
     said = said.lower()
     offline = any(w in said for w in ("connect", "timeout", "timed out", "network", "no such host"))
     if code and not offline and any(w in said for w in ("not logged", "invalid", "expired", "re-authenticate")):
-        out.append(Problem("signin:github:gh:out", "The GitHub CLI on the Mac is signed out, so the heartbeat can't "
-                                                   "see reviews or mentions. Sign it in again: gh auth login."))
+        out.append(Problem("signin:github:gh:out", "The GitHub CLI on the computer is signed out, so the heartbeat "
+                                                   "can't see reviews or mentions. Sign it in again: gh auth login."))
     token = await asyncio.to_thread(_secret, "github")
     if token:
         r = await _token_check(f"{GITHUB_API}/user", {"Authorization": f"Bearer {token}",

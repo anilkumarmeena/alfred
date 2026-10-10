@@ -35,8 +35,8 @@ _IDLE_SECONDS = 600  # close an unused warmed session after this
 COMMAND, GOOGLE, SERVICE, ACTION, TASK, RULE, SCREEN, TELL = (
     "command", "google", "service", "action", "task", "rule", "screen", "tell")
 KINDS = {
-    COMMAND: "JARVIS asked whether it may run a command on the Mac that needs their go-ahead (deleting files, pushing "
-             "code, installing software, stopping a process, restarting services and the like).",
+    COMMAND: "JARVIS asked whether it may run a command on the computer that needs their go-ahead (deleting files, "
+             "pushing code, installing software, stopping a process, restarting services and the like).",
     GOOGLE: "JARVIS read out an email, message or calendar invite or change it drafted, or something it would delete "
             "(a calendar event, part of a Google Doc, a Sheet's tab), and asked whether to send it, or go ahead.",
     SERVICE: "JARVIS asked whether it may make a change on a connected service such as GitHub or GitLab.",
@@ -45,7 +45,7 @@ KINDS = {
     TASK: "JARVIS asked whether a background task may go ahead with the commands it asked to run.",
     RULE: "JARVIS described a rule that would let that kind of request go ahead without asking, and asked whether to "
           "save it.",
-    SCREEN: "JARVIS asked whether it may look at the Mac's screen.",
+    SCREEN: "JARVIS asked whether it may look at the computer's screen.",
     TELL: "No question was just asked: a background task is waiting for their go-ahead to run a command. yes means "
           "their words tell JARVIS to approve it, no that they tell it to turn it down.",
 }

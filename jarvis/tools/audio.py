@@ -1,4 +1,4 @@
-"""audio_file: render text or a Mac document to an audio file in JARVIS's voice (Kokoro).
+"""audio_file: render text or a local document to an audio file in JARVIS's voice (Kokoro).
 
 Runs as a command job in the task runner, never in the conversation: visible in the task list, tracked by
 job_status, stopped by stop_job/task_stop, announced on completion from its last line. Optionally sent to the phone.
@@ -12,7 +12,7 @@ import shlex
 import sys
 import time
 
-from jarvis.core import config
+from jarvis.core import config, platform
 from jarvis.core.files import write_atomic
 from jarvis.tasks import client
 from jarvis.voice import audio_file as render
@@ -38,7 +38,7 @@ def _first_words(text: str, n: int = 6) -> str:
 @tool(
     "audio_file",
     "Read text into an audio file in JARVIS's voice, for the user to listen to later: a summary or briefing you write "
-    "(put the whole of it in text, written to be heard), something they dictate, or a document on the Mac (path). "
+    "(put the whole of it in text, written to be heard), something they dictate, or a document on the computer (path). "
     "For an email, a Google Doc or a web page, read it first, then pass its text, or your summary of it. It's made "
     "in the background, in parts, and saved as m4a (or mp3 or wav) in the user's Downloads unless JARVIS is set up "
     "otherwise; this says how long it will be and roughly how long it takes. Tell the user in a sentence, don't "
@@ -47,12 +47,12 @@ def _first_words(text: str, n: int = 6) -> str:
     {
         "text": {"type": "string", "description": "The words to read, in full. Markdown is fine: it's read as plain "
                                                   "speech. Give this or path."},
-        "path": {"type": "string", "description": "Or a document on the Mac to read, by its path or just its name "
+        "path": {"type": "string", "description": "Or a document on the computer to read, by its path or just its name "
                                                   "(PDF, Word, text...), looked for as file_read does."},
         "title": {"type": "string", "description": "A short name for the file, e.g. 'Monday briefing'. Default: the "
                                                    "document's name, or the text's first words."},
         "format": {"type": "string", "enum": list(config.AUDIO_FORMATS),
-                   "description": f"Default {config.AUDIO_FORMAT}. mp3 needs ffmpeg or lame on the Mac."},
+                   "description": f"Default {config.AUDIO_FORMAT}. mp3 needs ffmpeg or lame on the computer."},
         "voice": {"type": "string", "description": "A Kokoro voice, such as bf_emma or am_adam, only if the user asks "
                                                    "for another voice. Default: JARVIS's own."},
         "phone": {"type": "boolean", "description": "Also send it to the user's phone. Only when they ask.",
@@ -69,7 +69,8 @@ async def audio_file(text: str = "", path: str = "", title: str = "", format: st
         raise ValueError("Give either the text to read or a document's path.")
     fmt = format or config.AUDIO_FORMAT
     if not render.can_make(fmt):
-        raise ValueError(f"No {fmt} encoder on this Mac: {fmt} needs {render.programs(fmt)} (brew install ffmpeg)"
+        how = "brew install ffmpeg" if platform.MAC else "install it with the system's package manager"
+        raise ValueError(f"No {fmt} encoder on this computer: {fmt} needs {render.programs(fmt)} ({how})"
                          + (". m4a works without it." if fmt != "m4a" else "."))
     voice = voice.strip() or config.tts_voice()
     if not re.fullmatch(r"[a-z]{2}_[a-z0-9]+", voice):

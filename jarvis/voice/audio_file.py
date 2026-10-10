@@ -3,7 +3,8 @@
   python -m jarvis.voice.audio_file SPEC.json
 
 SPEC holds already-`speakable` text and the output path. Text is split into `parts` (<= PART_CHARS, at paragraph,
-sentence, then clause bounds), rendered with pauses into a WAV, then encoded (m4a: afconvert/ffmpeg; mp3: ffmpeg/lame).
+sentence, then clause bounds), rendered with pauses into a WAV, then encoded (m4a: afconvert on macOS, ffmpeg; mp3:
+ffmpeg/lame).
 With no encoder the WAV is kept and the last line says so.
 
 Isolated from live voice: own Kokoro (AUDIO_MODEL; fp32 is faster than int8 on Apple silicon), niced, AUDIO_THREADS
@@ -28,7 +29,7 @@ from pathlib import Path
 
 import numpy as np
 
-from jarvis.core import profile
+from jarvis.core import platform, profile
 from jarvis.core.config import (
     AUDIO_MODEL,
     AUDIO_THREADS,
@@ -53,6 +54,7 @@ NICE = 10  # below the live voice
 # Kokoro voice prefix -> espeak language
 LANGS = {"a": "en-us", "b": "en-gb", "e": "es", "f": "fr-fr", "h": "hi", "i": "it", "p": "pt-br"}
 BREW_BINS = ("/opt/homebrew/bin", "/usr/local/bin")  # Homebrew, missing from launchd's PATH
+MAC_ONLY = {"afconvert"}  # macOS's own encoder
 
 
 def lang(voice: str) -> str:
@@ -204,7 +206,9 @@ def free_path(folder: Path, name: str, ext: str) -> Path:
 
 
 def find_program(name: str) -> str | None:
-    """Find a program on PATH or in Homebrew's bin dirs."""
+    """Find a program on PATH or, on macOS, in Homebrew's bin dirs."""
+    if not platform.MAC:
+        return shutil.which(name)
     return shutil.which(name) or next((str(p) for d in BREW_BINS if os.access(p := Path(d) / name, os.X_OK)), None)
 
 
@@ -218,9 +222,21 @@ ENCODERS = {
 }
 
 
+def _offered(fmt: str) -> list[tuple[str, list[str], list[str]]]:
+    """ENCODERS for `fmt` that can exist on this OS."""
+    return [e for e in ENCODERS.get(fmt, []) if platform.MAC or e[0] not in MAC_ONLY]
+
+
 def programs(fmt: str) -> str:
     """Encoder names for `fmt`, e.g. 'ffmpeg or lame'."""
-    return " or ".join(program for program, _, _ in ENCODERS.get(fmt, []))
+    return " or ".join(program for program, _, _ in _offered(fmt))
+
+
+def missing(fmt: str) -> str:
+    """Why `fmt` can't be made here, naming what to install."""
+    if platform.MAC:
+        return f"no {fmt} encoder ({programs(fmt)}) on this computer"
+    return f"no {fmt} encoder on this computer: install {programs(fmt)}"
 
 
 def _argv(program: str, before: list[str], after: list[str], wav: Path, out: Path) -> list[str]:
@@ -229,7 +245,7 @@ def _argv(program: str, before: list[str], after: list[str], wav: Path, out: Pat
 
 def encoders(fmt: str) -> list[Callable[[Path, Path], list[str]]]:
     """Installed encoders for `fmt`, best first, each a (wav, out) -> argv builder."""
-    return [functools.partial(_argv, path, before, after) for program, before, after in ENCODERS.get(fmt, [])
+    return [functools.partial(_argv, path, before, after) for program, before, after in _offered(fmt)
             if (path := find_program(program))]
 
 
@@ -253,7 +269,7 @@ def encode(wav: Path, out: Path, fmt: str) -> tuple[Path, str]:
             problems.append(f"{Path(argv[0]).name}: {said[0][:200] if said else f'exit code {done.returncode}'}")
             tmp.unlink(missing_ok=True)
         out = free_path(out.parent, out.stem, "wav")
-        problems = problems or [f"no {fmt} encoder ({programs(fmt)}) on this Mac"]
+        problems = problems or [missing(fmt)]
     shutil.move(wav, out)
     return out, "; ".join(problems)
 
@@ -330,7 +346,7 @@ def _writable(folder: Path) -> bool:
 
 
 def _wait_turn(lock) -> None:
-    """Serialize renders: two Kokoro instances can exhaust an 8 GB Mac."""
+    """Serialize renders: two Kokoro instances can exhaust an 8 GB machine."""
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -345,7 +361,7 @@ async def send_to_phone(path: Path, title: str, seconds: float) -> str:
     from jarvis.state import shared_files
 
     if not PUSH_ENABLED:
-        return " Not sent to the phone: notifications are off on the Mac (JARVIS_PUSH)."
+        return " Not sent to the phone: notifications are off on the computer (JARVIS_PUSH)."
     token = shared_files.share(path)
     try:
         sent = await push.send_push("Audio ready", f"{title}: {length(seconds)}. Tap to listen.",

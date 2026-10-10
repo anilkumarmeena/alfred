@@ -9,7 +9,7 @@ import { FocusCard } from "./FocusCard";
 import { Login } from "./Login";
 import { BellIcon, SoundIcon } from "./icons";
 
-// iPhone app: after a phone call turned mic and speaker off, offer to restore them.
+// Native app: after a phone call turned mic and speaker off, offer to restore them.
 function AfterCall() {
   const was = afterCall.value;
   if (!was) return null;

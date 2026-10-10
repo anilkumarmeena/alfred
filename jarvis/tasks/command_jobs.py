@@ -63,7 +63,7 @@ def project_of(folder: Path, named=None) -> str | None:
 
 
 class Runs(host.Jobs):
-    """Long jobs for command tasks, numbered by task id; no Mac notification (the runner announces)."""
+    """Long jobs for command tasks, numbered by task id; no desktop notification (the runner announces)."""
 
     def __init__(self, folder: Path | None = None, shell: tuple[str, ...] = host.SHELL) -> None:
         super().__init__(folder or COMMANDS_DIR, shell, notify=False)
@@ -141,7 +141,7 @@ def ending(how: dict) -> str:
     if how["outcome"] == TIMEOUT:
         return f"it ran past its time limit of {took(how['timeout_minutes'] * 60)} and was stopped"
     if how["outcome"] == LOST:
-        return "it ended without an exit status: it was killed, or the Mac restarted"
+        return "it ended without an exit status: it was killed, or the computer restarted"
     return f"exit code {how['code']}"
 
 

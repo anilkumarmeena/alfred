@@ -482,8 +482,41 @@ def test_system_asks_launchd_by_full_label(db, monkeypatch):
         return {"name": label, "state": "running"}
 
     monkeypatch.setattr(panel, "_launchd", launchd)
+    monkeypatch.setattr(panel.setup_local, "MANAGER", "launchd")
     monkeypatch.setattr(panel.shutil, "which", lambda cmd: "/bin/launchctl")
     monkeypatch.setattr(panel, "_vault", lambda: {"state": "ok", "secrets": 0})
     call("system")
     assert asked == [config.service_label(name) for name in config.SERVICE_NAMES]
     assert all(label.startswith(config.SERVICE_PREFIX + ".") for label in asked)
+
+
+def test_on_linux_system_reads_systemd_user_units(db, monkeypatch):
+    shown = {"livekit": "LoadState=loaded\nActiveState=active\nExecMainStatus=0\nExecMainStartTimestampMonotonic={}\n",
+             "agent": "LoadState=loaded\nActiveState=activating\nExecMainStatus=1\n"
+                      "ExecMainStartTimestampMonotonic=0\n",
+             "web": "LoadState=not-found\nActiveState=inactive\nExecMainStatus=0\n"}
+    asked = []
+
+    class Proc:
+        def __init__(self, out: str):
+            self.out, self.returncode = out, 0 if out else 1
+
+        async def communicate(self):
+            return self.out.encode(), b""
+
+    async def exec_(*cmd, **kwargs):
+        asked.append(cmd)
+        name = cmd[-1].removesuffix(".service").rpartition(".")[2]
+        started = int((panel.time.monotonic() - 3600) * 1e6)
+        return Proc(shown.get(name, "").format(started))
+
+    monkeypatch.setattr(panel.setup_local, "MANAGER", "systemd")
+    monkeypatch.setattr(panel.shutil, "which", lambda cmd: "/usr/bin/systemctl" if cmd == "systemctl" else None)
+    monkeypatch.setattr(panel.asyncio, "create_subprocess_exec", exec_)
+    monkeypatch.setattr(panel, "_vault", lambda: {"state": "ok", "secrets": 0})
+    livekit, agent, web, tasks = call("system")["services"]
+    assert asked[0][:3] == ("systemctl", "--user", "show")
+    assert asked[0][-1] == config.service_label("livekit") + ".service"
+    assert livekit["state"] == "running" and abs(panel.time.time() - 3600 - livekit["since"]) < 5
+    assert agent == {"name": "Voice agent", "state": "stopped", "exit": 1}
+    assert web == {"name": "Web", "state": "not loaded"} and tasks == {"name": "Task runner", "state": "not loaded"}

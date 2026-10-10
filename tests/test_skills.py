@@ -201,8 +201,8 @@ def test_sources_become_archives_to_try():
 
 @pytest.mark.parametrize("source, wrong", [
     ("http://example.com/x.zip", "only over https"),
-    ("https://127.0.0.1/x.zip", "this Mac"),
-    ("https://nas.local/x.zip", "this Mac"),
+    ("https://127.0.0.1/x.zip", "this computer"),
+    ("https://nas.local/x.zip", "this computer"),
     ("https://example.com/skill", "GitHub repo"),
     ("https://github.com/acme/skills/blob/main/pdf/run.py", "a file"),
     ("https://github.com/acme/skills/issues", "isn't a repo"),
@@ -329,6 +329,37 @@ def test_the_scan_flags_what_matters_whatever_a_model_says(tmp_path):
     assert [f.split(" (")[0] for f in review.scan(tmp_path / "inline")] == [
         "has commands in its SKILL.md meant to run as it loads, which JARVIS doesn't run",
         "mentions secrets or credentials in its instructions"]
+
+
+@pytest.mark.parametrize("script, label", [
+    ("cp x.service ~/.config/systemd/user/ && systemctl --user enable --now x", "starts at login or changes the system"),
+    ("cat > ~/.config/systemd/user/x.service <<EOF\n[Install]\nWantedBy=default.target\nEOF\n",
+     "starts at login or changes the system"),
+    ("cp x.desktop ~/.config/autostart/", "starts at login or changes the system"),
+    ("echo 'export PATH=x' >> ~/.profile", "starts at login or changes the system"),
+    ("echo 'x' >> ~/.bashrc", "starts at login or changes the system"),
+    ("echo '127.0.0.1 x' | tee -a /etc/hosts", "starts at login or changes the system"),
+    ("open('/etc/hosts', 'a').write('x')", "starts at login or changes the system"),
+    ("gsettings set org.gnome.desktop.interface clock-format 12h", "starts at login or changes the system"),
+    ("loginctl enable-linger $USER", "starts at login or changes the system"),
+    ("systemd-run --user --on-calendar=daily ./x.sh", "starts at login or changes the system"),
+    ("apt-get install -y jq", "downloads and runs code"), ("dnf -y install jq", "downloads and runs code"),
+    ("pacman -S --noconfirm jq", "downloads and runs code"), ("flatpak install flathub x", "downloads and runs code"),
+    ("secret-tool lookup service github", "reads secrets or credentials"),
+    ("cat ~/.password-store/x.gpg", "reads secrets or credentials"),
+    ("nmcli --show-secrets connection show home", "reads secrets or credentials"),
+    ("pkexec cp x /usr/local/bin", "uses sudo"),
+])
+def test_the_scan_knows_linux_persistence_installs_and_keychains(tmp_path, script, label):
+    manual(tmp_path, "linux", files={"scripts/run.sh": script + "\n"})
+    assert label in [f.split(" (")[0] for f in review.scan(tmp_path / "linux")]
+
+
+@pytest.mark.parametrize("script", ["cat /etc/os-release", "print(user.profile)", "import cProfile",
+                                    "uname -a && free -h", "ls ~/.config"])
+def test_reading_linux_system_files_is_no_flag(tmp_path, script):
+    manual(tmp_path, "plain", files={"scripts/run.sh": script + "\n"})
+    assert review.scan(tmp_path / "plain") == []
 
 
 def test_the_models_reply_is_read_only_as_json():

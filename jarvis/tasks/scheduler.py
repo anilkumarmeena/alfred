@@ -1,6 +1,6 @@
 """Scheduler: runs due jobs from jarvis.tasks.schedules inside the task runner, every TICK_SECONDS (stateless SQL read).
 
-  reminder  Mac notification, phone push, spoken in a live session
+  reminder  desktop notification, phone push, spoken in a live session
   task      background task on SCHEDULE_MODEL; ends with a NOTEPAD: line kept for the next run. only_changes runs
             judged "nothing new" by `read` stay silent. Transient failures retry after RETRY_MINUTES; a failure
             kind is announced once until a run succeeds
@@ -243,7 +243,7 @@ PROBES = {"url": probe_url, "gmail": probe_gmail, "chat": probe_chat}
 
 
 class Scheduler:
-    """Runs due jobs via `runner` (start, start_command, store). Alerts go out via `notify` (Mac), `announce`
+    """Runs due jobs via `runner` (start, start_command, store). Alerts go out via `notify` (desktop), `announce`
     (voice agent events) and `push` (phone)."""
 
     def __init__(self, runner, notify: Notify, announce: Callable[[dict], None] | None = None, push=None,

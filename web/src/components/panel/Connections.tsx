@@ -1,4 +1,4 @@
-// Connections (MCP servers): toggle, sign in (via JARVIS's browser on the Mac), set keys, remove.
+// Connections (MCP servers): toggle, sign in (via JARVIS's browser on its computer), set keys, remove.
 // Keys are write-only (pasted, never spoken; shown only as set/unset). Adding servers is by voice, with approval.
 import { useSignal } from "@preact/signals";
 import { act, servers, type Server } from "../../state/panel";
@@ -81,7 +81,7 @@ function Card({ s }: { s: Server }) {
           <span class="var">Sign-in</span>
           {s.signed_in ? <span class="st">signed in</span> : <span class="st warn">not signed in</span>}
           <button class="btn sm" disabled={signing.value} onClick={signIn}>
-            {signing.value ? "Sign in in JARVIS's browser on the Mac…" : s.signed_in ? "Sign in again" : "Sign in"}
+            {signing.value ? "Sign in in JARVIS's browser on its computer…" : s.signed_in ? "Sign in again" : "Sign in"}
           </button>
         </div>
       )}

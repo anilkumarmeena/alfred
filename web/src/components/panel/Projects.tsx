@@ -1,5 +1,5 @@
 // Projects: folders code tasks work in. Edit aliases, description, and in-place vs branch mode. The path changes
-// only on the Mac (make projects).
+// only on JARVIS's computer (make projects).
 import { useSignal } from "@preact/signals";
 import { act, projects, type Project } from "../../state/panel";
 import { ChevronIcon, PlusIcon } from "../icons";
@@ -97,7 +97,7 @@ export function ProjectsSection() {
       {all.map((p) => <Card key={p.name} p={p} />)}
       {adding.value ? <AddProject done={() => { adding.value = false; }} />
         : <button class="btn wide addproj" onClick={() => { adding.value = true; }}><PlusIcon />Add project</button>}
-      <p class="hint">To move a project to another folder, run this on the Mac: uv run python -m jarvis.tasks.projects set NAME --path …</p>
+      <p class="hint">To move a project to another folder, run this on JARVIS's computer: uv run python -m jarvis.tasks.projects set NAME --path …</p>
     </div>
   );
 }

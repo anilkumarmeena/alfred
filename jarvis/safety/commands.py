@@ -19,13 +19,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from jarvis.core import platform
 from jarvis.core.config import CLAUDE_CONFIG_DIR, DATA_DIR, ROOT, SECRETS_DIR
 
 # ── Secrets ─────────────────────────────────────────────────────
 
-# Home-folder logins, keys and keychains
+# Home-folder logins, keys and keychains, macOS and Linux alike: a path that doesn't exist here costs nothing.
+# Linux: GNOME Keyring, KWallet, pass, Bitwarden's vault and the NSS key store Chromium keeps client keys in.
 HOME_SECRETS = ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/gh", "~/.netrc", "~/.docker/config.json",
-                "~/Library/Keychains", "~/.git-credentials", "~/.npmrc", "~/.pypirc"]
+                "~/Library/Keychains", "~/.git-credentials", "~/.npmrc", "~/.pypirc", "~/.local/share/keyrings",
+                "~/.local/share/kwalletd", "~/.password-store", "~/.config/Bitwarden", "~/.pki/nssdb"]
 # JARVIS's own: keys and sign-ins, Claude login (and voice logs), .env, and the browser profile (cookies = logins)
 JARVIS_SECRETS = [SECRETS_DIR, Path(CLAUDE_CONFIG_DIR), ROOT / ".env", DATA_DIR / "browser/profile"]
 # Secret wherever they appear
@@ -70,10 +73,11 @@ _PS_VALUES = set("oOpgGtuUMN")  # ps options taking a value; later letters in th
 
 
 def _ps_shows_env(args: list[str]) -> bool:
+    dashed = {"e", "E"} if platform.MAC else {"E"}  # Linux's ps -e means every process, as in ps -ef
     for n, arg in enumerate(args):
         if arg.startswith("-") and not arg.startswith("--"):
             letters = re.split(f"[{''.join(_PS_VALUES)}]", arg[1:], maxsplit=1)[0]
-            if set(letters) & {"e", "E"}:
+            if set(letters) & dashed:
                 return True
         elif n == 0 and re.fullmatch(r"[A-Za-z]+", arg) and "e" in arg:  # BSD style: ps eww, ps auxe
             return True
@@ -86,12 +90,12 @@ def reads_environment(command: str) -> bool:
         return True
     for argv in _simple_commands(command) or []:
         argv = _strip_prefixes(argv)
-        while argv and Path(argv[0]).name in ("sudo", "doas"):
-            argv = _strip_prefixes(_options_then(argv[1:], {"-u", "-g", "-C", "-h", "-p", "-U"}))
+        while argv and Path(argv[0]).name in _ROOT:
+            argv = _strip_prefixes(_options_then(argv[1:], {"-u", "-g", "-C", "-h", "-p", "-U", "--user"}))
         if argv and Path(argv[0].lstrip("\\")).name == "ps" and _ps_shows_env(argv[1:]):
             return True
-        if argv and Path(argv[0]).name in ("lldb", "gdb") and any(a in ("-p", "--attach-pid", "--pid") or
-                                                                     a.startswith("--attach") for a in argv[1:]):
+        if argv and Path(argv[0]).name in ("lldb", "gdb", "strace", "ltrace") and any(
+                a in ("-p", "--attach-pid", "--pid") or a.startswith("--attach") for a in argv[1:]):
             return True
     return False
 
@@ -319,20 +323,36 @@ _ALWAYS = {
     "rm": "deletes files", "rmdir": "deletes files", "unlink": "deletes files", "shred": "deletes files",
     "srm": "deletes files", "trash": "deletes files", "truncate": "deletes files", "dd": "writes a disk",
     "kill": "stops a process", "killall": "stops a process", "pkill": "stops a process",
-    "shutdown": "stops the Mac", "reboot": "stops the Mac", "halt": "stops the Mac",
+    "shutdown": "stops the computer", "reboot": "stops the computer", "halt": "stops the computer",
     "sudo": "runs as root", "su": "runs as root", "doas": "runs as root",
     "chmod": "changes permissions", "chown": "changes permissions", "chgrp": "changes permissions",
     "chflags": "changes permissions", "crontab": "changes the system", "installer": "installs software",
     "softwareupdate": "installs software", "pipx": "installs software", "mas": "installs software",
     "npx": "installs software", "pnpx": "installs software", "bunx": "installs software", "uvx": "installs software",
-    "port": "installs software", "apt": "installs software", "apt-get": "installs software",
-    "scp": "sends data off the Mac", "sftp": "sends data off the Mac", "ssh": "sends data off the Mac",
-    "ftp": "sends data off the Mac", "nc": "sends data off the Mac", "ncat": "sends data off the Mac",
-    "netcat": "sends data off the Mac", "telnet": "sends data off the Mac", "mail": "sends data off the Mac",
-    "sendmail": "sends data off the Mac", "csrutil": "changes the system",
+    "port": "installs software",
+    **dict.fromkeys(("scp", "sftp", "ssh", "ftp", "nc", "ncat", "netcat", "telnet", "mail", "sendmail"),
+                    "sends data off the computer"),
+    "csrutil": "changes the system",
     "spctl": "changes the system", "tccutil": "changes the system", "dscl": "changes the system",
     "tmutil": "changes the system", "osascript": "controls apps",
     "eval": "runs code it can't see", "watch": "runs code it can't see", "script": "runs code it can't see",
+    # Linux
+    "poweroff": "stops the computer", "pkexec": "runs as root", "run0": "runs as root",
+    "chattr": "changes permissions", "setfacl": "changes permissions", "setcap": "changes permissions",
+    "passwd": "changes the system", "chpasswd": "changes the system", "chage": "changes the system",
+    "chsh": "changes the system", "chfn": "changes the system", "usermod": "changes the system",
+    "useradd": "changes the system", "userdel": "changes the system", "groupadd": "changes the system",
+    "groupdel": "changes the system", "groupmod": "changes the system", "gpasswd": "changes the system",
+    "visudo": "changes the system", "umount": "changes the system", "swapon": "changes the system",
+    "swapoff": "changes the system", "modprobe": "changes the system", "insmod": "changes the system",
+    "rmmod": "changes the system", "systemd-run": "changes the system", "dpkg-reconfigure": "changes the system",
+    "update-rc.d": "changes the system", "chkconfig": "changes the system", "iptables-restore": "changes the system",
+    "ip6tables-restore": "changes the system", "add-apt-repository": "installs software", "apt-key": "installs software",
+    "fdisk": "writes a disk", "sfdisk": "writes a disk", "parted": "writes a disk", "wipefs": "writes a disk",
+    "mkswap": "writes a disk", "cryptsetup": "writes a disk",
+    "dbus-send": "controls apps", "qdbus": "controls apps", "xdotool": "controls apps", "ydotool": "controls apps",
+    # Secret Service, KWallet and pass: like `security find-generic-password` (refused to tasks)
+    "secret-tool": "reads the keychain", "kwallet-query": "reads the keychain", "pass": "reads the keychain",
 }
 _READ_ONLY_SUBCOMMANDS = {  # any other subcommand changes things
     "launchctl": {"list", "print", "print-disabled", "blame", "managername", "version", "getenv", "help"},
@@ -340,8 +360,75 @@ _READ_ONLY_SUBCOMMANDS = {  # any other subcommand changes things
     "defaults": {"read", "read-type", "domains", "find", "help"},
     # other security subcommands read the keychain
     "security": {"find-identity", "cms"},
+    # Linux
+    "systemctl": {"status", "show", "cat", "help", "list-units", "list-unit-files", "list-sockets", "list-timers",
+                  "list-jobs", "list-dependencies", "list-machines", "list-paths", "list-automounts", "is-active",
+                  "is-enabled", "is-failed", "is-system-running", "show-environment", "get-default"},
+    "loginctl": {"list-sessions", "session-status", "show-session", "list-users", "user-status", "show-user",
+                 "list-seats", "seat-status", "show-seat", "help"},
+    "timedatectl": {"status", "show", "show-timesync", "timesync-status", "list-timezones", "help"},
+    "hostnamectl": {"status", "show", "help"},
+    "localectl": {"status", "list-locales", "list-keymaps", "list-x11-keymap-models", "list-x11-keymap-layouts",
+                  "list-x11-keymap-variants", "list-x11-keymap-options", "help"},
+    "gsettings": {"get", "list-schemas", "list-relocatable-schemas", "list-keys", "list-children", "list-recursively",
+                  "range", "describe", "writable", "monitor", "help"},
+    "dconf": {"read", "list", "dump", "watch", "help"},
+    "xdg-settings": {"get", "check"},
+    "xdg-mime": {"query"},
+    "busctl": {"list", "status", "monitor", "capture", "tree", "introspect", "get-property", "help"},
+    "gdbus": {"introspect", "monitor", "help"},
+    "ufw": {"status", "show", "version", "help"},
+    "apt": {"list", "search", "show", "showsrc", "policy", "depends", "rdepends", "changelog", "help"},
+    "apt-get": {"check", "changelog", "help"},
+    **dict.fromkeys(("dnf", "dnf5", "yum", "microdnf"), frozenset({
+        "list", "info", "search", "provides", "whatprovides", "repolist", "repoinfo", "repoquery", "check-update",
+        "deplist", "updateinfo", "help"})),
+    "zypper": {"search", "se", "info", "if", "list-updates", "lu", "list-patches", "lp", "packages", "pa", "patterns",
+               "pt", "products", "pd", "repos", "lr", "services", "ls", "what-provides", "wp", "locks", "ll",
+               "patch-check", "pchk", "help"},
+    "apk": {"info", "search", "list", "policy", "dot", "stats", "version", "audit", "help"},
+    "snap": {"list", "find", "info", "version", "connections", "interfaces", "services", "logs", "changes", "change",
+             "tasks", "warnings", "aliases", "known", "model", "get", "run", "whoami", "help"},
+    "flatpak": {"list", "info", "search", "remotes", "remote-ls", "remote-info", "history", "ps", "documents",
+                "document-info", "permissions", "permission-show", "run", "help"},
 }
-_READ_ONLY_WHY = {"security": "reads the keychain"}
+_READ_ONLY_WHY = {"security": "reads the keychain", "busctl": "controls apps", "gdbus": "controls apps",
+                  **dict.fromkeys(("apt", "apt-get", "dnf", "dnf5", "yum", "microdnf", "zypper", "apk", "snap", "flatpak"),
+                                  "installs software")}
+_BARE_READS = {"systemctl", "loginctl", "timedatectl", "hostnamectl", "localectl", "busctl"}  # alone: a status listing
+_SUB_WHY = {  # subcommands with a reason of their own
+    "systemctl": dict.fromkeys(("poweroff", "reboot", "halt", "kexec", "soft-reboot", "suspend", "hibernate", "sleep",
+                                "hybrid-sleep", "suspend-then-hibernate", "rescue", "emergency"),
+                               "stops the computer"),
+    "snap": {"start": "stops a process", "stop": "stops a process", "restart": "stops a process",
+             "connect": "changes permissions", "disconnect": "changes permissions"},
+    "flatpak": {"kill": "stops a process", "override": "changes permissions", "permission-set": "changes permissions",
+                "permission-remove": "changes permissions", "permission-reset": "changes permissions"},
+}
+_SUB_VALUES = {  # options taking a value, before the subcommand
+    "systemctl": {"-t", "--type", "-p", "--property", "-P", "-H", "--host", "-M", "--machine", "-n", "--lines", "-o",
+                  "--output", "-s", "--signal", "--state", "--root", "--image", "--kill-whom", "--kill-value",
+                  "--job-mode", "--what", "--when", "--timestamp", "--preset-mode", "--boot-loader-entry",
+                  "--reboot-argument"},
+    "loginctl": {"-p", "--property", "-P", "-H", "--host", "-M", "--machine", "-n", "--lines", "-o", "--output", "-s",
+                 "--signal", "--kill-whom"},
+    "timedatectl": {"-H", "--host", "-M", "--machine", "-p", "--property"},
+    "hostnamectl": {"-H", "--host", "-M", "--machine"},
+    "localectl": {"-H", "--host", "-M", "--machine"},
+    "busctl": {"-H", "--host", "-M", "--machine", "--match", "--size", "--destination"},
+    "gsettings": {"--schemadir"},
+    "apt": {"-o", "--option", "-c", "--config-file", "-t", "--target-release"},
+    "apt-get": {"-o", "--option", "-c", "--config-file", "-t", "--target-release"},
+    **dict.fromkeys(("dnf", "dnf5", "yum", "microdnf"), frozenset({
+        "-c", "--config", "--installroot", "--releasever", "--repo", "--repoid", "--enablerepo", "--disablerepo", "-x",
+        "--exclude", "--setopt", "-d", "--debuglevel", "-e", "--errorlevel", "--forcearch", "--color"})),
+    "zypper": {"-R", "--root", "-c", "--config", "-D", "--reposd-path", "-C", "--cache-dir", "--raw-cache-dir",
+               "--solv-cache-dir", "--pkg-cache-dir", "--userdata"},
+    "apk": {"-X", "--repository", "-p", "--root", "--arch", "--cache-dir", "--keys-dir", "--repositories-file"},
+}
+_HOSTNAME_PARTS = {"hostname", "icon-name", "chassis", "deployment", "location"}  # hostnamectl X shows, X VALUE sets
+# What these do is in their options, not a subcommand
+_OPTION_DRIVEN = {"pacman", "yay", "paru", "rpm", "dpkg", "update-alternatives", "alternatives"}
 _INSTALLS = {
     "brew": {"install", "uninstall", "remove", "rm", "reinstall", "upgrade", "tap", "untap", "link", "unlink", "cleanup",
              "autoremove", "pin", "unpin", "bundle"},
@@ -471,10 +558,243 @@ def _glab(args: list[str]) -> str:
 def _curl(args: list[str]) -> str:
     uploads = ("-d", "--data", "-F", "--form", "-T", "--upload-file", "--json")
     if any(a.startswith(uploads) for a in args):
-        return "sends data off the Mac"
+        return "sends data off the computer"
     method = next((b for a, b in zip(args, args[1:]) if a in ("-X", "--request")), "") or next(
         (a[2:] for a in args if a.startswith("-X") and len(a) > 2), "")
-    return "sends data off the Mac" if method.upper() not in ("", "GET", "HEAD") else ""
+    return "sends data off the computer" if method.upper() not in ("", "GET", "HEAD") else ""
+
+
+# ── Linux tools whose risk is in their options ──
+
+
+def _prefixed(word: str, choices: tuple[str, ...]) -> list[str]:
+    """Choices `word` abbreviates (nmcli and ip accept any unambiguous prefix)."""
+    return [c for c in choices if c.startswith(word)]
+
+
+def _reads_only(word: str, reads: tuple[str, ...], writes: tuple[str, ...]) -> bool:
+    """Whether `word` can only abbreviate a read."""
+    found = _prefixed(word, reads + writes)
+    return bool(found) and all(c in reads for c in found)
+
+
+_NM_OBJECTS = ("general", "networking", "radio", "connection", "device", "agent", "monitor", "help")
+_NM_VERBS = {  # (reads, writes)
+    "connection": (("show", "monitor"), ("up", "down", "add", "modify", "clone", "edit", "delete", "reload", "load",
+                                         "import", "export", "migrate")),
+    "device": (("status", "show", "monitor", "lldp"), ("set", "up", "connect", "reapply", "modify", "down",
+                                                      "disconnect", "delete", "wifi")),
+    "general": (("status", "permissions"), ("hostname", "logging", "reload")),
+}
+_NM_VALUES = {"-f", "--fields", "-g", "--get-values", "-m", "--mode", "-c", "--colors", "-e", "--escape", "-w", "--wait"}
+
+
+def _nmcli(args: list[str]) -> str:
+    if any(a.startswith("-") and a.lstrip("-") and "show-secrets".startswith(a.lstrip("-")) or a == "show-password"
+           for a in args):
+        return "reads the keychain"  # Wi-Fi and VPN passwords
+    words = _options_then(args, _NM_VALUES)
+    if not words:
+        return ""
+    objects = _prefixed(words[0], _NM_OBJECTS)
+    if len(objects) != 1:
+        return "changes the system"
+    obj, rest = objects[0], words[1:]
+    if obj in ("monitor", "help"):
+        return ""
+    if obj in ("radio", "networking"):
+        return "changes the system" if {"on", "off"} & set(rest) else ""
+    if obj not in _NM_VERBS:
+        return "changes the system"  # agent: answers password prompts
+    if not rest:
+        return ""
+    reads, writes = _NM_VERBS[obj]
+    if obj == "general" and len(rest) == 1 and _prefixed(rest[0], reads + writes) in (["hostname"], ["logging"]):
+        return ""  # shown, not set
+    if obj == "device" and _prefixed(rest[0], reads + writes) == ["wifi"]:
+        return "" if len(rest) == 1 or _prefixed(rest[1], ("list", "connect", "hotspot", "rescan")) == ["list"] else \
+            "changes the system"
+    return "" if _reads_only(rest[0], reads, writes) else "changes the system"
+
+
+_IP_READS = ("show", "list", "lst", "get", "help")
+_IP_WRITES = ("add", "append", "change", "chg", "del", "delete", "exec", "flush", "prepend", "replace", "restore",
+              "save", "set", "attach", "detach", "update", "test")
+
+
+def _ip(args: list[str]) -> str:
+    if any(a.startswith("-") and len(a) > 1 and "batch".startswith(a.lstrip("-")) for a in args):
+        return "changes the system"  # -batch FILE runs its commands
+    words = _options_then(args, {"-n", "-netns", "-f", "-family", "-l", "-loops", "-rc", "-rcvbuf"})
+    if not words or len(words[0]) >= 3 and "monitor".startswith(words[0]) or len(words) < 2:
+        return ""  # ip addr: a listing
+    return "" if _reads_only(words[1], _IP_READS, _IP_WRITES) else "changes the system"
+
+
+_XT_WRITES = set("ADIRFZNXPE")  # iptables commands that change rules
+_XT_LONG_WRITES = {"--append", "--delete", "--insert", "--replace", "--flush", "--zero", "--new-chain", "--delete-chain",
+                   "--policy", "--rename-chain"}
+
+
+def _iptables(args: list[str]) -> str:
+    letters = {c for a in args if a.startswith("-") and not a.startswith("--") for c in a[1:]}
+    longs = {a.split("=")[0] for a in args if a.startswith("--")}
+    if letters & _XT_WRITES or longs & _XT_LONG_WRITES:
+        return "changes the system"
+    reads = letters & set("LSChV") or longs & {"--list", "--list-rules", "--check", "--help", "--version"}
+    return "" if reads else "changes the system"
+
+
+def _nft(args: list[str]) -> str:
+    if any(a in ("-f", "--file", "-i", "--interactive") or a.startswith("--file=") for a in args):
+        return "changes the system"
+    words = _options_then(args, {"-I", "--includepath", "-D", "--define"})
+    return "" if not words or words[0].split()[0] in ("list", "describe", "monitor", "help") else "changes the system"
+
+
+_FIREWALLD_READS = ("--state", "--get-", "--list-", "--query-", "--info-", "--check-config", "--zone", "--permanent",
+                    "--help", "--version", "-h", "-V", "-q", "--quiet")
+
+
+def _firewall_cmd(args: list[str]) -> str:
+    return "" if args and all(a.startswith(_FIREWALLD_READS) for a in args) else "changes the system"
+
+
+_PACMAN_OPS = {"--sync": "S", "--remove": "R", "--upgrade": "U", "--database": "D", "--query": "Q", "--files": "F",
+               "--deptest": "T", "--version": "V", "--help": "h"}
+_PACMAN_SYNC = {"--search": "s", "--info": "i", "--list": "l", "--groups": "g", "--print": "p", "--refresh": "y",
+                "--sysupgrade": "u", "--downloadonly": "w", "--clean": "c"}
+
+
+def _pacman(args: list[str]) -> str:
+    """pacman, and the AUR helpers yay and paru that share its options."""
+    op, letters = "", set()
+    for a in args:
+        if a.startswith("--"):
+            op = op or _PACMAN_OPS.get(a, "")
+            letters.add(_PACMAN_SYNC.get(a, ""))
+        elif a.startswith("-"):
+            for c in a[1:]:
+                if c in "DFQRSTUVh" and not op:
+                    op = c
+                else:
+                    letters.add(c)
+    if op in ("Q", "T", "V", "h") or op == "F" and "y" not in letters:
+        return ""
+    if op == "S" and letters & set("silgp") and not letters & set("yuwc"):
+        return ""  # search, info, list, groups, print: nothing installed
+    return "installs software"
+
+
+def _dpkg(args: list[str]) -> str:
+    longs = ("--install", "--remove", "--purge", "--unpack", "--configure", "--triggers-only", "--set-selections",
+             "--clear-selections", "--add-architecture", "--remove-architecture", "--update-avail", "--merge-avail",
+             "--clear-avail", "--record-avail")
+    letters = {c for a in args if a.startswith("-") and not a.startswith("--") for c in a[1:]}
+    return "installs software" if letters & set("irPA") or any(a.startswith(longs) for a in args) else ""
+
+
+def _rpm(args: list[str]) -> str:
+    longs = ("--install", "--upgrade", "--freshen", "--erase", "--reinstall", "--import", "--rebuilddb", "--initdb",
+             "--restore", "--setperms", "--setugids")
+    letters = {c for a in args if a.startswith("-") and not a.startswith("--") for c in a[1:]}
+    if any(a.startswith(longs) for a in args) or letters & set("iUFe") and not letters & set("qVK"):
+        return "installs software"  # rpm -qi is a query
+    return ""
+
+
+def _alternatives(args: list[str]) -> str:
+    writes = {"--install", "--remove", "--remove-all", "--auto", "--set", "--config", "--all", "--set-selections"}
+    reads = {"--display", "--query", "--list", "--get-selections", "--help", "--version"}
+    return "" if reads & set(args) and not writes & set(args) else "changes the system"
+
+
+def _journalctl(args: list[str]) -> str:
+    if any(a.startswith("--vacuum") for a in args):
+        return "deletes files"
+    changes = {"--rotate", "--flush", "--sync", "--relinquish-var", "--smart-relinquish-var", "--setup-keys",
+               "--update-catalog"}
+    return "changes the system" if any(a.split("=")[0] in changes for a in args) else ""  # reading logs is fine
+
+
+def _sysctl(args: list[str]) -> str:
+    """sysctl sets a value with -w or name=value (Linux and macOS); -p/--system load settings files."""
+    letters = {c for a in args if a.startswith("-") and not a.startswith("--") for c in a[1:]}
+    if letters & {"w", "p"} or any(a.split("=")[0] in ("--write", "--load", "--system") for a in args) or any(
+            "=" in a for a in args if not a.startswith("-")):
+        return "changes the system"
+    return ""
+
+
+def _mount(args: list[str]) -> str:
+    return "" if set(args) <= {"-l", "-v", "-h", "--help", "-V", "--version"} else "changes the system"  # alone: lists
+
+
+def _hostname(args: list[str]) -> str:
+    sets = any(not a.startswith("-") for a in args) or set(args) & {"-F", "--file", "-b", "--boot"}
+    return "changes the system" if sets else ""
+
+
+def _service(args: list[str]) -> str:
+    reads = args in (["--status-all"], ["--help"], ["-h"], ["--version"]) or len(args) == 2 and args[1] == "status"
+    return "" if reads else "changes the system"
+
+
+_CHECKS: dict[str, Callable[[list[str]], str]] = {
+    "nmcli": _nmcli, "ip": _ip, "nft": _nft, "firewall-cmd": _firewall_cmd, "dpkg": _dpkg, "rpm": _rpm,
+    "update-alternatives": _alternatives, "alternatives": _alternatives, "journalctl": _journalctl,
+    "sysctl": _sysctl, "mount": _mount, "hostname": _hostname, "service": _service,
+    **dict.fromkeys(("iptables", "ip6tables", "iptables-legacy", "ip6tables-legacy", "iptables-nft", "ip6tables-nft",
+                     "ebtables", "arptables"), _iptables),
+    **dict.fromkeys(("pacman", "yay", "paru"), _pacman),
+}
+
+# Where something written runs at login, or system-wide: persistence outside any sandbox's walls
+_STARTUP_HOME = (".config/systemd", ".config/autostart", ".config/environment.d", ".local/share/systemd",
+                 "Library/LaunchAgents")
+_STARTUP_ROOTS = ("/etc", "/private/etc", "/Library/LaunchAgents", "/Library/LaunchDaemons")
+_STARTUP_DOTFILES = {".bashrc", ".bash_profile", ".bash_login", ".profile", ".zshrc", ".zprofile", ".zshenv", ".zlogin",
+                     ".xprofile", ".xinitrc", ".xsessionrc", ".pam_environment"}
+_COPIERS = {"cp", "mv", "ln", "install", "rsync", "ditto"}  # write to their last operand (or -t DIR)
+_WRITERS = {"tee", "touch", "mkdir", "patch"}  # write to every operand
+_OUTPUT_FLAGS = {"curl": {"-o", "--output"}, "wget": {"-O", "--output-document", "-P", "--directory-prefix"},
+                 "tar": {"-C", "--directory"}, "unzip": {"-d"}}
+_WRITES_THERE = _COPIERS | _WRITERS | _OUTPUT_FLAGS.keys() | {"sed"}  # after a cd into such a folder
+_REDIRECT_TARGETS = re.compile(r"(?<!<)>>?\|?\s*([^\s;&|()<>]+)")
+
+
+def _starts_up(word: str) -> str:
+    """Why writing to `word` changes what runs at login or system-wide, or ''."""
+    word = word.strip("'\"")
+    home = next((word[len(h):] for h in ("~/", "$HOME/", "${HOME}/", f"{Path.home()}/") if word.startswith(h)), None)
+    if home is not None:
+        rel = os.path.normpath(home)
+        if rel in _STARTUP_DOTFILES:
+            return "overwrites a settings file"
+        if any(rel == d or rel.startswith(d + "/") for d in _STARTUP_HOME):
+            return "changes the system"
+    if word.startswith("/"):
+        path = os.path.normpath(word)
+        if any(path == d or path.startswith(d + "/") for d in _STARTUP_ROOTS):
+            return "changes the system"
+    return ""
+
+
+def _writes_startup(program: str, args: list[str]) -> str:
+    """Why a copy, tee, sed -i or download writes a login item, unit, autostart entry or /etc file, or ''."""
+    operands = [a for a in args if not a.startswith("-")]
+    if program in _COPIERS:
+        targets = operands[-1:] + [b for a, b in zip(args, args[1:]) if a in ("-t", "--target-directory")]
+        targets += [a.split("=", 1)[1] for a in args if a.startswith("--target-directory=")]
+    elif program in _WRITERS or program == "sed" and any(
+            a == "--in-place" or a.startswith("--in-place=") or re.fullmatch(r"-[A-Za-z]*i.*", a) for a in args):
+        targets = operands
+    elif program in _OUTPUT_FLAGS:
+        targets = [b for a, b in zip(args, args[1:]) if a in _OUTPUT_FLAGS[program]]
+        targets += [a.split("=", 1)[1] for a in args if a.split("=")[0] in _OUTPUT_FLAGS[program] and "=" in a]
+    else:
+        return ""
+    return next((why for t in targets if (why := _starts_up(t))), "")
 
 
 def _strip_prefixes(argv: list[str]) -> list[str]:
@@ -497,9 +817,17 @@ def _piece(argv: list[str]) -> str:
     flags = set(args)
     if program in _ALWAYS or program.startswith(("mkfs", "newfs")):
         return _ALWAYS.get(program, "writes a disk")
+    if why := _writes_startup(program, args):
+        return why
     if program in _READ_ONLY_SUBCOMMANDS:
-        sub = _options_then(args)
-        return "" if sub and sub[0] in _READ_ONLY_SUBCOMMANDS[program] else _READ_ONLY_WHY.get(program, "changes the system")
+        sub = _options_then(args, _SUB_VALUES.get(program, frozenset()))
+        if sub and sub[0] in _READ_ONLY_SUBCOMMANDS[program] or not sub and program in _BARE_READS:
+            return ""
+        if program == "hostnamectl" and sub[0] in _HOSTNAME_PARTS and len(sub) == 1:
+            return ""
+        return _SUB_WHY.get(program, {}).get(sub[0] if sub else "", _READ_ONLY_WHY.get(program, "changes the system"))
+    if program in _CHECKS:
+        return _CHECKS[program](args)
     if program == "pmset" and "-g" not in flags or program == "networksetup" and not any(
             a.startswith(("-get", "-list", "-print")) for a in args) or program == "xattr" and flags & {"-d", "-c", "-w"}:
         return "changes the system"
@@ -530,11 +858,12 @@ def _piece(argv: list[str]) -> str:
     if program == "curl":
         return _curl(args)
     if program == "wget" and any(a.startswith(("--post-", "--method", "--body-")) for a in args):
-        return "sends data off the Mac"
+        return "sends data off the computer"
     if program == "rsync":
         if any(a.startswith(("--delete", "--remove-source-files")) for a in args):
             return "deletes files"
-        return "sends data off the Mac" if any(re.match(r"[\w.@-]+:", a) for a in args if not a.startswith("-")) else ""
+        remote = any(re.match(r"[\w.@-]+:", a) for a in args if not a.startswith("-"))
+        return "sends data off the computer" if remote else ""
     if program == "find":
         if "-delete" in flags:
             return "deletes files"
@@ -589,9 +918,18 @@ def risky_pieces(command: str, own: "Own | None" = None) -> list[tuple[list[str]
         return [([], "overwrites a settings file")]
     if (pieces := _simple_commands(command)) is None:
         return [([], "can't be checked")]
+    if why := next((why for t in _REDIRECT_TARGETS.findall(command) if (why := _starts_up(t))), ""):
+        return [([], why)]  # > /etc/hosts
+    # cd ~/.config/systemd/user && cp x.service .: every write there counts
+    there = any(p[0] in ("cd", "pushd") and len(p) > 1 and _starts_up(p[1]) for p in map(_strip_prefixes, pieces) if p)
+    if there and _REDIRECT_TARGETS.search(command):
+        return [([], "changes the system")]
     found, mine = [], None
     for argv in pieces:
-        if not (why := _piece(argv)):
+        why = _piece(argv)
+        if not why and there and Path((_strip_prefixes(argv) or argv)[0]).name in _WRITES_THERE:
+            why = "changes the system"
+        if not why:
             continue
         if own and (mine := mine or _Mine(command, pieces, own)).covers(argv):
             continue
@@ -605,7 +943,7 @@ def _risk(command: str, own: "Own | None" = None) -> tuple[str, str]:
         return "", ""
     argv, why = found[0]
     if not argv:
-        return why, "a redirect" if why == "overwrites a settings file" else "unbalanced quotes"
+        return why, "unbalanced quotes" if why == "can't be checked" else "a redirect"
     return why, program(argv)
 
 
@@ -613,8 +951,8 @@ def program(argv: list[str]) -> str:
     """Program plus subcommand, if any: 'brew install', 'git push', 'rm'."""
     argv = _strip_prefixes(argv) or argv
     words = [Path(argv[0].lstrip("\\")).name]
-    rest = _options_then(argv[1:], {"-C", "-c", "-R", "--repo"})
-    if rest and re.fullmatch(r"[a-z][a-z-]{1,20}", rest[0]) and words[0] not in _ALWAYS:
+    rest = _options_then(argv[1:], {"-C", "-c", "-R", "--repo", *_SUB_VALUES.get(words[0], ())})
+    if rest and re.fullmatch(r"[a-z][a-z-]{1,20}", rest[0]) and words[0] not in _ALWAYS.keys() | _OPTION_DRIVEN:
         words.append(rest[0])
     return " ".join(words)
 
@@ -692,8 +1030,9 @@ _VERBS = {  # user's word -> what it orders
     "sync": {"sync"}, "delete": {"delete"}, "trash": {"delete"}, "erase": {"delete"}, "wipe": {"delete"},
     "merge": {"merge"}, "create": {"open"}, "open": {"open"}, "raise": {"open"},
 }
-_SERVICES = {  # order -> allowed launchctl / brew services / docker / podman subcommands
-    "restart": {"kickstart", "kill", "bootout", "bootstrap", "load", "unload", "stop", "start", "restart"},
+_SERVICES = {  # order -> allowed launchctl / systemctl / brew services / docker / podman subcommands
+    "restart": {"kickstart", "kill", "bootout", "bootstrap", "load", "unload", "stop", "start", "restart", "reload",
+                "try-restart", "reload-or-restart", "try-reload-or-restart"},
     "stop": {"bootout", "unload", "stop", "kill"},
     "start": {"bootstrap", "load", "start", "kickstart", "run"},
 }
@@ -778,11 +1117,14 @@ def _ordered_piece(argv: list[str], why: str, acts: set[str], said: set[str]) ->
     if why == "stops a process" and name in ("kill", "pkill", "killall"):
         targets = _operands(args)  # kill takes pids, which can't be named
         return "stop" in acts and (name == "kill" or bool(targets) and all(_named(t, said) for t in targets))
-    if why in ("stops a process", "changes the system") and (name in ("launchctl", "docker", "podman")
+    if why in ("stops a process", "changes the system") and (name in ("launchctl", "systemctl", "docker", "podman")
                                                             or (name, sub) == ("brew", "services")):
         if name in ("docker", "podman") and set(args) & _CONTAINER_REMOVES:
             return False
-        does = {"brew": rest[:1], "launchctl": [sub]}.get(name, args)
+        units = [re.sub(r"\.(service|socket|timer|target|path|mount)$", "", u) for u in _operands(rest)]
+        if name == "systemctl" and not (units and all(_named(u, said) for u in units)):
+            return False  # each unit by name: "restart nginx"
+        does = {"brew": rest[:1], "launchctl": [sub], "systemctl": [sub]}.get(name, args)
         return any(set(does) & _SERVICES[act] for act in acts & _SERVICES.keys())
     if why == "installs software":
         return _install_as_said(words, acts, said)
@@ -985,20 +1327,29 @@ class _Mine:
 _CONTROLS = re.compile(r"runner\.sock|/api/approvals|/approvals/\d")
 _KEYCHAIN_DUMPS = re.compile(r"find-(generic|internet)-password|dump-keychain|export|unlock-keychain|set-key-partition-list"
                              r"|add-(generic|internet)-password|delete-(generic|internet)-password")
-_ROOT = {"sudo", "su", "doas"}
+# Linux keychains: the Secret Service (GNOME Keyring, KeePassXC), KWallet, pass, and either over D-Bus
+_SECRET_TOOL_USES = {"lookup", "search", "store", "clear"}
+_SECRET_SERVICE = re.compile(r"org\.freedesktop\.secrets|org\.freedesktop\.Secret\b|org\.kde\.kwalletd|org\.gnome\.keyring")
+_ROOT = {"sudo", "su", "doas", "pkexec", "run0"}
+# Linux: the task sandbox shuts out the user's D-Bus, so these would only fail with "Failed to connect to bus"
+_SERVICE_TARGETS = re.compile(r"services-[\w-]+")
+USER_BUS = ("it needs the user's own session (systemd --user), which tasks can't reach: ask the user to run it "
+            "themselves (make services-restart for JARVIS's own services)")
 # Refused for in-place tasks, which share the user's checkout
 IN_PLACE_GIT = ("commit", "push", "reset", "checkout", "switch", "restore", "stash", "clean", "rebase", "merge",
                 "pull", "cherry-pick", "revert", "am", "branch", "tag", "worktree", "update-ref", "gc", "prune", "init")
 
 
 def refused(command: str, in_place: bool = False) -> str:
-    """Why a task may never run this on the Mac, even with a yes, or ''. `in_place`: git writes are left to the user."""
+    """Why a task may never run this on the computer, even with a yes, or ''. `in_place`: git writes are the user's."""
     if names_secret(command):
         return "it touches secrets, which stay out of reach even with a yes"
     if reads_environment(command):
         return "it reads other processes' environments, where their keys are, which stay out of reach even with a yes"
     if _CONTROLS.search(command):
         return "it touches JARVIS's own controls, which tasks can't reach"
+    if _SECRET_SERVICE.search(command):
+        return "it reads or changes passwords in the keychain"
     for argv in _simple_commands(command) or []:
         argv = _strip_prefixes(argv)
         if not argv:
@@ -1006,11 +1357,30 @@ def refused(command: str, in_place: bool = False) -> str:
         program, rest = Path(argv[0].lstrip("\\")).name, _options_then(argv[1:])
         if program in _ROOT:
             return f"{program} wants a password typed in a terminal, and tasks have none"
-        if program == "security" and rest and _KEYCHAIN_DUMPS.fullmatch(rest[0]):
+        if (program == "security" and rest and _KEYCHAIN_DUMPS.fullmatch(rest[0])
+                or program in ("kwallet-query", "pass") or program == "secret-tool" and set(rest[:1]) & _SECRET_TOOL_USES
+                or program == "nmcli" and _nmcli(argv[1:]) == "reads the keychain"):
             return "it reads or changes passwords in the keychain"
+        if platform.LINUX and (why := _user_bus(program, argv[1:])):
+            return why
         if in_place and program == "git":
             sub = _options_then(argv[1:], {"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
             if sub and sub[0] in IN_PLACE_GIT:
                 return (f"git {sub[0]} changes the user's own checkout, which in-place tasks leave to them; "
                         "list it in your summary instead")
+    return ""
+
+
+def _user_bus(program: str, args: list[str]) -> str:
+    """Why a task can't run this on Linux for want of the user's D-Bus, or ''."""
+    if program == "make" and (target := next((a for a in args if _SERVICE_TARGETS.fullmatch(a)), "")):
+        return f"JARVIS's services are started and stopped by the user, not tasks: ask them to run make {target}"
+    if "--user" not in args:
+        return ""
+    if program == "systemd-run":
+        return USER_BUS
+    if program == "systemctl":
+        sub = _options_then(args, _SUB_VALUES["systemctl"])
+        if sub and sub[0] not in _READ_ONLY_SUBCOMMANDS["systemctl"]:
+            return USER_BUS
     return ""

@@ -130,7 +130,7 @@ def test_a_command_is_given_its_own_time_limit_before_its_quiet_counts():
     clock = Clock(NOW - 20 * MINUTE)
     pulse = Pulse(clock)
     pulse.saw(7, called("h1", HOST_RUN, command="xcodebuild", minutes=10))
-    assert stall.excuse(running(), Store(), pulse, Jobs(), NOW - 15 * MINUTE) == "running a command on the Mac"
+    assert stall.excuse(running(), Store(), pulse, Jobs(), NOW - 15 * MINUTE) == "running a command on the computer"
     assert check(running(), pulse=pulse, at=NOW - 20 * MINUTE + 10 * MINUTE + GRACE - 1, minutes=5) is None
     assert check(running(), pulse=pulse) == {"minutes": 20, "since": NOW - 20 * MINUTE}  # past its limit: stuck
 

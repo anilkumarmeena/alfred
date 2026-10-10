@@ -19,7 +19,7 @@ from jarvis.core.config import TASK_ARTIFACTS
 GRANTS = {
     "artifacts": "publish pages to claude.ai with the Artifact tool",
     "shell": "run sandboxed shell commands that reach any host",
-    "mac": "run commands on the Mac itself outside the sandbox",
+    "mac": "run commands on the computer itself outside the sandbox",
     "projects": "edit files in other projects",
     "accounts": "read mail, calendar, Chat, Sheets, Docs, GitHub and GitLab",
 }
@@ -79,7 +79,7 @@ def add(task: dict, names) -> str:
 
 
 def describe(names) -> str:
-    """Grants as prose: 'publish pages ... and run commands on the Mac ...'."""
+    """Grants as prose: 'publish pages ... and run commands on the computer ...'."""
     said = [GRANTS[n] for n in names]
     return " and ".join(said) if len(said) < 3 else ", ".join(said[:-1]) + " and " + said[-1]
 
