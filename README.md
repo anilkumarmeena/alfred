@@ -1034,3 +1034,6 @@ make services-restart            # the services run .venv's Python, so they pick
 
 `unset UV_NO_SYNC && uv sync` goes back to the pinned copy. To move JARVIS onto new AI Armory work, push it, set `rev` to the new commit, then `uv lock && uv sync`.
 
+## License
+
+JARVIS is released under the [MIT License](LICENSE).
