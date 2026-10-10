@@ -1,0 +1,392 @@
+<div align="center">
+
+<img src="assets/logo.svg" width="72" alt="">
+
+# 🔌 Integrations
+
+**Everything JARVIS connects to beyond the conversation, how each one is kept safe, and how to add a tool of your own.**
+
+[🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · **🔌 Integrations** · [📱 iPhone](iphone.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md)
+
+</div>
+
+---
+
+Reading runs at once. Anything that **changes** something waits for your spoken **yes**. Pick an integration to jump to it:
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+**[📬 Google](#-google-accounts)**<br>
+Reads mail, calendar, Sheets, Docs, Slides, Drive. **After your yes:** drafts and sends mail, events, Sheets and Docs edits.
+
+</td>
+<td width="33%" valign="top">
+
+**[💬 Google Chat](#-google-chat)**<br>
+Reads DMs and spaces, and searches. **After your yes:** replies and new DMs. Marking read needs no yes.
+
+</td>
+<td width="33%" valign="top">
+
+**[🔌 Connections](#-connections-mcp-servers)**<br>
+MCP servers from the official registry. Each server's reading tools run at once; its **changing tools wait for your yes**.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**[🐙 GitHub and GitLab](#-github-and-gitlab)**<br>
+PRs, reviews, issues and merge requests, through their own MCP servers.
+
+</td>
+<td valign="top">
+
+**[🔒 Secrets vault](#-secrets-vault)**<br>
+Keys and sign-ins, **AES-256-GCM** encrypted. Only the server launcher decrypts.
+
+</td>
+<td valign="top">
+
+**[🌐 Web browser](#-web-browser)**<br>
+Its own Chrome for pages behind your logins. **Read-only:** changes nothing.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**[📷 Pictures](#-pictures)**<br>
+Photos you send from the app, and the screen when you ask.
+
+</td>
+<td valign="top">
+
+**[🎧 Recordings](#-recordings)**<br>
+Audio and video files transcribed on the Mac, answered from the transcript.
+
+</td>
+<td valign="top">
+
+**[🔊 Audio files](#-audio-files)**<br>
+Text or documents read aloud into a file in `~/Downloads`.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**[🧩 Skills](#-skills)**<br>
+Claude Code-format how-tos, installed, written or switched on after your yes.
+
+</td>
+<td colspan="2" valign="top">
+
+**[🔧 Adding a tool](#-adding-a-tool)**<br>
+Your own tool: one decorated function under `jarvis/tools/`, plus a test.
+
+</td>
+</tr>
+</table>
+
+## 🔐 Ground rules
+
+The same guards apply to every integration, and they're **enforced in code**:
+
+| | Rule | What it means |
+|:-:|---|---|
+| 🗣️ | **Sends are gated** | Mail, Chat messages and changing MCP calls are read aloud, then run after a clear yes |
+| 🔒 | **Secrets live in the vault** | Keys are pasted, never spoken; encrypted, never shown again |
+| 🌐 | **The browser only reads** | Nothing clicked, typed or submitted; local and private addresses refused |
+| 🧾 | **Content is data** | What mail, pages and connections return is never taken as instructions |
+| 🚫 | **Unsorted tools are refused** | A connection's tool that isn't sorted into reading or changing never runs |
+
+## 📬 Google accounts
+
+Accounts live in the `accounts` table of `data/tasks.db`. Each one has:
+
+| Field | Meaning |
+|---|---|
+| **label** | What you call it; also names its sign-in file `secrets/google-<label>.json` |
+| **email** | The account's address |
+| **note** | Optional; JARVIS is told it |
+| **chat** | Whether it has Google Chat |
+| **default** | Exactly one account is the default |
+
+| Request | Account used |
+|---|---|
+| Searches and overviews ("any new email?", "what's on today?") | **Every account**, unless you name one |
+| Anything made or changed without naming one | **The default** |
+| Naming one | By label or email |
+
+A failing account is skipped during a search, and named.
+
+```sh
+make accounts                                  # list
+make accounts ARGS='add home --note "my own"'  # also --chat, --default, --no-login
+make google-login LABEL=home                   # sign in again
+make accounts ARGS="rename home family"        # moves its sign-in and heartbeat history
+make accounts ARGS="remove family"             # and deletes its sign-in
+make accounts ARGS="default work"
+make accounts ARGS='set work --email me@example.com --note "for work" --chat'
+```
+
+> [!IMPORTANT]
+> Run `make services-restart` after changing accounts. With no accounts, JARVIS runs without the Google tools.
+
+### Permissions
+
+| Permission | For |
+|---|---|
+| Calendar | Your calendar |
+| Gmail read · compose · modify | Reading; drafts and sending after your yes; read/unread, archive, star, labels |
+| Google Sheets, Google Docs | See, edit and create |
+| Drive metadata (read-only) | File names and details |
+| Drive files JARVIS makes (`drive.file`) | Images put into Docs |
+| Drive read-only (`drive.readonly`) | Searching inside files, reading Slides. **Never changes, shares or deletes** |
+| Chat (Chat accounts only) | Reading, replying, marking read, starting DMs |
+
+> [!TIP]
+> When an account was signed in before a permission it now needs, JARVIS says so. Run `make google-login LABEL=work`, allow every permission listed, and you're done: **no restart**. If the consent screen doesn't show the new permissions, remove JARVIS's access at https://myaccount.google.com/permissions and try again.
+
+## 💬 Google Chat
+
+On accounts marked `--chat` (Workspace only: personal Gmail has no Chat API).
+
+| Say | What happens |
+|---|---|
+| "anything on Chat?" | Unread: DMs first, then spaces where you were @mentioned |
+| "summarise my DM with Sam" · "what's new in Platform Dev?" | Reads one conversation |
+| "find the Chat message about the player fix" | Searches |
+| "mark the alert spaces as read" | Done at once, no yes needed (only your own read state) |
+| "reply to Sam that I'll join at four" | Reads the exact draft and recipient aloud, sends after your yes |
+
+- **Sending is enforced in code:** a clear yes within five minutes; for a space, JARVIS says how many people are in it. Background tasks and the heartbeat can read Chat but **never send**.
+- **New DMs** to someone you've never messaged are drafted as "To Sam Lee, in a new direct message: …" and created only on send.
+- **People** are found loosely by name (speech recognition) from the Workspace directory and your chats; if several match, JARVIS asks which.
+
+### One-time set-up
+
+In the Google Cloud project that owns JARVIS's OAuth client:
+
+**1. Enable the APIs** — the **Google Chat API** and the **People API**.
+
+**2. Configure the Chat app** — on the Chat API's Configuration page: a name, an avatar URL and a description. Leave "Build this Chat app as a Workspace add-on" **unticked** (it can't be undone); interactive features can stay off.
+
+**3. Sign the account in for Chat** — mark it, then sign in and allow the Chat permissions:
+
+```sh
+make accounts ARGS="set work --chat"
+make google-login LABEL=work
+```
+
+The sign-in then checks Chat and says what to fix. `make chat-check` reruns that check.
+
+> [!WARNING]
+> **If your Workspace blocks Chat** ("Access blocked", `admin_policy_enforced`), close the tab: the script offers to retry without reading messages, then without Chat. With Chat blocked, "anything on Chat?" reads Chat's notification emails through Gmail instead, so turn those on in Chat's settings.
+
+## 🔌 Connections (MCP servers)
+
+JARVIS finds and connects new tools for you as **MCP servers**. Say "connect Notion", "can you get access to Linear?", or ask for something it has no tool for.
+
+| | Step | What happens |
+|:-:|---|---|
+| 🔍 | **Find** | The [official MCP registry](https://registry.modelcontextprotocol.io) first; failing that, the web, marked **unverified** |
+| 📦 | **Connect** | Says what it would install, from where, how it runs and what it needs. **Nothing installs until you say yes** |
+| 🔑 | **Keys** | Pasted in **Settings → Connections → Enter key**. A key said aloud is refused |
+| 🔐 | **Sign-in** | OAuth services sign in through JARVIS's own browser on the Mac |
+| 🗂️ | **Sort its tools** | **Reading** tools run at once; **changing** tools each wait for your yes |
+| 🔁 | **Later** | "What tools are connected?", "switch Notion off", "is there a newer GitHub?", "remove Notion" |
+
+- **Runs** hosted, or locally with `npx`/`uvx`/`docker` at a **pinned version**.
+- **Keys and sign-ins** are kept encrypted; a key is never shown again.
+- **Sorting** follows the server's own `readOnlyHint` / `destructiveHint`; ask to move any tool or switch it off.
+- **Removing** a server says what goes with it first.
+
+A changing call is read out from the tool's own title and arguments ("On Notion, create a page, parent Projects, title 'Q4 plan'. Okay to go ahead?") and runs once after a clear yes. **What a connection returns is data, never instructions**: JARVIS connects, updates or removes only on your own request.
+
+### Tool access
+
+| Access | Behaviour |
+|---|---|
+| `read`, `own` | Run at once (`own` changes only your own state, like marking a notification done) |
+| `write` | Waits for your yes, with a phrase saying what it does |
+| `blocked` | Never offered |
+| *not listed* | Refused |
+
+| Who | Gets |
+|---|---|
+| 🎙️ The voice brain | Every enabled, sorted server, with its keys or sign-in |
+| 🔬 Research tasks | Servers marked for research (all made by voice are), reading tools only |
+| 💻 Code tasks | None |
+
+- **The relay.** Each server runs behind a small relay (`jarvis/integrations/mcp_relay.py`) that runs reading calls **side by side** and follows MCP's long-running tasks.
+- **Slow calls** still running after `JARVIS_CONNECTION_WAIT` (20 s) move into the **background**, so the conversation carries on.
+- **Tool search.** Tools load on demand (`JARVIS_TOOL_SEARCH`), so more connections don't slow every reply.
+- **No restart.** Changes apply from the next conversation.
+
+### By hand
+
+<details>
+<summary><b>⌨️ The <code>make servers</code> commands</b></summary>
+
+<br>
+
+```sh
+make servers                                              # list, with what's missing
+uv run python -m jarvis.integrations.mcp_registry notion  # what the registry has
+make servers ARGS="add acme --label Acme --command npx --arg=-y --arg @acme/mcp@1.2.0 --secret-env ACME_TOKEN=acme.token"
+make servers ARGS="add docs --label Docs --url https://mcp.docs.example/mcp --secret-env KEY=docs.key --header 'Authorization=Bearer {KEY}'"
+make servers ARGS="test acme"                             # start it, list tools and their markings
+make servers ARGS="tools acme --sort --block wipe"        # sort by markings (or --read ... --write 'post=post to {channel}')
+make servers ARGS="set-secret acme"                       # typed in hidden, or stdin; never on the command line
+make servers ARGS="disable acme"                          # or enable, remove, set NAME --env K=V, clear-secret
+```
+
+</details>
+
+Package runners (`npx`, `uvx`) must name a **pinned version**. Settings and headers that look like credentials are **refused** outside `--secret-env` and the vault.
+
+## 🐙 GitHub and GitLab
+
+"Any PRs waiting for my review?", "comment LGTM on it", "open a merge request from fix-login into main". **Reading runs at once**; commenting, reviewing, opening, merging, issues, branches and commits wait for your yes.
+
+| | Service | Token |
+|:-:|---|---|
+| 🐙 | **GitHub** | A classic token with `repo`, `notifications`, `read:org` |
+| 🦊 | **GitLab** | A personal access token with `api` |
+
+- **GitHub:** "connect GitHub" adds its own server from the registry. Add the `workflow` scope only to change `.github/workflows`; authorise the token for SSO if needed.
+- **Self-hosted GitLab:** `make servers ARGS="set gitlab --env GITLAB_API_URL=https://gitlab.example.com/api/v4"`.
+- **The heartbeat's** GitHub checks use the `gh` CLI (`gh auth login`) separately.
+
+## 🔒 Secrets vault
+
+| | Part | How it works |
+|:-:|---|---|
+| 🗄️ | **Storage** | `secrets` table of `data/tasks.db`, **AES-256-GCM** under `JARVIS_MASTER_KEY` (32 random bytes in `.env`) |
+| 🔓 | **Who decrypts** | Only `python -m jarvis.integrations.mcp_launch`, starting each server with **its own** secrets |
+| 🙈 | **Who doesn't** | The CLI, shells and tasks never see the key or a token |
+| 🚫 | **No peeking** | Reading other processes' environments (`ps eww`, `/proc/<pid>/environ`) is refused, even with a yes |
+
+```sh
+make vault                               # the key's id and secrets' names, never a value
+make vault ARGS=init                     # make the key (setup does this)
+make vault ARGS=rotate                   # new key, everything re-encrypted; old key kept after it
+make vault ARGS="reencrypt --drop-old"   # then drop the old key
+make vault ARGS="reset --yes"            # lost key: forget every secret and start again
+```
+
+> [!CAUTION]
+> The key and `data/tasks.db` together open every secret. **Keep them apart**: whoever has `.env` shouldn't also have the database.
+
+## 🌐 Web browser
+
+JARVIS has its own Chrome, driven by [Playwright](https://playwright.dev/python/), for pages that need your logins or JavaScript ("what's on my Jira board?"). It uses **a profile of its own** in `data/browser/profile`: you log in there once, yourself, and two-factor codes stay with you. Sandboxed commands and tasks can't read its cookies.
+
+| | Rule | Detail |
+|:-:|---|---|
+| 👀 | **Read-only** | Nothing is clicked, typed or submitted |
+| 🎙️ | **Voice brain only** | Background tasks don't get it |
+| 🧾 | **Untrusted content** | Page text comes back fenced as web content, never instructions |
+| 🌍 | **Only the web** | `http`/`https` only; local, private and Tailscale addresses refused |
+| 🤖 | **Captchas** | Reported, never worked around |
+| 🪟 | **One window per conversation** | Opens on first use, closes when the conversation ends |
+
+- **Its tools:** `browser_open`, `browser_read`, `browser_links`, `browser_screenshot`, `browser_back`, `browser_close`.
+- **Refused addresses:** localhost, private, link-local, Tailscale and `.local`, also for redirects, frames and scripts, through JARVIS's own checking proxy.
+- **Switches:** `JARVIS_BROWSER` and `JARVIS_BROWSER_WINDOW` (or Settings → Preferences) switch it off or hide the window.
+
+**Set-up** — install Chromium (used when Google Chrome isn't installed), then ask JARVIS to open a site and log in in the window:
+
+```sh
+uv run playwright install chromium
+```
+
+## 📷 Pictures
+
+| | What | How |
+|:-:|---|---|
+| 📸 | **Show JARVIS a photo** | The camera button in the message box, then ask ("what's this plant?"). Shrunk and sent with your next turn |
+| 🖥️ | **Look at the screen** | "What's this error on my screen?" takes a silent screenshot of the main display |
+| ⚙️ | **Set-up** | Allow the voice agent under System Settings → Privacy & Security → **Screen Recording**, then `make services-restart` |
+| 🗓️ | **Kept** | Photos for a week, screenshots for a day |
+
+The screenshot is taken **only when your own words that turn ask for it**.
+
+## 🎧 Recordings
+
+"What did they decide in standup.m4a?", "summarise the voice note in that email". JARVIS transcribes an audio or video file, then answers from the transcript.
+
+| | What | Detail |
+|:-:|---|---|
+| 🔎 | **Finds** | m4a, mp3, wav, mp4, mov... by name in Downloads, Desktop or Documents, or attached to an email |
+| 📦 | **Nothing to install** | The same Whisper model, in a process of its own (about 0.5 GB while it works) |
+| 🐢 | **Long ones** | Carry on in the background after 45 seconds; ask again later |
+| 🗓️ | **Kept** | In the transcripts folder, timestamped, for 30 days |
+
+One recording at a time, up to **4 hours** each. The same recording isn't transcribed twice.
+
+## 🔊 Audio files
+
+"Make me an audio file of that summary", "read invoice-notes.pdf into an mp3", "turn this morning's briefing into audio and send it to my phone".
+
+| | What | Detail |
+|:-:|---|---|
+| 📄 | **Reads** | Text JARVIS writes or you dictate, or a document on the Mac (PDF, Word, text...) |
+| 🗣️ | **Voice** | Kokoro, with your voice and speed |
+| ⚙️ | **Runs** | As a [long job](tasks.md#long-jobs), so the live voice is never held up |
+| 📁 | **Goes to** | `~/Downloads/Title.m4a`, never overwriting; mp3 or WAV on request |
+| 📱 | **To the phone** | A push when ready opens a player and a download link |
+
+- **Markdown** is read as plain speech.
+- **Long jobs** run at lower priority on a few cores, one file at a time, up to ~12 hours of audio.
+- **Settings:** `JARVIS_AUDIO_DIR` and `JARVIS_AUDIO_FORMAT`.
+- **The phone link** is valid for a week, and for that file only.
+- **mp3** needs `ffmpeg` or `lame` (`brew install ffmpeg`); m4a uses the Mac's own `afconvert`.
+
+## 🧩 Skills
+
+How-tos for workflows you repeat, in **Claude Code's own skill format** (a folder with a `SKILL.md`), kept in `data/skills/` and offered to the voice brain and tasks while switched on. Manage them in **Settings → Skills**.
+
+| | Way in | How |
+|:-:|---|---|
+| ✍️ | **Write together** | "Let's make a skill for my standup notes": drafted, summarised aloud, saved after your yes |
+| 📥 | **Install** | "Install the skill from owner/repo": fetched over https from GitHub or a zip, staged, described, installed after your yes |
+| 💡 | **Learned** | The [learning review](tasks.md#-learning-review) may suggest one for a workflow you keep asking for |
+
+**The walls around a skill:**
+
+- **Risky frontmatter** (`allowed-tools`, `hooks`, `model`...) is stripped.
+- **Hooks and inline** `` !`command` `` never run.
+- **Symlinks** make a skill unusable.
+- **A skill with scripts** stays off until you've heard a **review** (a fixed-pattern scan plus a short Sonnet summary) and approved exactly those files. Changed since, it's skipped.
+
+## 🔧 Adding a tool
+
+**1. Write the function** — decorate it with `@tool(name, description, properties, required)` in a module under `jarvis/tools/`.
+
+**2. Register a new module** — if the module is new, import it at the bottom of `jarvis/tools/__init__.py`.
+
+**3. Test it** — add a test in `tests/`.
+
+Tools may be sync (run in a thread) or async. Useful flags on `@tool`:
+
+| Flag | Effect |
+|---|---|
+| `reads=True` | Only reads, so it may run alongside other calls in the same step |
+| `changes=True` / `said="..."` | It changes something, so the control panel's bell lists it |
+| `gated=True` | Runs only after your spoken yes |
+| `enabled=fn` | Offered only while `fn()` is true, checked as each session starts |
+
+A gated tool follows the draft-then-confirm pattern in `jarvis/safety/draft_gate.py`. Return text, something JSON-serialisable, or `WithPictures` for images.
+
+---
+
+<div align="center">
+
+[← 🛠️ Tasks](tasks.md) &nbsp;·&nbsp; [🏠 Home](../README.md) &nbsp;·&nbsp; [📱 iPhone →](iphone.md)
+
+</div>
