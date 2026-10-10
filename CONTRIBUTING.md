@@ -13,7 +13,7 @@
 ---
 
 > [!IMPORTANT]
-> You need **macOS on Apple silicon**, **Linux** with systemd, or **Windows through WSL2**, plus [uv](https://docs.astral.sh/uv/), Node.js and the platform's packages (Homebrew on macOS; bubblewrap, socat and friends on Linux). The full list per platform is in **[Setup](docs/setup.md#-pick-your-platform)**.
+> You need **macOS on Apple silicon**, **Linux** with systemd, or **Windows through WSL2**, plus [uv](https://docs.astral.sh/uv/), Node.js 22+ and the platform's packages (Homebrew on macOS; bubblewrap, socat and friends on Linux). The full list per platform is in **[Setup](docs/setup.md#-pick-your-platform)**.
 
 ## 🚀 Your first pull request
 

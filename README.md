@@ -151,7 +151,7 @@ Four **services** keep it running (launchd on macOS, systemd user units on Linux
 | 🪟 | **Windows** via WSL2 | Ubuntu in WSL2 with **systemd** on, then the Linux steps |
 
 > [!IMPORTANT]
-> Everywhere you also need [uv](https://docs.astral.sh/uv/), Node.js and the **Claude Code CLI** with a Claude account. Package lists and per-platform steps are in **[Setup](docs/setup.md#-pick-your-platform)**.
+> Everywhere you also need [uv](https://docs.astral.sh/uv/), Node.js 22+ and the **Claude Code CLI** with a Claude account. Package lists and per-platform steps are in **[Setup](docs/setup.md#-pick-your-platform)**.
 
 **1. Install** — LiveKit, Python packages, models and the web app:
 

@@ -17,6 +17,11 @@ WEB = config.ROOT / "web"
 @pytest.mark.skipif(not shutil.which("npm") or not (WEB / "node_modules").is_dir(),
                     reason="needs Node.js and the web app's packages (make web-install)")
 def test_web_mic():
+    version = subprocess.run(["node", "--version"], capture_output=True, text=True).stdout.strip()
+    major, minor = (int(n) for n in version.lstrip("v").split(".")[:2])
+    # jsdom's range (web/package.json engines); outside it vitest dies deep in undici
+    if not ((major == 22 and minor >= 22) or (major == 24 and minor >= 15) or major >= 26):
+        pytest.fail(f"web tests need Node.js 22.22+, found {version}: `nvm use` in the repo picks it (.nvmrc)")
     done = subprocess.run(["npm", "test"], cwd=WEB, capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stdout + done.stderr
 

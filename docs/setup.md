@@ -75,7 +75,7 @@ flowchart LR
 </table>
 
 > [!IMPORTANT]
-> Everywhere you need [uv](https://docs.astral.sh/uv/), Node.js 18 or later and the **Claude Code CLI** with a Claude account. Optional extras are listed in the [README](../README.md#-quickstart).
+> Everywhere you need [uv](https://docs.astral.sh/uv/), **Node.js 22** or later and the **Claude Code CLI** with a Claude account. Optional extras are listed in the [README](../README.md#-quickstart).
 
 - **Intel Macs** get faster-whisper instead of MLX (which needs Apple silicon); they're untested.
 - **Beyond install and services**, Linux differs in two places: tasks are walled in by **bubblewrap** instead of Seatbelt, and the Mac's tools (Shortcuts, opening apps by name) give way to Linux desktop tools where their programs exist. See **[🔌 Integrations](integrations.md)** and **[🏗️ Architecture](architecture.md)**.
@@ -113,7 +113,7 @@ sudo apt install ffmpeg libnotify-bin xdg-utils wl-clipboard    # optional (xcli
 
 Each desktop tool is offered only when its program is installed and a display is present.
 
-**Then the tools** — [uv](https://docs.astral.sh/uv/getting-started/installation/), Node.js 18+ (your distro's, [NodeSource](https://github.com/nodesource/distributions) or nvm) and the Claude Code CLI. Make sure **`~/.local/bin` is on your `PATH`**: the LiveKit server goes there.
+**Then the tools** — [uv](https://docs.astral.sh/uv/getting-started/installation/), Node.js 22+ (your distro's, [NodeSource](https://github.com/nodesource/distributions) or nvm) and the Claude Code CLI. Make sure **`~/.local/bin` is on your `PATH`**: the LiveKit server goes there.
 
 > [!WARNING]
 > **Ubuntu 23.10 and later (24.04 included)** restrict unprivileged user namespaces through AppArmor, which stops bubblewrap. Background tasks' commands then **refuse to run**, with a message saying how to fix it. Run `make host-check` after `make install` to find out early.
