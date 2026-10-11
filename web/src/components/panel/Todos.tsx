@@ -9,15 +9,20 @@ import { Markdown } from "./Markdown";
 
 const TICK_MS = 350;  // a ticked to-do shows its tick before it moves
 
+// Tick a to-do off (or put it back), with Undo on the toast. Also used by the desktop rail.
+export async function checkTodo(t: Todo) {
+  const [r] = await Promise.all([todoAct("todo_check", { id: t.id, done: !t.done }), new Promise((ok) => setTimeout(ok, TICK_MS))]);
+  if (r) toast(t.done ? "Put back on the list" : "Ticked off", { label: "Undo", run: () => todoAct("todo_check", { id: t.id, done: t.done }) });
+}
+
 function Row({ t }: { t: Todo }) {
   const editing = useSignal(false), text = useSignal(t.text), ticking = useSignal(false);
   const done = ticking.value ? !t.done : t.done, fresh = freshTodos.value.has(t.id);
   async function tick() {
     if (ticking.value) return;
     ticking.value = true;
-    const [r] = await Promise.all([todoAct("todo_check", { id: t.id, done: !t.done }), new Promise((ok) => setTimeout(ok, TICK_MS))]);
+    await checkTodo(t);
     ticking.value = false;
-    if (r) toast(t.done ? "Put back on the list" : "Ticked off", { label: "Undo", run: () => todoAct("todo_check", { id: t.id, done: t.done }) });
   }
   async function remove() {
     if (await todoAct("todo_delete", { id: t.id })) toast("Deleted", { label: "Undo", run: () => todoAct("todo_restore", { ...t }) });

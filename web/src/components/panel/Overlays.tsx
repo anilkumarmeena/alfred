@@ -4,11 +4,11 @@ import { useSignal } from "@preact/signals";
 import { pressMute, toggleSpeaker } from "../../state/session";
 import {
   activity, activityOpen, answer, approvals, ask, askGuard, closeSheet, go, lapses, openTask, paletteOpen,
-  setSideOff, sheet, sideOff, tasks, toast, toastAction, toastText, todoAct, toggleActivity, tuck, when, wide, type Section, type SettingsItem,
+  home, setHome, sheet, tasks, toast, toastAction, toastText, todoAct, toggleActivity, tuck, when, wide, type Section, type SettingsItem,
 } from "../../state/panel";
 import { now } from "../../state/store";
 import {
-  BellIcon, BrainIcon, CheckIcon, CloseIcon, HistoryIcon, JarvisIcon, KeysIcon, MicIcon, PanelIcon, MoonIcon, PlugIcon, PlusIcon, PrefsIcon, ProjectsIcon, PulseIcon, SettingsIcon, ShieldIcon, SkillIcon,
+  BellIcon, BrainIcon, CheckIcon, CloseIcon, HistoryIcon, HomeIcon, JarvisIcon, KeysIcon, MicIcon, MoonIcon, PlugIcon, PlusIcon, PrefsIcon, ProjectsIcon, PulseIcon, SettingsIcon, ShieldIcon, SkillIcon,
   SpeakerIcon, TasksIcon, TodosIcon, UserIcon, WordsIcon,
 } from "../icons";
 import { Answer } from "./Answer";
@@ -70,6 +70,7 @@ function commands(): Command[] {
   const fromTasks: Command[] = tasks.peek().map((t) => ({ icon: TasksIcon, label: `Task ${t.id} · ${t.title}`, run: () => openTask(t.id), hint: t.status }));
   return [
     ...fromTasks,
+    ...(wide.peek() ? [{ icon: HomeIcon, label: "Go to Home · the call", run: () => setHome(true), hint: "\\" }] : []),
     { icon: TasksIcon, label: "Go to Tasks", run: goTo("tasks") },
     { icon: TodosIcon, label: "Go to To-dos", run: goTo("todos") },
     { icon: ProjectsIcon, label: "Go to Projects", run: goTo("projects") },
@@ -90,7 +91,6 @@ function commands(): Command[] {
     { icon: KeysIcon, label: "Keyboard shortcuts", run: goTo("settings", "keys"), hint: "?" },
     { icon: MicIcon, label: "Mute or unmute", run: pressMute, hint: "M" },
     { icon: SpeakerIcon, label: "Speaker off or on · replies in text only", run: toggleSpeaker, hint: "S" },
-    ...(wide.peek() ? [{ icon: PanelIcon, label: "Show or hide the panel", run: () => setSideOff(!sideOff.peek()), hint: "\\" }] : []),
   ];
 }
 
@@ -160,7 +160,7 @@ export function panelKey(e: KeyboardEvent): boolean {
   if (id != null && !askGuard.peek() && (e.key === "y" || e.key === "n")) { answer(id, e.key === "y"); return true; }
   if (!wide.peek()) return false;
   if (e.key === "?") { go("settings", "keys"); return true; }
-  if (e.key === "\\") { setSideOff(!sideOff.peek()); return true; }
+  if (e.key === "\\") { setHome(!home.peek()); return true; }
   return false;
 }
 

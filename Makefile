@@ -4,8 +4,34 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 unexport VIRTUAL_ENV  # stops uv warning about a shell-wide venv
 
+# uv's usual homes (its installer, cargo, `pip install --user uv`), appended to PATH: make then finds uv when the
+# shell's PATH lacks them, and wrappers ahead of it on PATH (e.g. PMG's ~/.pmg/bin/uv) find the real one.
+# make install and make setup fetch the pinned uv into ~/.local/bin when no working uv is found.
+empty     :=
+UV_DIRS   := $(HOME)/.local/bin $(HOME)/.cargo/bin $(wildcard $(HOME)/Library/Python/*/bin)
+export PATH := $(PATH):$(subst $(empty) $(empty),:,$(strip $(UV_DIRS)))
+UV_VERSION := 0.13.0
 UV        := uv run
 UNAME     := $(shell uname -s)
+# Behind a company proxy the browser follows the macOS settings, but uv, curl, go and npm only read HTTPS_PROXY.
+# The downloading targets take the proxy macOS uses for GitHub (a set proxy, a PAC file or WPAD), unless one is set.
+DOWNLOADS := install uv-bin livekit-bin models models-int8 web-install web-build
+ifeq ($(UNAME)$(HTTPS_PROXY)$(https_proxy),Darwin)
+ifneq ($(filter $(DOWNLOADS),$(MAKECMDGOALS)),)
+SYSTEM_PROXY := $(shell osascript -l JavaScript $(CURDIR)/deploy/macos-proxy.js https://github.com 2>/dev/null)
+ifneq ($(SYSTEM_PROXY),)
+$(info Using the macOS proxy $(SYSTEM_PROXY) (set HTTPS_PROXY to override))
+export HTTPS_PROXY := $(SYSTEM_PROXY)
+export https_proxy := $(SYSTEM_PROXY)
+export HTTP_PROXY  := $(SYSTEM_PROXY)
+export http_proxy  := $(SYSTEM_PROXY)
+export NO_PROXY    := localhost,127.0.0.1,::1
+export no_proxy    := $(NO_PROXY)
+# Proxies that inspect TLS sign with a company certificate, which macOS trusts but uv's own store doesn't
+export UV_SYSTEM_CERTS := 1
+endif
+endif
+endif
 # Main checkout, even when run from a task's worktree (data/worktrees/jarvis-N)
 MAIN_DIR  := $(or $(patsubst %/.git,%,$(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)),$(CURDIR))
 # Main checkout's Python (services, artifact-check), also from a worktree. Override with JARVIS_PYTHON=...
@@ -44,6 +70,12 @@ LIVEKIT_VERSION := 1.13.7
 LIVEKIT_URL     := https://github.com/livekit/livekit/releases/download/v$(LIVEKIT_VERSION)
 LIVEKIT_SHA_amd64 := 6634aeeb2fb1366b6723708ae4320b9d5408106a4c63457c5e845ae3979c90e2
 LIVEKIT_SHA_arm64 := 5d167fdf52cf43c0c72972f25325364479f41f854bfef651056eab2504da5de9
+# macOS without Homebrew (no admin rights): LiveKit ships no macOS binaries, so build the pinned source with a pinned
+# Go, both hash-checked and fetched into a temp folder. Go must satisfy the go line in LiveKit's go.mod.
+LIVEKIT_SRC_SHA := b42f34b095dff22639a40256c3f98fd563fdbce5d497e449ceb06ee010de88c5
+GO_VERSION      := 1.26.9
+GO_SHA_amd64    := 00c29e3d4c8562f547410daa18d2959b641bd691ab00c4a525ea817a0253d4bd
+GO_SHA_arm64    := f9bb7c0a02506c5d9bf0d1eb1f7ee6c7684f844ae49558308a0427b830e022cc
 LOCAL_BIN       := $(HOME)/.local/bin
 LIVEKIT_SERVER   = $(or $(shell command -v livekit-server),$(LOCAL_BIN)/livekit-server)
 # Pinned so a new pyright release can't break make check
@@ -52,7 +84,7 @@ NPM       := npm --prefix web
 # web-install reruns only when the manifests change
 WEB_STAMP := web/node_modules/.install-stamp
 
-.PHONY: help install livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks speech-gate voice-timing voiceprint test host-check artifact-check \
+.PHONY: help install uv-bin livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks speech-gate voice-timing voiceprint test host-check artifact-check \
         services-install services-start services-stop services-restart status logs awake sleep-normal \
         claude-login claude-status accounts about servers passcode vault google-login chat-check tailscale-serve check clean
 
@@ -61,16 +93,35 @@ help: ## Show this list
 
 ## ── First-time setup ───────────────────────────────────────────
 
-install: ## Install tools, dependencies and models
+install: uv-bin ## Install tools, dependencies and models
 ifeq ($(UNAME),Darwin)
-	@command -v livekit-server >/dev/null || brew install livekit
+	@command -v livekit-server >/dev/null || [ -x $(LOCAL_BIN)/livekit-server ] || \
+		if command -v brew >/dev/null; then brew install livekit; else $(MAKE) --no-print-directory livekit-bin; fi
 else
 	@command -v livekit-server >/dev/null || [ -x $(LOCAL_BIN)/livekit-server ] || $(MAKE) --no-print-directory livekit-bin
 endif
 	uv sync
 	$(MAKE) models web-build
 
-livekit-bin: ## Install livekit-server into ~/.local/bin (Linux)
+uv-bin: ## Install the pinned uv into ~/.local/bin if no working one is found (no sudo)
+	@uv --version >/dev/null 2>&1 || { set -o pipefail; curl -LsSf https://astral.sh/uv/$(UV_VERSION)/install.sh | UV_INSTALL_DIR=$(HOME)/.local/bin sh; }
+
+livekit-bin: ## Install livekit-server into ~/.local/bin (built from source on macOS, about a minute)
+ifeq ($(UNAME),Darwin)
+	@case $$(uname -m) in x86_64) arch=amd64 sha=$(GO_SHA_amd64);; arm64) arch=arm64 sha=$(GO_SHA_arm64);; \
+		*) echo "no Go $(GO_VERSION) build for $$(uname -m)"; exit 1;; esac; \
+	tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
+	curl -fSL -o $$tmp/go.tar.gz https://go.dev/dl/go$(GO_VERSION).darwin-$$arch.tar.gz && \
+	echo "$$sha  $$tmp/go.tar.gz" | $(SHA256) -c --quiet - && \
+	curl -fSL -o $$tmp/livekit.tar.gz https://github.com/livekit/livekit/archive/refs/tags/v$(LIVEKIT_VERSION).tar.gz && \
+	echo "$(LIVEKIT_SRC_SHA)  $$tmp/livekit.tar.gz" | $(SHA256) -c --quiet - && \
+	tar -xzf $$tmp/go.tar.gz -C $$tmp && tar -xzf $$tmp/livekit.tar.gz -C $$tmp && \
+	echo "building livekit-server $(LIVEKIT_VERSION)..." && \
+	(cd $$tmp/livekit-$(LIVEKIT_VERSION) && GOTOOLCHAIN=local GOFLAGS=-modcacherw GOPATH=$$tmp/gopath \
+		GOCACHE=$$tmp/gocache $$tmp/go/bin/go build -trimpath -o $$tmp/livekit-server ./cmd/server) && \
+	mkdir -p $(LOCAL_BIN) && install -m 755 $$tmp/livekit-server $(LOCAL_BIN)/livekit-server && \
+	echo "livekit-server $(LIVEKIT_VERSION) installed in $(LOCAL_BIN)"
+else
 	@case $$(uname -m) in x86_64|amd64) arch=amd64 sha=$(LIVEKIT_SHA_amd64);; aarch64|arm64) arch=arm64 sha=$(LIVEKIT_SHA_arm64);; \
 		*) echo "no LiveKit $(LIVEKIT_VERSION) build for $$(uname -m)"; exit 1;; esac; \
 	tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
@@ -79,6 +130,7 @@ livekit-bin: ## Install livekit-server into ~/.local/bin (Linux)
 	tar -xzf $$tmp/livekit.tar.gz -C $$tmp livekit-server && \
 	mkdir -p $(LOCAL_BIN) && install -m 755 $$tmp/livekit-server $(LOCAL_BIN)/livekit-server && \
 	echo "livekit-server $(LIVEKIT_VERSION) installed in $(LOCAL_BIN)"
+endif
 
 # shasum on macOS; sha256sum where Perl's shasum isn't installed
 SHA256 = $$(command -v shasum >/dev/null && echo shasum -a 256 || echo sha256sum)
@@ -102,7 +154,7 @@ models-int8: ## Download the 8-bit Kokoro (~230 MB less memory, slower; JARVIS_T
 	@[ -f models/kokoro-v1.0.int8.onnx ] || { curl -fSL -o models/kokoro-v1.0.int8.onnx.part $(KOKORO_INT8) && \
 		mv models/kokoro-v1.0.int8.onnx.part models/kokoro-v1.0.int8.onnx; }
 
-setup: ## Generate keys, passcode and LiveKit config (rerunnable)
+setup: uv-bin ## Generate keys, passcode and LiveKit config (rerunnable)
 	$(UV) python -m jarvis.setup_local
 
 claude-login: ## Log in JARVIS's own Claude CLI

@@ -16,7 +16,7 @@
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ThrottleInterval</key><integer>10</integer>
-    <key>StandardOutPath</key><string>${ROOT}/logs/livekit.log</string>
-    <key>StandardErrorPath</key><string>${ROOT}/logs/livekit.log</string>
+    <key>StandardOutPath</key><string>${LOGS}/livekit.log</string>
+    <key>StandardErrorPath</key><string>${LOGS}/livekit.log</string>
 </dict>
 </plist>

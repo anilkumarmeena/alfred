@@ -1,22 +1,22 @@
 // Top bar: the status pill (signal bars for the link and its quality, then Live and its timer, Linking, Reconnecting
 // or Offline, which connects on a tap) and toggles (⌘K, history, activity or notifications before login,
-// settings, desktop panel column).
+// settings). On desktop the sidebar carries the wordmark, the pill and History instead.
 import { toggleNotifications } from "../state/push";
 import { activate } from "../state/session";
 import {
-  activityOpen, activityUnread, closeSheet, go, needYou, paletteOpen, section, setSideOff, shown, sideOff, toggleActivity, unseen, visible, wide,
+  activityOpen, activityUnread, closeSheet, go, paletteOpen, section, setHome, shown, toggleActivity, visible, wide,
 } from "../state/panel";
 import { connected, link, linkText, passcode, pushOn, quality, setPasscode, showLogin } from "../state/store";
-import { BellIcon, HistoryIcon, LockIcon, PanelIcon, SearchIcon, SettingsIcon } from "./icons";
+import { BellIcon, HistoryIcon, LockIcon, SearchIcon, SettingsIcon } from "./icons";
 
-// History and Settings toggle like dock buttons: open, or close the sheet (phone) or go back to Tasks (desktop column).
+// History and Settings toggle like dock buttons: open, or close the sheet (phone) or go back to Home (desktop).
 function toggle(sec: "history" | "settings") {
   if (!(visible.peek() && section.peek() === sec)) go(sec);
-  else if (wide.peek()) go("tasks");
+  else if (wide.peek()) setHome(true);
   else closeSheet();
 }
 
-function StatusPill() {
+export function StatusPill() {
   const inner = <>
     <span class="signal" title={quality.value ? `Connection: ${quality.value}` : undefined} data-q={quality.value ?? undefined}><i /><i /><i /></span>
     <span id="linkText">{linkText}</span>
@@ -36,9 +36,9 @@ export function Header() {
       </div>
       <div class="tools">
         {shown.value && <button class="palbtn" title="Jump to anything · press ? for all shortcuts" onClick={() => { paletteOpen.value = true; }}>
-          <SearchIcon />Search <kbd>⌘K</kbd>
+          <SearchIcon /><span>Jump to a task, a section, or type a to-do…</span><kbd>⌘K</kbd>
         </button>}
-        {shown.value && <button id="historyBtn" class="mini" aria-pressed={on("history")} aria-label="History" title="Past conversations"
+        {shown.value && !wide.value && <button id="historyBtn" class="mini" aria-pressed={on("history")} aria-label="History" title="Past conversations"
           onClick={() => toggle("history")}>
           <HistoryIcon />
         </button>}
@@ -54,11 +54,6 @@ export function Header() {
         {shown.value && <button id="settingsBtn" class="mini" aria-pressed={on("settings")} aria-label="Settings" title="Settings"
           onClick={() => toggle("settings")}>
           <SettingsIcon />
-        </button>}
-        {shown.value && wide.value && <button id="sideBtn" class="mini" aria-pressed={!sideOff.value} aria-label="Panel" title="Show or hide the panel (\)"
-          onClick={() => setSideOff(!sideOff.peek())}>
-          <PanelIcon />
-          {sideOff.value && (needYou.value ? <i class="bdg n">{needYou.value}</i> : unseen.value.length ? <i class="bdg dot" /> : null)}
         </button>}
         <button id="lock" class="mini" aria-label="Forget passcode" title="Forget passcode"
           hidden={connected.value || !passcode.value || shown.value} onClick={() => { setPasscode(null); showLogin(); }}>

@@ -156,7 +156,7 @@ Four **services** keep it running (launchd on macOS, systemd user units on Linux
 **1. Install** — LiveKit, Python packages, models and the web app:
 
 ```sh
-git clone <repo-url> jarvis && cd jarvis
+git clone https://github.com/anilkumarmeena/jarvis.git && cd jarvis
 make install
 ```
 

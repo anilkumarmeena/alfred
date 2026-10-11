@@ -1,4 +1,5 @@
-// The panel: a tabbed column on desktop; on phones a sheet raised from the bottom dock, draggable full/half/closed.
+// The panel: the open section's page on desktop (picked in the sidebar); on phones a sheet raised from the bottom
+// dock, draggable full/half/closed.
 import { useEffect, useRef } from "preact/hooks";
 import { jobOf } from "../../lib/schedule";
 import { readout } from "../../state/store";
@@ -14,8 +15,8 @@ import { JarvisSection, SETTINGS_TITLES, SettingsSection } from "./Settings";
 import { TasksSection } from "./Tasks";
 import { TodosSection } from "./Todos";
 
-// Tabs and dock; History and Settings open from their buttons in the top bar.
-const SECTIONS: [Section, string, () => preact.JSX.Element][] = [
+// Dock; History and Settings open from their buttons in the top bar (History from the sidebar on desktop).
+export const SECTIONS: [Section, string, () => preact.JSX.Element][] = [
   ["tasks", "Tasks", TasksIcon], ["todos", "To-dos", TodosIcon], ["projects", "Projects", ProjectsIcon], ["jarvis", "JARVIS", JarvisIcon],
 ];
 const ROOMY = 760;  // px: panel width that fits list and open item side by side
@@ -27,25 +28,18 @@ export function Badge({ sec }: { sec: Section }) {
   return unseen.value.length ? <i class="bdg dot" /> : null;
 }
 
-function Tabs() {
+// Desktop page header's count ("2 running · 1 needs you"); phones show it at the top of the section instead.
+function Kpi() {
   const running = tasks.value.filter((t) => t.status === "running" || t.status === "queued").length;
   const open = todos.value?.filter((t) => !t.done).length;
   const kpi = section.value === "tasks"
     ? <>{running} running{needYou.value ? <> · <b>{needYou.value} need{needYou.value === 1 ? "s" : ""} you</b></> : ""}</>
     : section.value === "todos" && open != null ? <>{open} open</> : null;
-  return (
-    <nav class="ptabs" aria-label="Sections">
-      {SECTIONS.map(([sec, label, Icon]) => (
-        <button key={sec} class={section.value === sec ? "on" : ""} aria-current={section.value === sec ? "page" : undefined}
-          onClick={() => go(sec)}><Icon />{label}<Badge sec={sec} /></button>
-      ))}
-      {kpi && <span class="pkpi">{kpi}</span>}
-    </nav>
-  );
+  return kpi && <span class="pkpi">{kpi}</span>;
 }
 
-function title(): string {
-  const sec = section.value, open = item.value;
+function title(open: string | null): string {
+  const sec = section.value;
   if (open && sec === "tasks") return jobOf(open) != null ? "Scheduled" : `Task ${open}`;
   if (sec === "settings" || sec === "jarvis") return (open && SETTINGS_TITLES[open as SettingsItem]) || (sec === "jarvis" ? "JARVIS" : "Settings");
   if (sec === "history") return open ? dayLabel(open, days.value?.today ?? "") : "History";
@@ -98,10 +92,10 @@ export function Panel() {
   return (
     <aside id="panel" class={`panel${drilled ? " drill" : ""}`} ref={ref} aria-label="Panel" data-sheet={sheet.value}>
       <div class="grabzone" onPointerDown={drag} title="Drag, or tap for half or full height"><div class="grab" /></div>
-      <Tabs />
       <div class="phead" onPointerDown={drag}>
         {drilled && <button class="ico back" aria-label="Back" onClick={back}><BackIcon /></button>}
-        <h2>{title()}</h2>
+        <h2>{title(roomy.value ? null : item.value)}</h2>
+        {wide.value && <Kpi />}
         <span class="vstrip"><span class="dot run" />{readout.value.label}</span>
         <button class="ico close" aria-label="Close" onClick={closeSheet}><CloseIcon /></button>
       </div>

@@ -170,7 +170,7 @@ JARVIS_PUSH_CONTACT=mailto:you@example.com
 
 ## 📲 Native app
 
-A native app for **iOS and Android** (**a separate project, not in this repository**) loads the same page and runs the LiveKit session natively, so **the mic keeps going in the background**.
+A native app for **iOS and Android** ([**jarvis-app**](https://github.com/anilkumarmeena/jarvis-app), a separate repository) loads the same page and runs the LiveKit session natively, so **the mic keeps going in the background**.
 
 - The page detects it and its platform (`web/src/lib/native.ts`) and hands it the session.
 - **iOS:** its web view can't use Web Push, so it registers with **APNs** and posts its device token to `POST /api/push/native`. Tokens are kept in `data/push_devices.json`, and every push then goes to the app too.

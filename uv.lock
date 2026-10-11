@@ -10,7 +10,7 @@ resolution-markers = [
 [[package]]
 name = "ai-armory"
 version = "0.1.0"
-source = { git = "https://github.com/anilkumarmeena/ai-armory.git?rev=ad542332a55ae71024e673b55ea5f7d40720ce2b#ad542332a55ae71024e673b55ea5f7d40720ce2b" }
+source = { git = "https://github.com/anilkumarmeena/ai-armory.git?rev=266fca4e96813212c897ea9b23cbf6397dad1c65#266fca4e96813212c897ea9b23cbf6397dad1c65" }
 dependencies = [
     { name = "mcp" },
 ]
@@ -1174,7 +1174,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ai-armory", extras = ["google", "mac"], git = "https://github.com/anilkumarmeena/ai-armory.git?rev=ad542332a55ae71024e673b55ea5f7d40720ce2b" },
+    { name = "ai-armory", extras = ["google", "mac"], git = "https://github.com/anilkumarmeena/ai-armory.git?rev=266fca4e96813212c897ea9b23cbf6397dad1c65" },
     { name = "claude-agent-sdk", specifier = ">=0.2.160" },
     { name = "cryptography", specifier = ">=46.0" },
     { name = "faster-whisper", marker = "platform_machine != 'arm64' or sys_platform != 'darwin'", specifier = ">=1.1" },

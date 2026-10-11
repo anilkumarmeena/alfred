@@ -442,7 +442,7 @@ export function pageShown(e: PageTransitionEvent) {
 export function initSession(els: { player: HTMLAudioElement; keepalive: HTMLAudioElement }) {
   player = els.player;
   keys = mediaKeys({
-    // In the app the plugin owns the earphone button and Now Playing.
+    // In the app the plugin owns the earphone button.
     audio: mobile && !native ? els.keepalive : null, session: navigator.mediaSession, Metadata: window.MediaMetadata,
     setMuted, isMuted: () => wantMuted, log: trace,
     cue: (m) => { if (!speakerOff.peek()) chime(audioContext(), m); },
