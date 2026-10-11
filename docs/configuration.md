@@ -48,7 +48,7 @@
 
 ## 📱 Changed in the app
 
-A few settings live in the settings table of `data/tasks.db` and are changed in the control panel: **Settings → About you**, or **Settings → Preferences → …** for the rest.
+A few settings live in the settings table of `data/tasks.db` and are changed in the control panel: **Settings → About you**, or **Settings → Behaviour** and **Settings → Safety check** for the rest.
 
 | | In the app | Variables | Applies |
 |:-:|---|---|---|

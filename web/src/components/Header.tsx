@@ -1,17 +1,17 @@
 // Top bar: the status pill (signal bars for the link and its quality, then Live and its timer, Linking, Reconnecting
-// or Offline, which connects on a tap), clock, and toggles (⌘K, activity or notifications before login, settings,
-// desktop panel column).
+// or Offline, which connects on a tap) and toggles (⌘K, history, activity or notifications before login,
+// settings, desktop panel column).
 import { toggleNotifications } from "../state/push";
 import { activate } from "../state/session";
 import {
   activityOpen, activityUnread, closeSheet, go, needYou, paletteOpen, section, setSideOff, shown, sideOff, toggleActivity, unseen, visible, wide,
 } from "../state/panel";
-import { clock, connected, link, linkText, passcode, pushOn, quality, setPasscode, showLogin } from "../state/store";
-import { BellIcon, LockIcon, PanelIcon, SearchIcon, SettingsIcon } from "./icons";
+import { connected, link, linkText, passcode, pushOn, quality, setPasscode, showLogin } from "../state/store";
+import { BellIcon, HistoryIcon, LockIcon, PanelIcon, SearchIcon, SettingsIcon } from "./icons";
 
-// Settings toggles like a dock button: open it, or close the sheet (phone) or go back to Tasks (desktop column).
-function toggleSettings() {
-  if (!(visible.peek() && section.peek() === "settings")) go("settings");
+// History and Settings toggle like dock buttons: open, or close the sheet (phone) or go back to Tasks (desktop column).
+function toggle(sec: "history" | "settings") {
+  if (!(visible.peek() && section.peek() === sec)) go(sec);
   else if (wide.peek()) go("tasks");
   else closeSheet();
 }
@@ -27,7 +27,7 @@ function StatusPill() {
 }
 
 export function Header() {
-  const settingsOn = visible.value && section.value === "settings";
+  const on = (sec: "history" | "settings") => visible.value && section.value === sec;
   return (
     <header>
       <div class="brand">
@@ -38,7 +38,10 @@ export function Header() {
         {shown.value && <button class="palbtn" title="Jump to anything · press ? for all shortcuts" onClick={() => { paletteOpen.value = true; }}>
           <SearchIcon />Search <kbd>⌘K</kbd>
         </button>}
-        <span id="clock">{clock}</span>
+        {shown.value && <button id="historyBtn" class="mini" aria-pressed={on("history")} aria-label="History" title="Past conversations"
+          onClick={() => toggle("history")}>
+          <HistoryIcon />
+        </button>}
         {shown.value
           ? <button id="activityBtn" class="mini" aria-pressed={activityOpen.value} aria-label="Activity" title="Activity"
               onClick={() => toggleActivity()}>
@@ -48,8 +51,8 @@ export function Header() {
               title={pushOn.value ? "Notifications on (tap to turn off)" : "Enable notifications"} onClick={toggleNotifications}>
               <BellIcon />
             </button>}
-        {shown.value && <button id="settingsBtn" class="mini" aria-pressed={settingsOn} aria-label="Settings" title="Settings"
-          onClick={toggleSettings}>
+        {shown.value && <button id="settingsBtn" class="mini" aria-pressed={on("settings")} aria-label="Settings" title="Settings"
+          onClick={() => toggle("settings")}>
           <SettingsIcon />
         </button>}
         {shown.value && wide.value && <button id="sideBtn" class="mini" aria-pressed={!sideOff.value} aria-label="Panel" title="Show or hide the panel (\)"

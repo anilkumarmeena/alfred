@@ -2,8 +2,8 @@
   --bg: #04070c; --fg: #e3f3fa; --muted: #7d95a5; --dim: #466070;
   --accent: #4fd1ff; --accent-2: #ffb547; --danger: #ff5f6d; --ok: #5ef2b0;
   --glass: rgba(12, 26, 38, .6); --line: rgba(120, 200, 240, .13);
-  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
-  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --mono: "Roboto Mono Variable", ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  --sans: "Roboto Variable", -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   --fold: .35s cubic-bezier(.2,.8,.2,1);  /* stage fold/unfold when reading back */
 }
 * { box-sizing: border-box; }
@@ -41,7 +41,6 @@ header { display: flex; align-items: center; justify-content: space-between; gap
 .link { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 button.link { background: none; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; transition: border-color .2s, color .2s; }
 button.link:hover { border-color: rgba(79,209,255,.4); color: var(--fg); }
-#clock { font-variant-numeric: tabular-nums; }
 .mini { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 50%; border: 1px solid transparent; background: none; color: var(--muted); position: relative; transition: color .2s, background .2s; }
 .mini::after { content: ""; position: absolute; inset: -3px; }
 .mini:hover { color: var(--fg); background: rgba(255,255,255,.05); }
@@ -73,7 +72,9 @@ body[data-state="thinking"] #core::before { color: var(--accent-2); }
 body[data-state="speaking"] #core::before { opacity: .2; }
 body[data-muted] #core::before { color: var(--danger); }
 body[data-paused] #core::before { color: var(--accent-2); }
-body[data-view="login"] #core { opacity: .45; width: max(140px, min(74vw, calc(100dvh - 500px), 320px)); }
+/* Passcode screen: the core by the width, as on the main screen, unless the card needs the height (Safari's bars) */
+body[data-view="login"] #core { opacity: .45; width: max(140px, min(62vw, calc(100dvh - 420px), 260px)); }
+body[data-view="login"] .readout { display: none; }  /* the card says it */
 
 .readout { text-align: center; min-height: 3.4em; }
 /* Each line shrink-wrapped and centred (lib/fold.ts measures them) */
@@ -229,19 +230,22 @@ body[data-paused="resuming"]:not([data-live]) #hangup { display: grid; }
   #core { width: min(74vw, 34dvh, 320px); }
 }
 
-/* Phones: compact header (the OS shows the time) */
-@media (max-width: 420px) {
-  .word { font-size: 11px; letter-spacing: .24em; }
+/* Phones: compact header (the OS shows the time). Spacing tightens with the width so the wordmark, the pill (even
+   "Reconnecting") and three buttons fit on one line. */
+@media (max-width: 600px) {
+  .word { font-size: 11px; letter-spacing: .14em; }
   header, .brand, .tools { gap: 4px; }
-  .link { padding: 6px 8px; }
+  .link { padding: 6px; }
   #clock { display: none; }
-  .mini { width: 40px; height: 40px; }
+  .mini { width: 38px; height: 38px; }
+}
+@media (max-width: 380px) {
+  .word { letter-spacing: .1em; }
+  .mini { width: 36px; height: 36px; }
 }
 @media (max-width: 360px) {
   header { letter-spacing: .1em; }
-  .word { letter-spacing: .1em; }
-  .link { padding: 6px; }
-  .mini { width: 38px; height: 38px; }
+  .mini { width: 34px; height: 34px; }
 }
 
 /* Wide screens: centred column until there's a conversation, then (data-layout="split") reactor left, transcript right */
@@ -260,3 +264,21 @@ body[data-layout="split"] footer { width: 100%; max-width: 1120px; margin: 0 aut
 @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); opacity: .45; } 40% { transform: translateY(-5px); opacity: 1; } }
 @keyframes shake { 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
 @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
+
+/* Wider phones (iPhone 12 and later: 390px+): a step up for the small text and icons, which would otherwise take a
+   smaller share of the screen than on a 360px phone. The 16px message box stays as it is. */
+@media (min-width: 390px) and (max-width: 600px) {
+  header { font-size: 12px; }
+  .word { font-size: 12px; }
+  .mini svg { width: 20px; height: 20px; }
+  #status { font-size: 14px; }
+  #hint { font-size: 15px; }
+  .msg.jarvis { font-size: 18px; }
+  .msg.jarvis::before { font-size: 11px; }
+  .msg.you { font-size: 16px; }
+  .divider, #suggest h2 { font-size: 11px; }
+  #suggest { font-size: 15px; }
+  .cb svg, .attach svg { width: 22px; height: 22px; }
+  .send svg { width: 20px; height: 20px; }
+}
+

@@ -9,10 +9,10 @@ import { ACTIVITY_KEY, PASSCODE_KEY, SIDE_KEY, storage } from "../lib/storage";
 import { day, loadDay, loadDays } from "./history";
 import { loginShown, passcode, pushSub, setPasscode, showLogin } from "./store";
 
-export type Section = "tasks" | "todos" | "projects" | "history" | "settings";
+export type Section = "tasks" | "todos" | "projects" | "jarvis" | "history" | "settings";  // jarvis: what it can do and knows
 export type SettingsItem =
-  "conn" | "accounts" | "memory" | "vocabulary" | "skills" | "approvals" | "about" | "prefs" | "heartbeat" | "notify" | "system"
-  | "access" | "keys";
+  "conn" | "accounts" | "memory" | "vocabulary" | "skills" | "approvals" | "about" | "prefs" | "dnd" | "safety" | "heartbeat"
+  | "notify" | "system" | "access" | "keys";
 
 export interface Task {
   id: number; kind: string; title: string; project: string | null; status: string; created: number; updated: number;
@@ -290,13 +290,15 @@ const SETTINGS: Record<SettingsItem, () => Promise<void>> = {
       act<Voiceprints>("voiceprint").then((r) => { if (r) voiceprints.value = r; }),
     ]);
   },
+  dnd: async () => { const r = await act<Quiet>("hold_status"); if (r) quiet.value = r; },
+  safety: loadPrefs,
   heartbeat: async () => { heartbeat.value = await act("heartbeat_sources") ?? heartbeat.peek(); },
   notify: async () => { devices.value = await act("devices", { endpoint: pushSub.peek()?.endpoint ?? "" }) ?? devices.peek(); },
   system: async () => { system.value = await act("system") ?? system.peek(); },
   access: async () => { access.value = await act("access") ?? access.peek(); },
   keys: async () => {},
 };
-// Loaded whenever Settings opens, for the summaries on the list itself
+// Loaded whenever Settings or JARVIS opens, for the summaries on their lists
 const LISTED: SettingsItem[] = ["system", "conn", "skills", "prefs", "heartbeat", "access"];
 
 async function loadPrefs() { prefs.value = await act<Prefs>("preferences") ?? prefs.peek(); }

@@ -8,7 +8,7 @@ import {
 } from "../../state/panel";
 import { now } from "../../state/store";
 import {
-  BellIcon, BrainIcon, CheckIcon, CloseIcon, HistoryIcon, KeysIcon, MicIcon, PanelIcon, PlugIcon, PlusIcon, PrefsIcon, ProjectsIcon, PulseIcon, SettingsIcon,
+  BellIcon, BrainIcon, CheckIcon, CloseIcon, HistoryIcon, JarvisIcon, KeysIcon, MicIcon, PanelIcon, MoonIcon, PlugIcon, PlusIcon, PrefsIcon, ProjectsIcon, PulseIcon, SettingsIcon, ShieldIcon, SkillIcon,
   SpeakerIcon, TasksIcon, TodosIcon, UserIcon, WordsIcon,
 } from "../icons";
 import { Answer } from "./Answer";
@@ -74,13 +74,17 @@ function commands(): Command[] {
     { icon: TodosIcon, label: "Go to To-dos", run: goTo("todos") },
     { icon: ProjectsIcon, label: "Go to Projects", run: goTo("projects") },
     { icon: HistoryIcon, label: "Go to History · past conversations", run: goTo("history") },
+    { icon: JarvisIcon, label: "Go to JARVIS · skills, connections, memory", run: goTo("jarvis") },
+    { icon: SkillIcon, label: "Skills", run: goTo("jarvis", "skills") },
     { icon: SettingsIcon, label: "Go to Settings", run: goTo("settings") },
-    { icon: PrefsIcon, label: "Preferences · do not disturb, voice, background work", run: goTo("settings", "prefs") },
-    { icon: PlugIcon, label: "Connections", run: goTo("settings", "conn") },
-    { icon: BrainIcon, label: "Memory", run: goTo("settings", "memory") },
-    { icon: WordsIcon, label: "Vocabulary", run: goTo("settings", "vocabulary") },
+    { icon: PrefsIcon, label: "Behaviour · voice, voice ID, background work", run: goTo("settings", "prefs") },
+    { icon: MoonIcon, label: "Do not disturb", run: goTo("settings", "dnd") },
+    { icon: ShieldIcon, label: "Safety check · hidden instructions", run: goTo("settings", "safety") },
+    { icon: PlugIcon, label: "Connections", run: goTo("jarvis", "conn") },
+    { icon: BrainIcon, label: "Memory", run: goTo("jarvis", "memory") },
+    { icon: WordsIcon, label: "Vocabulary", run: goTo("jarvis", "vocabulary") },
     { icon: CheckIcon, label: "Remembered approvals", run: goTo("settings", "approvals") },
-    { icon: UserIcon, label: "Google accounts", run: goTo("settings", "accounts") },
+    { icon: UserIcon, label: "Google accounts", run: goTo("jarvis", "accounts") },
     { icon: PulseIcon, label: "System", run: goTo("settings", "system") },
     { icon: BellIcon, label: "Activity", run: () => toggleActivity(true) },
     { icon: KeysIcon, label: "Keyboard shortcuts", run: goTo("settings", "keys"), hint: "?" },

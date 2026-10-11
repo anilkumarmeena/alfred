@@ -16,8 +16,8 @@ import {
   type Vocabulary as VocabularyData, type Voiceprints, type Word,
 } from "../../state/panel";
 import {
-  BellIcon, BrainIcon, CheckIcon, ChevronIcon, EditIcon, HeartIcon, KeyIcon, KeysIcon, LockIcon, NoteIcon, PlugIcon, PrefsIcon,
-  PulseIcon, SkillIcon, TrashIcon, UserIcon, WordsIcon,
+  BellIcon, BrainIcon, CheckIcon, ChevronIcon, EditIcon, HeartIcon, KeyIcon, KeysIcon, LockIcon, MoonIcon, NoteIcon, PlugIcon,
+  PrefsIcon, PulseIcon, ShieldIcon, SkillIcon, TrashIcon, UserIcon, WordsIcon,
 } from "../icons";
 import { cap, Empty, InlineForm, Led, Pill } from "./bits";
 import { Markdown, MarkdownEditor } from "./Markdown";
@@ -27,7 +27,7 @@ import { SkillsPage } from "./Skills";
 
 export const SETTINGS_TITLES: Record<SettingsItem, string> = {
   conn: "Connections", accounts: "Google accounts", memory: "Memory", vocabulary: "Vocabulary", skills: "Skills", approvals: "Approvals", about: "About you",
-  prefs: "Preferences", heartbeat: "Heartbeat", notify: "Notifications", system: "System", access: "Logins and keys",
+  prefs: "Behaviour", dnd: "Do not disturb", safety: "Safety check", heartbeat: "Heartbeat", notify: "Notifications", system: "System", access: "Logins and keys",
   keys: "Keyboard shortcuts",
 };
 
@@ -61,36 +61,56 @@ function systemSummary(): [string, "ok" | "warn" | null] {
   return ["All running", "ok"];
 }
 
-function Row({ to, icon, title, sub, led }: { to: SettingsItem; icon: ComponentChildren; title: string; sub: string; led?: "ok" | "warn" | null }) {
+function Row({ to, icon, title, sub, led, sec = "settings" }: {
+  to: SettingsItem; icon: ComponentChildren; title: string; sub: string; led?: "ok" | "warn" | null; sec?: "settings" | "jarvis";
+}) {
   return (
-    <button class={`srow${item.value === to ? " sel" : ""}`} onClick={() => go("settings", to)}>
+    <button class={`srow${item.value === to ? " sel" : ""}`} onClick={() => go(sec, to)}>
       {icon}<div class="grow"><div>{title}</div><div class="sub">{sub}</div></div>
       {led && <Led kind={led} />}<ChevronIcon />
     </button>
   );
 }
 
-export function SettingsList() {
-  const [conn, connLed] = connSummary(), [sys, sysLed] = systemSummary(), [pref, prefLed] = prefsSummary();
-  const [keys, keysLed] = accessSummary();
-  const acc = accounts.value;
+// The JARVIS tab: what it can do and what it knows, most visited first
+export const JARVIS_PAGES: SettingsItem[] = ["skills", "conn", "accounts", "memory", "vocabulary", "about"];
+
+export function JarvisList() {
+  const [conn, connLed] = connSummary(), acc = accounts.value;
   return (
     <div class="settings">
-      <Row to="prefs" icon={<PrefsIcon />} title="Preferences" sub={pref} led={prefLed} />
-      <Row to="heartbeat" icon={<HeartIcon />} title="Heartbeat" sub={heartbeatSummary()} />
-      <Row to="conn" icon={<PlugIcon />} title="Connections" sub={conn} led={connLed} />
-      <Row to="accounts" icon={<UserIcon />} title="Google accounts"
+      <div class="grp">Can do</div>
+      <Row sec="jarvis" to="skills" icon={<SkillIcon />} title="Skills" sub={skillsSummary()} />
+      <Row sec="jarvis" to="conn" icon={<PlugIcon />} title="Connections" sub={conn} led={connLed} />
+      <Row sec="jarvis" to="accounts" icon={<UserIcon />} title="Google accounts"
         sub={acc ? acc.map((a) => a.label + (a.default ? " (default)" : "")).join(" · ") || "None yet" : "Mail, calendar and Chat"} />
-      <Row to="memory" icon={<BrainIcon />} title="Memory" sub="What JARVIS remembers about you" />
-      <Row to="vocabulary" icon={<WordsIcon />} title="Vocabulary" sub={vocabularySummary()} />
-      <Row to="skills" icon={<SkillIcon />} title="Skills" sub={skillsSummary()} />
-      <Row to="approvals" icon={<CheckIcon />} title="Approvals" sub={rulesSummary()} />
-      <Row to="about" icon={<NoteIcon />} title="About you" sub="Your name, time zone, and what JARVIS should know" />
+      <div class="grp">Knows</div>
+      <Row sec="jarvis" to="memory" icon={<BrainIcon />} title="Memory" sub="What JARVIS remembers about you" />
+      <Row sec="jarvis" to="vocabulary" icon={<WordsIcon />} title="Vocabulary" sub={vocabularySummary()} />
+      <Row sec="jarvis" to="about" icon={<NoteIcon />} title="About you" sub="Your name, time zone, and what JARVIS should know" />
+    </div>
+  );
+}
+
+// How JARVIS behaves and stays safe, most visited first; every page one tap away, its row saying how it stands
+export function SettingsList() {
+  const [sys, sysLed] = systemSummary(), [dnd, dndLed] = dndSummary();
+  const [keys, keysLed] = accessSummary(), [safe, safeLed] = safetySummary();
+  return (
+    <div class="settings">
+      <div class="grp">General</div>
+      <Row to="dnd" icon={<MoonIcon />} title="Do not disturb" sub={dnd} led={dndLed} />
+      <Row to="prefs" icon={<PrefsIcon />} title="Behaviour" sub={behaviourSummary()} />
+      <Row to="heartbeat" icon={<HeartIcon />} title="Heartbeat" sub={heartbeatSummary()} />
       <Row to="notify" icon={<BellIcon />} title="Notifications" sub={pushOn.value ? "On for this device" : "Off for this device"} />
-      <Row to="system" icon={<PulseIcon />} title="System" sub={sys} led={sysLed} />
+      <div class="grp">Security</div>
+      <Row to="approvals" icon={<CheckIcon />} title="Approvals" sub={rulesSummary()} />
       <Row to="access" icon={<KeyIcon />} title="Logins and keys" sub={keys} led={keysLed} />
+      <Row to="safety" icon={<ShieldIcon />} title="Safety check" sub={safe} led={safeLed} />
+      <div class="grp">System</div>
+      <Row to="system" icon={<PulseIcon />} title="System" sub={sys} led={sysLed} />
       {wide.value && <Row to="keys" icon={<KeysIcon />} title="Keyboard shortcuts" sub="Talk, search and answer without the mouse · press ?" />}
-      <button class="srow" onClick={() => { if (confirm("Forget the passcode on this device?")) { setPasscode(null); showLogin(); } }}>
+      <button class="srow lock" onClick={() => { if (confirm("Forget the passcode on this device?")) { setPasscode(null); showLogin(); } }}>
         <LockIcon /><div class="grow"><div>Lock</div><div class="sub">Forget the passcode on this device</div></div>
       </button>
     </div>
@@ -328,7 +348,7 @@ function Approvals() {
   );
 }
 
-// ── Preferences: stored server-side; an .env value wins and is read-only here ──
+// ── Preferences (Behaviour, Safety check): stored server-side; an .env value wins and is read-only here ──
 
 const AT_RESTART = "Saved. JARVIS uses it once its services restart.";
 const NEXT_CALL = "Saved. JARVIS uses it from the next conversation.";
@@ -344,14 +364,26 @@ async function savePref(key: PrefKey, value: string, done: string) {
 const ACCENT: Record<string, string> = { a: "American", b: "British" };
 const voiceName = (v: string) => `${cap(v.slice(3))} · ${ACCENT[v.charAt(0)] ?? ""} ${v.charAt(1) === "m" ? "male" : "female"}`;
 
-// Preferences summary line: do-not-disturb if on, else voice and voice ID
-function prefsSummary(): [string, "warn" | null] {
-  const h = quiet.value?.hold, v = shown("voice");
-  if (h) return [`Do not disturb is ${h.said}`, "warn"];
-  if (!v) return ["Do not disturb, voice, voice ID and background work", null];
+// Summary lines for the list
+function behaviourSummary(): string {
+  const v = shown("voice");
+  if (!v) return "Voice, voice ID and background work";
   const id = !voiceprints.value ? "" : !voiceprints.value.owner ? " · answers any voice"
     : shown("speaker_check") === "off" ? " · voice ID off" : " · knows your voice";
-  return [`${cap(v.slice(3))}'s voice at ${shown("voice_speed")}×${id}${quiet.value ? " · do not disturb off" : ""}`, null];
+  return `${cap(v.slice(3))} · ${shown("voice_speed")}×${id}`;
+}
+
+function dndSummary(): [string, "warn" | null] {
+  const q = quiet.value;
+  if (!q) return ["Hold reminders, jobs and alerts", null];
+  return q.hold ? [cap(q.hold.said), "warn"] : ["Off", null];
+}
+
+function safetySummary(): [string, "warn" | null] {
+  if (!pref("injection_check")) return ["Checks what JARVIS reads for hidden instructions", null];
+  if (shown("injection_check") === "off") return ["Off: nothing is checked", "warn"];
+  const by = INJECTION_MODEL.find(([m]) => m === shown("injection_model"))?.[1].split(" ")[0] ?? "a fast model";
+  return [`On · checked by ${by}`, null];
 }
 
 const FromEnv = ({ label, value }: { label: string; value: string }) => (
@@ -509,12 +541,11 @@ function VoicePrefs({ all }: { all: Prefs }) {
   );
 }
 
-function PreferencesPage() {
+function BehaviourPage() {
   const all = prefs.value;
   return (
     <>
-      <DoNotDisturb />
-      <div class="grp">Voice</div>
+      <div class="grp">Voice & speech</div>
       <MicModeRow />
       {all ? <VoicePrefs all={all} /> : <Empty>Loading…</Empty>}
       <VoiceId />
@@ -526,13 +557,20 @@ function PreferencesPage() {
         <PrefChoice k="browser_window" label="Browser window" options={BROWSER_WINDOW} />
         <p class="hint">JARVIS's own Chrome, on a profile of its own, for reading pages you're logged in to: log in there yourself.
           It only reads pages for now. Changes apply from the next conversation.</p>
-        <div class="grp">Safety</div>
-        <PrefChoice k="injection_check" label="Hidden instruction check" options={BROWSER} />
-        <PrefChoice k="injection_model" label="Checked by" options={INJECTION_MODEL} />
-        <p class="hint">Before JARVIS acts on an email, page, document, file or other tool result, a fast model checks it for
-          instructions hidden there for the AI. Those that try to make JARVIS act are held back and you're told; milder ones
-          come with a warning. Changes apply from the next conversation or task.</p>
       </>}
+    </>
+  );
+}
+
+function SafetyPage() {
+  if (!prefs.value) return <Empty>Loading…</Empty>;
+  return (
+    <>
+      <PrefChoice k="injection_check" label="Hidden instruction check" options={BROWSER} />
+      <PrefChoice k="injection_model" label="Checked by" options={INJECTION_MODEL} />
+      <p class="hint">Before JARVIS acts on an email, page, document, file or other tool result, a fast model checks it for
+        instructions hidden there for the AI. Those that try to make JARVIS act are held back and you're told; milder ones
+        come with a warning. Changes apply from the next conversation or task.</p>
     </>
   );
 }
@@ -832,7 +870,7 @@ function Keys() {
 }
 
 const PAGES: Record<SettingsItem, () => preact.JSX.Element> = {
-  conn: ConnectionsPage, accounts: Accounts, memory: Memory, vocabulary: VocabularyPage, skills: SkillsPage, approvals: Approvals, about: About, prefs: PreferencesPage,
+  conn: ConnectionsPage, accounts: Accounts, memory: Memory, vocabulary: VocabularyPage, skills: SkillsPage, approvals: Approvals, about: About, prefs: BehaviourPage, dnd: DoNotDisturb, safety: SafetyPage,
   heartbeat: HeartbeatPage, notify: Notifications, system: SystemPage, access: AccessPage, keys: Keys,
 };
 
@@ -841,17 +879,20 @@ export function SettingsPage({ page }: { page: SettingsItem }) {
   return <div class="spage">{roomy.value && <h2 class="ptitle">{SETTINGS_TITLES[page]}</h2>}<Page /></div>;
 }
 
-export function SettingsSection() {
+// A list of pages, the open one beside it (roomy) or in its place
+function Pages({ List, first }: { List: () => preact.JSX.Element; first: SettingsItem }) {
   const page = item.value as SettingsItem | null;
   useEffect(() => { act<Account[]>("accounts").then((r) => { if (r) accounts.value = r; }); }, []);
   if (roomy.value) {
-    const shown = page && page in PAGES ? page : "prefs";
     return (
       <div class="split">
-        <div class="col lead"><SettingsList /></div>
-        <div class="col"><SettingsPage page={shown} /></div>
+        <div class="col lead"><List /></div>
+        <div class="col"><SettingsPage page={page && page in PAGES ? page : first} /></div>
       </div>
     );
   }
-  return page && page in PAGES ? <SettingsPage page={page} /> : <SettingsList />;
+  return page && page in PAGES ? <SettingsPage page={page} /> : <List />;
 }
+
+export const SettingsSection = () => <Pages List={SettingsList} first="prefs" />;
+export const JarvisSection = () => <Pages List={JarvisList} first="skills" />;

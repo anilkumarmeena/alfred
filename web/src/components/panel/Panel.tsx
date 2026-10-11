@@ -7,16 +7,16 @@ import {
 } from "../../state/panel";
 import { dayLabel } from "../../lib/history";
 import { days } from "../../state/history";
-import { BackIcon, CloseIcon, HistoryIcon, ProjectsIcon, TasksIcon, TodosIcon } from "../icons";
+import { BackIcon, CloseIcon, JarvisIcon, ProjectsIcon, TasksIcon, TodosIcon } from "../icons";
 import { HistorySection } from "./History";
 import { ProjectsSection } from "./Projects";
-import { SETTINGS_TITLES, SettingsSection } from "./Settings";
+import { JarvisSection, SETTINGS_TITLES, SettingsSection } from "./Settings";
 import { TasksSection } from "./Tasks";
 import { TodosSection } from "./Todos";
 
-// Tabs and dock; Settings opens from its button in the top bar.
+// Tabs and dock; History and Settings open from their buttons in the top bar.
 const SECTIONS: [Section, string, () => preact.JSX.Element][] = [
-  ["tasks", "Tasks", TasksIcon], ["todos", "To-dos", TodosIcon], ["projects", "Projects", ProjectsIcon], ["history", "History", HistoryIcon],
+  ["tasks", "Tasks", TasksIcon], ["todos", "To-dos", TodosIcon], ["projects", "Projects", ProjectsIcon], ["jarvis", "JARVIS", JarvisIcon],
 ];
 const ROOMY = 760;  // px: panel width that fits list and open item side by side
 
@@ -47,8 +47,8 @@ function Tabs() {
 function title(): string {
   const sec = section.value, open = item.value;
   if (open && sec === "tasks") return jobOf(open) != null ? "Scheduled" : `Task ${open}`;
-  if (sec === "settings") return (open && SETTINGS_TITLES[open as SettingsItem]) || "Settings";
-  if (open && sec === "history") return dayLabel(open, days.value?.today ?? "");
+  if (sec === "settings" || sec === "jarvis") return (open && SETTINGS_TITLES[open as SettingsItem]) || (sec === "jarvis" ? "JARVIS" : "Settings");
+  if (sec === "history") return open ? dayLabel(open, days.value?.today ?? "") : "History";
   return SECTIONS.find(([s]) => s === sec)![1];
 }
 
@@ -94,7 +94,7 @@ export function Panel() {
     return () => watch.disconnect();
   }, []);
   const sec = section.value, drilled = !!item.value && !roomy.value;
-  const Body = { tasks: TasksSection, todos: TodosSection, projects: ProjectsSection, history: HistorySection, settings: SettingsSection }[sec];
+  const Body = { tasks: TasksSection, todos: TodosSection, projects: ProjectsSection, jarvis: JarvisSection, history: HistorySection, settings: SettingsSection }[sec];
   return (
     <aside id="panel" class={`panel${drilled ? " drill" : ""}`} ref={ref} aria-label="Panel" data-sheet={sheet.value}>
       <div class="grabzone" onPointerDown={drag} title="Drag, or tap for half or full height"><div class="grab" /></div>
@@ -105,7 +105,7 @@ export function Panel() {
         <span class="vstrip"><span class="dot run" />{readout.value.label}</span>
         <button class="ico close" aria-label="Close" onClick={closeSheet}><CloseIcon /></button>
       </div>
-      <div class={`pbody${roomy.value && (sec === "tasks" || sec === "history" || sec === "settings") ? " splitting" : ""}`} key={`${sec}:${drilled ? item.value : ""}`}>
+      <div class={`pbody${roomy.value && (sec === "tasks" || sec === "history" || sec === "settings" || sec === "jarvis") ? " splitting" : ""}`} key={`${sec}:${drilled ? item.value : ""}`}>
         <Body />
       </div>
     </aside>

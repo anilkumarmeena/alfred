@@ -15,7 +15,7 @@ kbd { display: inline-block; min-width: 18px; padding: 2px 5px; border-radius: 5
   color: var(--muted); font: 500 11px/1 var(--mono); letter-spacing: .1em; }
 .palbtn:hover { color: var(--fg); border-color: rgba(79,209,255,.35); }
 .palbtn svg { width: 14px; height: 14px; }
-.mini[aria-pressed="true"]#sideBtn, .mini[aria-pressed="true"]#activityBtn, .mini[aria-pressed="true"]#settingsBtn { color: var(--accent); }
+.mini[aria-pressed="true"]:is(#sideBtn, #activityBtn, #historyBtn, #settingsBtn) { color: var(--accent); }
 .bdg { position: absolute; pointer-events: none; }
 .bdg.n { top: 0; left: calc(50% + 5px); min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px; background: var(--accent-2); color: #1b1206;
   font: 700 10.5px/17px var(--sans); letter-spacing: 0; text-align: center; box-shadow: 0 0 0 2px var(--bg); animation: bump .5s ease; }
@@ -167,7 +167,7 @@ body[data-panel="side"] .tsum + .grp { margin-top: 8px; }
 
 /* Scheduled jobs: compact rows */
 .scheds { border: 1px solid var(--line); border-radius: 12px; background: rgba(12,26,38,.45); overflow: hidden; }
-/* Do-not-disturb choices (Preferences) */
+/* Do-not-disturb choices (Settings › Do not disturb) */
 .holdbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; color: var(--muted); font-size: 12.5px; }
 .holdbar > span { margin-right: 4px; }
 .holdbar .inline { gap: 6px; }
@@ -343,6 +343,9 @@ body[data-panel="dock"] .pedit { padding-left: 19px; }  /* past the light, under
 .srow > svg:first-child { color: var(--accent); width: 19px; height: 19px; }
 .srow > svg:last-child { color: var(--dim); width: 16px; height: 16px; }
 .srow .slash { display: none; }
+.settings > .grp:first-child { margin-top: 8px; }
+.settings > .grp + .srow { border-top: 0; }
+.srow.lock, .srow.lock > svg:first-child { color: var(--danger); }
 .srv { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: rgba(12,26,38,.45); }
 .srv + .srv { margin-top: 10px; }
 .srv h3 { margin: 0; font-size: 15px; display: flex; align-items: center; gap: 8px; }
@@ -530,3 +533,22 @@ body[data-panel="dock"] .todos .row.none { padding: 12px 0; }
 @keyframes pop { from { opacity: 0; transform: translateY(16px) scale(.97); } }
 @keyframes ring { 0%, 100% { box-shadow: 0 0 0 0 rgba(79,209,255,0); } 30% { box-shadow: 0 0 0 3px rgba(79,209,255,.7); } }
 @keyframes bump { 40% { transform: scale(1.35); } }
+
+/* Wider phones (390px+): the same step as styles.css, for the panel */
+@media (min-width: 390px) and (max-width: 600px) {
+  .dock button { font-size: 10.5px; }
+  .dock svg { width: 23px; height: 23px; }
+  .phead h2 { font-size: 19px; }
+  .grp, .lbl { font-size: 11px; }
+  .tag { font-size: 11px; }
+  .sub, .hint, .task .meta, .jobmark, .pmeta, .sched .meta, .btn.sm { font-size: 13.5px; }
+  .task .id { font-size: 13px; }
+  .task .doing, .empty, .btn.primary { font-size: 14.5px; }
+  .tsum, .kv { font-size: 14px; }
+  .row, .srow { font-size: 15.5px; }
+  .todos .row { font-size: 16px; }
+  .field { font-size: 15px; }
+  .ico svg { width: 18px; height: 18px; }
+  .srow > svg:first-child { width: 21px; height: 21px; }
+}
+

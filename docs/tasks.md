@@ -290,7 +290,7 @@ A missed **daily** job runs once if missed by under 2 hours, else waits.
 <td width="50%" valign="top">
 
 **🔕 Do not disturb**<br>
-"Hold alerts till three", "pause everything for an hour", "I'm back", or the switch in **Settings → Preferences**. While on, nothing scheduled runs, the heartbeat checks nothing and finished tasks send no notifications. When it ends, held reminders are said and each held job runs once.
+"Hold alerts till three", "pause everything for an hour", "I'm back", or the switch in **Settings → Do not disturb**. While on, nothing scheduled runs, the heartbeat checks nothing and finished tasks send no notifications. When it ends, held reminders are said and each held job runs once.
 
 </td>
 <td width="50%" valign="top">

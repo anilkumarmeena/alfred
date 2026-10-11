@@ -189,17 +189,17 @@ test("a task job's view shows its notepad for the next run, and when it speaks",
 
 const USAGE = { said: "Claude hasn't reported anything.", waiting: "" };
 
-test("do not disturb lives in Preferences only, not above the jobs", async () => {
+test("do not disturb lives in its Settings page only, not above the jobs", async () => {
   state.quiet.value = { hold: { since: 1, until: 3601, said: "on until 10:15" }, usage: USAGE };
   await act(() => { render(h(ui.TaskList, {}), box); });
   assert.doesNotMatch(box.textContent!, /Do not disturb/);
   assert.equal(box.querySelector(".holdbar"), null);
 });
 
-test("do not disturb is turned on in Preferences, for an hour, and off with its switch", async () => {
+test("do not disturb is turned on in its Settings page, for an hour, and off with its switch", async () => {
   const { SettingsPage } = await import("../src/components/panel/Settings");
   state.quiet.value = { hold: null, usage: USAGE };
-  await act(() => { render(h(SettingsPage, { page: "prefs" }), box); });
+  await act(() => { render(h(SettingsPage, { page: "dnd" }), box); });
   const bar = box.querySelector(".holdbar")!;
   assert.deepEqual([...bar.querySelectorAll("button")].map((b) => b.textContent), ["1 hour", "Until then"]);
   answers.hold_on = { hold: { since: 1, until: 3601, said: "on until 10:15" }, usage: USAGE };

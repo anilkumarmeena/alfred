@@ -303,7 +303,7 @@ JARVIS has its own Chrome, driven by [Playwright](https://playwright.dev/python/
 
 - **Its tools:** `browser_open`, `browser_read`, `browser_links`, `browser_screenshot`, `browser_back`, `browser_close`.
 - **Refused addresses:** localhost, private, link-local, Tailscale and `.local`, also for redirects, frames and scripts, through JARVIS's own checking proxy.
-- **Switches:** `JARVIS_BROWSER` and `JARVIS_BROWSER_WINDOW` (or Settings → Preferences) switch it off or hide the window.
+- **Switches:** `JARVIS_BROWSER` and `JARVIS_BROWSER_WINDOW` (or Settings → Behaviour) switch it off or hide the window.
 
 **Set-up** — install Chromium (used when Google Chrome isn't installed), then ask JARVIS to open a site and log in in the window:
 

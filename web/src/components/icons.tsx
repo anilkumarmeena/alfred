@@ -80,6 +80,11 @@ export const RepeatIcon = () => <svg viewBox="0 0 24 24"><path d="m17 2 4 4-4 4M
 export const EyeIcon = () => <svg viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>;
 export const TerminalIcon = () => <svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="3" /><path d="m7.5 10 3 2.5-3 2.5M13 15h3.5" /></svg>;
 export const BranchIcon = () => <svg viewBox="0 0 24 24"><circle cx="6" cy="5.5" r="2" /><circle cx="6" cy="18.5" r="2" /><circle cx="18" cy="8" r="2" /><path d="M6 7.5v9M18 10c0 4-6 3.5-11 7" /></svg>;
+export const MoonIcon = () => <svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" /></svg>;
+export const ShieldIcon = () => <svg viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6z" /><path d="m9 12 2 2 4-4" /></svg>;
+export const JarvisIcon = () => (  // the core: rings and a centre
+  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" /><circle cx="12" cy="12" r="3" /><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3" /></svg>
+);
 export const PauseIcon = () => <svg viewBox="0 0 24 24"><path d="M9 6v12M15 6v12" /></svg>;
 export const PlayIcon = () => <svg viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" /></svg>;
 export const StopIcon = () => <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>;

@@ -203,7 +203,7 @@ Each way **replaces** the previous voiceprint:
 | | Way | How |
 |:-:|---|---|
 | 🗣️ | **By voice** (best) | Say "learn my voice" and talk for about thirty seconds; same mic and filter later calls use |
-| 📱 | **In the app** | Settings → Preferences → Voice ID → **Enroll my voice**, then read the text shown (hang up first) |
+| 📱 | **In the app** | Settings → Behaviour → Voice ID → **Enroll my voice**, then read the text shown (hang up first) |
 | 💻 | **On the computer** | `make voiceprint ARGS=enroll`, then read the passage it prints (uses its own mic) |
 
 ### What a clip needs

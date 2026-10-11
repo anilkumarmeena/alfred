@@ -74,10 +74,6 @@ export const coreLabel = computed(() => !connected.value ? "Connect to JARVIS"
   : paused.value ? "Turn the microphone back on" : muted.value ? "Unmute microphone" : "Mute microphone");
 
 const two = (n: number) => String(n).padStart(2, "0");
-export const clock = computed(() => {
-  const d = new Date(now.value);
-  return `${two(d.getHours())}:${two(d.getMinutes())}`;
-});
 export const linkText = computed(() => {
   if (link.value === "on" && startedAt.value) {
     const s = Math.max(0, Math.floor((now.value - startedAt.value) / 1000));
