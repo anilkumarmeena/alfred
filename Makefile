@@ -44,6 +44,12 @@ LIVEKIT_VERSION := 1.13.7
 LIVEKIT_URL     := https://github.com/livekit/livekit/releases/download/v$(LIVEKIT_VERSION)
 LIVEKIT_SHA_amd64 := 6634aeeb2fb1366b6723708ae4320b9d5408106a4c63457c5e845ae3979c90e2
 LIVEKIT_SHA_arm64 := 5d167fdf52cf43c0c72972f25325364479f41f854bfef651056eab2504da5de9
+# macOS without Homebrew (no admin rights): LiveKit ships no macOS binaries, so build the pinned source with a pinned
+# Go, both hash-checked and fetched into a temp folder. Go must satisfy the go line in LiveKit's go.mod.
+LIVEKIT_SRC_SHA := b42f34b095dff22639a40256c3f98fd563fdbce5d497e449ceb06ee010de88c5
+GO_VERSION      := 1.26.9
+GO_SHA_amd64    := 00c29e3d4c8562f547410daa18d2959b641bd691ab00c4a525ea817a0253d4bd
+GO_SHA_arm64    := f9bb7c0a02506c5d9bf0d1eb1f7ee6c7684f844ae49558308a0427b830e022cc
 LOCAL_BIN       := $(HOME)/.local/bin
 LIVEKIT_SERVER   = $(or $(shell command -v livekit-server),$(LOCAL_BIN)/livekit-server)
 # Pinned so a new pyright release can't break make check
@@ -62,15 +68,32 @@ help: ## Show this list
 ## ── First-time setup ───────────────────────────────────────────
 
 install: ## Install tools, dependencies and models
+	@command -v uv >/dev/null || { echo "uv is not installed: see docs/setup.md#-1-install"; exit 1; }
 ifeq ($(UNAME),Darwin)
-	@command -v livekit-server >/dev/null || brew install livekit
+	@command -v livekit-server >/dev/null || [ -x $(LOCAL_BIN)/livekit-server ] || \
+		if command -v brew >/dev/null; then brew install livekit; else $(MAKE) --no-print-directory livekit-bin; fi
 else
 	@command -v livekit-server >/dev/null || [ -x $(LOCAL_BIN)/livekit-server ] || $(MAKE) --no-print-directory livekit-bin
 endif
 	uv sync
 	$(MAKE) models web-build
 
-livekit-bin: ## Install livekit-server into ~/.local/bin (Linux)
+livekit-bin: ## Install livekit-server into ~/.local/bin (built from source on macOS, about a minute)
+ifeq ($(UNAME),Darwin)
+	@case $$(uname -m) in x86_64) arch=amd64 sha=$(GO_SHA_amd64);; arm64) arch=arm64 sha=$(GO_SHA_arm64);; \
+		*) echo "no Go $(GO_VERSION) build for $$(uname -m)"; exit 1;; esac; \
+	tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
+	curl -fSL -o $$tmp/go.tar.gz https://go.dev/dl/go$(GO_VERSION).darwin-$$arch.tar.gz && \
+	echo "$$sha  $$tmp/go.tar.gz" | $(SHA256) -c --quiet - && \
+	curl -fSL -o $$tmp/livekit.tar.gz https://github.com/livekit/livekit/archive/refs/tags/v$(LIVEKIT_VERSION).tar.gz && \
+	echo "$(LIVEKIT_SRC_SHA)  $$tmp/livekit.tar.gz" | $(SHA256) -c --quiet - && \
+	tar -xzf $$tmp/go.tar.gz -C $$tmp && tar -xzf $$tmp/livekit.tar.gz -C $$tmp && \
+	echo "building livekit-server $(LIVEKIT_VERSION)..." && \
+	(cd $$tmp/livekit-$(LIVEKIT_VERSION) && GOTOOLCHAIN=local GOFLAGS=-modcacherw GOPATH=$$tmp/gopath \
+		GOCACHE=$$tmp/gocache $$tmp/go/bin/go build -trimpath -o $$tmp/livekit-server ./cmd/server) && \
+	mkdir -p $(LOCAL_BIN) && install -m 755 $$tmp/livekit-server $(LOCAL_BIN)/livekit-server && \
+	echo "livekit-server $(LIVEKIT_VERSION) installed in $(LOCAL_BIN)"
+else
 	@case $$(uname -m) in x86_64|amd64) arch=amd64 sha=$(LIVEKIT_SHA_amd64);; aarch64|arm64) arch=arm64 sha=$(LIVEKIT_SHA_arm64);; \
 		*) echo "no LiveKit $(LIVEKIT_VERSION) build for $$(uname -m)"; exit 1;; esac; \
 	tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
@@ -79,6 +102,7 @@ livekit-bin: ## Install livekit-server into ~/.local/bin (Linux)
 	tar -xzf $$tmp/livekit.tar.gz -C $$tmp livekit-server && \
 	mkdir -p $(LOCAL_BIN) && install -m 755 $$tmp/livekit-server $(LOCAL_BIN)/livekit-server && \
 	echo "livekit-server $(LIVEKIT_VERSION) installed in $(LOCAL_BIN)"
+endif
 
 # shasum on macOS; sha256sum where Perl's shasum isn't installed
 SHA256 = $$(command -v shasum >/dev/null && echo shasum -a 256 || echo sha256sum)

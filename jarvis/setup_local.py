@@ -89,7 +89,7 @@ def ask_projects_folder(text: str, ask=input) -> str:
 
 
 def livekit_server() -> str:
-    """livekit-server on PATH, else where make install puts it on Linux."""
+    """livekit-server on PATH, else where make livekit-bin puts it (Linux, or macOS without Homebrew)."""
     return shutil.which("livekit-server") or str(Path.home() / ".local/bin/livekit-server")
 
 

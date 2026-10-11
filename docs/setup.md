@@ -90,6 +90,29 @@ flowchart LR
 brew install uv node   # plus the Claude Code CLI
 ```
 
+<details>
+<summary><b>🔒 No Homebrew or admin rights</b></summary>
+
+<br>
+
+Install everything into your home folder instead, with **no sudo**:
+
+```sh
+mkdir -p ~/.local/bin
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+curl -LsSf https://astral.sh/uv/install.sh | sh                                   # uv
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash   # nvm, then in a new terminal:
+nvm install 22                                                                     # Node.js
+curl -fsSL https://claude.ai/install.sh | bash                                     # Claude Code CLI
+```
+
+Without `brew`, `make install` **builds the LiveKit server from source** into `~/.local/bin` (`make livekit-bin`), because LiveKit publishes no macOS binaries. That takes about a minute and needs no Go install.
+
+> [!TIP]
+> **Installed uv with `pip`?** pip puts it in `~/Library/Python/3.x/bin`, which isn't on your `PATH`, so `make` reports uv as missing. Add that folder to `PATH`, or use the installer above.
+
+</details>
+
 ### 🐧 Linux
 
 **Packages** — Debian and Ubuntu names; Fedora's are alike (`portaudio` for `libportaudio2`, `libnotify` for `libnotify-bin`, `words` for `wamerican`):
@@ -176,7 +199,7 @@ make install
 | | It runs | What for |
 |:-:|---|---|
 | 🍺 | `brew install livekit` | **macOS:** the local LiveKit server, only if it's missing |
-| 📡 | `make livekit-bin` | **Linux:** the same, as the pinned **1.13.7** release (amd64 or arm64), **sha256-checked**, into `~/.local/bin`; no sudo |
+| 📡 | `make livekit-bin` | **Linux:** the same, as the pinned **1.13.7** release (amd64 or arm64), **sha256-checked**, into `~/.local/bin`; no sudo. **macOS without Homebrew:** built from the pinned 1.13.7 source with a pinned Go, both **sha256-checked** |
 | 🐍 | `uv sync` | Python 3.12+ and every dependency, into `.venv` |
 | 🧠 | `make models` | Speech, VAD, turn, noise and speaker models for this machine (below) |
 | 🌐 | `make web-build` | `npm install` (once) and a build into `web/dist` |

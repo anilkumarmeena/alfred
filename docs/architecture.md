@@ -86,7 +86,7 @@ flowchart TB
 
 | | Service | Entry point | Listens on | Role |
 |:-:|---|---|---|---|
-| 📡 | **LiveKit server**<br>`com.jarvis.livekit` | `livekit-server` (Homebrew on macOS, `~/.local/bin` on Linux), config `secrets/livekit.yaml` | 7880/tcp (127.0.0.1), 7881/tcp, 7882/udp | WebRTC media, clients ↔ agent |
+| 📡 | **LiveKit server**<br>`com.jarvis.livekit` | `livekit-server` (Homebrew on macOS, else `~/.local/bin`), config `secrets/livekit.yaml` | 7880/tcp (127.0.0.1), 7881/tcp, 7882/udp | WebRTC media, clients ↔ agent |
 | 🎙️ | **Voice agent**<br>`com.jarvis.agent` | `jarvis/voice/agent.py` | 8081/tcp (worker health) | LiveKit Agents worker |
 | 🌐 | **Web server**<br>`com.jarvis.web` | `jarvis/server.py` | 8787/tcp (127.0.0.1) | Web app, passcode → LiveKit token, panel, push, photos |
 | ⚙️ | **Task runner**<br>`com.jarvis.tasks` | `jarvis/tasks/runner.py` | `data/runner.sock` (mode 600) | Tasks, approvals, heartbeat, scheduler, learning review |
