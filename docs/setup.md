@@ -75,7 +75,7 @@ flowchart LR
 </table>
 
 > [!IMPORTANT]
-> Everywhere you need [uv](https://docs.astral.sh/uv/), **Node.js 22** or later and the **Claude Code CLI** with a Claude account. Optional extras are listed in the [README](../README.md#-quickstart).
+> Everywhere you need [uv](https://docs.astral.sh/uv/) (`make install` fetches it into `~/.local/bin` if it's missing), **Node.js 22** or later and the **Claude Code CLI** with a Claude account. Optional extras are listed in the [README](../README.md#-quickstart).
 
 - **Intel Macs** get faster-whisper instead of MLX (which needs Apple silicon); they're untested.
 - **Beyond install and services**, Linux differs in two places: tasks are walled in by **bubblewrap** instead of Seatbelt, and the Mac's tools (Shortcuts, opening apps by name) give way to Linux desktop tools where their programs exist. See **[🔌 Integrations](integrations.md)** and **[🏗️ Architecture](architecture.md)**.
@@ -100,7 +100,6 @@ Install everything into your home folder instead, with **no sudo**:
 ```sh
 mkdir -p ~/.local/bin
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
-curl -LsSf https://astral.sh/uv/install.sh | sh                                   # uv
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash   # nvm, then in a new terminal:
 nvm install 22                                                                     # Node.js
 curl -fsSL https://claude.ai/install.sh | bash                                     # Claude Code CLI
@@ -109,7 +108,7 @@ curl -fsSL https://claude.ai/install.sh | bash                                  
 Without `brew`, `make install` **builds the LiveKit server from source** into `~/.local/bin` (`make livekit-bin`), because LiveKit publishes no macOS binaries. That takes about a minute and needs no Go install.
 
 > [!TIP]
-> **Installed uv with `pip`?** pip puts it in `~/Library/Python/3.x/bin`, which isn't on your `PATH`, so `make` reports uv as missing. Add that folder to `PATH`, or use the installer above.
+> **uv needs nothing from you here:** `make` finds it in `~/.local/bin` or where `pip install uv` put it (`~/Library/Python/3.x/bin`), even off your `PATH`, and otherwise installs the pinned version into `~/.local/bin`.
 
 </details>
 
@@ -200,6 +199,7 @@ make install
 |:-:|---|---|
 | 🍺 | `brew install livekit` | **macOS:** the local LiveKit server, only if it's missing |
 | 📡 | `make livekit-bin` | **Linux:** the same, as the pinned **1.13.7** release (amd64 or arm64), **sha256-checked**, into `~/.local/bin`; no sudo. **macOS without Homebrew:** built from the pinned 1.13.7 source with a pinned Go, both **sha256-checked** |
+| ⚡ | `make uv-bin` | **uv**, pinned, into `~/.local/bin`; only if none is found, no sudo |
 | 🐍 | `uv sync` | Python 3.12+ and every dependency, into `.venv` |
 | 🧠 | `make models` | Speech, VAD, turn, noise and speaker models for this machine (below) |
 | 🌐 | `make web-build` | `npm install` (once) and a build into `web/dist` |

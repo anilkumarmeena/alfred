@@ -4,7 +4,11 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 unexport VIRTUAL_ENV  # stops uv warning about a shell-wide venv
 
-UV        := uv run
+# uv: on PATH, else where its installer or `pip install --user uv` puts it (make install fetches it there if missing)
+UV_VERSION := 0.13.0
+UV_BIN    := $(or $(shell command -v uv),$(firstword $(wildcard $(HOME)/.local/bin/uv $(HOME)/.cargo/bin/uv \
+             $(HOME)/Library/Python/*/bin/uv)),$(HOME)/.local/bin/uv)
+UV        := $(UV_BIN) run
 UNAME     := $(shell uname -s)
 # Main checkout, even when run from a task's worktree (data/worktrees/jarvis-N)
 MAIN_DIR  := $(or $(patsubst %/.git,%,$(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)),$(CURDIR))
@@ -58,7 +62,7 @@ NPM       := npm --prefix web
 # web-install reruns only when the manifests change
 WEB_STAMP := web/node_modules/.install-stamp
 
-.PHONY: help install livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks heartbeat speech-gate voice-timing voiceprint test host-check artifact-check \
+.PHONY: help install uv-bin livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks heartbeat speech-gate voice-timing voiceprint test host-check artifact-check \
         services-install services-start services-stop services-restart status logs awake sleep-normal \
         claude-login claude-status accounts about servers passcode vault google-login chat-check tailscale-serve check clean
 
@@ -67,16 +71,18 @@ help: ## Show this list
 
 ## ── First-time setup ───────────────────────────────────────────
 
-install: ## Install tools, dependencies and models
-	@command -v uv >/dev/null || { echo "uv is not installed: see docs/setup.md#-1-install"; exit 1; }
+install: uv-bin ## Install tools, dependencies and models
 ifeq ($(UNAME),Darwin)
 	@command -v livekit-server >/dev/null || [ -x $(LOCAL_BIN)/livekit-server ] || \
 		if command -v brew >/dev/null; then brew install livekit; else $(MAKE) --no-print-directory livekit-bin; fi
 else
 	@command -v livekit-server >/dev/null || [ -x $(LOCAL_BIN)/livekit-server ] || $(MAKE) --no-print-directory livekit-bin
 endif
-	uv sync
+	$(UV_BIN) sync
 	$(MAKE) models web-build
+
+uv-bin: ## Install the pinned uv into ~/.local/bin if there's none (no sudo)
+	@[ -x "$(UV_BIN)" ] || { set -o pipefail; curl -LsSf https://astral.sh/uv/$(UV_VERSION)/install.sh | UV_INSTALL_DIR=$(HOME)/.local/bin sh; }
 
 livekit-bin: ## Install livekit-server into ~/.local/bin (built from source on macOS, about a minute)
 ifeq ($(UNAME),Darwin)
@@ -126,7 +132,7 @@ models-int8: ## Download the 8-bit Kokoro (~230 MB less memory, slower; JARVIS_T
 	@[ -f models/kokoro-v1.0.int8.onnx ] || { curl -fSL -o models/kokoro-v1.0.int8.onnx.part $(KOKORO_INT8) && \
 		mv models/kokoro-v1.0.int8.onnx.part models/kokoro-v1.0.int8.onnx; }
 
-setup: ## Generate keys, passcode and LiveKit config (rerunnable)
+setup: uv-bin ## Generate keys, passcode and LiveKit config (rerunnable)
 	$(UV) python -m jarvis.setup_local
 
 claude-login: ## Log in JARVIS's own Claude CLI
