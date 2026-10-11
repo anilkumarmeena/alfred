@@ -115,23 +115,24 @@ const WIDE = matchMedia("(min-width: 900px)");
 export const wide = signal(WIDE.matches);  // desktop: panel is a column beside the voice screen
 WIDE.addEventListener("change", () => { wide.value = WIDE.matches; });
 export const roomy = signal(false);  // desktop panel fits list and open item side by side
-export const sideOff = signal(storage.get(SIDE_KEY) === "off");  // desktop: panel column hidden
+export const home = signal(storage.get(SIDE_KEY) !== "on");  // desktop: the call (Home) rather than a section page
 export const sheet = signal<"closed" | "full" | "half">("closed");  // phone: slide-up sheet
 export const section = signal<Section>("tasks");
 export const item = signal<string | null>(null);  // open task id, job item or settings page
 export const shown = computed(() => !!passcode.value && !loginShown.value);
-export const visible = computed(() => shown.value && (wide.value ? !sideOff.value : sheet.value !== "closed"));
+export const visible = computed(() => shown.value && (wide.value ? !home.value : sheet.value !== "closed"));
 
-export function setSideOff(off: boolean) {
-  sideOff.value = off;
-  storage.set(SIDE_KEY, off ? "off" : null);
+// Desktop: Home (the call) or the open section's page. Kept across reloads.
+export function setHome(on: boolean) {
+  home.value = on;
+  storage.set(SIDE_KEY, on ? null : "on");
 }
 
-// Open a section (and optionally an item), revealing the sheet or column.
+// Open a section (and optionally an item), revealing the sheet or the page.
 export function go(sec: Section, open: string | null = null) {
   section.value = sec;
   item.value = open;
-  if (wide.peek()) setSideOff(false);
+  if (wide.peek()) setHome(false);
   else if (sheet.peek() === "closed") sheet.value = "full";
   load(sec);
 }

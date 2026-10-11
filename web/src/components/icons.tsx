@@ -48,8 +48,8 @@ export const SettingsIcon = () => (
     <circle cx="12" cy="12" r="3" />
   </svg>
 );
-export const PanelIcon = () => (
-  <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5" /><path d="M14.5 4v16" /></svg>
+export const HomeIcon = () => (
+  <svg viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1v-8.5Z" /></svg>
 );
 export const BackIcon = () => <svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7" /></svg>;
 export const ChevronIcon = () => <svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7" /></svg>;

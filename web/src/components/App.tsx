@@ -1,12 +1,13 @@
 import { effect } from "@preact/signals";
 import { useEffect } from "preact/hooks";
-import { shown, sheet, sideOff, wide } from "../state/panel";
+import { home, shown, sheet, wide } from "../state/panel";
 import { agentState, link, live, loginShown, muted, paused, reading, sideBySide, speakerOff } from "../state/store";
 import { lines } from "../state/transcript";
 import { Controls } from "./Controls";
 import { Header } from "./Header";
 import { ApprovalCard, Activity, Palette, Toast } from "./panel/Overlays";
 import { Dock, Panel } from "./panel/Panel";
+import { Rail, Sidebar } from "./panel/Sidebar";
 import { Stage } from "./Stage";
 import { Transcript } from "./Transcript";
 
@@ -28,21 +29,20 @@ export function App() {
     setData("muted", muted.value ? "" : null);
     setData("paused", paused.value || null);
     setData("speaker", speakerOff.value ? "off" : null);
-    // Split only once there's a conversation, and only while the panel column isn't taking the space.
-    const column = shown.value && wide.value && !sideOff.value;
-    const split = lines.value.length && !loginShown.value && !column && sideBySide.value;
+    // Split only once there's a conversation, and never beside the desktop sidebar (Home stacks the call instead).
+    const desk = shown.value && wide.value;
+    const split = lines.value.length && !loginShown.value && !desk && sideBySide.value;
     setData("layout", split ? "split" : null);
     // Reading back folds the core into a strip, unless already side by side
     setData("reading", reading.value && !split ? "" : null);
-    // Panel: side column (desktop) or dock + sheet (phone)
-    setData("panel", shown.value ? (wide.value ? (sideOff.value ? "off" : "side") : "dock") : null);
+    // Panel: desktop Home (the call) or a section page beside the sidebar, or dock + sheet (phone)
+    setData("panel", shown.value ? (wide.value ? (home.value ? "home" : "side") : "dock") : null);
     setData("sheet", shown.value && !wide.value && sheet.value !== "closed" ? sheet.value : null);
   }), []);
 
   return (
     <>
       <div class="bg" aria-hidden="true" />
-      <div class="vcard" aria-hidden="true" />
       <Header />
       <main>
         <Stage />
@@ -50,6 +50,7 @@ export function App() {
       </main>
       <Controls />
       {shown.value && <>
+        {wide.value && <><Sidebar /><Rail /></>}
         <Panel />
         <div class="dim" aria-hidden="true" onClick={() => { sheet.value = "closed"; }} />
         <Dock />
