@@ -45,7 +45,8 @@ def make(tmp_path, checks, at=AFTERNOON, **kw) -> tuple[Notices, Notifier]:
 
 WAITING = Notice("task:3:waiting:1", "tasks", "Task 3, retry logic, is still waiting for your answer: which DB?",
                  task_id=3)
-SIGNED_OUT = Notice("signin:google:work:out", "signins", "The work Google account is signed out.", ongoing=True)
+LIMIT = Notice("usage:five_hour:1790000000:close", "usage", "JARVIS has used 90% of Claude's five-hour limit.")
+STUCK = Notice("task:7:stalled", "tasks", "Task 7 seems stuck.", task_id=7, ongoing=True)
 
 
 # ── Config and the loop ─────────────────────────────────────────
@@ -100,10 +101,10 @@ def test_it_checks_every_interval_and_survives_a_failed_round(tmp_path):
 
 def test_a_new_notice_is_notified_and_announced(tmp_path):
     events = []
-    n, notify = make(tmp_path, {"signins": check(SIGNED_OUT), "tasks": check(WAITING)}, announce=events.append)
-    assert asyncio.run(n.check()) == [SIGNED_OUT, WAITING]
-    assert notify.sent == [("JARVIS · signins", SIGNED_OUT.text), ("JARVIS · tasks", WAITING.text)]
-    assert events == [{"type": "alert", "tasks": [3], "text": f"Heads up. {SIGNED_OUT.text} {WAITING.text}",
+    n, notify = make(tmp_path, {"usage": check(LIMIT), "tasks": check(WAITING)}, announce=events.append)
+    assert asyncio.run(n.check()) == [LIMIT, WAITING]
+    assert notify.sent == [("JARVIS · usage", LIMIT.text), ("JARVIS · tasks", WAITING.text)]
+    assert events == [{"type": "alert", "tasks": [3], "text": f"Heads up. {LIMIT.text} {WAITING.text}",
                        "urgency": "soon", "pushed": False}]
 
 
@@ -120,24 +121,24 @@ def test_the_same_notice_is_never_given_twice_even_across_restarts(tmp_path):
 
 
 def test_an_ongoing_notice_is_given_once_until_it_clears(tmp_path):
-    found = [SIGNED_OUT]
+    found = [STUCK]
 
     async def checks(now):
         return list(found)
 
-    n, notify = make(tmp_path, {"signins": checks})
-    assert asyncio.run(n.check()) == [SIGNED_OUT]
-    assert asyncio.run(n.check()) == []  # still signed out: not said again
+    n, notify = make(tmp_path, {"tasks": checks})
+    assert asyncio.run(n.check()) == [STUCK]
+    assert asyncio.run(n.check()) == []  # still stuck: not said again
     found.clear()
-    assert asyncio.run(n.check()) == []  # signed in again
-    found.append(SIGNED_OUT)
-    assert asyncio.run(n.check()) == [SIGNED_OUT]  # signed out anew: said again
+    assert asyncio.run(n.check()) == []  # moving again
+    found.append(STUCK)
+    assert asyncio.run(n.check()) == [STUCK]  # stuck anew: said again
     assert len(notify.sent) == 2
-    assert json.loads((tmp_path / "notices.json").read_text())["ongoing"] == {"signins": [SIGNED_OUT.key]}
+    assert json.loads((tmp_path / "notices.json").read_text())["ongoing"] == {"tasks": [STUCK.key]}
 
 
 def test_a_failed_check_doesnt_count_as_cleared(tmp_path):
-    answers = [[SIGNED_OUT], RuntimeError("offline"), [SIGNED_OUT]]
+    answers = [[STUCK], RuntimeError("database locked"), [STUCK]]
 
     async def checks(now):
         found = answers.pop(0)
@@ -145,7 +146,7 @@ def test_a_failed_check_doesnt_count_as_cleared(tmp_path):
             raise found
         return found
 
-    n, notify = make(tmp_path, {"signins": checks})
+    n, notify = make(tmp_path, {"tasks": checks})
     for _ in range(3):
         asyncio.run(n.check())
     assert len(notify.sent) == 1
@@ -176,12 +177,12 @@ def test_a_failing_check_doesnt_stop_the_round_or_leak_its_message(tmp_path, cap
         await asyncio.sleep(3600)
 
     monkeypatch.setattr(notices, "CHECK_TIMEOUT", 0.05)
-    n, notify = make(tmp_path, {"signins": broken, "usage": hangs, "tasks": check(WAITING)})
+    n, notify = make(tmp_path, {"broken": broken, "usage": hangs, "tasks": check(WAITING)})
     with caplog.at_level(logging.INFO, logger="jarvis.tasks.notices"):
         asyncio.run(n.check())
     assert notify.sent == [("JARVIS · tasks", WAITING.text)]
     assert "s3cr3t" not in caplog.text
-    assert "signins failed" in caplog.text and "usage failed" in caplog.text
+    assert "broken failed" in caplog.text and "usage failed" in caplog.text
 
 
 def test_an_unreadable_state_file_starts_afresh(tmp_path):
@@ -218,12 +219,12 @@ class Pusher:
 
 def test_notices_are_pushed_alongside_the_desktop_notification(tmp_path):
     phone = Pusher()
-    n, notify = make(tmp_path, {"signins": check(SIGNED_OUT), "tasks": check(WAITING)}, push=phone)
+    n, notify = make(tmp_path, {"usage": check(LIMIT), "tasks": check(WAITING)}, push=phone)
     asyncio.run(n.check())
     assert len(notify.sent) == 2
     (title, body, url, tag), task_push = phone.sent
-    assert (title, body, url) == ("Sign-in", SIGNED_OUT.text, "/?alert=signins")
-    assert tag.startswith("alert-") and "work" not in tag  # stable per notice, but reveals nothing about it
+    assert (title, body, url) == ("Claude usage", LIMIT.text, "/?alert=usage")
+    assert tag.startswith("alert-") and "five_hour" not in tag  # stable per notice, but reveals nothing about it
     assert task_push == ("Tasks", WAITING.text, "/?task=3", "task-3")  # opens the app on the task
 
 
@@ -309,11 +310,27 @@ def test_task_notices():
     ]
 
 
+def test_usage_warnings_are_said_once_per_window(tmp_path, monkeypatch):
+    from claude_agent_sdk import RateLimitInfo
+
+    from jarvis.brain import usage
+
+    use_profile(monkeypatch, tmp_path)
+    monkeypatch.setattr(usage, "USAGE_FILE", tmp_path / "usage.json")
+    stamp = AFTERNOON.timestamp()
+    usage.record(RateLimitInfo(status="allowed_warning", resets_at=int(stamp + 3600), rate_limit_type="five_hour",
+                               utilization=0.9), now=stamp)
+    n, notify = make(tmp_path, {"usage": notices.usage_notices})
+    asyncio.run(n.check())
+    asyncio.run(n.check())
+    assert notify.sent == [("JARVIS · usage", "JARVIS has used 90% of Claude's five-hour limit; it resets at 4 PM.")]
+
+
 def test_the_runner_gets_only_jarvis_s_own_checks():
     class Store:
         def recent(self):
             return []
 
     n = notices.make(Store(), Notifier(), state_file=None)
-    assert list(n.checks) == ["tasks", "usage", "signins"]
+    assert list(n.checks) == ["tasks", "usage"]
     assert notices.make(Store(), Notifier(), push=Pusher()).push is not None

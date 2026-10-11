@@ -2,12 +2,11 @@
 
   tasks    a question unanswered for MINUTES, a run cut off by a restart, a running task gone quiet (jarvis.tasks.stall)
   usage    Claude's usage limits nearly or all used, once per limit window (jarvis.brain.usage)
-  signins  a connection signed out or with a token about to expire (jarvis.integrations.signins)
 
-It never watches the user's mail, calendar or other services: what to watch there is each user's choice, made with
-scheduled jobs (jarvis.tasks.schedules). Each notice goes out once as a desktop notification, a phone push and a
-spoken update; lock-screen surfaces get only `text`. Keys already given live in data/notices.json, and an ongoing
-notice (a stall, a sign-in) is forgotten once it clears, so it can recur. Nothing is checked in quiet hours or
+It reads only JARVIS's own state, never a service: what to watch is each user's choice, made with scheduled jobs
+(jarvis.tasks.schedules). Each notice goes out once as a desktop notification, a phone push and a spoken update;
+lock-screen surfaces get only `text`. Keys already given live in data/notices.json, and an ongoing notice (a stall)
+is forgotten once it clears, so it can recur. Nothing is checked in quiet hours or
 do-not-disturb; what still holds is said after. A failing check is logged and skipped.
 """
 
@@ -32,7 +31,7 @@ MINUTES = 15
 MAX_NOTICES = 5  # per round; the rest wait for the next
 KEEP_DAYS = 30  # how long given keys are remembered
 CHECK_TIMEOUT = 60
-TITLES = {"tasks": "Tasks", "usage": "Claude usage", "signins": "Sign-in"}  # push titles
+TITLES = {"tasks": "Tasks", "usage": "Claude usage"}  # push titles
 
 
 @dataclass(frozen=True)
@@ -224,12 +223,6 @@ async def usage_notices(now: datetime) -> list[Notice]:
     return [Notice(key, "usage", text) for key, text in usage.alerts(now.timestamp())]
 
 
-async def signin_notices(now: datetime) -> list[Notice]:
-    from jarvis.integrations import signins
-
-    return [Notice(p.key, "signins", p.text, ongoing=True) for p in await signins.check(now)]
-
-
 def _carry_over(path: Path) -> None:
     """Migration: keep the keys data/heartbeat.json recorded, so nothing it already said is said again."""
     if not path.exists() and (old := path.with_name("heartbeat.json")).exists():
@@ -241,5 +234,5 @@ def make(store, notify: Notify, announce: Callable[[dict], None] | None = None, 
     """The runner's Notices. `stalls` is Runner.stalls; `settings` override Notices kwargs."""
     if "state_file" not in settings:
         _carry_over(profile.current().notices_file)
-    checks = {"tasks": task_notices(store, stalls), "usage": usage_notices, "signins": signin_notices}
+    checks = {"tasks": task_notices(store, stalls), "usage": usage_notices}
     return Notices(checks, notify, announce, push=push, **settings)
