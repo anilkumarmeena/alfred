@@ -680,9 +680,12 @@ def voice(env, monkeypatch):
     """Voice shell job tools, wired to an in-process runner as the socket client would be."""
     r = make()
 
-    async def start_command(command, title, folder, timeout_minutes=None, summarize=True, auto_fix=True, report=False):
-        return r.view(r.start_command(command, title, folder, timeout_minutes=timeout_minutes, summarize=summarize,
-                                      auto_fix=auto_fix, report=report))
+    async def start_command(command, title, folder, timeout_minutes=None, summarize=True, auto_fix=True, report=False,
+                            placeable=False, machine="", approved=""):
+        task = r.start_command(command, title, folder, timeout_minutes=timeout_minutes, summarize=summarize,
+                               auto_fix=auto_fix, report=report, placeable=placeable, machine=machine,
+                               approved=approved)
+        return await r.where(task["id"])
 
     async def tasks(unseen=False):
         return [r.view(t) for t in r.store.recent()]

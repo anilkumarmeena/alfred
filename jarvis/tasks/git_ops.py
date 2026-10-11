@@ -91,6 +91,8 @@ class GitOps(RunnerBase):
         spoken = f"Task {task_id}, {task['title']}, {did}. {cleaned}."
         self.store.log(task_id, "merged", spoken)
         bell.add(spoken, "ok", task_id)
+        if task["node"]:  # its copy on the machine has served its purpose
+            await self.offload.forget(task["node"], self.offload.key(task_id))
         return self.store.update(task_id, spoken=spoken)
 
     async def _merge(self, task: dict, project: projects.Project) -> tuple[str, str]:
@@ -149,6 +151,8 @@ class GitOps(RunnerBase):
         bell.add(spoken, "warn", task_id)
         self._close_approvals(task_id, "discarded")
         remembered.end_session(session_key(task_id))
+        if task["node"]:
+            await self.offload.forget(task["node"], self.offload.key(task_id))
         return self.store.update(task_id, status="discarded", spoken=spoken, activity=None, question=None,
                                  wait_kind=None, seen=1)
 

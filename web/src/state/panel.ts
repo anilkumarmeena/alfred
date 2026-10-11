@@ -12,7 +12,7 @@ import { loginShown, passcode, pushSub, setPasscode, showLogin } from "./store";
 export type Section = "tasks" | "todos" | "projects" | "jarvis" | "history" | "settings";  // jarvis: what it can do and knows
 export type SettingsItem =
   "conn" | "accounts" | "memory" | "vocabulary" | "skills" | "approvals" | "about" | "prefs" | "dnd" | "safety" | "heartbeat"
-  | "notify" | "system" | "access" | "keys";
+  | "notify" | "system" | "access" | "keys" | "machines";
 
 export interface Task {
   id: number; kind: string; title: string; project: string | null; status: string; created: number; updated: number;
@@ -106,6 +106,18 @@ export interface Login { name: string; created: number; used: number | null; thi
 export interface JarvisKey { name: string; label: string; hint: string; required: boolean; source: "vault" | ".env" | "file" | "" }
 export interface Access { logins: Login[]; keys: JarvisKey[] }
 export interface Activity { id: number; at: number; text: string; kind: "ok" | "bad" | "warn" | "run"; task: number | null }
+// Another computer JARVIS sends heavy work to. online: it answered a ping just now; pending: awaiting confirmation
+export interface Machine {
+  id: number; name: string; aliases: string[]; status: "pending" | "paired"; fingerprint: string; host: string; os: string;
+  cores: number; ram_gb: number; tools: string[]; version: string; up_to_date: boolean; last_seen: number | null;
+  online: boolean; usage: string; free?: number; max_tasks?: number; running?: number; load?: number | null;
+  updating?: boolean; update_problem?: string; takes_work?: boolean;
+}
+// Per job kind: "here", "auto" (let JARVIS choose) or a machine's id
+export interface Machines {
+  machines: Machine[]; placement: Record<string, string>; kinds: Record<string, string>; commit: string; fingerprint: string;
+}
+export interface PairingCode { code: string; expires: number; main_fingerprint: string }
 
 export const ACTIVE = ["queued", "running", "waiting"];
 const WIDE = matchMedia("(min-width: 900px)");
@@ -170,6 +182,7 @@ export const prefs = signal<Prefs | null>(null);
 export const rules = signal<Rule[] | null>(null);
 export const voiceprints = signal<Voiceprints | null>(null);
 export const heartbeat = signal<Heartbeat | null>(null);
+export const machines = signal<Machines | null>(null);
 
 // Waiting on the user: approval requests and task questions
 export const questions = computed(() => tasks.value.filter((t) => t.status === "waiting" && !t.requests_only));
@@ -297,9 +310,10 @@ const SETTINGS: Record<SettingsItem, () => Promise<void>> = {
   system: async () => { system.value = await act("system") ?? system.peek(); },
   access: async () => { access.value = await act("access") ?? access.peek(); },
   keys: async () => {},
+  machines: async () => { machines.value = await act("machines") ?? machines.peek(); },
 };
 // Loaded whenever Settings or JARVIS opens, for the summaries on their lists
-const LISTED: SettingsItem[] = ["system", "conn", "skills", "prefs", "heartbeat", "access"];
+const LISTED: SettingsItem[] = ["system", "conn", "skills", "prefs", "heartbeat", "access", "machines"];
 
 async function loadPrefs() { prefs.value = await act<Prefs>("preferences") ?? prefs.peek(); }
 

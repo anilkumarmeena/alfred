@@ -218,6 +218,15 @@ ANNOUNCE_ENABLED = _flag("JARVIS_ANNOUNCE", True)
 ANNOUNCE_MODEL = os.environ.get("JARVIS_ANNOUNCE_MODEL", "") or FAST_MODEL
 ANNOUNCE_SECONDS = _number(os.environ.get("JARVIS_ANNOUNCE_SECONDS", ""), 30.0, 5.0, 120.0)
 
+# Other machines (jarvis.node). Where jobs run is a per-user setting (Settings › Machines); when it lets JARVIS choose,
+# PLACEMENT_MODEL picks among the machines online. A machine unreachable for NODE_LOST_MINUTES while it has work is
+# reported once; a task whose session lives on a machine waits NODE_WAIT_MINUTES for it to come back. Copies of a
+# project sent to a machine stop at NODE_SYNC_MAX_GB.
+PLACEMENT_MODEL = os.environ.get("JARVIS_PLACEMENT_MODEL", "") or FAST_MODEL
+NODE_LOST_MINUTES = _number(os.environ.get("JARVIS_NODE_LOST_MINUTES", ""), 30, 1, 24 * 60)
+NODE_WAIT_MINUTES = _number(os.environ.get("JARVIS_NODE_WAIT_MINUTES", ""), 30, 0, 24 * 60)
+NODE_SYNC_MAX_GB = _number(os.environ.get("JARVIS_NODE_SYNC_MAX_GB", ""), 20, 0.1, 10000)
+
 # Heartbeat (jarvis.tasks.heartbeat): periodic read-only check for anything new
 HEARTBEAT_ENABLED = _flag("JARVIS_HEARTBEAT", True)
 HEARTBEAT_MINUTES = max(1, int(os.environ.get("JARVIS_HEARTBEAT_MINUTES", "") or "15"))

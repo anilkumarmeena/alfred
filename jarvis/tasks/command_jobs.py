@@ -73,12 +73,16 @@ class Runs(host.Jobs):
         return self.launch(command, title, folder, job_id=task_id)
 
     def how(self, record: dict) -> tuple[str, int | None] | None:
-        """(DONE|FAILED, exit code), (STOPPED, None), (LOST, None) if it died without an exit file; None while running."""
+        """(DONE|FAILED, exit code), (STOPPED, None), (LOST, None) if it died without an exit file; None while running.
+
+        One running on another machine (`node`) is mirrored here: its end is written here once its files are back."""
         if self._stopped(record):
             return STOPPED, None
         try:
             code = int((self.folder / f"{record['id']}.exit").read_text().strip())
         except (OSError, ValueError):
+            if record.get("node"):
+                return (LOST, None) if (self.folder / f"{record['id']}.lost").exists() else None
             return None if host.alive(record["pid"]) else (LOST, None)
         return (DONE if code == 0 else FAILED), code
 

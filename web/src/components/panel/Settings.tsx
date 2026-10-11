@@ -16,19 +16,20 @@ import {
   type Vocabulary as VocabularyData, type Voiceprints, type Word,
 } from "../../state/panel";
 import {
-  BellIcon, BrainIcon, CheckIcon, ChevronIcon, EditIcon, HeartIcon, KeyIcon, KeysIcon, LockIcon, MoonIcon, NoteIcon, PlugIcon,
-  PrefsIcon, PulseIcon, ShieldIcon, SkillIcon, TrashIcon, UserIcon, WordsIcon,
+  BellIcon, BrainIcon, CheckIcon, ChevronIcon, EditIcon, HeartIcon, KeyIcon, KeysIcon, LockIcon, MachineIcon, MoonIcon, NoteIcon,
+  PlugIcon, PrefsIcon, PulseIcon, ShieldIcon, SkillIcon, TrashIcon, UserIcon, WordsIcon,
 } from "../icons";
 import { cap, Empty, InlineForm, Led, Pill } from "./bits";
 import { Markdown, MarkdownEditor } from "./Markdown";
 import { ConnectionsPage } from "./Connections";
 import { HeartbeatPage, heartbeatSummary } from "./Heartbeat";
+import { MachinesPage, machinesSummary } from "./Machines";
 import { SkillsPage } from "./Skills";
 
 export const SETTINGS_TITLES: Record<SettingsItem, string> = {
   conn: "Connections", accounts: "Google accounts", memory: "Memory", vocabulary: "Vocabulary", skills: "Skills", approvals: "Approvals", about: "About you",
   prefs: "Behaviour", dnd: "Do not disturb", safety: "Safety check", heartbeat: "Heartbeat", notify: "Notifications", system: "System", access: "Logins and keys",
-  keys: "Keyboard shortcuts",
+  keys: "Keyboard shortcuts", machines: "Machines",
 };
 
 function skillsSummary(): string {
@@ -95,7 +96,7 @@ export function JarvisList() {
 // How JARVIS behaves and stays safe, most visited first; every page one tap away, its row saying how it stands
 export function SettingsList() {
   const [sys, sysLed] = systemSummary(), [dnd, dndLed] = dndSummary();
-  const [keys, keysLed] = accessSummary(), [safe, safeLed] = safetySummary();
+  const [keys, keysLed] = accessSummary(), [safe, safeLed] = safetySummary(), [mac, macLed] = machinesSummary();
   return (
     <div class="settings">
       <div class="grp">General</div>
@@ -109,6 +110,7 @@ export function SettingsList() {
       <Row to="safety" icon={<ShieldIcon />} title="Safety check" sub={safe} led={safeLed} />
       <div class="grp">System</div>
       <Row to="system" icon={<PulseIcon />} title="System" sub={sys} led={sysLed} />
+      <Row to="machines" icon={<MachineIcon />} title="Machines" sub={mac} led={macLed} />
       {wide.value && <Row to="keys" icon={<KeysIcon />} title="Keyboard shortcuts" sub="Talk, search and answer without the mouse · press ?" />}
       <button class="srow lock" onClick={() => { if (confirm("Forget the passcode on this device?")) { setPasscode(null); showLogin(); } }}>
         <LockIcon /><div class="grow"><div>Lock</div><div class="sub">Forget the passcode on this device</div></div>
@@ -871,7 +873,7 @@ function Keys() {
 
 const PAGES: Record<SettingsItem, () => preact.JSX.Element> = {
   conn: ConnectionsPage, accounts: Accounts, memory: Memory, vocabulary: VocabularyPage, skills: SkillsPage, approvals: Approvals, about: About, prefs: BehaviourPage, dnd: DoNotDisturb, safety: SafetyPage,
-  heartbeat: HeartbeatPage, notify: Notifications, system: SystemPage, access: AccessPage, keys: Keys,
+  heartbeat: HeartbeatPage, notify: Notifications, system: SystemPage, access: AccessPage, keys: Keys, machines: MachinesPage,
 };
 
 export function SettingsPage({ page }: { page: SettingsItem }) {

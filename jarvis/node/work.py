@@ -1,0 +1,434 @@
+"""What a machine does for the main computer: copies of projects, command jobs and Claude task runs.
+
+Copies (one folder per run, under data/worktrees/, so the walls let its commands write there):
+  copy.sync    bring a copy up to the main computer's files: git history from a bundle (into a per-project mirror the
+               copies share), then every file whose hash differs, and remove what's gone there
+  copy.back    what the run changed since, as one archive; copy.backed once the main computer has it
+  copy.forget  remove a copy
+Command jobs (as `start_job` runs them on the main computer: a login shell, without JARVIS's keys):
+  job.start / job.poll / job.stop   numbered by the main computer's task id
+Claude task runs (jarvis.tasks.worker.run, unchanged: the same sandbox, file gate and host walls as there):
+  task.run / task.stop / task.running
+A run's reports go through the journal (`NetReporter`); questions the gate must ask (has this command been approved?
+is there a message for the task?) go to the main computer live, and get the safe answer when it can't be reached:
+not approved, nothing new.
+
+Every command here is checked again: secrets and environment reads are refused, and a risky command needs the main
+computer's word that the user said yes.
+"""
+
+import asyncio
+import base64
+import contextlib
+import json
+import logging
+import re
+import shutil
+import time
+from pathlib import Path
+
+from jarvis.core import proc
+from jarvis.core.config import DATA_DIR, WORKTREES_DIR
+from jarvis.core.files import write_atomic
+from jarvis.node import home, sync, transfer
+from jarvis.node.agent import Agent
+from jarvis.node.journal import Journal
+from jarvis.node.link import Link, LinkDown, Refused
+from jarvis.safety import commands
+from jarvis.tasks import command_jobs, stall
+from jarvis.tasks.host_tools import TaskJobs
+from jarvis.tasks.worker import Outcome, run as run_task
+
+log = logging.getLogger("jarvis.node.work")
+
+KEY = re.compile(r"[a-z0-9][a-z0-9_.-]{0,80}")  # a copy's name, as the main computer gives it
+POLL_BYTES = 256 * 1024  # most job output sent per poll
+ALIVE_SECONDS = 20.0  # how often a run's signs of life reach the main computer
+COPY_DAYS = 14  # copies untouched this long are removed
+
+
+class NetReporter:
+    """The Reporter a run here uses: reports go through the journal; the gate's questions go live, with safe answers
+    when the main computer can't be reached."""
+
+    def __init__(self, work: "Work", task_id: int, run: str) -> None:
+        self.work, self.task_id, self.run = work, task_id, run
+        self.host_jobs = work.host_jobs
+        self.pulse = stall.Pulse()
+        self.sent_alive = 0.0
+
+    def _note(self, kind: str, **body) -> None:
+        self.work.journal.add(kind, self.task_id, self.run, body)
+
+    def session(self, task_id: int, session_id: str) -> None:
+        self._note("session", session_id=session_id)
+
+    def alive(self, task_id: int, msg: object = None) -> None:
+        self.pulse.saw(task_id, msg)
+        if (now := time.time()) - self.sent_alive >= ALIVE_SECONDS:
+            self.sent_alive = now
+            busy = self.pulse.busy(task_id, now) or ("a long job it started is still running" if any(
+                j["state"] == "running" for j in self.host_jobs.status(task=task_id)) else "")
+            self.work.tell("alive", {"task": task_id, "busy": busy, "limited": self.pulse.limit(task_id, now)})
+
+    def activity(self, task_id: int, text: str) -> None:
+        self._note("activity", text=text)
+
+    def progress(self, task_id: int, text: str) -> None:
+        self._note("progress", text=text)
+
+    def subagent(self, task_id: int, text: str) -> None:
+        self._note("subagent", text=text)
+
+    def ask(self, task_id: int, question: str) -> None:
+        self._note("ask", question=question)
+
+    def flag(self, task_id: int, text: str) -> None:
+        self._note("flag", text=text)
+
+    async def _ask_main(self, kind: str, body: dict, timeout: float = 30) -> dict | None:
+        """The main computer's answer, or None if it can't be reached (the journal is sent first, to keep order)."""
+        up = self.work.agent.link
+        if up is None or not up.up:
+            return None
+        try:
+            await self.work.caught_up(timeout)
+            return await up.call(kind, {"task": self.task_id, "run": self.run} | body, timeout)
+        except (LinkDown, TimeoutError):
+            return None
+
+    async def take_nudges(self, task_id: int) -> list[str]:
+        got = await self._ask_main("task.nudges", {})
+        return [str(m) for m in (got or {}).get("messages") or []]
+
+    async def cleared(self, task_id: int, item: dict) -> bool:
+        try:
+            got = await self._ask_main("task.cleared", {"item": item})
+        except Refused:
+            return False
+        return bool(got and got.get("cleared"))
+
+    async def request_approval(self, task_id: int, item: dict) -> dict:
+        try:
+            got = await self._ask_main("task.approval", {"item": item})
+        except Refused as e:
+            raise ValueError(str(e)) from None
+        if got is None:  # asked as soon as the link is back
+            self._note("approval", item=item)
+            return {"id": "waiting to be sent"}
+        return got
+
+    async def propose(self, task_id: int, args: dict) -> dict:
+        try:
+            got = await self._ask_main("task.propose", {"args": args})
+        except Refused as e:
+            raise ValueError(str(e)) from None
+        if got is None:
+            raise ValueError("JARVIS's main computer can't be reached right now; mention the edit in your summary")
+        return got
+
+    async def request_access(self, task_id: int, names: list[str], reason: str) -> list[str]:
+        try:
+            got = await self._ask_main("task.access", {"names": names, "reason": reason})
+        except Refused as e:
+            raise ValueError(str(e)) from None
+        if got is None:
+            self._note("access", names=names, reason=reason)
+            return names
+        return [str(n) for n in got.get("asked") or []]
+
+
+class Work:
+    """The work handlers, registered on `agent`."""
+
+    def __init__(self, agent: Agent, journal: Journal | None = None, run=run_task) -> None:
+        self.agent = agent
+        self.journal = journal or Journal(home.JOURNAL_FILE)
+        self.run_task = run  # worker.run; a test gives a stand-in
+        self.state = DATA_DIR / "node"
+        self.jobs = command_jobs.Runs(self.state / "jobs")
+        self.host_jobs = TaskJobs()
+        self.runs: dict[int, tuple[str, asyncio.Task]] = {}  # task id -> (run id, its coroutine)
+        self.locks: dict[str, asyncio.Lock] = {}
+        self._sent = asyncio.Event()  # the journal is empty, as far as the sender knows
+        self._sent.set()
+        agent.handlers |= {
+            "copy.sync": self.copy_sync, "copy.back": self.copy_back, "copy.backed": self.copy_backed,
+            "copy.forget": self.copy_forget, "job.start": self.job_start, "job.poll": self.job_poll,
+            "job.stop": self.job_stop, "task.run": self.task_run, "task.stop": self.task_stop,
+            "task.running": self.task_running}
+        agent.busy = self.busy
+        agent.on_link.append(self.on_link)
+
+    def busy(self) -> int:
+        """Runs and jobs going here (an update waits for none)."""
+        return len(self.runs) + len(self._running_jobs())
+
+    def _running_jobs(self) -> list[int]:
+        return [r["id"] for r in self.jobs._records() if self.jobs.how(r) is None]
+
+    # ── The journal ──────────────────────────────────────────────
+
+    async def on_link(self, up: Link) -> None:
+        asyncio.create_task(self._send(up))
+
+    async def _send(self, up: Link) -> None:
+        """Send the journal in order, each event once acknowledged, for as long as the link lasts."""
+        while up.up:
+            pending = self.journal.pending()
+            if not pending:
+                self._sent.set()
+                self.journal.added.clear()
+                if self.journal.pending():  # added between the read and the clear
+                    continue
+                waiter = asyncio.create_task(self.journal.added.wait())
+                closed = asyncio.create_task(up.closed.wait())
+                await asyncio.wait([waiter, closed], return_when=asyncio.FIRST_COMPLETED)
+                waiter.cancel()
+                closed.cancel()
+                continue
+            self._sent.clear()
+            for event in pending:
+                try:
+                    await up.call("report", event, timeout=60)
+                except (LinkDown, TimeoutError):
+                    return
+                except Refused as e:  # the main computer won't take it (say, the task is gone): drop it
+                    log.warning("the main computer refused %s for task %s: %s", event["kind"], event["task"], e)
+                self.journal.done(event["seq"])
+
+    async def caught_up(self, timeout: float) -> None:
+        """Wait until the journal has been sent, so a live question can't overtake what came before it."""
+        if self.journal.pending():
+            self._sent.clear()
+            self.journal.added.set()
+        await asyncio.wait_for(self._sent.wait(), timeout)
+
+    def tell(self, kind: str, body: dict) -> None:
+        """A one-way note that may be lost (signs of life)."""
+        if self.agent.link is not None and self.agent.link.up:
+            asyncio.create_task(self.agent.report(kind, body))
+
+    # ── Copies ───────────────────────────────────────────────────
+
+    def _folder(self, key: str) -> Path:
+        if not KEY.fullmatch(key):
+            raise Refused("that isn't a copy's name")
+        return WORKTREES_DIR / f"node-{key}"
+
+    def _base_file(self, key: str) -> Path:
+        return self.state / "copies" / f"{key}.json"
+
+    def _mirror(self, mirror: str) -> Path:
+        if not KEY.fullmatch(mirror):
+            raise Refused("that isn't a project's name")
+        return WORKTREES_DIR / f"node-mirror-{mirror}.git"
+
+    async def copy_sync(self, body: dict) -> dict:
+        """{"key", "mirror", "manifest": offer, "git": {"head"} | None} -> {"copied", "bytes", "removed"}."""
+        key = str(body["key"])
+        folder = self._folder(key)
+        async with self.locks.setdefault(key, asyncio.Lock()):
+            up = self._link()
+            if git := body.get("git"):
+                await self._history(up, key, folder, self._mirror(str(body["mirror"])), str(git["head"]))
+            folder.mkdir(parents=True, exist_ok=True)
+            spool = self.state / "spool"
+            theirs = json.loads((await transfer.fetch(up, body["manifest"], spool / f"{key}.manifest")).read_text())
+            (spool / f"{key}.manifest").unlink(missing_ok=True)
+            ours = await asyncio.to_thread(sync.manifest, folder, self.state / "hashes" / f"{key}.json")
+            needed = [r for r in sync.differing(theirs, ours) if sync.allowed(r)]
+            gone = await asyncio.to_thread(sync.remove, folder, sorted(set(ours) - set(theirs)))
+            if needed:
+                offer = await up.call("copy.pack", {"key": key, "files": needed}, timeout=600)
+                archive = await transfer.fetch(up, offer, spool / f"{key}.tar", timeout=600)
+                try:
+                    await asyncio.to_thread(sync.unpack, archive, folder)
+                finally:
+                    archive.unlink(missing_ok=True)
+            self._base_file(key).parent.mkdir(parents=True, exist_ok=True)
+            write_atomic(self._base_file(key), json.dumps(theirs))
+        return {"copied": len(needed), "bytes": sync.total(theirs, needed), "removed": len(gone), "folder": str(folder)}
+
+    async def _history(self, up: Link, key: str, folder: Path, mirror: Path, head: str) -> None:
+        """Make `folder` a git checkout of `head`, its history fetched into the project's mirror as needed."""
+        if not mirror.exists():
+            await self._git(mirror.parent, "init", "-q", "--bare", str(mirror))
+        if (await proc.run_try("git", "-C", str(mirror), "cat-file", "-e", f"{head}^{{commit}}"))[0] != 0:
+            code, out = await proc.run_try("git", "-C", str(mirror), "for-each-ref", "--format=%(objectname)")
+            have = out.split()[:50] if code == 0 else []
+            offer = await up.call("copy.bundle", {"key": key, "have": have}, timeout=600)
+            bundle = await transfer.fetch(up, offer, self.state / "spool" / f"{key}.bundle", timeout=600)
+            try:
+                await self._git(mirror, "fetch", "-q", "--no-tags", str(bundle), f"+HEAD:refs/jarvis/{key}")
+            finally:
+                bundle.unlink(missing_ok=True)
+        else:
+            await self._git(mirror, "update-ref", f"refs/jarvis/{key}", head)
+        if not (folder / ".git").exists():
+            if folder.exists():
+                shutil.rmtree(folder)
+            await self._git(mirror.parent, "clone", "-q", "--shared", "--no-checkout", str(mirror), str(folder))
+        await self._git(folder, "fetch", "-q", "origin", f"+refs/jarvis/{key}:refs/jarvis/base")
+        await self._git(folder, "checkout", "-q", "-f", "--detach", head)
+
+    @staticmethod
+    async def _git(cwd: Path, *args: str) -> str:
+        code, out = await proc.run_try("git", "-C", str(cwd), *args, timeout=600)
+        if code:
+            raise RuntimeError(f"git {args[0]} failed: {out}"[:300])
+        return out
+
+    async def copy_back(self, body: dict) -> dict:
+        """{"key"} -> {"changed", "deleted", "archive": offer | None}: what the run changed since the copy was made."""
+        key = str(body["key"])
+        folder = self._folder(key)
+        async with self.locks.setdefault(key, asyncio.Lock()):
+            base = json.loads(self._base_file(key).read_text()) if self._base_file(key).exists() else {}
+            now = await asyncio.to_thread(sync.manifest, folder, self.state / "hashes" / f"{key}.json")
+            changed = sync.differing(now, base)
+            deleted = sorted(set(base) - set(now))
+            archive = None
+            if changed:
+                packed = await asyncio.to_thread(sync.pack, folder, changed, self.state / "spool" / f"{key}-back.tar")
+                archive = self.agent.outbox.offer(packed, remove=True)
+            write_atomic(self.state / "copies" / f"{key}.now.json", json.dumps(now))
+        return {"changed": changed, "deleted": deleted, "archive": archive, "entries": {r: now[r] for r in changed}}
+
+    async def copy_backed(self, body: dict) -> dict:
+        """The main computer has the changes: they're the copy's new starting point."""
+        key = str(body["key"])
+        self._folder(key)
+        if (now := self.state / "copies" / f"{key}.now.json").exists():
+            now.replace(self._base_file(key))
+        return {}
+
+    async def copy_forget(self, body: dict) -> dict:
+        key = str(body["key"])
+        folder = self._folder(key)
+        async with self.locks.setdefault(key, asyncio.Lock()):
+            await asyncio.to_thread(shutil.rmtree, folder, True)
+            for leftover in (self._base_file(key), self.state / "hashes" / f"{key}.json",
+                             self.state / "copies" / f"{key}.now.json"):
+                leftover.unlink(missing_ok=True)
+        self.locks.pop(key, None)
+        return {}
+
+    def prune(self, days: float = COPY_DAYS) -> list[str]:
+        """Remove copies nobody has touched in `days` (the main computer forgets them when tasks end; this catches
+        the rest)."""
+        gone = []
+        for folder in WORKTREES_DIR.glob("node-*"):
+            if folder.name.startswith("node-mirror-") or not folder.is_dir():
+                continue
+            if time.time() - folder.stat().st_mtime > days * 86400 and folder.name.removeprefix("node-") not in self.locks:
+                shutil.rmtree(folder, ignore_errors=True)
+                gone.append(folder.name)
+        return gone
+
+    def _link(self) -> Link:
+        if self.agent.link is None or not self.agent.link.up:
+            raise LinkDown("the main computer went away")
+        return self.agent.link
+
+    def _inside(self, key: str, rel: str) -> Path:
+        folder = self._folder(key)
+        target = (folder / rel).resolve() if rel else folder.resolve()
+        if not target.is_relative_to(folder.resolve()) or not target.is_dir():
+            raise Refused(f"{rel or 'the copy'} isn't a folder in the copy")
+        return target
+
+    # ── Command jobs ─────────────────────────────────────────────
+
+    @staticmethod
+    def check(command: str, approved: str) -> None:
+        """Refuse what the main computer couldn't have let run: secrets, environment reads, or a risky command
+        without the user's yes."""
+        if commands.names_secret(command) or commands.reads_environment(command):
+            raise Refused("it touches secrets, which stay out of reach even with a yes")
+        if (why := commands.risky(command)) and not approved:
+            raise Refused(f"it {why}, and the main computer didn't say the user agreed to it")
+
+    async def job_start(self, body: dict) -> dict:
+        """{"task", "key", "rel", "command", "title", "approved"} -> its record. Runs as the main computer runs a
+        job: outside the sandbox in a login shell, without JARVIS's keys."""
+        task, command = int(body["task"]), str(body["command"]).strip()
+        self.check(command, str(body.get("approved") or ""))
+        folder = self._inside(str(body["key"]), str(body.get("rel") or ""))
+        if (old := self.jobs.get(task)) is not None:
+            if self.jobs.how(old) is None:
+                raise Refused(f"job {task} is already running here")
+            for leftover in self.jobs.folder.glob(f"{task}.*"):
+                leftover.unlink()
+        record = self.jobs.start(task, command, str(body.get("title") or command[:40]), folder)
+        self.agent.awake.hold(f"job {task}")
+        asyncio.create_task(self._awake_until_done(task))
+        return {"started": record["started"]}
+
+    async def _awake_until_done(self, task: int) -> None:
+        while (record := self.jobs.get(task)) is not None and self.jobs.how(record) is None:
+            await asyncio.sleep(self.jobs.poll)
+        self.agent.awake.release(f"job {task}")
+
+    async def job_poll(self, body: dict) -> dict:
+        """{"task", "offset"} -> {"data": base64 output from offset, "ended": [outcome, code] | None}."""
+        task, offset = int(body["task"]), int(body.get("offset") or 0)
+        record = self.jobs.get(task)
+        if record is None:
+            return {"data": "", "ended": [command_jobs.LOST, None], "gone": True}
+        ended = self.jobs.how(record)
+        try:
+            with open(self.jobs.log_file(task), "rb") as f:
+                f.seek(offset)
+                data = f.read(POLL_BYTES)
+        except OSError:
+            data = b""
+        more = len(data) == POLL_BYTES
+        return {"data": base64.b64encode(data).decode(), "ended": None if more else ended}
+
+    async def job_stop(self, body: dict) -> dict:
+        with contextlib.suppress(ValueError):  # already ended
+            await self.jobs.stop(int(body["task"]))
+        return {}
+
+    # ── Claude task runs ─────────────────────────────────────────
+
+    async def task_run(self, body: dict) -> dict:
+        """{"task": its row, "prompt", "run", "key"}: run it here in the copy, reporting through the journal."""
+        task, prompt, run = dict(body["task"]), str(body["prompt"]), str(body["run"])
+        task_id = int(task["id"])
+        if task_id in self.runs:
+            raise Refused(f"task {task_id} is already running here")
+        if task["kind"] not in ("code_change", "code_question"):
+            raise Refused(f"a {task['kind']} task runs on the main computer")
+        task["worktree"] = str(self._inside(str(body["key"]), ""))
+        self.runs[task_id] = (run, asyncio.create_task(self._run(task, prompt, run)))
+        return {"started": True}
+
+    async def _run(self, task: dict, prompt: str, run: str) -> None:
+        task_id = task["id"]
+        reporter = NetReporter(self, task_id, run)
+        self.agent.awake.hold(f"task {task_id}")
+        outcome: Outcome | None = None
+        try:
+            outcome = await self.run_task(task, prompt, reporter)
+        except asyncio.CancelledError:
+            outcome = None
+        except Exception as e:
+            log.exception("task %s failed here", task_id)
+            outcome = Outcome("", f"{type(e).__name__}: {e}"[:200], 0, "error")
+        finally:
+            self.runs.pop(task_id, None)
+            self.agent.awake.release(f"task {task_id}")
+            ended = None if outcome is None else {"result": outcome.result, "error": outcome.error,
+                                                  "cost": outcome.cost, "kind": outcome.kind}
+            self.journal.add("ended", task_id, run, {"outcome": ended})
+
+    async def task_stop(self, body: dict) -> dict:
+        if found := self.runs.get(int(body["task"])):
+            found[1].cancel()
+        stopped = self.host_jobs.stop_all(int(body["task"]))
+        return {"stopped": bool(found), "jobs": stopped}
+
+    async def task_running(self, _: dict) -> dict:
+        return {"runs": {str(t): run for t, (run, _) in self.runs.items()}}

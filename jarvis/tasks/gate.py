@@ -8,7 +8,7 @@ Secrets are hidden from file tools (`_secret`) and from the sandbox via Read den
 
 import re
 import shlex
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 
 from claude_agent_sdk import HookMatcher, PermissionResultAllow, PermissionResultDeny, ToolPermissionContext
@@ -16,7 +16,7 @@ from claude_agent_sdk import HookMatcher, PermissionResultAllow, PermissionResul
 from jarvis.core import profile
 from jarvis.core.config import CLAUDE_CONFIG_DIR, ROOT, SECRETS_DIR
 from jarvis.safety import commands
-from jarvis.tasks.host_tools import HOST_COMMANDS, _inside, _resolve
+from jarvis.tasks.host_tools import HOST_COMMANDS, _inside, _resolve, answer
 from jarvis.tasks.subagents import _AGENT_TOOLS
 
 ARTIFACT = "Artifact"
@@ -129,9 +129,10 @@ class TaskGate:
     async def __call__(self, name: str, args: dict, ctx) -> Decision:
         if name in HOST_COMMANDS and (done := self.decided.pop(getattr(ctx, "tool_use_id", None) or "", None)):
             return done  # don't ask the user twice or spend a one-time approval again
-        return self.decide(name, args, ctx)
+        return await answer(self.decide(name, args, ctx))
 
-    def decide(self, name: str, args: dict, ctx) -> Decision:
+    def decide(self, name: str, args: dict, ctx) -> Decision | Awaitable[Decision]:
+        """The decision; for host commands an awaitable one (the host gate may ask the runner, perhaps over a link)."""
         cwd = self.cwd
         if name in HOST_COMMANDS and self.host_gate is not None:
             return self.host_gate(name, args, ctx)
@@ -186,7 +187,7 @@ class TaskGate:
         if (name := data.get("tool_name")) not in self.checked:
             return {}
         ctx = ToolPermissionContext(tool_use_id=tool_use_id, agent_id=agent)
-        decision = self.decide(name, data.get("tool_input") or {}, ctx)
+        decision = await answer(self.decide(name, data.get("tool_input") or {}, ctx))
         if isinstance(decision, PermissionResultDeny):
             return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                            "permissionDecisionReason": decision.message}}

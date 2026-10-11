@@ -10,13 +10,14 @@ TaskJobs tracks each task's jobs and host_run sessions so processes they leave b
 
 import asyncio
 import functools
+import inspect
 import json
 import logging
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny, create_sdk_mcp_server, tool as sdk_tool
 
@@ -96,6 +97,14 @@ def unwalled(command: str) -> bool:
 def task_temp(task_id: int) -> Path:
     """Per-task temp folder in the cache dir; sandboxed commands may write there too."""
     return TASK_CACHE_DIR / "tmp" / f"task-{task_id}"
+
+
+T = TypeVar("T")
+
+
+async def answer(value: T | Awaitable[T]) -> T:
+    """A Reporter's answer, whether given now (the runner) or awaited (over the link, on another machine)."""
+    return await value if inspect.isawaitable(value) else value  # type: ignore[return-value]
 
 
 def few(names: list[str]) -> str:
@@ -269,7 +278,7 @@ def _host_gate(task: dict, cwd: Path, reporter: "Reporter"):
     task_id, in_place = task["id"], bool(task["in_place"])
     roots = [cwd, TASK_CACHE_DIR]
 
-    def gate(name: str, args: dict, ctx) -> PermissionResultAllow | PermissionResultDeny:
+    async def gate(name: str, args: dict, ctx) -> PermissionResultAllow | PermissionResultDeny:
         tool = HOST_COMMANDS[name]
         command = args.get("command", "").strip()
         if not command:
@@ -287,13 +296,13 @@ def _host_gate(task: dict, cwd: Path, reporter: "Reporter"):
             log.warning("task %s runs on %s, deleting or stopping only its own: %s", task_id, MACHINE, command)
             return PermissionResultAllow()
         item = approval_item(tool, args, cwd, why, own)
-        if reporter.cleared(task_id, item):  # a prior yes to exactly this, or a remembered rule
+        if await answer(reporter.cleared(task_id, item)):  # a prior yes to exactly this, or a remembered rule
             log.warning("task %s runs on %s, as agreed (%s): %s", task_id, MACHINE, item["why"], command)
             return PermissionResultAllow()
         if getattr(ctx, "agent_id", None):
             return PermissionResultDeny(message=f"Not run: it {item['why']}, so it needs {profile.name()}'s go-ahead, and only "
                                                 "the task's own agent can ask for that. Report the exact command back instead.")
-        approval = reporter.request_approval(task_id, item)
+        approval = await answer(reporter.request_approval(task_id, item))
         return PermissionResultDeny(message=(
             f"Not run: it {item['why']}, so it needs {profile.name()}'s go-ahead. JARVIS has asked them (request "
             f"{approval['id']}). Carry on with anything that doesn't depend on it; if nothing's left, end your turn with "

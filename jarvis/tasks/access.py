@@ -24,6 +24,8 @@ GRANTS = {
     "accounts": "read mail, calendar, Chat, Sheets, Docs, GitHub and GitLab",
 }
 _DEFAULTS = {"code_change": {"artifacts", "shell", "mac"}, "code_question": set(), "research": {"artifacts", "accounts"}}
+# What only this computer has (account keys, the user's other projects): a task with these never runs on a machine
+LOCAL = {"accounts", "projects"}
 
 
 def _off() -> set[str]:

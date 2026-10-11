@@ -66,7 +66,7 @@ from jarvis.tasks.gate import (
     _secret_rules,
 )
 from jarvis.tasks.host_tools import HOST_RUN, JOB_STATUS, JOB_WAIT, START_JOB, _host_gate, _host_server, task_temp
-from jarvis.tasks.reporting import PAUSES, REQUEST_ACCESS, Reporter, _nudge_hook, _task_server, nudge_text
+from jarvis.tasks.reporting import PAUSES, REQUEST_ACCESS, Reporter, _nudge_hook, _task_server, answer, nudge_text
 from jarvis.tasks.subagents import _AGENT_TOOLS, Subagents, _agents
 
 # Re-exported: other modules and tests import these from here
@@ -412,7 +412,7 @@ async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
                 if asked:
                     break
                 # Late nudges become one more prompt (a question or failure keeps them for the next reply).
-                if late := reporter.take_nudges(task["id"]):
+                if late := await answer(reporter.take_nudges(task["id"])):
                     await prompt_again(nudge_text(late, finished=True))
                 elif not (result.result or "").strip() and not reminded:
                     reminded = True

@@ -87,9 +87,13 @@ class Pulse:
             kept.pop(task_id, None)
 
 
-def excuse(task: dict, store, pulse: Pulse, jobs: host.Jobs, now: float) -> str:
-    """Why a running task may legitimately be quiet now, or ""."""
+def excuse(task: dict, store, pulse: Pulse, jobs: host.Jobs, now: float,
+           remote: Callable[[dict, float], str] | None = None) -> str:
+    """Why a running task may legitimately be quiet now, or "". `remote` gives the excuse of a task on another
+    machine (unreachable, or busy there)."""
     task_id = task["id"]
+    if remote and (away := remote(task, now)):
+        return away
     if store.approvals(task_id):
         return "waiting for your go-ahead"
     if task.get("question") or task.get("wants"):
@@ -104,7 +108,7 @@ def excuse(task: dict, store, pulse: Pulse, jobs: host.Jobs, now: float) -> str:
 
 
 def check(task: dict, store, pulse: Pulse, jobs: host.Jobs, now: float | None = None,
-          minutes: int = TASK_STALL_MINUTES) -> dict | None:
+          minutes: int = TASK_STALL_MINUTES, remote: Callable[[dict, float], str] | None = None) -> dict | None:
     """{"minutes", "since"} for a stalled running task, else None.
 
     Command tasks are never stalled: they have no model session, so silence is expected.
@@ -113,6 +117,6 @@ def check(task: dict, store, pulse: Pulse, jobs: host.Jobs, now: float | None = 
         return None
     now = now or time.time()
     since = max(pulse.heard(task["id"]), task["updated"], store.last_logged(task["id"]))
-    if now - since < minutes * 60 or excuse(task, store, pulse, jobs, now):
+    if now - since < minutes * 60 or excuse(task, store, pulse, jobs, now, remote):
         return None
     return {"minutes": int((now - since) // 60), "since": since}

@@ -23,12 +23,18 @@ _ACCESS = {"type": "array", "items": {"type": "string", "enum": list(access.GRAN
 _NOW = ("The result's now says how the task stands: started, queued (not started yet, and what it waits on), or "
         "already running and getting the message after its current step. Say just that, in a few words (\"It's "
         "started.\", \"It's queued and will start shortly.\"), never that it started when it's queued, and what it "
-        "waits on only when asked.")
+        "waits on only when asked. When the result has where, say that too: it names the machine the task runs on, or "
+        "why it runs on this computer instead.")
+_MACHINE = {"type": "string", "description": "Only when the user says where this one should run: \"here\" for this "
+                                             "computer, or the name of one of their machines (see machines). Leave it "
+                                             "out to follow their setting."}
 
 
 def _brief(t: dict, requests: list[dict] = ()) -> dict:
     out = {"id": t["id"], "title": t["title"], "kind": t["kind"], "status": t["status"],
            "minutes_since_update": minutes_since_update(t)}
+    if t.get("machine"):
+        out["runs_on"] = t["machine"]
     for key in ("project", "activity", "question", "spoken", "changes", "branch", "error"):
         if t.get(key):
             out[key] = t[key]
@@ -66,8 +72,10 @@ def _brief(t: dict, requests: list[dict] = ()) -> dict:
 
 
 def _launched(t: dict) -> dict:
-    """`_brief` plus `now`: started, queued (and on what), or running with a pending nudge."""
+    """`_brief` plus `now`: started, queued (and on what), or running with a pending nudge; and `where` it runs."""
     out = _brief(t)
+    if t.get("where"):
+        out["where"] = t["where"]
     if t["status"] == "running":  # undelivered message = nudge, delivered after the current step
         out["now"] = "running: it gets the message after its current step" if nudges(t) else "started: it's running"
     elif t["status"] == "queued":
@@ -138,12 +146,13 @@ async def _mark_seen(tasks: list[dict]) -> None:
                                                   "item off, or suggests rewording it to what's left, and its "
                                                   "announcement says so. Leave it out otherwise: a task without one "
                                                   "is still checked against the open items as it ends."},
+        "machine": _MACHINE,
     },
     ["kind", "title", "instruction"],
 )
 async def task_start(kind: str, title: str, instruction: str, project: str = "", access: list[str] | None = None,
-                     todo: str = "") -> dict:
-    return _launched(await client.start(kind, title, instruction, project or None, access, _order(), todo))
+                     todo: str = "", machine: str = "") -> dict:
+    return _launched(await client.start(kind, title, instruction, project or None, access, _order(), todo, machine))
 
 
 @tool("task_list", "Background tasks: every active one, plus any that changed in the last day, newest first. Kind "
