@@ -15,7 +15,7 @@ kbd { display: inline-block; min-width: 18px; padding: 2px 5px; border-radius: 5
   color: var(--muted); font: 500 11px/1 var(--mono); letter-spacing: .1em; }
 .palbtn:hover { color: var(--fg); border-color: rgba(79,209,255,.35); }
 .palbtn svg { width: 14px; height: 14px; }
-.mini[aria-pressed="true"]#sideBtn, .mini[aria-pressed="true"]#activityBtn { color: var(--accent); }
+.mini[aria-pressed="true"]#sideBtn, .mini[aria-pressed="true"]#activityBtn, .mini[aria-pressed="true"]#settingsBtn { color: var(--accent); }
 .bdg { position: absolute; pointer-events: none; }
 .bdg.n { top: 0; left: calc(50% + 5px); min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px; background: var(--accent-2); color: #1b1206;
   font: 700 10.5px/17px var(--sans); letter-spacing: 0; text-align: center; box-shadow: 0 0 0 2px var(--bg); animation: bump .5s ease; }
@@ -146,30 +146,48 @@ textarea.field { resize: vertical; min-height: 140px; line-height: 1.5; }
 .task .t1 svg { width: 16px; height: 16px; color: var(--dim); }
 .task .id { font: 500 12px/1 var(--mono); color: var(--muted); }
 .task .title { flex: 1; min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task .meta { margin-top: 5px; color: var(--muted); font-size: 12.5px; }
+.task .meta { margin-top: 5px; color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jobmark { display: flex; align-items: center; gap: 6px; margin-top: 5px; color: #b9a4ff; font-size: 12.5px; }
+.jobmark svg { width: 13px; height: 13px; flex: none; }
+.jobmark span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jobmark + .meta { margin-top: 2px; }
 .task .el { font-variant-numeric: tabular-nums; }
-.task .doing { margin-top: 4px; font: 12px/1.45 var(--mono); color: #a9c4d2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* What a running task is doing: readable, up to two lines */
+.task .doing { margin-top: 6px; font-size: 13.5px; line-height: 1.45; color: #c4dae5; overflow: hidden; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+.task .doing.stuck { color: var(--accent-2); }
 .task.ring { animation: ring 1.4s ease 2; }
-.tag.job { color: #b9a4ff; background: rgba(185,164,255,.08); padding: 0 7px; font-size: 11.5px; }
 
-/* Scheduled jobs: compact rows atop Tasks */
+/* Tasks summary line ("2 running · 1 needs you"); the desktop tabs show it already */
+.tsum { margin: 4px 2px 0; color: var(--muted); font-size: 13px; }
+.tsum b { color: var(--accent-2); font-weight: 600; }
+.tsum + .grp, .tsum + .note { margin-top: 12px; }
+body[data-panel="side"] .tsum { display: none; }
+body[data-panel="side"] .tsum + .grp { margin-top: 8px; }
+
+/* Scheduled jobs: compact rows */
 .scheds { border: 1px solid var(--line); border-radius: 12px; background: rgba(12,26,38,.45); overflow: hidden; }
 /* Do-not-disturb choices (Preferences) */
 .holdbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; color: var(--muted); font-size: 12.5px; }
 .holdbar > span { margin-right: 4px; }
 .holdbar .inline { gap: 6px; }
 .holdbar .field { width: 7.5em; padding: 5px 8px; font-size: 12.5px; }
-.sched { display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 12px; }
+.sched { display: flex; align-items: center; gap: 8px; padding: 10px 8px 10px 12px; }
 .sched + .sched { border-top: 1px solid var(--line); }
 .sched.sel { background: rgba(79,209,255,.08); box-shadow: inset 3px 0 0 var(--accent); }
 .sched.paused .open { opacity: .6; }
 .sched .open { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 0; border: 0; background: none; color: inherit; text-align: left; font: inherit; cursor: pointer; }
 .sched .open:hover .title { color: var(--accent); }
+.sched .t1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .sched .title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sched .meta { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sched .btn.sm { padding: 3px 9px; }
-@media (max-width: 420px) { .sched > .tag { display: none; } }
-.task.run .meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sched .meta { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 15px; }
+.sched .meta svg { width: 13px; height: 13px; margin-right: 6px; vertical-align: -2px; color: var(--dim); }
+.sched .open { gap: 4px; }
+.sched { padding-right: 4px; }
+.sched .ico { width: 34px; height: 34px; }
+.sched .ico + .ico { margin-left: -6px; }
+.ico.danger:hover { color: var(--danger); background: rgba(255,95,109,.1); }
+.ico[disabled] { opacity: .4; cursor: not-allowed; }
 .linkish { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; text-align: left; }
 .linkish:hover { text-decoration: underline; }
 .new { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
@@ -182,11 +200,14 @@ textarea.field { resize: vertical; min-height: 140px; line-height: 1.5; }
 .why { color: var(--accent-2); font-size: 13px; }
 .qbox { border: 1px solid var(--line); border-radius: 12px; padding: 11px 12px; background: rgba(12,26,38,.45); margin-top: 8px; }
 .qbox .qtext { margin: 6px 0 10px; font-size: 14.5px; }
-.big { font-size: 17px; font-weight: 600; margin: 4px 0 10px; }
+.big { font-size: 18px; line-height: 1.3; font-weight: 600; letter-spacing: -.01em; margin: 4px 0 12px; }
 .kv { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 5px 12px; font-size: 13px; margin: 0 0 6px; }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-.summary { margin: 12px 0 0; font-size: 14px; }
+.summary { margin: 12px 0 0; font-size: 15px; line-height: 1.55; }
+.lbl .dot { display: inline-block; margin: 0 7px 1px 0; vertical-align: middle; }
+.acts.tacts { padding-top: 14px; border-top: 1px solid var(--line); }
+.acts.tacts:empty { display: none; }
 
 /* Rendered Markdown (panel/Markdown.tsx) */
 .md { overflow-wrap: anywhere; line-height: 1.55; }

@@ -157,8 +157,8 @@ livekit: ## Run LiveKit server
 web: web-build ## Build and run web app (:8787)
 	$(UV) python -m jarvis.server
 
-web-dev: $(WEB_STAMP) ## Web app with hot reload (:5173, API via make web)
-	JARVIS_WEB_PORT=$(WEB_PORT) $(NPM) run dev
+web-dev: $(WEB_STAMP) ## Web app with hot reload (:5173, API via make web; API=https://host for another JARVIS)
+	JARVIS_WEB_PORT=$(WEB_PORT) JARVIS_API=$(API) $(NPM) run dev
 
 agent: ## Run voice agent with reload
 	$(UV) python -m jarvis.voice.agent dev

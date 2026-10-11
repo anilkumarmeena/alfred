@@ -9,7 +9,6 @@ export const storage = {
 };
 
 export const PASSCODE_KEY = "jarvis.passcode";
-export const CAPTIONS_KEY = "jarvis.captions";  // "off" hides the transcript
 export const SPEAKER_KEY = "jarvis.speaker";  // "off": text-only replies
 export const PUSH_KEY = "jarvis.push";  // "later": user deferred notifications; pill hidden
 export const SIDE_KEY = "jarvis.side";  // "off": desktop panel column hidden

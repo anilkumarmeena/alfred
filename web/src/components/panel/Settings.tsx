@@ -812,7 +812,7 @@ function AccessPage() {
 }
 
 const KEYS: [string, [string, string][]][] = [
-  ["Voice", [["Connect, or mute and unmute", "Space"], ["Mute or unmute", "M"], ["Speaker off or on: replies in text only", "S"], ["Show or hide the transcript", "C"], ["End the conversation", "Esc"]]],
+  ["Voice", [["Connect, or mute and unmute", "Space"], ["Mute or unmute", "M"], ["Speaker off or on: replies in text only", "S"], ["End the conversation", "Esc"]]],
   ["Requests for a yes", [["Approve once", "Y"], ["Deny", "N"], ["Later, keep it in Tasks", "Esc"]]],
   ["Getting around", [["Search, jump to a task, add a to-do", "⌘K"], ["Show or hide the panel", "\\"], ["Close what's open", "Esc"], ["This list", "?"]]],
 ];

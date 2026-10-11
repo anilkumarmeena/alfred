@@ -138,7 +138,7 @@ These work the same on macOS and Linux; `make livekit` runs the `livekit-server`
 | `public/` | Copied as is: `sw.js`, manifest, icons |
 | `tests/` | vitest |
 
-- **Keys** wired in `main.tsx`: <kbd>Space</kbd>, <kbd>M</kbd>, <kbd>S</kbd>, <kbd>C</kbd>, <kbd>Esc</kbd>.
+- **Keys** wired in `main.tsx`: <kbd>Space</kbd>, <kbd>M</kbd>, <kbd>S</kbd>, <kbd>Esc</kbd>.
 - **`store.ts`** is mirrored onto `body[data-*]` for CSS.
 - **`mic.ts`** handles earphones and mic recovery; **`markdown.ts`** uses marked + DOMPurify.
 
@@ -150,6 +150,7 @@ These work the same on macOS and Linux; `make livekit` runs the `livekit-server`
 
 - **Builds:** `make web`, `services-install` and `services-restart` build first; a running server picks up a rebuild without restarting.
 - **Hot reload:** http://localhost:5173 serves `web/src` straight from disk and proxies `/api` to the web server on 8787 (`make web-api`, restarted on Python changes). Only the UI piece: `make web-dev` beside a running `make dev` or the services.
+- **UI against another JARVIS:** `make web-dev API=https://<host>.<tailnet>.ts.net` runs only the UI here, with hot reload, using that machine's API and LiveKit (through its `make tailscale-serve`). Sign in with that machine's passcode.
 - **Build ids** live in `<meta name="jarvis-build">`; the server reports the one it serves.
 
 > [!WARNING]

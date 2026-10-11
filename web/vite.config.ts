@@ -4,7 +4,9 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import preact from "@preact/preset-vite";
 
-const API = `http://127.0.0.1:${process.env.JARVIS_WEB_PORT || 8787}`;
+// Where /api goes in dev: this computer's web server, or another JARVIS (JARVIS_API=https://host.tailnet.ts.net).
+// changeOrigin sends that host's name, so /api/token answers with its LiveKit (wss://host/rtc via Tailscale Serve).
+const API = process.env.JARVIS_API || `http://127.0.0.1:${process.env.JARVIS_WEB_PORT || 8787}`;
 const SW = fileURLToPath(new URL("./public/sw.js", import.meta.url));
 
 // Serve /sw.js at the root in dev, as jarvis.web does, so the worker's scope is the whole app.
@@ -47,7 +49,7 @@ export default defineConfig({
   server: {
     host: process.env.HOST || "127.0.0.1",
     port: Number(process.env.WEB_PORT || 5173),
-    proxy: { "/api": API },
+    proxy: { "/api": { target: API, changeOrigin: true, secure: true } },
   },
   build: {
     target: "es2020",  // iOS 16.4+, the oldest Safari with Web Push

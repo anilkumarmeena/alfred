@@ -701,7 +701,7 @@ flowchart LR
 </table>
 
 - **The panel is deliberately limited:** it can't add MCP servers, change project folders or sign in Google accounts, because anyone with a login can reach it.
-- **Panel tabs:** Tasks (with scheduled jobs), To-dos, Projects, History (read-only view of `data/conversations/` through `jarvis/state/history.py`) and Settings (preferences, memory, vocabulary, approvals, connections, skills, logins and keys, heartbeat).
+- **Panel tabs:** Tasks (with scheduled jobs), To-dos, Projects, History (read-only view of `data/conversations/` through `jarvis/state/history.py`). **Settings** opens from the gear beside the bell in the top bar (preferences, memory, vocabulary, approvals, connections, skills, logins and keys, heartbeat).
 
 **Push** (`jarvis/notify/`):
 

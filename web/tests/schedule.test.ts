@@ -83,48 +83,71 @@ beforeEach(() => {
 
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 
-test("the Scheduled section comes first, a row per job with its kind, next run and status", async () => {
+test("Scheduled comes after Running, a row per job with its state light, kind, next run and buttons", async () => {
   await act(() => { render(h(ui.TaskList, {}), box); });
-  assert.equal(box.querySelector(".grp")?.textContent, "Scheduled");
+  assert.deepEqual([...box.querySelectorAll(".grp")].map((g) => g.textContent), ["Running", "Scheduled", "Recent"]);
   const rows = [...box.querySelectorAll(".sched")];
   assert.deepEqual(rows.map((r) => r.querySelector(".title")?.textContent), ["Morning brief", "Deploy live"]);
   assert.match(rows[0]!.querySelector(".meta")!.textContent!, /^Scheduled task · next /);
   assert.equal(rows[1]!.querySelector(".meta")!.textContent, "Watch · paused");
-  assert.deepEqual(rows.map((r) => r.querySelector(".tag")?.textContent), ["active", "paused"]);
-  assert.deepEqual(rows.map((r) => [...r.querySelectorAll("button.btn")].map((b) => b.textContent)),
+  assert.deepEqual(rows.map((r) => r.querySelector(".dot")?.className), ["dot ok", "dot off"]);
+  assert.deepEqual(rows.map((r) => [...r.querySelectorAll("button.ico")].map((b) => b.getAttribute("title"))),
     [["Pause", "Cancel"], ["Resume", "Cancel"]]);
   assert.ok(rows[1]!.classList.contains("paused"));
+});
+
+test("what waits on the user comes first, under a summary line", async () => {
+  state.tasks.value = [...state.tasks.value, {
+    id: 23, kind: "research", title: "Pick a venue", project: null, status: "waiting", created: 1, updated: 2,
+    activity: null, question: "Which one?", spoken: null, changes: null, error: null, cost: 0, seen: 1, in_place: 0,
+    branch: null, worktree: false, requests_only: false, pending_edits: 0, job: null, job_title: null,
+  }];
+  await act(() => { render(h(ui.TaskList, {}), box); });
+  assert.equal(box.querySelector(".tsum")?.textContent, "0 running · 1 needs you");
+  assert.deepEqual([...box.querySelectorAll(".grp")].map((g) => g.textContent), ["Waiting for you", "Running", "Scheduled", "Recent"]);
 });
 
 test("with nothing scheduled it says how to schedule something, and there's no form", async () => {
   state.schedules.value = [];
   await act(() => { render(h(ui.TaskList, {}), box); });
-  assert.match(box.querySelector(".empty")!.textContent!, /Nothing scheduled\. Ask JARVIS/);
+  assert.ok([...box.querySelectorAll(".empty")].some((e) => /Nothing scheduled\. Ask JARVIS/.test(e.textContent!)));
   assert.equal(box.querySelector(".scheds"), null);
   assert.equal(box.querySelector("form, input, textarea"), null);  // jobs are created by voice only
 });
 
-test("tasks a job started are tagged with its name in the task list", async () => {
+test("tasks a job started show the job's name on a row of its own", async () => {
   await act(() => { render(h(ui.TaskList, {}), box); });
   const cards = [...box.querySelectorAll("button.task")];
   assert.equal(cards.length, 2);
-  assert.equal(cards[0]!.querySelector(".tag.job")?.textContent, "Morning brief");
-  assert.equal(cards[1]!.querySelector(".tag.job"), null);
+  assert.equal(cards[0]!.querySelector(".jobmark")?.textContent, "Morning brief");
+  assert.equal(cards[0]!.querySelector(".jobmark")?.getAttribute("title"), "Scheduled: Morning brief");
+  assert.equal(cards[1]!.querySelector(".jobmark"), null);
 });
 
-test("pause, resume and cancel ask JARVIS and show the list it sends back", async () => {
+test("pause, resume and cancel on a job's page ask JARVIS and show the list it sends back", async () => {
+  const page = document.createElement("div");
+  document.body.append(page);
   await act(() => { render(h(ui.TaskList, {}), box); });
-  answers.schedule_pause = [{ ...JOB, status: "paused" }, WATCH];
-  await act(() => { (box.querySelector(".sched button.btn") as HTMLButtonElement).click(); });
+  state.item.value = "job-3";
+  answers.schedule = { ...JOB, recent: [], runs_problem: "" };
+  await act(() => { render(h(ui.ScheduleView, { id: 3 }), page); });
   await flush();
-  assert.deepEqual(calls.map((c) => [c.action, c.body.id]), [["schedule_pause", 3]]);
-  assert.equal(box.querySelector(".sched .meta")!.textContent, "Scheduled task · paused");
+  const button = (text: string) => [...page.querySelectorAll("button.btn")].find((b) => b.textContent === text) as HTMLButtonElement;
 
-  answers.schedule_cancel = [{ ...JOB, status: "paused" }];
-  await act(() => { (box.querySelectorAll(".sched")[1]!.querySelector("button.danger") as HTMLButtonElement).click(); });
+  answers.schedule_pause = [{ ...JOB, status: "paused" }, WATCH];
+  answers.schedule = { ...JOB, status: "paused", recent: [], runs_problem: "" };
+  await act(() => { button("Pause").click(); });
   await flush();
-  assert.deepEqual(calls.at(-1)!.action, "schedule_cancel");
-  assert.deepEqual([...box.querySelectorAll(".sched .title")].map((t) => t.textContent), ["Morning brief"]);
+  assert.deepEqual(calls.filter((c) => c.action.startsWith("schedule_")).map((c) => [c.action, c.body.id]), [["schedule_pause", 3]]);
+  assert.equal(box.querySelector(".sched .meta")!.textContent, "Scheduled task · paused");
+  assert.ok(button("Resume"));
+
+  answers.schedule_cancel = [WATCH];
+  await act(() => { button("Cancel").click(); });
+  await flush();
+  assert.equal(calls.filter((c) => c.action === "schedule_cancel").length, 1);
+  assert.deepEqual([...box.querySelectorAll(".sched .title")].map((t) => t.textContent), ["Deploy live"]);
+  render(null, page);
 });
 
 test("a job opens to its runs and results, Markdown rendered", async () => {

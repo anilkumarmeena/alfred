@@ -1,11 +1,21 @@
-// Top bar: link LED and timer, connection quality, clock, and toggles (⌘K, transcript, activity or notifications
-// before login, desktop panel column).
+// Top bar: link LED and timer, connection quality, clock, and toggles (⌘K, activity or notifications
+// before login, settings, desktop panel column).
 import { toggleNotifications } from "../state/push";
-import { activityOpen, activityUnread, needYou, paletteOpen, setSideOff, shown, sideOff, toggleActivity, unseen, wide } from "../state/panel";
-import { captions, clock, connected, linkText, passcode, pushOn, quality, setPasscode, showLogin, toggleCaptions } from "../state/store";
-import { BellIcon, CaptionsIcon, LockIcon, PanelIcon, SearchIcon } from "./icons";
+import {
+  activityOpen, activityUnread, closeSheet, go, needYou, paletteOpen, section, setSideOff, shown, sideOff, toggleActivity, unseen, visible, wide,
+} from "../state/panel";
+import { clock, connected, linkText, passcode, pushOn, quality, setPasscode, showLogin } from "../state/store";
+import { BellIcon, LockIcon, PanelIcon, SearchIcon, SettingsIcon } from "./icons";
+
+// Settings toggles like a dock button: open it, or close the sheet (phone) or go back to Tasks (desktop column).
+function toggleSettings() {
+  if (!(visible.peek() && section.peek() === "settings")) go("settings");
+  else if (wide.peek()) go("tasks");
+  else closeSheet();
+}
 
 export function Header() {
+  const settingsOn = visible.value && section.value === "settings";
   return (
     <header>
       <div class="brand">
@@ -20,9 +30,6 @@ export function Header() {
           <SearchIcon />Search <kbd>⌘K</kbd>
         </button>}
         <span id="clock">{clock}</span>
-        <button id="captionsBtn" class="mini" aria-pressed={captions.value} aria-label="Transcript" title="Transcript (C)" onClick={toggleCaptions}>
-          <CaptionsIcon />
-        </button>
         {shown.value
           ? <button id="activityBtn" class="mini" aria-pressed={activityOpen.value} aria-label="Activity" title="Activity"
               onClick={() => toggleActivity()}>
@@ -32,6 +39,10 @@ export function Header() {
               title={pushOn.value ? "Notifications on (tap to turn off)" : "Enable notifications"} onClick={toggleNotifications}>
               <BellIcon />
             </button>}
+        {shown.value && <button id="settingsBtn" class="mini" aria-pressed={settingsOn} aria-label="Settings" title="Settings"
+          onClick={toggleSettings}>
+          <SettingsIcon />
+        </button>}
         {shown.value && wide.value && <button id="sideBtn" class="mini" aria-pressed={!sideOff.value} aria-label="Panel" title="Show or hide the panel (\)"
           onClick={() => setSideOff(!sideOff.peek())}>
           <PanelIcon />

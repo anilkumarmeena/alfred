@@ -6,7 +6,7 @@ import { App } from "./components/App";
 import { panelKey } from "./components/panel/Overlays";
 import { openedFromNotification, setupPush } from "./state/push";
 import { activate, hangup, initSession, online, pageHidden, pageShown, pressMute, toggleSpeaker, visibilityChanged } from "./state/session";
-import { passcode, showLogin, toggleCaptions } from "./state/store";
+import { passcode, showLogin } from "./state/store";
 
 const root = document.getElementById("app");
 if (!root) throw new Error("Missing #app root element.");
@@ -25,7 +25,6 @@ document.addEventListener("keydown", (e) => {
   else if (e.code === "Escape") hangup();
   else if (e.code === "KeyM") pressMute();
   else if (e.code === "KeyS") toggleSpeaker();
-  else if (e.code === "KeyC") toggleCaptions();
 });
 
 document.addEventListener("visibilitychange", visibilityChanged);

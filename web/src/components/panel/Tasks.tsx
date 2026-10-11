@@ -6,10 +6,10 @@ import { jobOf, kindLabel, nextRun, type Schedule } from "../../lib/schedule";
 import { now } from "../../state/store";
 import {
   ACTIVE, act, ago, approvals, changeSchedule, detail, elapsed, flash, hhmm, item, jobDetail, lapses, loadSchedule,
-  loadTask, loadTasks, openSchedule, openTask, questions, quiet, roomy, runnerDown, schedules, tasks, when, type Approval,
+  loadTask, loadTasks, needYou, openSchedule, openTask, questions, quiet, roomy, runnerDown, schedules, tasks, when, type Approval,
   type Task, type TaskDetail,
 } from "../../state/panel";
-import { ChevronIcon, RetryIcon, StopIcon } from "../icons";
+import { BellIcon, ChevronIcon, EyeIcon, PauseIcon, PlayIcon, RepeatIcon, RetryIcon, StopIcon, TerminalIcon, TrashIcon } from "../icons";
 import { Answer } from "./Answer";
 import { cap, Empty, InlineForm, Led, Pill, StatusPill } from "./bits";
 import { Markdown } from "./Markdown";
@@ -82,6 +82,9 @@ function Stuck({ t }: { t: Task }) {
   );
 }
 
+// A run of a scheduled job: the job's name on a row of its own
+const JobMark = ({ name }: { name: string }) => <div class="jobmark" title={`Scheduled: ${name}`}><RepeatIcon /><span>{name}</span></div>;
+
 function Card({ t }: { t: Task }) {
   const ref = useRef<HTMLButtonElement>(null);
   const sel = item.value === String(t.id);
@@ -100,16 +103,15 @@ function Card({ t }: { t: Task }) {
         {active ? <Led kind={waiting || t.stalled ? "warn" : "run"} /> : !t.seen && <span class="new" />}
         <span class="id">#{t.id}</span><span class="title">{t.title}</span>
         {(waiting || !active) && <StatusPill status={t.status} requestsOnly={t.requests_only} />}
-        {t.stalled && <Pill kind="waiting">seems stuck</Pill>}
         {active && !waiting && <ChevronIcon />}
       </div>
+      {t.job_title && <JobMark name={t.job_title} />}
       <div class="meta">
-        {t.job_title && <><Pill kind="job">{t.job_title}</Pill> </>}
         {where(t)} · {active ? <span class="el">{elapsed(t.created, now.value)}</span> : ago(t.updated, now.value)}
         {t.pending_edits ? ` · ${t.pending_edits} suggested edit${t.pending_edits > 1 ? "s" : ""}` : ""}
       </div>
-      {active && <div class="doing">{first ? `Waiting for your yes to ${first}`
-        : t.stalled ? `No progress for ${t.stalled.minutes} min · last: ${t.activity || t.status}`
+      {active && <div class={`doing${t.stalled ? " stuck" : ""}`}>{first ? `Waiting for your yes to ${first}`
+        : t.stalled ? `Seems stuck: no progress for ${t.stalled.minutes} min · last: ${t.activity || t.status}`
         : <Markdown text={(waiting ? t.question : t.activity) || t.status} inline links={false} />}</div>}
       {t.status === "failed" && t.error && <div class="ferr">{t.error}</div>}
     </button>
@@ -122,7 +124,8 @@ const CANCEL_ASK = (j: Schedule) => `Cancel “${j.title}”? It won't run again
 
 const JobPill = ({ j }: { j: Schedule }) => <Pill kind={j.status === "active" ? "running" : "muted"}>{j.status}</Pill>;
 
-function JobButtons({ j }: { j: Schedule }) {
+// Labelled on the job's page; icons on its row in the list
+function JobButtons({ j, icons = false }: { j: Schedule; icons?: boolean }) {
   const busy = useSignal(false);
   const toggle = j.status === "paused" ? "resume" : "pause";
   async function change(action: "pause" | "resume" | "cancel") {
@@ -131,6 +134,14 @@ function JobButtons({ j }: { j: Schedule }) {
     await changeSchedule(action, j);
     busy.value = false;
   }
+  if (icons) return (
+    <>
+      <button class="ico" disabled={busy.value} aria-label={`${cap(toggle)} ${j.title}`} title={cap(toggle)}
+        onClick={() => change(toggle)}>{toggle === "pause" ? <PauseIcon /> : <PlayIcon />}</button>
+      <button class="ico danger" disabled={busy.value} aria-label={`Cancel ${j.title}`} title="Cancel"
+        onClick={() => change("cancel")}><TrashIcon /></button>
+    </>
+  );
   return (
     <>
       <button class="btn sm" disabled={busy.value} aria-label={`${cap(toggle)} ${j.title}`}
@@ -141,16 +152,18 @@ function JobButtons({ j }: { j: Schedule }) {
   );
 }
 
+const KIND_ICON: Record<string, () => preact.JSX.Element> = { reminder: BellIcon, task: RepeatIcon, watch: EyeIcon, command: TerminalIcon };
+
+// Title with its state as a light (green on, grey paused); kind and next run below; one-tap pause and cancel
 function JobRow({ j }: { j: Schedule }) {
-  const sel = jobOf(item.value) === j.id;
+  const sel = jobOf(item.value) === j.id, Kind = KIND_ICON[j.kind] ?? RepeatIcon;
   return (
     <div class={`sched${sel ? " sel" : ""}${j.status === "paused" ? " paused" : ""}`}>
       <button class="open" onClick={() => openSchedule(j.id)}>
-        <span class="title">{j.title}</span>
-        <span class="meta">{kindLabel(j.kind)} · {nextRun(j, now.value)}</span>
+        <span class="t1"><Led kind={j.status === "active" ? "ok" : "off"} /><span class="title">{j.title}</span></span>
+        <span class="meta"><Kind />{kindLabel(j.kind)} · {nextRun(j, now.value)}</span>
       </button>
-      <JobPill j={j} />
-      <JobButtons j={j} />
+      <JobButtons j={j} icons />
     </div>
   );
 }
@@ -217,17 +230,20 @@ export function ScheduleView({ id }: { id: number }) {
 
 // ── Tasks ───────────────────────────────────────────────────────
 
+// Most urgent first: what waits on the user, then what's running, then what's to come and what's done
 export function TaskList() {
   const all = tasks.value, running = all.filter((t) => ACTIVE.includes(t.status)), recent = all.filter((t) => !ACTIVE.includes(t.status));
+  const need = needYou.value, busy = all.filter((t) => t.status === "running" || t.status === "queued").length;
   return (
     <>
+      <p class="tsum">{busy} running{need ? <> · <b>{need} need{need === 1 ? "s" : ""} you</b></> : ""}</p>
       {runnerDown.value && <div class="note amber">{runnerDown.value}</div>}
-      <Scheduled />
-      {(approvals.value.length > 0 || questions.value.length > 0) && <div class="grp">Waiting for you</div>}
+      {need > 0 && <div class="grp">Waiting for you</div>}
       {approvals.value.map((a) => <Request key={a.id} a={a} />)}
       {questions.value.map((t) => <Question key={t.id} t={t} />)}
       <div class="grp">Running</div>
       {running.length ? running.map((t) => <Card key={t.id} t={t} />) : <Empty>Nothing running. Ask JARVIS to start a task.</Empty>}
+      <Scheduled />
       <div class="grp">Recent</div>
       {recent.length ? recent.map((t) => <Card key={t.id} t={t} />) : <Empty>No tasks in the last day.</Empty>}
     </>
@@ -336,7 +352,7 @@ export function TaskView({ id }: { id: number }) {
     <>
       <p class="big">{t.title}</p>
       <dl class="kv">
-        <dt>Status</dt><dd><StatusPill status={t.status} requestsOnly={t.requests_only} /></dd>
+        <dt>Status</dt><dd><StatusPill status={t.status} requestsOnly={t.requests_only} />{t.stalled && <> <Pill kind="waiting">seems stuck</Pill></>}</dd>
         <dt>Project</dt><dd>{where(t) || "research"}{branchy ? `, branch ${t.branch}` : ""}</dd>
         <dt>Started</dt><dd>{hhmm(t.created)} · {ACTIVE.includes(t.status) ? elapsed(t.created, now.value) : `took ${elapsed(t.created, t.updated * 1000)}`}{t.cost ? ` · $${t.cost.toFixed(2)}` : ""}</dd>
         {t.changes && <><dt>Changes</dt><dd>{t.changes}</dd></>}
@@ -354,16 +370,16 @@ export function TaskView({ id }: { id: number }) {
       {shellJob && <>
         <label class="lbl">Command</label>
         <code class="cmd">{t.instruction}</code>
-        <label class="lbl">{t.status === "running" ? "Live output" : "Output"}</label>
+        <label class="lbl">{t.status === "running" ? <><Led kind="run" />Live output</> : "Output"}</label>
         <Output text={t.command!.output_tail} />
       </>}
-      <label class="lbl">{ACTIVE.includes(t.status) ? "Live log" : "Log"}</label>
+      <label class="lbl">{ACTIVE.includes(t.status) ? <><Led kind="run" />Live log</> : "Log"}</label>
       <Log lines={t.log} />
       {t.status !== "discarded" && !shellJob && <>
         <label class="lbl">{ACTIVE.includes(t.status) ? "Reply or nudge" : "Follow up"}</label>
         <InlineForm placeholder={ACTIVE.includes(t.status) ? "e.g. “keep it to four buttons”" : "e.g. “now add tests”"} label="Send" send={reply(id)} />
       </>}
-      <div class="acts end">
+      <div class="acts end tacts">
         {ACTIVE.includes(t.status) && <button class="btn sm" disabled={!!busy.value} onClick={() => run("stop", `Stopped task ${id}`)}><StopIcon />Stop</button>}
         {shellJob ? finished && <button class="btn sm" disabled={!!busy.value} onClick={again}><RetryIcon />Run again</button>
           : (t.status === "failed" || t.status === "stopped") && <button class="btn sm" disabled={!!busy.value} onClick={() => run("retry", `Task ${id} is running again`)}><RetryIcon />Retry</button>}

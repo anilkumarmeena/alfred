@@ -7,16 +7,16 @@ import {
 } from "../../state/panel";
 import { dayLabel } from "../../lib/history";
 import { days } from "../../state/history";
-import { BackIcon, CloseIcon, HistoryIcon, ProjectsIcon, SettingsIcon, TasksIcon, TodosIcon } from "../icons";
+import { BackIcon, CloseIcon, HistoryIcon, ProjectsIcon, TasksIcon, TodosIcon } from "../icons";
 import { HistorySection } from "./History";
 import { ProjectsSection } from "./Projects";
 import { SETTINGS_TITLES, SettingsSection } from "./Settings";
 import { TasksSection } from "./Tasks";
 import { TodosSection } from "./Todos";
 
+// Tabs and dock; Settings opens from its button in the top bar.
 const SECTIONS: [Section, string, () => preact.JSX.Element][] = [
   ["tasks", "Tasks", TasksIcon], ["todos", "To-dos", TodosIcon], ["projects", "Projects", ProjectsIcon], ["history", "History", HistoryIcon],
-  ["settings", "Settings", SettingsIcon],
 ];
 const ROOMY = 760;  // px: panel width that fits list and open item side by side
 
@@ -47,7 +47,7 @@ function Tabs() {
 function title(): string {
   const sec = section.value, open = item.value;
   if (open && sec === "tasks") return jobOf(open) != null ? "Scheduled" : `Task ${open}`;
-  if (open && sec === "settings") return SETTINGS_TITLES[open as SettingsItem] ?? "Settings";
+  if (sec === "settings") return (open && SETTINGS_TITLES[open as SettingsItem]) || "Settings";
   if (open && sec === "history") return dayLabel(open, days.value?.today ?? "");
   return SECTIONS.find(([s]) => s === sec)![1];
 }

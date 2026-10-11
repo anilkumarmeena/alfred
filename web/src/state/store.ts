@@ -2,7 +2,7 @@
 import { computed, signal } from "@preact/signals";
 import type { AgentState, Focus, Link, Paused } from "../types";
 import type { BeforeCall, MicMode, Permission } from "../lib/native";
-import { CAPTIONS_KEY, PASSCODE_KEY, PUSH_KEY, SPEAKER_KEY, storage } from "../lib/storage";
+import { PASSCODE_KEY, PUSH_KEY, SPEAKER_KEY, storage } from "../lib/storage";
 
 const STATES: Record<AgentState, [string, string]> = {
   idle: ["Standing by", "Tap the core to connect"],
@@ -34,7 +34,6 @@ export const micPaused = signal<Exclude<Paused, "resuming">>("");  // micGuard s
 export const resuming = signal(false);  // auto-reconnecting a lost session
 export const paused = computed<Paused>(() => micPaused.value || (resuming.value ? "resuming" : ""));  // body[data-paused]
 export const loginShown = signal(false);  // body[data-view="login"]
-export const captions = signal(storage.get(CAPTIONS_KEY) !== "off");  // body[data-captions="off"] when false
 export const passcode = signal(storage.get(PASSCODE_KEY));
 export const audioBlocked = signal(false);  // autoplay blocked until a tap
 export const quality = signal<string | null>(null);  // LiveKit connection quality
@@ -110,12 +109,6 @@ export function setSpeakerOff(off: boolean): void {
   speakerOff.value = off;
   storage.set(SPEAKER_KEY, off ? "off" : null);
 }
-
-export function setCaptions(on: boolean): void {
-  captions.value = on;
-  storage.set(CAPTIONS_KEY, on ? null : "off");
-}
-export const toggleCaptions = () => setCaptions(!captions.value);
 
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 export function showNotice(msg?: string): void {

@@ -47,7 +47,6 @@ body[data-link="on"] .led { background: var(--ok); box-shadow: 0 0 8px var(--ok)
 .mini::after { content: ""; position: absolute; inset: -3px; }
 .mini:hover { color: var(--fg); background: rgba(255,255,255,.05); }
 .mini svg { width: 18px; height: 18px; }
-#captionsBtn[aria-pressed="false"] { color: var(--dim); }
 .signal { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; }
 .signal i { width: 3px; border-radius: 1px; background: var(--dim); }
 .signal i:nth-child(1) { height: 5px; } .signal i:nth-child(2) { height: 8px; } .signal i:nth-child(3) { height: 12px; }
@@ -135,7 +134,7 @@ body[data-live] #focusTalk { display: none; }
   -webkit-mask-position: 0 var(--cut); mask-position: 0 var(--cut); }
 main[data-fold] #transcript { transition: -webkit-mask-position var(--fold), mask-position var(--fold); }
 #transcript::-webkit-scrollbar { display: none; }
-body[data-view="login"] #transcript, body[data-captions="off"] #transcript { visibility: hidden; }
+body[data-view="login"] #transcript { visibility: hidden; }
 .feed { min-height: 100%; display: flex; flex-direction: column; justify-content: flex-end; gap: 14px; }
 .feed.room { min-height: calc(100% + 60px); }  /* lines under the stage: room to scroll up to them */
 #log { display: flex; flex-direction: column; gap: 14px; }
