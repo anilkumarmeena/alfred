@@ -2,8 +2,8 @@
 // only on JARVIS's computer (make projects).
 import { useSignal } from "@preact/signals";
 import { act, projects, type Project } from "../../state/panel";
-import { ChevronIcon, PlusIcon } from "../icons";
-import { Empty, Led, Pill } from "./bits";
+import { BranchIcon, ChevronIcon, PlusIcon, ProjectsIcon } from "../icons";
+import { Empty, Led } from "./bits";
 
 const set = (r: Project[] | null) => { if (r) projects.value = r; return !!r; };
 
@@ -14,6 +14,8 @@ function state(p: Project): [string, "ok" | "warn" | "bad"] {
   if (p.changed) return [`${p.changed} file${p.changed > 1 ? "s" : ""} changed`, "warn"];
   return ["clean", "ok"];
 }
+
+const short = (path: string) => path.replace(/^\/(Users|home)\/[^/]+/, "~");
 
 function Mode({ inPlace, set: choose, fixed }: { inPlace: boolean; set: (v: boolean) => void; fixed?: boolean }) {
   return (
@@ -34,20 +36,32 @@ function Card({ p }: { p: Project }) {
   async function remove() {
     if (confirm(`Take ${p.name} off the project list? Its folder stays as it is.`)) set(await act("project_remove", { name: p.name }, `Removed ${p.name}`));
   }
+  // Closing with unsaved edits asks first, then puts the fields back
+  function toggle() {
+    if (open.value && dirty) {
+      if (!confirm(`Discard your changes to ${p.name}?`)) return;
+      aliases.value = p.aliases.join(", "); about.value = p.about; inPlace.value = p.in_place;
+    }
+    open.value = !open.value;
+  }
   return (
     <div class="proj">
-      <button class="phead-btn" aria-expanded={open.value} onClick={() => { open.value = !open.value; }}>
+      <button class="phead-btn" aria-expanded={open.value} onClick={toggle}>
         <Led kind={led} />
         <div class="grow">
-          <div><b>{p.name}</b> <Pill kind={p.in_place ? "running" : "muted"}>{p.in_place ? "in place" : "worktree"}</Pill></div>
+          <div class="pname">{p.name}</div>
           {p.about && <div class="sub">{p.about}</div>}
-          <div class="folder">{p.path} · {said}</div>
+          <div class="pmeta" title={p.path}>{p.in_place ? <ProjectsIcon /> : <BranchIcon />}{p.in_place ? "In place" : "Worktree"} · {short(p.path)}</div>
+          {led !== "ok" && <div class={`pstate ${led}`}>{said}</div>}
         </div>
         <ChevronIcon />
       </button>
       {open.value && <div class="pedit">
         {p.git === "none" && p.exists && <div class="note amber">Tasks that work on a branch need git here.
           <button class="btn sm" onClick={async () => set(await act("project_git", { name: p.name }, `Set up git for ${p.name}`))}>Set up git</button></div>}
+        <label class="lbl">Folder</label>
+        <div class="field mono ro" title={p.path}>{p.path}</div>
+        <p class="hint">To move it, on JARVIS's computer: <code>uv run python -m jarvis.tasks.projects set {p.name} --path …</code></p>
         <label class="lbl">Said as</label>
         <input class="field" value={aliases.value} placeholder="other names, comma separated" onInput={(e) => { aliases.value = e.currentTarget.value; }} />
         <label class="lbl">About</label>
@@ -94,10 +108,9 @@ export function ProjectsSection() {
   return (
     <div class="projects">
       {!all.length && <Empty>No projects yet. Add one, or tell JARVIS about a folder.</Empty>}
-      {all.map((p) => <Card key={p.name} p={p} />)}
+      {all.length > 0 && <div class="plist">{all.map((p) => <Card key={p.name} p={p} />)}</div>}
       {adding.value ? <AddProject done={() => { adding.value = false; }} />
         : <button class="btn wide addproj" onClick={() => { adding.value = true; }}><PlusIcon />Add project</button>}
-      <p class="hint">To move a project to another folder, run this on JARVIS's computer: uv run python -m jarvis.tasks.projects set NAME --path …</p>
     </div>
   );
 }

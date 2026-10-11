@@ -261,8 +261,26 @@ body[data-panel="side"] .tsum + .grp { margin-top: 8px; }
 
 /* To-dos */
 .todo-add { margin-top: 6px; }
+.tsum + .todo-add { margin-top: 10px; }
 .todo-add .btn { padding: 9px 12px; }
-.todo-open { margin-top: 6px; }
+.todo-open { margin-top: 12px; }
+.todos .list { border: 1px solid var(--line); border-radius: 12px; background: rgba(12,26,38,.45); overflow: hidden; }
+.todos .row { padding: 11px 8px 11px 12px; font-size: 15px; }
+.todos .row.none { padding: 14px 12px; color: var(--muted); font-size: 13.5px; }
+.todos .rt { opacity: 1; gap: 0; }
+.todos .rt .ico { color: var(--dim); }
+.todos .row:hover .rt .ico, .todos .row:focus-within .rt .ico { color: var(--muted); }
+.todos .rt .ico:hover { color: var(--fg); }
+.todos .check { position: relative; transition: background .2s, border-color .2s; }
+.todos .check::after { content: ""; position: absolute; inset: -9px; }  /* thumb-sized tap area */
+.todos .check svg { transition: opacity .2s; }
+.todos .row .grow > div:first-child { transition: color .25s; }
+.todos .tap { cursor: text; }
+.todos .sub.when { margin-top: 3px; font-size: 12px; color: var(--dim); }
+/* Added elsewhere (by voice, a task, another device): a glow, and a dot until touched or 10 s pass */
+.todos .row.fresh { animation: flash 1.6s ease 2; }
+.todos .row.fresh .new { display: inline-block; margin: 0 8px 1px 0; vertical-align: middle; }
+@keyframes flash { 0%, 100% { background: transparent; } 30% { background: rgba(79,209,255,.12); } }
 .todo-done[data-folded] { display: none; }
 
 /* Projects */
@@ -274,8 +292,16 @@ body[data-panel="side"] .tsum + .grp { margin-top: 8px; }
 .phead-btn[aria-expanded="true"] > svg { transform: rotate(90deg); }
 .pedit { padding: 0 2px 14px; }
 .proj.add { padding: 2px 2px 14px; }
-.folder { font: 12px/1.4 var(--mono); color: var(--muted); margin-top: 3px; overflow-wrap: anywhere; }
+.pname { font-weight: 600; }
+.pmeta { display: flex; align-items: center; gap: 6px; margin-top: 4px; color: var(--muted); font-size: 12.5px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pmeta svg { width: 13px; height: 13px; flex: none; color: var(--dim); }
+.pstate { margin-top: 3px; font-size: 12.5px; }
+.pstate.warn { color: var(--accent-2); }
+.pstate.bad { color: var(--danger); }
+.field.ro { color: var(--muted); overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
+.pedit .field.ro + .hint code { overflow-wrap: anywhere; }
 .addproj { margin-top: 12px; }
+body[data-panel="dock"] .pedit { padding-left: 19px; }  /* past the light, under the name */
 
 /* History */
 .hsearch { margin: 6px 0 12px; }
@@ -437,6 +463,19 @@ body[data-panel="dock"] .askcard { width: 100%; }
 body[data-panel="dock"] .askcard kbd, body[data-panel="dock"] .palbox .foot { display: none; }
 body[data-panel="dock"] .keys { display: none; }
 
+/* Phone: no cards. Lists use the sheet's full width, rows split by hairlines; alerts (a request for a yes, a
+   question), code and logs keep their boxes. */
+body[data-panel="dock"] :is(.task, .srv) { margin: 0; padding-left: 0; padding-right: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: none; }
+body[data-panel="dock"] :is(.grp, .tsum, .big, .lbl, .note) + :is(.task, .srv), body[data-panel="dock"] .srv:first-child { border-top: 0; }
+body[data-panel="dock"] .task:hover { border-color: var(--line); }
+body[data-panel="dock"] .task.sel { background: none; box-shadow: none; }
+body[data-panel="dock"] .task.ring { animation: flash 1.4s ease 2; }
+body[data-panel="dock"] :is(.scheds, .todos .list) { border: 0; border-radius: 0; background: none; overflow: visible; }
+body[data-panel="dock"] .sched { padding-left: 0; }
+body[data-panel="dock"] .sched.sel { background: none; box-shadow: none; }
+body[data-panel="dock"] .todos .row { padding-left: 0; padding-right: 0; }
+body[data-panel="dock"] .todos .row.none { padding: 12px 0; }
+
 /* ══════════ Desktop: voice column left, panel right ══════════ */
 @media (min-width: 900px) {
   body[data-panel] .palbtn { display: inline-flex; }
@@ -479,8 +518,9 @@ body[data-panel="dock"] .keys { display: none; }
   body[data-panel="side"] .todo-open { grid-column: 1; grid-row: 2; }
   body[data-panel="side"] .grp.fold { grid-column: 2; grid-row: 1; margin: 0; height: 38px; pointer-events: none; }
   body[data-panel="side"] .grp.fold svg { display: none; }
-  body[data-panel="side"] .todo-done, body[data-panel="side"] .todo-done[data-folded] { display: block; grid-column: 2; grid-row: 2; margin-top: 6px; padding: 2px 12px;
-    border: 1px solid var(--line); border-radius: 12px; background: rgba(0,0,0,.18); }
+  body[data-panel="side"] .todo-done, body[data-panel="side"] .todo-done[data-folded] { display: block; grid-column: 2; grid-row: 2; margin-top: 12px;
+    background: rgba(0,0,0,.18); }
+  body[data-panel="side"] .plist { display: contents; }
   body[data-panel="side"] .projects { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; align-items: start; }
   body[data-panel="side"] .proj, body[data-panel="side"] .proj:first-child { border: 1px solid var(--line); border-radius: 14px; background: rgba(12,26,38,.45); padding: 4px 12px; }
   body[data-panel="side"] .projects > .hint, body[data-panel="side"] .projects > .empty { grid-column: 1 / -1; }

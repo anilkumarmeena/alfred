@@ -1,7 +1,7 @@
 """The user's to-do list (todos table in the profile database).
 
 Text API (voice tools, task runner) matches items by wording: find(), done(), reword(). The control panel works by
-id: items(), check(), edit(), delete(). read() renders a Markdown checklist, open items first.
+id: items(), check(), edit(), delete(), restore(). read() renders a Markdown checklist, open items first.
 """
 
 import re
@@ -119,3 +119,21 @@ def edit(item_id: int, text: str) -> None:
 
 def delete(item_id: int) -> None:
     _change(item_id, "delete from todos where id = ?")
+
+
+def _when(value) -> float | None:
+    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) and value > 0 else None
+
+
+def restore(item: dict) -> None:
+    """Put back an item just deleted (the panel's Undo): in its old place, or at the end if a new one took its id."""
+    text = " ".join(scan.clean(str(item.get("text", ""))).split())
+    if not text:
+        raise ValueError("The to-do is empty.")
+    done = bool(item.get("done"))
+    row = (text, int(done), _when(item.get("created")) or time.time(), (_when(item.get("done_at")) or time.time()) if done else None)
+    with _db() as db:
+        try:
+            db.execute("insert into todos (id, text, done, created, done_at) values (?, ?, ?, ?, ?)", (int(item["id"]), *row))
+        except sqlite3.IntegrityError:
+            db.execute("insert into todos (text, done, created, done_at) values (?, ?, ?, ?)", row)

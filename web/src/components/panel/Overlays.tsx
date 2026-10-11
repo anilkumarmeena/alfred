@@ -3,8 +3,8 @@ import { useEffect, useRef } from "preact/hooks";
 import { useSignal } from "@preact/signals";
 import { pressMute, toggleSpeaker } from "../../state/session";
 import {
-  activity, activityOpen, act, answer, approvals, ask, askGuard, closeSheet, go, lapses, openTask, paletteOpen,
-  setSideOff, sheet, sideOff, tasks, toast, toastAction, toastText, todos, toggleActivity, tuck, when, wide, type Section, type SettingsItem,
+  activity, activityOpen, answer, approvals, ask, askGuard, closeSheet, go, lapses, openTask, paletteOpen,
+  setSideOff, sheet, sideOff, tasks, toast, toastAction, toastText, todoAct, toggleActivity, tuck, when, wide, type Section, type SettingsItem,
 } from "../../state/panel";
 import { now } from "../../state/store";
 import {
@@ -97,8 +97,7 @@ export function Palette() {
   const text = q.value.trim(), words = text.toLowerCase().split(/\s+/).filter(Boolean);
   const items = commands().filter((c) => words.every((w) => c.label.toLowerCase().includes(w)));
   if (text) items.push({ icon: PlusIcon, label: `Add to-do “${text}”`, hint: "↵", run: async () => {
-    const r = await act("todo_add", { text }, "Added to To-dos");
-    if (r) todos.value = r;
+    await todoAct("todo_add", { text }, "Added to To-dos");
   } });
   const at = Math.min(sel.value, items.length - 1);
   const run = (i: number) => { paletteOpen.value = false; items[i]?.run(); };

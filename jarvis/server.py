@@ -27,7 +27,7 @@ from jarvis import panel
 from jarvis.core import credentials, logins
 from jarvis.core.config import LIVEKIT_URL, PUSH_ENABLED, ROOT, WEB_PORT
 from jarvis.notify import apns, fcm, push
-from jarvis.state import activity, pictures, shared_files
+from jarvis.state import activity, pictures, shared_files, todo
 from jarvis.tasks import client
 from jarvis.voice import quiet
 
@@ -40,7 +40,7 @@ _failures: list[float] = []
 PUSH_OFF = ("Notifications are off on the computer JARVIS runs on. Remove JARVIS_PUSH=off from .env, then restart "
             "JARVIS.")
 PING_SECONDS = 25  # /api/events keepalive interval
-ACTIVITY_SECONDS = 2  # /api/events poll interval for activity entries (written by other processes)
+ACTIVITY_SECONDS = 2  # /api/events poll interval for activity entries and to-dos (written by other processes)
 RUNNER_DOWN = "JARVIS's task runner isn't running."
 BUILD_META = re.compile(r'<meta name="jarvis-build" content="([0-9a-f]{1,64})"')
 MAX_REQUEST = pictures.MAX_UPLOAD * 4 // 3 + 64 * 1024  # base64 photo plus JSON overhead
@@ -243,8 +243,9 @@ async def panel_action(request: web.Request, body: dict) -> web.Response:
 
 @authed
 async def events(request: web.Request, _: dict) -> web.StreamResponse:
-    """NDJSON stream: "hello" (build id, so stale pages reload), then runner events, "activity" entries and "ping"
-    every PING_SECONDS when idle. Ends with an "error" line if the runner goes away; the page reconnects."""
+    """NDJSON stream: "hello" (build id, so stale pages reload), then runner events, "activity" entries, "todos" (the
+    whole list, whenever it changes) and "ping" every PING_SECONDS when idle. Ends with an "error" line if the runner
+    goes away; the page reconnects."""
     resp = web.StreamResponse(headers={"Content-Type": "application/x-ndjson", "Cache-Control": "no-store",
                                        "X-Accel-Buffering": "no"})
     await resp.prepare(request)
@@ -259,12 +260,16 @@ async def events(request: web.Request, _: dict) -> web.StreamResponse:
         await queue.put(None)
 
     async def bell() -> None:
-        last = await asyncio.to_thread(activity.latest_id)
+        last, todos = await asyncio.to_thread(activity.latest_id), await asyncio.to_thread(todo.items)
         while True:
             await asyncio.sleep(ACTIVITY_SECONDS)
             for entry in reversed(await asyncio.to_thread(activity.recent, last)):  # oldest first
                 last = entry["id"]
                 await queue.put({"type": "activity", "entry": entry})
+            # To-dos change by voice, from tasks and on other devices: send the list when it does
+            if (now := await asyncio.to_thread(todo.items)) != todos:
+                todos = now
+                await queue.put({"type": "todos", "todos": todos})
 
     reader, watcher = asyncio.create_task(relay()), asyncio.create_task(bell())
     try:

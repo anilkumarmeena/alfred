@@ -317,6 +317,14 @@ async def todo_delete(body: dict) -> list[dict]:
     return todo.items()
 
 
+@action
+async def todo_restore(body: dict) -> list[dict]:
+    """Undo a delete: the item as todo_delete's caller last saw it."""
+    todo.restore({"id": _id(body), "text": _text(body, "text", 500), "done": body.get("done") is True,
+                  "created": body.get("created"), "done_at": body.get("done_at")})
+    return todo.items()
+
+
 # ── Projects ────────────────────────────────────────────────────
 
 

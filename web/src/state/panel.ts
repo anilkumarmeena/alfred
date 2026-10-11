@@ -190,6 +190,35 @@ export async function act<T = any>(action: string, fields: Record<string, unknow
   }
 }
 
+// To-dos come from this device's own actions or from the event stream (voice, tasks, other devices). Open items the
+// stream brings that this device didn't add are fresh for a while: the list highlights them.
+const FRESH_MS = 10000;
+export const freshTodos = signal<ReadonlySet<number>>(new Set());
+let ownTodoCalls = 0;  // in flight: the stream may bring their result first
+
+export function setTodos(next: Todo[]) {
+  const before = todos.peek();
+  todos.value = next;
+  if (!before || ownTodoCalls) return;
+  const known = new Set(before.map((t) => t.id)), added = next.filter((t) => !t.done && !known.has(t.id)).map((t) => t.id);
+  if (!added.length) return;
+  freshTodos.value = new Set([...freshTodos.peek(), ...added]);
+  setTimeout(() => unfresh(...added), FRESH_MS);
+}
+export function unfresh(...ids: number[]) {
+  const now = freshTodos.peek();
+  if (ids.some((id) => now.has(id))) freshTodos.value = new Set([...now].filter((id) => !ids.includes(id)));
+}
+// A to-do action from this device; the list it returns is shown, never highlighted
+export async function todoAct(action: string, fields: Record<string, unknown> = {}, done?: string): Promise<Todo[] | null> {
+  ownTodoCalls++;
+  try {
+    const r = await act<Todo[]>(action, fields, done);
+    if (r) todos.value = r;
+    return r;
+  } finally { ownTodoCalls--; }
+}
+
 export async function loadTasks() {
   try {
     const r = await panelCall<{ tasks: Task[]; approvals: Approval[]; schedules?: Schedule[] } & Partial<Quiet>>("tasks");
@@ -275,7 +304,7 @@ async function loadPrefs() { prefs.value = await act<Prefs>("preferences") ?? pr
 // Fetch a section's data afresh.
 export function load(sec: Section, open: string | null = item.peek()) {
   if (sec === "tasks") loadTasks();
-  else if (sec === "todos") act<Todo[]>("todos").then((r) => { if (r) todos.value = r; });
+  else if (sec === "todos") act<Todo[]>("todos").then((r) => { if (r) setTodos(r); });
   else if (sec === "projects") act<Project[]>("projects").then((r) => { if (r) projects.value = r; });
   else if (sec === "history") {
     loadDays();
@@ -405,6 +434,10 @@ function handle(event: any) {
       build.served(event.build);  // newer build: reload now or after the voice session
       loadTasks();
       loadActivity();
+      if (todos.peek()) load("todos");  // changes while the stream was down
+      break;
+    case "todos":
+      if (todos.peek()) setTodos(event.todos);  // else loaded when To-dos opens
       break;
     case "activity":
       addActivity(event.entry);

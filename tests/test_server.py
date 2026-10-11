@@ -11,8 +11,10 @@ import re
 import pytest
 from livekit import api
 
+from conftest import use_profile
 from jarvis import server
 from jarvis.core import logins
+from jarvis.state import todo
 from jarvis.voice import quiet
 
 KEY, SECRET = "devkey", "a-livekit-secret-long-enough-to-sign-with"
@@ -147,3 +149,32 @@ def test_the_phone_log_takes_lines_only_and_cleans_them(site, caplog):
     assert call(server.phone_log, sent) == (200, {"ok": True})
     logged = [r.getMessage() for r in caplog.records if r.getMessage().startswith("iphone: press")]
     assert len(logged) == server.MAX_LOG_LINES and logged[0] == "iphone: press 0 ??[31m"
+
+
+def test_the_event_stream_sends_the_to_do_list_when_it_changes(site, monkeypatch, tmp_path):
+    use_profile(monkeypatch, tmp_path)
+    monkeypatch.setattr(server, "ACTIVITY_SECONDS", 0.01)
+
+    async def runner_says_nothing():
+        await asyncio.Event().wait()
+        yield
+
+    sent = []
+
+    class Stream:  # records the lines; the client hangs up once the list arrives
+        def __init__(self, **_) -> None: ...
+
+        async def prepare(self, _) -> None: ...
+
+        async def write(self, line: bytes) -> None:
+            sent.append(json.loads(line))
+            if sent[-1]["type"] == "hello":  # by voice, say, once the stream is watching
+                asyncio.get_running_loop().call_later(0.05, todo.add, "Buy milk")
+            elif sent[-1]["type"] == "todos":
+                raise ConnectionResetError
+
+    monkeypatch.setattr(server.client, "events", runner_says_nothing)
+    monkeypatch.setattr(server.web, "StreamResponse", Stream)
+    asyncio.run(asyncio.wait_for(server.events(Request({"passcode": RIGHT})), 5))
+    assert [e["type"] for e in sent] == ["hello", "todos"]
+    assert [t["text"] for t in sent[1]["todos"]] == ["Buy milk"]

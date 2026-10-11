@@ -674,7 +674,7 @@ flowchart LR
 | `GET /`, `/sw.js`, `/static/` | The built web app (`web/dist`) and service worker |
 | `POST /api/token` | Passcode → 12-hour LiveKit token for a fresh room, with lockout |
 | `POST /api/panel/<action>` | Control panel actions (`jarvis/panel.py`) |
-| `POST /api/events` | Runner events and bell entries as JSON lines, with pings and a build hello for reloads |
+| `POST /api/events` | Runner events, bell entries and the to-do list (whenever it changes) as JSON lines, with pings and a build hello for reloads |
 | `POST /api/approvals/<id>` | Answer from a push, with its nonce |
 | `POST /api/picture`, `/api/picture/drop` | Photos for the next turn |
 | `/api/push/*` | Web Push key and subscriptions, native app tokens (APNs, FCM) |

@@ -79,6 +79,7 @@ export const RetryIcon = () => <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0
 export const RepeatIcon = () => <svg viewBox="0 0 24 24"><path d="m17 2 4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3" /></svg>;
 export const EyeIcon = () => <svg viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>;
 export const TerminalIcon = () => <svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="3" /><path d="m7.5 10 3 2.5-3 2.5M13 15h3.5" /></svg>;
+export const BranchIcon = () => <svg viewBox="0 0 24 24"><circle cx="6" cy="5.5" r="2" /><circle cx="6" cy="18.5" r="2" /><circle cx="18" cy="8" r="2" /><path d="M6 7.5v9M18 10c0 4-6 3.5-11 7" /></svg>;
 export const PauseIcon = () => <svg viewBox="0 0 24 24"><path d="M9 6v12M15 6v12" /></svg>;
 export const PlayIcon = () => <svg viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" /></svg>;
 export const StopIcon = () => <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>;

@@ -66,6 +66,30 @@ def test_the_panel_s_todo_actions_return_the_list(db):
         call("todo_check", {})
 
 
+def test_undoing_a_delete_puts_the_to_do_back_in_its_place(db):
+    first, second = (call("todo_add", {"text": t})[-1] for t in ("Call the bank", "Book the car service"))
+    call("todo_delete", {"id": first["id"]})
+    back = call("todo_restore", first)
+    assert [(i["id"], i["text"], i["created"]) for i in back] == [(first["id"], "Call the bank", first["created"]),
+                                                                   (second["id"], "Book the car service", second["created"])]
+
+
+def test_a_restored_to_do_whose_id_was_taken_goes_at_the_end(db):
+    gone = call("todo_add", {"text": "Call the bank"})[-1]
+    call("todo_delete", {"id": gone["id"]})
+    taken = call("todo_add", {"text": "Renew the domain"})[-1]  # may reuse the freed id
+    back = call("todo_restore", gone | {"id": taken["id"]})
+    assert [i["text"] for i in back] == ["Renew the domain", "Call the bank"]
+
+
+def test_a_done_to_do_comes_back_done(db):
+    item = call("todo_add", {"text": "Call the bank"})[-1]
+    done = call("todo_check", {"id": item["id"], "done": True})[0]
+    call("todo_delete", {"id": item["id"]})
+    (back,) = call("todo_restore", done)
+    assert back["done"] is True and back["done_at"] == done["done_at"]
+
+
 # ── Memory and "about you" ──────────────────────────────────────
 
 
