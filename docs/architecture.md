@@ -283,7 +283,7 @@ sequenceDiagram
 
 ### The voice shell
 
-`Bash` runs in Claude Code's own sandbox (Seatbelt on macOS; bubblewrap and socat on Linux) from `data/shell/`: **reads anything but secrets, writes only `data/shell/`, no network.** Inside it, commands run without asking.
+`Bash` runs in Claude Code's own sandbox (Seatbelt on macOS; bubblewrap and socat on Linux) from `data/shell/`: **reads anything but secrets, writes only `data/shell/`, no network.** Inside it, commands run without asking. On macOS it can also use the GPU (Metal), as task sandboxes can (`jarvis/safety/gpu.py`).
 
 A command that needs more, and every `start_job`, goes to `ShellGate` (`jarvis/safety/shell.py`). It splits the line at `;`, `&&`, `|` and substitutions and judges each part with `commands.risky`:
 
@@ -524,7 +524,7 @@ Each run resumes the task's own Claude session, so follow-ups keep everything it
 
 - **File gate reads:** task folders, `JARVIS_TASK_READ_DIRS` and voice session logs.
 - **Secrets:** `.env*`, keys, credential files, `secrets/`, `~/.ssh` and similar. `.env` values are blanked in the CLI's environment.
-- **Sandbox:** network is open through the sandbox proxy.
+- **Sandbox:** network is open through the sandbox proxy. On macOS, Metal works too: Claude Code's settings can't add IOKit rules, so `jarvis/safety/sandbox-bin/env`, first on the CLI's `PATH` (`safety/gpu.py`), appends two allows to each sandboxed command's Seatbelt profile: the GPU's user client (`AGXDeviceUserClient`) and the shader compiler (`com.apple.MTLCompilerService`). Nothing else changes. Metal's shader caches stay unwritable, so compiling Metal source at run time (`mx.compile`, some MLX JIT kernels) still fails; MLX Whisper's precompiled kernels don't need it. If a CLI update stops starting commands through `env`, the shim is skipped and Metal is unavailable again; `tests/test_gpu.py` checks the bundled CLI for that.
 - **Host commands:** the walls deny **reading secrets, writing JARVIS's files, and the runner's socket** (compared in [Security model](#host-walls-seatbelt-and-bubblewrap)). The environment comes from `host.task_env()`, keeping only the SSH agent.
 - **Own things:** deleting must be strictly inside its own folders.
 - **Project setup:** CLAUDE.md, `.claude/agents`, `.claude/skills` and `.claude/commands`. Flagged files are left out and the user is told.

@@ -26,7 +26,7 @@ from jarvis.core.config import (
     TOOL_SEARCH,
     injection_check_on,
 )
-from jarvis.safety import injection
+from jarvis.safety import gpu, injection
 
 log = logging.getLogger("jarvis.brain.sdk")
 TOOL_SEARCH_TOOL = "ToolSearch"  # CLI tool that loads deferred tools
@@ -86,7 +86,8 @@ def sdk_options(env: dict[str, str] | None = None, screen_seconds: float = INJEC
     Settings are excluded because their allow rules would bypass permission_mode and can_use_tool. With tools and
     the injection check on, tool results are screened, `screen_seconds` per check.
     """
-    options = on_demand(options | {"env": {"CLAUDE_CONFIG_DIR": CLAUDE_CONFIG_DIR} | (env or {})})
+    env = {"CLAUDE_CONFIG_DIR": CLAUDE_CONFIG_DIR} | gpu.env(options.get("sandbox")) | (env or {})
+    options = on_demand(options | {"env": env})
     if (options.get("tools") or options.get("mcp_servers")) and injection_check_on():
         options["hooks"] = injection.with_screening(options.get("hooks"), screen_seconds)
     return ClaudeAgentOptions(
