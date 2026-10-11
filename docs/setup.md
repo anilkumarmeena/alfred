@@ -108,7 +108,7 @@ curl -fsSL https://claude.ai/install.sh | bash                                  
 Without `brew`, `make install` **builds the LiveKit server from source** into `~/.local/bin` (`make livekit-bin`), because LiveKit publishes no macOS binaries. That takes about a minute and needs no Go install.
 
 > [!TIP]
-> **uv needs nothing from you here:** `make` finds it in `~/.local/bin` or where `pip install uv` put it (`~/Library/Python/3.x/bin`), even off your `PATH`, and otherwise installs the pinned version into `~/.local/bin`.
+> **uv needs nothing from you here:** `make` finds it in `~/.local/bin` or where `pip install uv` put it (`~/Library/Python/3.x/bin`), even off your `PATH`, and otherwise installs the pinned version into `~/.local/bin`. A wrapper such as **PMG** (`~/.pmg/bin/uv`) keeps working: make adds those folders to the end of `PATH`, so the wrapper finds the real uv.
 
 </details>
 

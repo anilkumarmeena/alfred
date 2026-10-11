@@ -4,11 +4,14 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 unexport VIRTUAL_ENV  # stops uv warning about a shell-wide venv
 
-# uv: on PATH, else where its installer or `pip install --user uv` puts it (make install fetches it there if missing)
+# uv's usual homes (its installer, cargo, `pip install --user uv`), appended to PATH: make then finds uv when the
+# shell's PATH lacks them, and wrappers ahead of it on PATH (e.g. PMG's ~/.pmg/bin/uv) find the real one.
+# make install and make setup fetch the pinned uv into ~/.local/bin when no working uv is found.
+empty     :=
+UV_DIRS   := $(HOME)/.local/bin $(HOME)/.cargo/bin $(wildcard $(HOME)/Library/Python/*/bin)
+export PATH := $(PATH):$(subst $(empty) $(empty),:,$(strip $(UV_DIRS)))
 UV_VERSION := 0.13.0
-UV_BIN    := $(or $(shell command -v uv),$(firstword $(wildcard $(HOME)/.local/bin/uv $(HOME)/.cargo/bin/uv \
-             $(HOME)/Library/Python/*/bin/uv)),$(HOME)/.local/bin/uv)
-UV        := $(UV_BIN) run
+UV        := uv run
 UNAME     := $(shell uname -s)
 # Main checkout, even when run from a task's worktree (data/worktrees/jarvis-N)
 MAIN_DIR  := $(or $(patsubst %/.git,%,$(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)),$(CURDIR))
@@ -78,11 +81,11 @@ ifeq ($(UNAME),Darwin)
 else
 	@command -v livekit-server >/dev/null || [ -x $(LOCAL_BIN)/livekit-server ] || $(MAKE) --no-print-directory livekit-bin
 endif
-	$(UV_BIN) sync
+	uv sync
 	$(MAKE) models web-build
 
-uv-bin: ## Install the pinned uv into ~/.local/bin if there's none (no sudo)
-	@[ -x "$(UV_BIN)" ] || { set -o pipefail; curl -LsSf https://astral.sh/uv/$(UV_VERSION)/install.sh | UV_INSTALL_DIR=$(HOME)/.local/bin sh; }
+uv-bin: ## Install the pinned uv into ~/.local/bin if no working one is found (no sudo)
+	@uv --version >/dev/null 2>&1 || { set -o pipefail; curl -LsSf https://astral.sh/uv/$(UV_VERSION)/install.sh | UV_INSTALL_DIR=$(HOME)/.local/bin sh; }
 
 livekit-bin: ## Install livekit-server into ~/.local/bin (built from source on macOS, about a minute)
 ifeq ($(UNAME),Darwin)
