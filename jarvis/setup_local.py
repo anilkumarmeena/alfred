@@ -1,7 +1,7 @@
 """Local setup, safe to rerun: uv run python -m jarvis.setup_local [--install | start | stop | status | labels]
 
   (default)  fill missing LiveKit keys, passcode and vault master key in .env (mode 600), move keys into the vault
-             and the passcode into logins (shown once); ask once for the projects folder; write secrets/livekit.yaml
+             and the passcode into logins (make passcode shows it again); ask once for the projects folder; write secrets/livekit.yaml
   --install  also (re)install and start the services: launchd agents from deploy/*.plist on macOS, systemd user
              units from deploy/systemd/*.service on Linux
   start      load installed services, installing missing ones
@@ -375,7 +375,7 @@ def main() -> None:
     ip = write_livekit_config()
     print(f"LiveKit config written. Media address: {ip or 'local network (Tailscale not running)'}")
     if new_passcode:
-        # Shown once; only its hash is kept
+        # Also kept encrypted in the vault: make passcode shows it again
         print(f"Phone passcode for {logins.first_name()}: {new_passcode}")
 
     if "--install" in sys.argv:

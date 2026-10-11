@@ -164,7 +164,7 @@ make install
 
 ```sh
 make claude-login
-make setup            # shows your passcode once: note it down
+make setup            # prints your phone passcode (make passcode shows it again)
 ```
 
 **3. Talk to it** — straight away in the terminal, or as always-on services:

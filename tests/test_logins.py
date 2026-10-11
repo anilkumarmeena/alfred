@@ -12,6 +12,7 @@ import pytest
 from jarvis import panel, server
 from jarvis.core import logins, profile, vault
 from tests.test_panel import reply
+from tests.test_vault import key  # noqa: F401  (fixture: fresh master key, empty vault)
 from tests.test_web_build import Request as TokenRequest
 
 
@@ -155,3 +156,33 @@ def test_the_panel_manages_logins_and_never_shows_a_passcode(home):
         asyncio.run(panel.call("login_passcode", me | {"name": "Sam", "passcode_new": "123456"}))
     got = asyncio.run(panel.call("login_remove", me | {"name": "Sam"}))
     assert [x["name"] for x in got["logins"]] == ["Alex"]
+
+
+# ── make passcode ───────────────────────────────────────────────
+
+
+def test_make_passcode_shows_each_login_from_an_encrypted_copy(home, key, capsys):
+    logins.add("Alex", "123456")
+    logins.add("Sam", "654321")
+    logins.set_passcode("sam", "777777")  # names are case-insensitive
+    assert logins.shown() == [("Alex", "123456"), ("Sam", "777777")]
+    assert "123456" not in logins.FILE.read_text()  # the copy lives in the vault, encrypted
+    logins.remove("Sam")
+    assert logins.shown() == [("Alex", "123456")] and len(vault.names()) == 1
+    assert logins.main() == 0 and capsys.readouterr().out == "Alex: 123456\n"
+
+
+def test_without_a_vault_key_a_login_still_works_and_make_passcode_says_how_to_reset(home, capsys):
+    logins.add("Alex", "123456")  # no master key in tests by default
+    assert logins.check("123456") == "Alex" and logins.shown() == [("Alex", None)]
+    assert logins.main() == 0 and "not kept" in capsys.readouterr().out
+
+
+def test_adopting_the_first_setup_passcode_keeps_a_copy(home, key, monkeypatch):
+    monkeypatch.setenv(logins.VAR, "246810")
+    assert logins.adopt() == "Alex" and logins.shown() == [("Alex", "246810")]
+
+
+def test_no_panel_answer_carries_a_passcode(home, key):
+    logins.add("Alex", "123456")
+    assert "123456" not in json.dumps(asyncio.run(panel.call("access", {"login": "Alex"})))

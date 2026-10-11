@@ -688,7 +688,7 @@ flowchart LR
 <td width="50%" valign="top">
 
 **🔐 Logins**<br>
-`jarvis/core/logins.py`: one login per person; the passcode alone identifies it, stored as a salted scrypt hash in `secrets/logins.json`.
+`jarvis/core/logins.py`: one login per person; the passcode alone identifies it, checked against a salted scrypt hash in `secrets/logins.json`. An encrypted copy in the vault lets `make passcode` show it in the terminal; no HTTP route returns it.
 
 </td>
 <td width="50%" valign="top">

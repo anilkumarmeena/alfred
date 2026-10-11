@@ -1,8 +1,13 @@
-"""Phone/browser logins: name + passcode, stored as salted scrypt hashes in secrets/logins.json (0600).
+"""Phone/browser logins: name + passcode, checked against salted scrypt hashes in secrets/logins.json (0600).
 
 The passcode alone identifies the login, so passcodes are unique. Managed only in the control panel, never by voice;
 every login reaches the whole panel. adopt() turns JARVIS_PASSCODE from .env into the owner's login and strips it
 from .env. With no logins, JARVIS_PASSCODE is checked directly so nobody is locked out.
+
+Each passcode is also kept encrypted in the vault, so `make passcode` can show it on this computer (whoever can
+run that can read .env and the vault key anyway). Nothing served over HTTP ever returns it.
+
+usage: python -m jarvis.core.logins      show each login and its passcode
 """
 
 import base64
@@ -102,6 +107,30 @@ def listed() -> list[dict]:
     return [{"name": r["name"], "created": r["created"], "used": r.get("used")} for r in _read()]
 
 
+def _secret(name: str) -> str:
+    """Vault name for a login's passcode copy (login names are case-insensitive and may hold spaces)."""
+    return "login." + hashlib.sha256(name.strip().lower().encode()).hexdigest()[:16]
+
+
+def _keep(name: str, passcode: str) -> None:
+    """Keep the passcode encrypted in the vault for `make passcode`; without a vault key it's just not kept."""
+    try:
+        vault.put(_secret(name), passcode)
+    except vault.VaultError as e:
+        log.warning("login %s's passcode isn't kept for make passcode: %s", name, e)
+
+
+def shown() -> list[tuple[str, str | None]]:
+    """(name, passcode) for each login, oldest first; None where no copy is kept. For the terminal only."""
+    out = []
+    for row in _read():
+        try:
+            out.append((row["name"], vault.get(_secret(row["name"]))))
+        except vault.VaultError:
+            out.append((row["name"], None))
+    return out
+
+
 def _named(rows: list[dict], name: str) -> dict:
     found = next((r for r in rows if r["name"].lower() == name.strip().lower()), None)
     if found is None:
@@ -129,6 +158,7 @@ def add(name: str, passcode: str) -> None:
             raise ValueError(f"There's a login called {name} already.")
         rows.append({"name": name, "hash": _new_passcode(rows, passcode), "created": time.time(), "used": None})
         _write(rows)
+    _keep(name, passcode)
     log.warning("login %s added", name)
 
 
@@ -138,6 +168,7 @@ def set_passcode(name: str, passcode: str) -> None:
         row = _named(rows, name)
         row["hash"] = _new_passcode(rows, passcode, row)
         _write(rows)
+    _keep(row["name"], passcode)
     log.warning("login %s has a new passcode", row["name"])
 
 
@@ -148,6 +179,7 @@ def remove(name: str) -> None:
         if len(rows) == 1:
             raise ValueError("That's the only login: add another first, or nobody could connect.")
         _write([r for r in rows if r is not row])
+    vault.remove(_secret(row["name"]))
     log.warning("login %s removed", row["name"])
 
 
@@ -170,6 +202,23 @@ def adopt() -> str:
             return ""
         # Skip length rules: existing devices already use this passcode
         _write([{"name": name, "hash": hashed(passcode), "created": time.time(), "used": None}])
+    _keep(name, passcode)
     vault.unset_env([VAR])
     log.warning("the passcode in .env is now %s's login", name)
     return name
+
+
+def main() -> int:
+    found = shown()
+    if not found:
+        print("No logins yet: make setup makes the first one.")
+        return 1
+    for name, passcode in found:
+        print(f"{name}: {passcode}" if passcode else
+              f"{name}: not kept (set before passcodes were kept, or with no vault key). Set a new one in the "
+              "control panel, or if it's the only login: rm secrets/logins.json && make setup")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

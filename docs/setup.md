@@ -234,8 +234,8 @@ flowchart LR
     class A,B,V,L,Y mac
 ```
 
-> [!WARNING]
-> Your passcode is **shown once: note it down.** Later changes, and logins for other people, are in the control panel under **Settings → Logins and keys**.
+> [!TIP]
+> Lost your passcode? **`make passcode`** shows it again, on this computer only. Later changes, and logins for other people, are in the control panel under **Settings → Logins and keys**.
 
 - It **asks once where your projects are kept** (default: the folder this checkout is in) and writes `JARVIS_NEW_PROJECTS_DIR` and `JARVIS_TASK_READ_DIRS`.
 - Then **set who you are**: your name and time zone in **Settings → About you** (or `JARVIS_USER_NAME`, `JARVIS_TIMEZONE`), plus what JARVIS should know about you (below).

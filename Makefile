@@ -54,7 +54,7 @@ WEB_STAMP := web/node_modules/.install-stamp
 
 .PHONY: help install livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks heartbeat speech-gate voice-timing voiceprint test host-check artifact-check \
         services-install services-start services-stop services-restart status logs awake sleep-normal \
-        claude-login claude-status accounts about servers vault google-login chat-check tailscale-serve check clean
+        claude-login claude-status accounts about servers passcode vault google-login chat-check tailscale-serve check clean
 
 help: ## Show this list
 	@grep -hE '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -119,6 +119,9 @@ about: ## Show "about you" text (ARGS="--from me.txt")
 
 servers: ## MCP servers (ARGS="set-secret notion")
 	@$(UV) python -m jarvis.integrations.mcp_servers $(or $(ARGS),list)
+
+passcode: ## Show the logins' passcodes (this computer only; never over the web)
+	@$(UV) python -m jarvis.core.logins
 
 vault: ## Vault status (ARGS=init|rotate|reencrypt|"reset --yes")
 	@$(UV) python -m jarvis.core.vault $(or $(ARGS),status)
