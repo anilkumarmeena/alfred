@@ -52,7 +52,7 @@ NPM       := npm --prefix web
 # web-install reruns only when the manifests change
 WEB_STAMP := web/node_modules/.install-stamp
 
-.PHONY: help install livekit-bin models models-int8 setup console livekit web web-install web-build web-dev agent runner dev tasks heartbeat speech-gate voice-timing voiceprint test host-check artifact-check \
+.PHONY: help install livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks heartbeat speech-gate voice-timing voiceprint test host-check artifact-check \
         services-install services-start services-stop services-restart status logs awake sleep-normal \
         claude-login claude-status accounts about servers vault google-login chat-check tailscale-serve check clean
 
@@ -165,6 +165,12 @@ runner: ## Run task runner
 
 dev: ## Run LiveKit, web, agent and runner together
 	@$(MAKE) -j4 --no-print-directory livekit web agent runner
+
+dev-hot: ## Like dev, but live: UI on :5173 updates as you save; web server and agent restart on Python changes
+	@$(MAKE) -j5 --no-print-directory livekit web-api agent runner web-dev
+
+web-api: ## Web server only, restarted when jarvis/ changes (the UI comes from make web-dev)
+	$(UV) watchfiles --filter python "python -m jarvis.server" jarvis
 
 ## ── 24/7 services (launchd on macOS, systemd on Linux) ────────
 

@@ -202,6 +202,7 @@ open http://localhost:8787   # xdg-open on Linux
 |:-:|---|---|
 | ▶️ | `make console` | Talk in this terminal (no server needed) |
 | ▶️ | `make dev` | Run every part in the foreground; <kbd>Ctrl</kbd>+<kbd>C</kbd> stops all |
+| 🔥 | `make dev-hot` | The same with hot reload: edit the UI at http://localhost:5173 and see it live |
 | 🔁 | `make services-restart` | Rebuild the web app and restart the services |
 | 📊 | `make status` · `make logs` | Service health · follow all logs |
 | 📋 | `make tasks` | Recent background tasks |

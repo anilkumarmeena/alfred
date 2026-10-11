@@ -116,6 +116,7 @@ The suite runs on **macOS and Linux**.
 | | Command | Runs |
 |:-:|---|---|
 | 🚀 | `make dev` | LiveKit, web app, agent (auto-reload) and runner together in the foreground |
+| 🔥 | `make dev-hot` | The same, live: the UI updates as you save, the web server and agent restart on Python changes |
 | 🧩 | `make agent` · `make runner` · `make web` · `make livekit` | One part on its own |
 | ⌨️ | `make console` | The agent in the terminal, no LiveKit; starts the task runner for the session if none is running (PortAudio: Linux needs `libportaudio2`) |
 
@@ -144,11 +145,11 @@ These work the same on macOS and Linux; `make livekit` runs the `livekit-server`
 | | Task | How |
 |:-:|---|---|
 | 📦 | **Build** | `make web-build` → `web/dist` |
-| 🔥 | **Hot reload** | `make web` (or the services) for the API, plus `make web-dev` |
+| 🔥 | **Hot reload** | `make dev-hot`, then open http://localhost:5173 |
 | 🏷️ | **Build ids** | Each build carries an id; an older page reloads itself between sessions |
 
 - **Builds:** `make web`, `services-install` and `services-restart` build first; a running server picks up a rebuild without restarting.
-- **Hot reload:** http://localhost:5173 serves `web/src` and proxies `/api` to 8787.
+- **Hot reload:** http://localhost:5173 serves `web/src` straight from disk and proxies `/api` to the web server on 8787 (`make web-api`, restarted on Python changes). Only the UI piece: `make web-dev` beside a running `make dev` or the services.
 - **Build ids** live in `<meta name="jarvis-build">`; the server reports the one it serves.
 
 > [!WARNING]
