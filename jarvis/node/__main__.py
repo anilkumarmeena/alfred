@@ -44,13 +44,12 @@ def _serve() -> int:
 
 
 def _pair(code: str, main: str) -> int:
+    import asyncio
     import json
     import urllib.error
     import urllib.request
 
     from jarvis.node import bundles, home, keys
-
-    import asyncio
 
     public = keys.public(home.key())
     facts = home.facts(asyncio.run(bundles.head(ROOT)))
@@ -94,7 +93,6 @@ def _status() -> int:
 
 def _check() -> int:
     import asyncio
-    import shutil
 
     from jarvis.node import agent, bundles, home, link
     from jarvis.safety import host
@@ -123,8 +121,7 @@ def _check() -> int:
         except Exception as e:
             good = False
             print(f"FAIL  signs in to the main computer: {e}")
-    claude = shutil.which("claude") is not None
-    print(f"{'ok  ' if claude else 'note'}  tools: {', '.join(home.facts()['tools']) or 'none found'}")
+    print(f"note  tools found: {', '.join(home.facts()['tools']) or 'none'}")
     return 0 if good else 1
 
 
