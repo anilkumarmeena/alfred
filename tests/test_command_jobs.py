@@ -336,8 +336,9 @@ def test_an_ordinary_failure_is_fixed_then_rerun_and_the_rerun_says_it_all(env, 
     first, fixer, rerun = (r.store.get(i) for i in (failed["id"], failed["id"] + 1, failed["id"] + 2))
     assert (fixer["kind"], fixer["project"], fixer["fixes"], fixer["title"]) == \
            ("code_change", "video-agent", first["id"], "Fix the produce run")
-    for part in ("exit code 3", "ffmpeg: not found", command, str(env["project"]), "should now succeed",
-                 f"Command task {first['id']}"):
+    for part in ("exit code 3", "ffmpeg: not found", command, str(env["project"]), f"Command task {first['id']}",
+                 "Never run the command yourself", "secrets are hidden from you", "JARVIS runs the command once more",
+                 "with its keys", "whether the cause is now dealt with"):
         assert part in briefs[0]
     assert first["status"] == "failed" and command_jobs.spec(first)["fix_task"] == fixer["id"]
     assert fixer["summary"] == "Pointed the script at Homebrew's ffmpeg.\nChanged scripts/run.sh.\nIt should work now."
@@ -459,7 +460,7 @@ def test_a_job_outside_any_project_or_with_fixing_off_is_never_fixed(env):
     assert all("the action is report" in p for p in triaged(env))  # the model is told; FIX it says is taken as REPORT
 
 
-def test_with_no_model_to_read_it_a_failure_is_fixed_where_it_can_be(env, monkeypatch):
+def test_with_no_model_to_read_it_a_failure_is_fixed_and_rerun_once(env, monkeypatch):
     async def down(prompt, system, model, **options):
         raise RuntimeError("Claude is overloaded")
 
@@ -475,8 +476,10 @@ def test_with_no_model_to_read_it_a_failure_is_fixed_where_it_can_be(env, monkey
 
     r, failed = asyncio.run(main())
     assert "Last lines: missing module" in failed["spoken"]
-    fixer = r.store.get(failed["id"] + 1)
-    assert fixer["fixes"] == failed["id"] and r.store.get(failed["id"] + 2) is None  # no model to say rerun: none
+    fixer, rerun = r.store.get(failed["id"] + 1), r.store.get(failed["id"] + 2)
+    assert fixer["fixes"] == failed["id"]  # the fix finished, so it reruns even with no model to read it
+    assert (rerun["kind"], rerun["status"], command_jobs.spec(rerun)["attempt"]) == (COMMAND, "failed", 2)
+    assert r.store.get(failed["id"] + 3) is None  # failed again: only said
 
 
 def test_the_triage_reply_is_read_strictly():
@@ -491,14 +494,16 @@ def test_the_triage_reply_is_read_strictly():
     assert read('```json\n{"said": "It broke.", "action": "report"}\n```') == Triage("report", "It broke.")
 
 
-def test_a_fix_is_rerun_only_when_its_summary_is_read_as_saying_so(monkeypatch):
+def test_a_fix_is_rerun_unless_its_summary_is_read_as_saying_the_cause_remains(monkeypatch):
     async def flag(prompt, field, system_prompt, model, **options):
         assert (field, system_prompt, model) == ("rerun", command_jobs.rerun_system(), command_jobs.VERDICT_MODEL)
         return answer
 
     monkeypatch.setattr(sdk, "ask_flag", flag)
-    for answer, again in ((True, True), (False, False), (None, False)):  # None: the call failed
+    for answer, again in ((True, True), (False, False), (None, True)):  # None: the call failed
         assert asyncio.run(command_jobs.wants_rerun("Fixed the path.")) is again
+    # the verdict knows the fix task couldn't run it for want of hidden keys, which the rerun has
+    assert "secrets are hidden from it" in command_jobs.rerun_system()
 
 
 # ── Scheduled commands ──────────────────────────────────────────
@@ -623,7 +628,7 @@ def test_no_scheduled_run_starts_while_the_last_is_still_going(env):
 def test_a_scheduled_run_that_fails_is_fixed_and_rerun_as_the_jobs_latest(env, monkeypatch):
     fake_run(monkeypatch, finishes("Fixed the path. It should work now."))
     env["rerun"] = True
-    job = daily("exit 3")
+    job = daily("exit 3", timeout_minutes=30, log_file="logs/*.log", summarize=False)
 
     async def main():
         r = make()
@@ -643,6 +648,12 @@ def test_a_scheduled_run_that_fails_is_fixed_and_rerun_as_the_jobs_latest(env, m
     assert (rerun["job"], job["last_task"], command_jobs.spec(rerun)["attempt"]) == (job["id"], rerun["id"], 2)
     assert schedules.run_of(job)["outcome"] == "failed" and job["last_result"].startswith("Failed after 0 seconds")
     assert [t["id"] for t in r.store.runs(job["id"])] == [rerun["id"], first + 1, first]
+    # JARVIS reruns it itself, exactly as the schedule runs it: a command task with the job's own settings
+    ran, again = command_jobs.spec(r.store.get(first)), command_jobs.spec(rerun)
+    same = ("folder", "timeout_minutes", "log_file", "summarize", "auto_fix", "report")
+    assert [again[k] for k in same] == [ran[k] for k in same] == [str(env["project"]), 30, "logs/*.log", False, True,
+                                                                   False]
+    assert (rerun["kind"], rerun["instruction"], rerun["project"]) == (COMMAND, "exit 3", "video-agent")
 
 
 def test_a_scheduled_run_waiting_for_a_yes_to_fix_holds_nothing_back(env):

@@ -98,9 +98,9 @@ _COMMAND = {
                                                    "model call (default true); false says it finished, with its last "
                                                    "lines."},
     "auto_fix": {"type": "boolean", "description": "command: when a run fails, let JARVIS fix it as it decides from "
-                                                  "the output: a task in its project fixes the cause and runs it once "
-                                                  "more, at once or, for a risky fix, after the user's yes (default "
-                                                  "true when it has a project)."},
+                                                  "the output: a task in its project fixes the cause, then JARVIS runs "
+                                                  "it once more, at once or, for a risky fix, after the user's yes "
+                                                  "(default true when it has a project)."},
     "log_file": {"type": "string", "description": "command: the log file the command writes itself, if its output "
                                                   "goes there rather than to the screen: a path inside its folder, a "
                                                   "pattern like logs/*-produce.log picking the newest."},
@@ -128,7 +128,7 @@ _COMMAND = {
     "eight\"), in folder (or its project's folder) at the times given, on its own outside the sandbox like start_job, "
     "with no model while it runs, however many hours it takes; each run is a command task in the task list, as a "
     "start_job is, and a run still going holds back the next. When it ends, a success is summed up in a sentence "
-    "(summarize), and a failure is read and, as JARVIS decides, fixed by a task in its project that runs it once more, "
+    "(summarize), and a failure is read and, as JARVIS decides, fixed by a task in its project, then run once more, "
     "or put to the user first when the fix would be risky (auto_fix). Set timeout_minutes only if the user gives a limit, and log_file if the command writes "
     "its output to a log of its own. It meets the same checks as your shell, so a risky one needs their yes. Times "
     "are local; work them out from the date and time at the start of the user's message. Then say in one sentence "
