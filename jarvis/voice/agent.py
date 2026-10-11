@@ -132,8 +132,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
     @session.on("conversation_item_added")
     def added(ev) -> None:
-        if ev.item.role == "assistant":
-            voice.spoke(ev.item.text_content or "", ev.item.metrics, ev.item.interrupted)
+        _item_added(voice, ev.item)
 
     ctx.add_shutdown_callback(voice.close)
     warmup = asyncio.create_task(voice.brain.start())  # start the CLI while the room connects
@@ -150,6 +149,12 @@ async def entrypoint(ctx: JobContext) -> None:
     await session.say(hello)
     voice.start(session)
     await asyncio.gather(warmup, speaker_ready)
+
+
+def _item_added(voice: VoiceSession, item: llm.ChatItem) -> None:
+    """Pass on what JARVIS said; other items (tool calls, agent handoffs, config updates) have no role."""
+    if isinstance(item, llm.ChatMessage) and item.role == "assistant":
+        voice.spoke(item.text_content or "", item.metrics, item.interrupted)
 
 
 async def _to_phone(text: str) -> None:

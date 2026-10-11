@@ -256,7 +256,7 @@ uv run python -m jarvis.state.settings about --clear
 
 | | Where | How |
 |:-:|---|---|
-| ⌨️ | **Terminal** | `make console` talks through this computer's mic (Linux needs `libportaudio2`); no server needed |
+| ⌨️ | **Terminal** | `make console` talks through this computer's mic (Linux needs `libportaudio2`); no server needed, and it brings up the task runner for the session |
 | 🌐 | **Browser** | `make dev` (foreground) or `make services-install` (services), then open the app and enter your passcode |
 
 ```sh

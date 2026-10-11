@@ -20,7 +20,15 @@ endif
 SERVICE_CTL = cd $(MAIN_DIR) && $(JARVIS_PYTHON) -m jarvis.setup_local
 SERVICES    = $(shell $(SERVICE_CTL) labels)
 CLAUDE_DIR := $(MAIN_DIR)/secrets/claude
-KOKORO_URL := https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0
+# Kokoro voice: kokoro-onnx's model files, from a pinned Hugging Face mirror (byte-identical to the GitHub release,
+# which serves ~120 KB/s per connection), hash-checked
+KOKORO_HF   := https://huggingface.co/fastrtc/kokoro-onnx/resolve/8d07950c9b6c87ce6809e9bba7bd494336217c2a
+TTS         := models/kokoro-v1.0.onnx
+TTS_SHA     := 7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5
+VOICES      := models/voices-v1.0.bin
+VOICES_SHA  := bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d
+# Optional 8-bit Kokoro (make models-int8): only on the GitHub release, so slow
+KOKORO_INT8 := https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx
 # Noise filter: DeepFilterNet 3 streaming ONNX (torchDF export), pinned and hash-checked
 DFN       := models/deepfilternet3-streaming.onnx
 DFN_URL   := https://github.com/yuyun2000/SpeechDenoiser/raw/9a1f069f562089c2f56008a8ecd897fa981fbc50/48k/denoiser_model.onnx
@@ -44,12 +52,12 @@ NPM       := npm --prefix web
 # web-install reruns only when the manifests change
 WEB_STAMP := web/node_modules/.install-stamp
 
-.PHONY: help install livekit-bin models setup console livekit web web-install web-build web-dev agent runner dev tasks heartbeat speech-gate voice-timing voiceprint test host-check artifact-check \
+.PHONY: help install livekit-bin models models-int8 setup console livekit web web-install web-build web-dev agent runner dev tasks heartbeat speech-gate voice-timing voiceprint test host-check artifact-check \
         services-install services-start services-stop services-restart status logs awake sleep-normal \
         claude-login claude-status accounts about servers vault google-login chat-check tailscale-serve check clean
 
 help: ## Show this list
-	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+	@grep -hE '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
 ## ── First-time setup ───────────────────────────────────────────
 
@@ -73,20 +81,26 @@ livekit-bin: ## Install livekit-server into ~/.local/bin (Linux)
 	echo "livekit-server $(LIVEKIT_VERSION) installed in $(LOCAL_BIN)"
 
 # shasum on macOS; sha256sum where Perl's shasum isn't installed
-models: SHA256 = $$(command -v shasum >/dev/null && echo shasum -a 256 || echo sha256sum)
+SHA256 = $$(command -v shasum >/dev/null && echo shasum -a 256 || echo sha256sum)
+# $(call fetch,FILE,URL,SHA): download once into FILE.part, keep it only if the hash matches
+fetch = [ -f $(1) ] || { curl -fSL -o $(1).part $(2) && echo "$(3)  $(1).part" | $(SHA256) -c --quiet - && mv $(1).part $(1); }
+
 models: ## Download speech, VAD, noise and speaker models
 	@mkdir -p models
-	@for f in kokoro-v1.0.int8.onnx kokoro-v1.0.onnx voices-v1.0.bin; do \
-		[ -f models/$$f ] || curl -fSL -o models/$$f $(KOKORO_URL)/$$f; done
-	@[ -f $(DFN) ] || { curl -fSL -o $(DFN).part $(DFN_URL) && \
-		echo "$(DFN_SHA)  $(DFN).part" | $(SHA256) -c --quiet - && mv $(DFN).part $(DFN); }
-	@[ -f $(SPK) ] || { curl -fSL -o $(SPK).part $(SPK_URL) && \
-		echo "$(SPK_SHA)  $(SPK).part" | $(SHA256) -c --quiet - && mv $(SPK).part $(SPK); }
+	@$(call fetch,$(TTS),$(KOKORO_HF)/kokoro-v1.0.onnx,$(TTS_SHA))
+	@$(call fetch,$(VOICES),$(KOKORO_HF)/voices-v1.0.bin,$(VOICES_SHA))
+	@$(call fetch,$(DFN),$(DFN_URL),$(DFN_SHA))
+	@$(call fetch,$(SPK),$(SPK_URL),$(SPK_SHA))
 # Whisper for this machine: MLX on Apple silicon, faster-whisper elsewhere (jarvis.core.whisper)
 	$(UV) python -m jarvis.core.whisper
 # os._exit skips teardown, which native plugin libraries can crash on macOS
 	$(UV) python -c "import os, sys; from livekit.agents.__main__ import main; code = main(['download-files']); \
 		sys.stdout.flush(); sys.stderr.flush(); os._exit(code)"
+
+models-int8: ## Download the 8-bit Kokoro (~230 MB less memory, slower; JARVIS_TTS_MODEL=kokoro-v1.0.int8.onnx)
+	@mkdir -p models
+	@[ -f models/kokoro-v1.0.int8.onnx ] || { curl -fSL -o models/kokoro-v1.0.int8.onnx.part $(KOKORO_INT8) && \
+		mv models/kokoro-v1.0.int8.onnx.part models/kokoro-v1.0.int8.onnx; }
 
 setup: ## Generate keys, passcode and LiveKit config (rerunnable)
 	$(UV) python -m jarvis.setup_local
@@ -122,7 +136,16 @@ tailscale-serve: ## Serve web app and LiveKit on the tailnet
 
 ## ── Run in the foreground ──────────────────────────────────────
 
-console: ## Talk via this machine's mic, no server
+# Exits 0 when a task runner answers on its socket. Checked first: a second runner would take the socket over
+RUNNER_UP = import socket, sys; from jarvis.core.config import RUNNER_SOCKET as p; \
+	sys.exit(not p.exists() or socket.socket(socket.AF_UNIX).connect_ex(str(p)))
+
+console: ## Talk via this machine's mic, no server (starts the task runner for the session if it isn't running)
+	@mkdir -p logs; \
+	if $(UV) python -c "$(RUNNER_UP)" 2>/dev/null; then echo "using the task runner that's already running"; \
+	else echo "starting the task runner for this session (logs/console-runner.log)"; \
+		$(UV) python -m jarvis.tasks.runner >logs/console-runner.log 2>&1 & runner=$$!; \
+		trap 'kill -TERM $$runner 2>/dev/null; wait $$runner 2>/dev/null' EXIT INT TERM; fi; \
 	$(UV) python -m jarvis.voice.agent console
 
 livekit: ## Run LiveKit server

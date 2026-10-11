@@ -15,6 +15,8 @@ from typing import Any, Callable
 
 import ai_armory
 
+from jarvis.tasks.client import RunnerUnavailable
+
 log = logging.getLogger("jarvis.tools")
 
 
@@ -149,6 +151,9 @@ async def run(name: str, args: Any) -> tuple[str | list[dict], bool]:
             result = await t.fn(**args)
         else:
             result = await asyncio.to_thread(t.fn, **args)
+    except RunnerUnavailable as e:  # expected when only the voice side runs: one line, no traceback
+        log.warning("tool %s: %s", name, e)
+        return f"{type(e).__name__}: {e}", True
     except Exception as e:  # report failures to the model
         log.exception("tool %s failed", name)
         return f"{type(e).__name__}: {e}", True

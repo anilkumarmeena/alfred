@@ -179,3 +179,13 @@ def test_a_request_put_while_the_brain_answered_is_withdrawn_when_its_reply_asks
     assert said == "Clearing the cache. Shall I delete the old renders too?" and then == "Deleting them."
     assert voice.asks.open is None and voice.runner.answers == []  # the yes is the brain's, not the request's
     assert voice.brain.asked == ["Clear the cache.", "Yes."] and voice.asks.due() is None
+
+
+def test_only_jarvis_s_own_messages_count_as_spoken():
+    spoke = []
+    voice = type("Voice", (), {"spoke": lambda self, text, metrics, interrupted: spoke.append((text, interrupted))})()
+    agent._item_added(voice, llm.AgentHandoff(new_agent_id="jarvis"))  # has no role
+    agent._item_added(voice, llm.FunctionCall(call_id="1", name="todo_list", arguments="{}"))
+    agent._item_added(voice, llm.ChatMessage(role="user", content=["hi"]))
+    agent._item_added(voice, llm.ChatMessage(role="assistant", content=["Hello."], interrupted=True))
+    assert spoke == [("Hello.", True)]

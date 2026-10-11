@@ -117,7 +117,7 @@ The suite runs on **macOS and Linux**.
 |:-:|---|---|
 | 🚀 | `make dev` | LiveKit, web app, agent (auto-reload) and runner together in the foreground |
 | 🧩 | `make agent` · `make runner` · `make web` · `make livekit` | One part on its own |
-| ⌨️ | `make console` | The agent in the terminal, no LiveKit (PortAudio: Linux needs `libportaudio2`) |
+| ⌨️ | `make console` | The agent in the terminal, no LiveKit; starts the task runner for the session if none is running (PortAudio: Linux needs `libportaudio2`) |
 
 These work the same on macOS and Linux; `make livekit` runs the `livekit-server` that `make install` set up (Homebrew on macOS, `~/.local/bin` on Linux).
 

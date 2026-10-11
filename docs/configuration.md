@@ -157,7 +157,7 @@ uv run python -m jarvis.state.settings prefs voice bm_lewis  # change one
 
 - **Whisper names:** MLX takes a Hugging Face repo; faster-whisper a size (`base.en`, `small.en`, `large-v3-turbo`...) or a CTranslate2 folder. An `mlx-community/` model elsewhere falls back to the default.
 - **Whisper sizes:** on MLX the 4-bit default is ~0.5 GB, the 16-bit original ~1.6 GB. On a slow CPU, `JARVIS_STT=base.en` answers quicker.
-- **Kokoro 8-bit:** `kokoro-v1.0.int8.onnx` saves ~230 MB but renders 30–60% slower.
+- **Kokoro 8-bit:** `kokoro-v1.0.int8.onnx` saves ~230 MB but renders 30–60% slower. `make models-int8` downloads it.
 - **Turn delays:** the min applies when you sound finished, the max at most mid-thought. Each speaker's delays then follow their pace.
 
 <details>
