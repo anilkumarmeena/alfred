@@ -39,16 +39,17 @@ header { display: flex; align-items: center; justify-content: space-between; gap
 .brand, .tools { display: flex; align-items: center; gap: 10px; }
 .word { color: var(--fg); font-size: 12px; letter-spacing: .42em; }
 .link { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.led { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); transition: background .3s, box-shadow .3s; }
-body[data-link="linking"] .led { background: var(--accent-2); box-shadow: 0 0 8px var(--accent-2); animation: blink 1s ease-in-out infinite; }
-body[data-link="on"] .led { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+button.link { background: none; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; transition: border-color .2s, color .2s; }
+button.link:hover { border-color: rgba(79,209,255,.4); color: var(--fg); }
 #clock { font-variant-numeric: tabular-nums; }
 .mini { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 50%; border: 1px solid transparent; background: none; color: var(--muted); position: relative; transition: color .2s, background .2s; }
 .mini::after { content: ""; position: absolute; inset: -3px; }
 .mini:hover { color: var(--fg); background: rgba(255,255,255,.05); }
 .mini svg { width: 18px; height: 18px; }
 .signal { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; }
-.signal i { width: 3px; border-radius: 1px; background: var(--dim); }
+.signal i { width: 3px; border-radius: 1px; background: var(--dim); transition: background .3s; }
+body[data-link="linking"] .signal i { background: var(--accent-2); animation: blink 1s ease-in-out infinite; }
+body[data-link="on"] .signal:not([data-q]) i { background: var(--ok); }  /* live, quality not known yet */
 .signal i:nth-child(1) { height: 5px; } .signal i:nth-child(2) { height: 8px; } .signal i:nth-child(3) { height: 12px; }
 .signal[data-q="excellent"] i, .signal[data-q="good"] i:nth-child(-n+2) { background: var(--ok); }
 .signal[data-q="poor"] i:nth-child(1) { background: var(--accent-2); }
@@ -175,12 +176,10 @@ body[data-reading] .stage > :not(.readout) { pointer-events: auto; }
 #latest svg { width: 14px; height: 14px; transform: rotate(180deg); }
 body[data-reading] #latest { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
 
-/* Controls */
-footer { display: flex; flex-direction: column; align-items: center; gap: 12px; padding-top: 10px; }
-.controls { display: flex; justify-content: center; align-items: flex-end; gap: 28px; min-height: 76px; }
+/* Call bar (Composer + Controls): photo, message, then Speaker, Mute and Connect or End, or Send once there's text */
+footer { display: flex; flex-direction: column; align-items: center; padding-top: 10px; }
 
-/* Message box */
-.composer { width: min(100%, 520px); display: flex; align-items: center; gap: 6px; padding: 4px 4px 4px 6px; border-radius: 999px;
+.composer { width: min(100%, 520px); display: flex; align-items: center; gap: 2px; padding: 5px 5px 5px 6px; border-radius: 999px;
   border: 1px solid var(--line); background: var(--glass); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); transition: border-color .2s; }
 .composer:focus-within { border-color: rgba(79,209,255,.45); }
 /* 16px, or iOS zooms in on focus */
@@ -205,25 +204,25 @@ footer { display: flex; flex-direction: column; align-items: center; gap: 12px; 
 .photo[data-state="failed"] { border-color: rgba(255,95,109,.85); }
 .photo[data-state="failed"] .x { background: rgba(255,95,109,.4); }
 body[data-view="login"] footer > * { display: none; }
-.ctl { display: flex; flex-direction: column; align-items: center; gap: 7px; background: none; border: 0; padding: 0; font: 500 10px var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); animation: rise .3s ease; }
-.ctl .round { width: 58px; height: 58px; display: grid; place-items: center; border-radius: 50%; color: var(--fg);
-  background: var(--glass); border: 1px solid var(--line); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); transition: background .2s, border-color .2s, transform .15s; }
-.ctl:active .round { transform: scale(.94); }
-.ctl:focus-visible { outline: none; } .ctl:focus-visible .round { outline: 2px solid var(--accent); outline-offset: 3px; }
-#hangup .round { width: 66px; height: 66px; border: 0; background: linear-gradient(180deg, #ff737e, #e03e4c); box-shadow: 0 10px 28px rgba(255,80,95,.3); }
-#hangup .round svg { width: 26px; height: 26px; }
-.ctl .label { padding-left: .16em; }
-.ctl .slash { display: none; }
-.ctl[aria-pressed="true"] .slash { display: inline; }
-.ctl[aria-pressed="true"] .round { background: rgba(255,95,109,.16); border-color: rgba(255,95,109,.55); color: #ffb3ba; }
-#speaker[aria-pressed="true"] .round { background: rgba(255,181,71,.12); border-color: rgba(255,181,71,.5); color: var(--accent-2); }
-#start { align-self: center; padding: 0 26px; min-height: 50px; border-color: rgba(79,209,255,.35); animation: rise .3s ease; }
-#start svg { color: var(--accent); }
+.composer input { padding-left: 4px; }
+.cb { flex: none; width: 40px; height: 40px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted);
+  transition: color .2s, background .2s, transform .15s; animation: fade .2s ease; }
+.cb:hover { color: var(--fg); }
+.cb:active { transform: scale(.92); }
+.cb svg { width: 20px; height: 20px; }
+.cb .slash { display: none; }
+.cb[aria-pressed="true"] .slash { display: inline; }
+#mute[aria-pressed="true"] { color: #ffb3ba; background: rgba(255,95,109,.16); }
+#speaker[aria-pressed="true"] { color: var(--accent-2); background: rgba(255,181,71,.12); }
+.cb.go { margin-left: 2px; color: #02131c; background: linear-gradient(180deg, #7fe0ff, #33b6ec); box-shadow: 0 4px 14px rgba(79,209,255,.25); }
+.cb.end { margin-left: 2px; color: #fff; background: linear-gradient(180deg, #ff737e, #e03e4c); box-shadow: 0 4px 14px rgba(255,80,95,.3); }
+.cb.go svg, .cb.end svg { width: 19px; height: 19px; }
+.send { animation: fade .2s ease; }
 body:not([data-live]) #hangup, body[data-live] #start { display: none; }
 body[data-state="connecting"] #start { opacity: .5; pointer-events: none; }
 /* While auto-reconnecting, show End (stop trying) instead of a redundant Connect */
 body[data-paused="resuming"] #start { display: none; }
-body[data-paused="resuming"]:not([data-live]) #hangup { display: flex; }
+body[data-paused="resuming"]:not([data-live]) #hangup { display: grid; }
 
 /* Short screens (iPhone SE 1st gen, landscape phones): smaller core leaves room for the message box */
 @media (max-height: 600px) {
@@ -236,14 +235,13 @@ body[data-paused="resuming"]:not([data-live]) #hangup { display: flex; }
   header, .brand, .tools { gap: 4px; }
   .link { padding: 6px 8px; }
   #clock { display: none; }
-  .mini { width: 34px; height: 34px; }
+  .mini { width: 40px; height: 40px; }
 }
 @media (max-width: 360px) {
-  .controls { gap: 18px; }  /* Mute, Connect, speaker in a row */
   header { letter-spacing: .1em; }
   .word { letter-spacing: .1em; }
   .link { padding: 6px; }
-  .mini { width: 32px; height: 32px; }
+  .mini { width: 38px; height: 38px; }
 }
 
 /* Wide screens: centred column until there's a conversation, then (data-layout="split") reactor left, transcript right */

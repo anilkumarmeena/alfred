@@ -20,7 +20,7 @@ const PAUSED: Record<Exclude<Paused, "">, string> = {
 };
 
 export const agentState = signal<AgentState>("idle");  // body[data-state]
-export const link = signal<Link>("off");  // body[data-link]: header LED
+export const link = signal<Link>("off");  // body[data-link]: the header's status pill
 export const connected = signal(false);  // session exists, live or connecting
 export const live = signal(false);  // body[data-live]: connected with audio flowing
 export const muted = signal(false);  // body[data-muted]: user's mute choice, while connected
@@ -83,7 +83,8 @@ export const linkText = computed(() => {
     const s = Math.max(0, Math.floor((now.value - startedAt.value) / 1000));
     return `Live ${two(Math.floor(s / 60))}:${two(s % 60)}`;
   }
-  return link.value === "linking" ? "Linking" : "Offline";
+  if (link.value === "linking") return agentState.value === "reconnecting" ? "Reconnecting" : "Linking";
+  return "Offline";
 });
 setInterval(() => { now.value = Date.now(); }, 1000);
 

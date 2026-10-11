@@ -1,10 +1,12 @@
-// Top bar: link LED and timer, connection quality, clock, and toggles (⌘K, activity or notifications
-// before login, settings, desktop panel column).
+// Top bar: the status pill (signal bars for the link and its quality, then Live and its timer, Linking, Reconnecting
+// or Offline, which connects on a tap), clock, and toggles (⌘K, activity or notifications before login, settings,
+// desktop panel column).
 import { toggleNotifications } from "../state/push";
+import { activate } from "../state/session";
 import {
   activityOpen, activityUnread, closeSheet, go, needYou, paletteOpen, section, setSideOff, shown, sideOff, toggleActivity, unseen, visible, wide,
 } from "../state/panel";
-import { clock, connected, linkText, passcode, pushOn, quality, setPasscode, showLogin } from "../state/store";
+import { clock, connected, link, linkText, passcode, pushOn, quality, setPasscode, showLogin } from "../state/store";
 import { BellIcon, LockIcon, PanelIcon, SearchIcon, SettingsIcon } from "./icons";
 
 // Settings toggles like a dock button: open it, or close the sheet (phone) or go back to Tasks (desktop column).
@@ -14,18 +16,25 @@ function toggleSettings() {
   else closeSheet();
 }
 
+function StatusPill() {
+  const inner = <>
+    <span class="signal" title={quality.value ? `Connection: ${quality.value}` : undefined} data-q={quality.value ?? undefined}><i /><i /><i /></span>
+    <span id="linkText">{linkText}</span>
+  </>;
+  return link.value === "off"
+    ? <button class="link" title="Connect (Space)" onClick={activate}>{inner}</button>
+    : <span class="link">{inner}</span>;
+}
+
 export function Header() {
   const settingsOn = visible.value && section.value === "settings";
   return (
     <header>
       <div class="brand">
         <span class="word">J.A.R.V.I.S.</span>
-        <span class="link"><span class="led" /><span id="linkText">{linkText}</span></span>
+        <StatusPill />
       </div>
       <div class="tools">
-        <span id="signal" class="signal" title="Connection quality" data-q={quality.value ?? undefined} hidden={quality.value == null}>
-          <i /><i /><i />
-        </span>
         {shown.value && <button class="palbtn" title="Jump to anything · press ? for all shortcuts" onClick={() => { paletteOpen.value = true; }}>
           <SearchIcon />Search <kbd>⌘K</kbd>
         </button>}

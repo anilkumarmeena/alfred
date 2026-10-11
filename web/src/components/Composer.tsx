@@ -1,10 +1,12 @@
-// Message box. Typed messages are answered like speech. The camera button attaches a photo to the next turn.
+// The call bar: photo, message box, then the call's buttons (`calls`) until there's something to send, when Send takes
+// their place, giving the text the bar's width. Typed messages are answered like speech; the photo goes with the next turn.
+import type { ComponentChildren } from "preact";
 import { useSignal } from "@preact/signals";
 import { sendText } from "../state/session";
 import { ASK, attach, discard, photo, photoReady } from "../state/photo";
 import { CameraIcon, CloseIcon, SendIcon } from "./icons";
 
-export function Composer() {
+export function Composer({ calls }: { calls?: ComponentChildren }) {
   const text = useSignal("");
   const busy = useSignal(false);  // waiting for the photo upload before sending
   const p = photo.value;
@@ -49,7 +51,8 @@ export function Composer() {
       <input id="message" type="text" enterKeyHint="send" autoComplete="off"
         placeholder={p ? "Ask about the photo, or just say it" : "Type to JARVIS"}
         aria-label="Message JARVIS" value={text.value} onInput={(e) => { text.value = e.currentTarget.value; }} />
-      <button type="submit" class="send" aria-label="Send" title="Send (Return)" disabled={empty || busy.value}><SendIcon /></button>
+      {empty ? calls
+        : <button type="submit" class="send" aria-label="Send" title="Send (Return)" disabled={busy.value}><SendIcon /></button>}
     </form>
   );
 }
