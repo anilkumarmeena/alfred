@@ -232,27 +232,51 @@ class Offload:
         with contextlib.suppress(LinkDown, Refused, TimeoutError):
             await self.up(node).call("copy.forget", {"key": key}, timeout=120)
 
+    # ── Projects that live on a machine ──────────────────────────
+
+    async def register_there(self, name: str, path: str | None, aliases: list[str] | None, about: str,
+                             in_place: bool, machine: str) -> dict:
+        """Add a project living on `machine`: that machine checks (or makes) its folder first."""
+        found = machines.find(machine)
+        checked = await self.folder_op(found.id, "check", {"path": path or "", "name": name})
+        made = await asyncio.to_thread(projects.register_there, name, found.id, checked["path"], checked["state"],
+                                       aliases, about, in_place)
+        return made | {"machine": found.name}
+
+    async def folder_op(self, node: int, op: str, body: dict) -> dict:
+        """A git or folder step (git_ops.OPS) on the machine a project lives on. ValueError if it's away or says no."""
+        try:
+            return await self.up(node).call(f"folder.{op}", body, timeout=900)
+        except LinkDown:
+            raise ValueError(f"{self.name(node)}, where that project lives, isn't online.") from None
+        except Refused as e:
+            raise ValueError(str(e)) from None
+
     # ── Commands ─────────────────────────────────────────────────
 
     async def start_command(self, task: dict, node: int, project: projects.Project, folder: Path, approved: str) -> None:
-        """Copy the project over and start the command there; then mirror it here until it ends."""
+        """Start the command there, in a copy of the project, or in its own folder when it lives there; then mirror it
+        here until it ends."""
         task_id, key = task["id"], self.key(task["id"])
-        self.runner.store.set(task_id, activity=f"copying {project.name} to {self.name(node)}")
-        copied = await self.copy_to(node, key, project.path, self.mirror(project.name))
-        self.runner.store.log(task_id, "machine", f"copied {project.name} to {self.name(node)}: "
-                                                  f"{copied['copied']} new or changed, {copied['removed']} removed")
+        where = {"task": task_id, "command": task["instruction"], "title": task["title"], "approved": approved}
+        if project.node:
+            where["path"] = str(folder)
+        else:
+            self.runner.store.set(task_id, activity=f"copying {project.name} to {self.name(node)}")
+            copied = await self.copy_to(node, key, project.path, self.mirror(project.name))
+            self.runner.store.log(task_id, "machine", f"copied {project.name} to {self.name(node)}: "
+                                                      f"{copied['copied']} new or changed, {copied['removed']} removed")
+            rel = str(folder.resolve().relative_to(project.path.resolve()))
+            where |= {"key": key, "rel": "" if rel == "." else rel}
         runs = self.runner.commands
         runs.folder.mkdir(parents=True, exist_ok=True)
-        rel = str(folder.resolve().relative_to(project.path.resolve()))
-        got = await self.up(node).call("job.start", {"task": task_id, "key": key, "rel": "" if rel == "." else rel,
-                                                     "command": task["instruction"], "title": task["title"],
-                                                     "approved": approved}, timeout=60)
+        got = await self.up(node).call("job.start", where, timeout=60)
         if why := got.get("refused"):
             raise TurnedDown(str(why))
         runs.log_file(task_id).write_bytes(b"")
         write_atomic(runs.folder / f"{task_id}.json", json.dumps({
             "id": task_id, "title": task["title"], "command": task["instruction"], "folder": str(folder), "pid": 0,
-            "started": time.time(), "node": node}))
+            "started": time.time(), "node": node} | ({"lives": True} if project.node else {})))
         self.follow(task_id)
 
     def follow(self, task_id: int) -> None:
@@ -289,14 +313,17 @@ class Offload:
                 await asyncio.sleep(POLL)
         outcome, code = ended
         task = self.runner.store.get(task_id)
-        if not got.get("gone") and task and outcome != command_jobs.STOPPED:
+        if record.get("lives"):  # it ran in the project's own folder there: nothing to bring back
+            pass
+        elif not got.get("gone") and task and outcome != command_jobs.STOPPED:
             try:
                 back = await self.copy_back(node, self.key(task_id), self._project_folder(task, record))
                 self.runner.store.log(task_id, "machine", self.said_back(back, node))
             except Exception as e:
                 log.warning("command task %s: its files didn't come back from %s: %s", task_id, self.name(node), e)
                 self.runner.store.log(task_id, "machine", f"its files didn't come back from {self.name(node)}: {e}"[:300])
-        await self.forget(node, self.key(task_id))
+        if not record.get("lives"):
+            await self.forget(node, self.key(task_id))
         if code is None:
             write_atomic(runs.folder / f"{task_id}.lost", "")
         else:
@@ -363,7 +390,9 @@ class Offload:
         """Run a task on its machine and bring its changes back. With `reattach` (after this computer restarted),
         a run still going there, or one that ended meanwhile, is taken up instead of starting another."""
         task_id, node = task["id"], task["node"]
-        up = await self._reachable(task)
+        up = await self.reachable(task)
+        lives = bool(self.runner._lives_on(task))  # in its own folder there, not a copy
+        where = {"folder": str(self.folder(task))} if lives else {"key": self.key(task_id)}
         running = (await up.call("task.running", {}, timeout=120))["runs"]
         run = running.get(str(task_id))
         if run and not reattach:  # an older run, from before this computer restarted: it gives way to the new one
@@ -375,7 +404,7 @@ class Offload:
         if ended:
             outcome = ended[1]
         else:
-            if not run:
+            if not run and not lives:
                 folder = self.folder(task)
                 self.runner.store.set(task_id, activity=f"copying {task['project']} to {self.name(node)}")
                 await self.copy_to(node, self.key(task_id), folder, self.mirror(task["project"]))
@@ -384,16 +413,18 @@ class Offload:
                     run = secrets.token_hex(6)
                     self._ending(task_id, run)  # waited for before it starts: a quick run may end at once
                     await up.call("task.run", {"task": {k: task.get(k) for k in TASK_FIELDS}, "prompt": prompt,
-                                               "run": run, "key": self.key(task_id)}, timeout=60)
+                                               "run": run} | where, timeout=60)
                     self.runner.store.set(task_id, activity=f"running on {self.name(node)}")
                 outcome = await self._ending(task_id, run)
             except asyncio.CancelledError:
                 if not self.runner.closing:  # stopped by the user: stop it there, keep what it did
                     await self._stop_there("task", node, task_id)
-                    with contextlib.suppress(Exception):
-                        await asyncio.wait_for(self._bring_back(task), 120)
+                    if not lives:
+                        with contextlib.suppress(Exception):
+                            await asyncio.wait_for(self._bring_back(task), 120)
                 raise
-        await self._bring_back(task)
+        if not lives:
+            await self._bring_back(task)
         if outcome is None:
             return Outcome("", f"it was cut off on {self.name(node)}, which stopped or restarted; reply to carry on",
                            0, "passing")
@@ -424,14 +455,15 @@ class Offload:
         future.add_done_callback(done)
         return future
 
-    async def _reachable(self, task: dict) -> Link:
-        """The task's machine, waiting up to NODE_WAIT_MINUTES for it (its session lives there). Offline after."""
+    async def reachable(self, task: dict) -> Link:
+        """The task's machine, waiting up to NODE_WAIT_MINUTES for it (its session or project is there). Offline
+        after."""
         node = task["node"]
         deadline = time.monotonic() + NODE_WAIT_MINUTES * 60
         said = False
         while (up := self.hub.connected(node)) is None:
             if time.monotonic() >= deadline:
-                raise Offline(f"{self.name(node)}, where this task's session is, has been unreachable for "
+                raise Offline(f"{self.name(node)}, where this task's work is, has been unreachable for "
                               f"{NODE_WAIT_MINUTES:g} minutes. Reply to carry on once it's back.")
             if not said:
                 self.runner.store.set(task["id"], activity=f"waiting for {self.name(node)} to come online")

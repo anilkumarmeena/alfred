@@ -45,10 +45,11 @@ class CommandTasks(RunnerBase):
             raise ValueError("Give the folder as a full path (~ allowed).")
         if secret_path(path):
             raise ValueError("That folder holds secrets, which stay out of reach.")
-        if not path.is_dir():
+        there = projects.living_at(path)  # a project that lives on another machine: its folder is there
+        if not there and not path.is_dir():
             raise ValueError(f"{path} isn't a folder.")
-        if project is None and auto_fix:
-            project = command_jobs.project_of(path)
+        if project is None and (auto_fix or there):
+            project = there.name if there else command_jobs.project_of(path)
         title = " ".join(title.split())[:80] or command[:60]
         how = {"folder": str(path), "timeout_minutes": timeout_minutes or None, "log_file": log_file or None,
                "summarize": bool(summarize), "auto_fix": bool(auto_fix), "report": bool(report), "attempt": attempt}
@@ -56,15 +57,17 @@ class CommandTasks(RunnerBase):
             how["after"] = after
         if placeable:
             how |= {"placeable": True} | ({"approved": approved} if approved else {})
-        owner = command_jobs.project_of(path) if placeable else None
-        if machine and machine.strip().lower() != machines.HERE:
+        owner = there.name if there else command_jobs.project_of(path) if placeable else None
+        if there:
+            machine = ""  # it runs where its project lives
+        elif machine and machine.strip().lower() != machines.HERE:
             if not owner:
                 raise ValueError("Only a command in one of the projects can run on another machine: its project is "
                                  "copied there.")
             machines.find(machine)  # an unknown name is said now, before anything starts
         task = self.store.create(COMMAND, title, command, project, job=job, command=how)
         task_id = task["id"]
-        if owner and (machine or machines.paired()):
+        if owner and (there or machine or machines.paired()):
             self._said_start(task, attempt, after, job)
             self.placing[task_id] = placing = asyncio.create_task(
                 self._place_command(task_id, path, projects.find(owner), how, machine))
@@ -98,11 +101,19 @@ class CommandTasks(RunnerBase):
         task = self.store.get(task_id)
         job = {"kind": "long command", "title": task["title"], "command": task["instruction"][:500],
                "folder": str(path), "project": owner.name}
-        try:
-            place = await self.offload.place(placement.COMMANDS, job, machine)
-        except Exception as e:
-            log.warning("command task %s: choosing its machine failed: %s", task_id, e)
-            place = placement.HERE
+        if owner.node:  # it lives there, so it runs there or not at all
+            name = self.offload.name(owner.node)
+            if self.hub.connected(owner.node) is None:
+                self._finish(task_id, "failed", f"Task {task_id}, {task['title']}, didn't start: {name}, where "
+                                                f"{owner.name} lives, isn't online.", error=f"{name} isn't online")
+                return
+            place = placement.Place(owner.node, name, f"It's running on {name}, where {owner.name} lives.")
+        else:
+            try:
+                place = await self.offload.place(placement.COMMANDS, job, machine)
+            except Exception as e:
+                log.warning("command task %s: choosing its machine failed: %s", task_id, e)
+                place = placement.HERE
         if place.node:
             self._placed(task_id, place)
             try:
@@ -118,6 +129,10 @@ class CommandTasks(RunnerBase):
                 return
             except Exception as e:
                 log.warning("command task %s couldn't start on %s: %s", task_id, place.name, e)
+                if owner.node:  # its folder is only there
+                    self._finish(task_id, "failed", f"Task {task_id}, {task['title']}, couldn't start on "
+                                                    f"{place.name}: {e}"[:400], error=str(e)[:300])
+                    return
                 await self.offload.forget(place.node, self.offload.key(task_id))
                 place = placement.Place(said=f"It couldn't be sent to {place.name} ({e}), so it's running on this "
                                              "computer instead."[:400])

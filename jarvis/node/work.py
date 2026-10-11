@@ -28,14 +28,14 @@ import time
 from pathlib import Path
 
 from jarvis.core import proc
-from jarvis.core.config import DATA_DIR, WORKTREES_DIR
+from jarvis.core.config import DATA_DIR, ROOT, WORKTREES_DIR
 from jarvis.core.files import write_atomic
 from jarvis.node import home, sync, transfer
 from jarvis.node.agent import Agent
 from jarvis.node.journal import Journal
 from jarvis.node.link import Link, LinkDown, Refused
 from jarvis.safety import commands
-from jarvis.tasks import command_jobs, stall
+from jarvis.tasks import command_jobs, git_ops, projects, stall
 from jarvis.tasks.host_tools import TaskJobs
 from jarvis.tasks.worker import Outcome, run as run_task
 
@@ -162,7 +162,8 @@ class Work:
             "copy.sync": self.copy_sync, "copy.back": self.copy_back, "copy.backed": self.copy_backed,
             "copy.forget": self.copy_forget, "job.start": self.job_start, "job.poll": self.job_poll,
             "job.stop": self.job_stop, "task.run": self.task_run, "task.stop": self.task_stop,
-            "task.running": self.task_running}
+            "task.running": self.task_running, "folder.check": self.folder_check,
+            **{f"folder.{op}": self._folder_step(op) for op in git_ops.OPS}}
         agent.busy = self.busy
         agent.on_link.append(self.on_link)
 
@@ -345,6 +346,44 @@ class Work:
             raise Refused(f"{rel or 'the copy'} isn't a folder in the copy")
         return target
 
+    # ── Projects that live here ──────────────────────────────────
+
+    @staticmethod
+    def own_folder(path: object, worktrees: bool = False) -> Path:
+        """A project folder the main computer names here: in this home, outside JARVIS's own folder (but for task
+        worktrees, with `worktrees`), never a secret. Refused otherwise."""
+        folder = Path(str(path)).expanduser().resolve()
+        if worktrees and folder.is_relative_to(WORKTREES_DIR.resolve()):
+            return folder
+        if commands.secret_path(folder) or folder.is_relative_to(ROOT.resolve()):
+            raise Refused(f"{folder} holds secrets or JARVIS's own files, so it can't be a project's folder")
+        try:
+            return projects._check_folder(str(folder))
+        except ValueError as e:
+            raise Refused(str(e)) from None
+
+    async def folder_check(self, body: dict) -> dict:
+        """{"path", "name"}: a folder for a project living here, made if missing -> {"path", "state"}."""
+        path = str(body.get("path") or "") or str(projects._default_path(str(body["name"])))
+        folder = self.own_folder(path)
+        try:
+            await asyncio.to_thread(projects._check_own_repo, folder)
+        except ValueError as e:
+            raise Refused(str(e)) from None
+        folder.mkdir(parents=True, exist_ok=True)
+        return {"path": str(folder), "state": await asyncio.to_thread(projects.git_state, folder)}
+
+    def _folder_step(self, op: str):
+        """A git step (git_ops.OPS) on a project living here, every folder it names checked first."""
+        async def step(body: dict) -> dict:
+            for key in ("repo", "folder"):
+                if key in body:
+                    body[key] = str(self.own_folder(body[key]))
+            if body.get("worktree"):
+                body["worktree"] = str(self.own_folder(body["worktree"], worktrees=True))
+            return await git_ops.OPS[op](body)
+        return step
+
     # ── Command jobs ─────────────────────────────────────────────
 
     @staticmethod
@@ -363,7 +402,12 @@ class Work:
         task, command = int(body["task"]), str(body["command"]).strip()
         if why := self.refusal(command, str(body.get("approved") or "")):
             return {"refused": why}
-        folder = self._inside(str(body["key"]), str(body.get("rel") or ""))
+        if body.get("path"):  # in a project living here
+            folder = self.own_folder(body["path"])
+            if not folder.is_dir():
+                raise Refused(f"{folder} isn't a folder here")
+        else:
+            folder = self._inside(str(body["key"]), str(body.get("rel") or ""))
         if (old := self.jobs.get(task)) is not None:
             if self.jobs.how(old) is None:
                 raise Refused(f"job {task} is already running here")
@@ -410,7 +454,10 @@ class Work:
             raise Refused(f"task {task_id} is already running here")
         if task["kind"] not in ("code_change", "code_question"):
             raise Refused(f"a {task['kind']} task runs on the main computer")
-        task["worktree"] = str(self._inside(str(body["key"]), ""))
+        if body.get("folder"):  # a project living here: its own folder, or its task worktree here
+            task["worktree"] = str(self.own_folder(body["folder"], worktrees=True))
+        else:
+            task["worktree"] = str(self._inside(str(body["key"]), ""))
         self.runs[task_id] = (run, asyncio.create_task(self._run(task, prompt, run)))
         return {"started": True}
 

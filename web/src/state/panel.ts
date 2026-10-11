@@ -52,7 +52,8 @@ export interface Rule {
 export interface Todo { id: number; text: string; done: boolean; created: number; done_at: number | null }
 export interface Project {
   name: string; path: string; aliases: string[]; about: string; in_place: boolean; jarvis: boolean; exists: boolean;
-  git: string; changed: number | null;
+  git: string | null; changed: number | null;
+  machine?: string;  // the other machine it lives on; its folder is there
 }
 export interface Account { label: string; email: string; note: string; chat: boolean; default: boolean; signed_in: boolean }
 // Long-term memory lines by section, with per-section usage

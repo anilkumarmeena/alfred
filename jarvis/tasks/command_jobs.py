@@ -57,7 +57,8 @@ def project_of(folder: Path, named=None) -> str | None:
     path = folder.resolve()
     if any(path.is_relative_to(p.resolve()) for p in (DATA_DIR, SECRETS_DIR)):
         return None
-    holding = [p for p in ([named] if named else []) + projects.load() if path.is_relative_to(p.path.resolve())]
+    holding = [p for p in ([named] if named else []) + projects.load()
+               if not p.node and path.is_relative_to(p.path.resolve())]  # one on another machine has its folder there
     found = max(holding, key=lambda p: len(p.path.resolve().parts), default=None)  # max keeps the first on ties
     return found.name if found else None
 

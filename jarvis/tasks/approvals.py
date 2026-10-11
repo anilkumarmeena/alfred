@@ -312,7 +312,7 @@ class Approvals(RunnerBase):
         elif task["status"] == "waiting" and task["wait_kind"] != WAIT_APPROVAL:
             self.store.add_nudge(task_id, result)  # waiting on its own question: deliver with that answer
         elif task["status"] in ("waiting", "stopped") and state != CANCELLED:
-            if not task["worktree"] or Path(task["worktree"]).exists():
+            if not task["worktree"] or task["node"] or Path(task["worktree"]).exists():  # a machine's folder is there
                 self._launch(task_id, result)
         word = SETTLED[state][0]
         self.broadcast({"type": "approval_answered", "text": f"Task {task_id}'s request {approval_id} {word}.",

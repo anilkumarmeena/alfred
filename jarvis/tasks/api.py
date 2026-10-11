@@ -88,7 +88,7 @@ def routes(r: "Runner") -> list[web.RouteDef]:
         b = await req.json()
         return web.json_response(await r.register_project(
             b["name"], b.get("path") or None, b.get("aliases") or [], b.get("about", ""),
-            b.get("in_place", projects.IN_PLACE_DEFAULT)))
+            b.get("in_place", projects.IN_PLACE_DEFAULT), str(b.get("machine") or "")))
 
     async def merge(req: web.Request) -> web.Response:
         return web.json_response(await r.merge(int(req.match_info["id"])))

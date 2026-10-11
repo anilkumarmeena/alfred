@@ -165,9 +165,12 @@ async def mark_seen(ids: list[int]) -> None:
     await call("POST", "/tasks/seen", {"ids": ids})
 
 
-async def register_project(name: str, path: str | None, aliases: list[str], about: str, in_place: bool) -> dict:
+async def register_project(name: str, path: str | None, aliases: list[str], about: str, in_place: bool,
+                           machine: str = "") -> dict:
+    """Add a project; with `machine`, one that lives on that machine (its folder checked there)."""
     return await call("POST", "/projects", {"name": name, "path": path, "aliases": aliases, "about": about,
-                                            "in_place": in_place})
+                                            "in_place": in_place} | ({"machine": machine} if machine else {}),
+                      timeout=60)
 
 
 async def git_init(name: str) -> dict:

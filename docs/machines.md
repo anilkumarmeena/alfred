@@ -49,9 +49,17 @@ make node-check      # walls, pairing, link, tools
 
 `JARVIS_PLACEMENT_MODEL`, `JARVIS_NODE_LOST_MINUTES` (30), `JARVIS_NODE_WAIT_MINUTES` (30), `JARVIS_NODE_SYNC_MAX_GB` (20).
 
+## Projects that live on a machine
+
+Say so when adding it ("the film project lives on the studio Mac at ~/projects/film"): the brain passes `machine` to
+`project_register`, and that machine checks the folder (in its home, not hidden, never a secrets folder or JARVIS's
+own) and makes it if missing. From then on its tasks and long commands always run there, in its own folder, whatever
+the placement setting: in place, or on a branch in a worktree there. The git steps (saving uncommitted work under
+`refs/jarvis/`, worktrees, commits, merge and discard) run on that machine (`git_ops.OPS`, sent over the link). Nothing
+is copied. If the machine is away, the task waits for it (`JARVIS_NODE_WAIT_MINUTES`); it never runs here.
+
 ## Not built yet
 
-- Projects that live on a machine (worked on there in place, merge and discard forwarded).
 - The machine's own scheduler for those projects while the main computer is off, with one summary afterwards.
 - JARVIS's own skills shipped to runs on the machine; the goal check's diff evidence for runs there.
 - Restricting pairing to the owner's login (today any panel login can pair a machine).

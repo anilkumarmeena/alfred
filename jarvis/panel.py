@@ -342,6 +342,9 @@ async def _changed(folder: Path) -> int | None:
 
 
 async def _project(p: projects.Project) -> dict:
+    if p.node:  # its folder is on that machine
+        return {"name": p.name, "path": str(p.path), "aliases": p.aliases, "about": p.about, "in_place": p.in_place,
+                "jarvis": False, "exists": True, "git": None, "changed": None, "machine": machines.where(str(p.node))}
     state = await asyncio.to_thread(projects.git_state, p.path)
     return {"name": p.name, "path": projects.shown(p.path), "aliases": p.aliases, "about": p.about,
             "in_place": p.in_place, "jarvis": projects.is_jarvis(p.path), "exists": p.path.is_dir(), "git": state,

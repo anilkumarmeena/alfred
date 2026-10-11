@@ -24,9 +24,11 @@ class RunnerBase:
     closing: bool
     placing: dict[int, asyncio.Task]
     if TYPE_CHECKING:
+        from jarvis.node.hub import Hub
         from jarvis.node.offload import Offload
         from jarvis.node.placement import Place
         offload: Offload
+        hub: Hub
 
     if TYPE_CHECKING:
         # jarvis.tasks.runner

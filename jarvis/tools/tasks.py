@@ -5,6 +5,7 @@ import time
 from jarvis.core import profile
 from jarvis.core.config import NEW_PROJECTS_DIR
 from jarvis.core.database import COMMAND, KINDS, edits, minutes_since_update, nudges
+from jarvis.node import machines
 from jarvis.safety import approvals, consent, remembered
 from jarvis.safety.commands import ordered, orders, said_scope, tells_approve, tells_deny
 from jarvis.state import conversation, todo
@@ -392,9 +393,11 @@ async def task_edits(id: int, action: str, edits: list[int]) -> dict:
 @tool("projects_list", "The user's projects that code tasks can work on, with their folders, aliases and what each one "
       "is. in_place true (the default) means code changes happen directly in the project's folder, uncommitted, "
       "one task at a time; in_place false means each task gets its own git branch in a separate worktree. "
-      "JARVIS's own project is always in_place false.", reads=True)
+      "JARVIS's own project is always in_place false. lives_on names the other machine a project lives on: its "
+      "folder is there, and its tasks and jobs run there.", reads=True)
 def projects_list() -> list[dict]:
-    return [{"name": p.name, "path": projects.shown(p.path), "aliases": p.aliases, "about": p.about, "in_place": p.in_place}
+    return [{"name": p.name, "path": str(p.path) if p.node else projects.shown(p.path), "aliases": p.aliases,
+             "about": p.about, "in_place": p.in_place} | ({"lives_on": machines.where(str(p.node))} if p.node else {})
             for p in projects.load()]
 
 
@@ -411,14 +414,17 @@ def projects_list() -> list[dict]:
         "aliases": {"type": "array", "items": {"type": "string"}, "description": "Other names speech recognition might hear."},
         "about": {"type": "string", "description": "What it is, and whether it's work or personal."},
         "in_place": {"type": "boolean", "description": "Code tasks edit its folder directly, uncommitted (default true; leave it out unless the user asks for branches)."},
+        "machine": {"type": "string", "description": "Only for a project that lives on one of the user's other "
+                                                     "machines (see machines): that machine's name; path is then a "
+                                                     "folder on it. Its tasks and jobs always run there."},
     },
     ["name"],
     said="Added the project {name}",
 )
 async def project_register(name: str, path: str = "", aliases: list[str] | None = None, about: str = "",
-                           in_place: bool = projects.IN_PLACE_DEFAULT) -> dict:
+                           in_place: bool = projects.IN_PLACE_DEFAULT, machine: str = "") -> dict:
     vetted("\n".join([name, about, *(aliases or [])]), "the project's entry")  # register strips invisible chars itself
-    return await client.register_project(name, path or None, aliases or [], about, in_place)
+    return await client.register_project(name, path or None, aliases or [], about, in_place, machine)
 
 
 @tool(

@@ -322,25 +322,31 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         if not instruction.strip():
             raise ValueError("instruction is empty")
         grants = [n for n in access.check(grants) if n not in access.defaults(kind)]
-        name, in_place = None, False
+        name, in_place, lives = None, False, None
         if kind != "research":
             if not project:
                 raise ValueError(f"A {kind} task needs a project.")
             found = projects.find(project)
-            name, in_place = found.name, found.in_place and kind == "code_change"
-            if kind == "code_change" and not in_place and (problem := projects.worktree_problem(found)):
+            name, in_place, lives = found.name, found.in_place and kind == "code_change", found.node
+            if kind == "code_change" and not in_place and not lives and (problem := projects.worktree_problem(found)):
                 raise ValueError(problem)
         item = todos.find(todo) if todo else None
         title = " ".join(title.split())[:80] or instruction[:60]
         placeable = kind != "research" and not access.has({"kind": kind, "grants": json.dumps(grants)}) & access.LOCAL
-        if machine and machine.strip().lower() != machines.HERE:
+        if lives and not placeable:
+            raise ValueError(f"{name} lives on {self.offload.name(lives)}, where accounts and other projects aren't: "
+                             "start a task here for what needs them.")
+        if machine and machine.strip().lower() != machines.HERE and not lives:
             if not placeable:
                 raise ValueError(f"A {kind} task that reads accounts or other projects runs on this computer, where they are.")
             machines.find(machine)  # an unknown name is said now, before anything starts
         task = self.store.create(kind, title, instruction, name, in_place, job, hidden, grants, fixes=fixes,
                                  todo=item and item["id"])
         self.store.log(task["id"], "start", instruction)
-        if placeable and (machine or machines.paired()):
+        if lives:  # it runs where its project lives, whatever the setting
+            self._placed(task["id"], placement.Place(lives, self.offload.name(lives),
+                                                     f"It's running on {self.offload.name(lives)}, where {name} lives."))
+        elif placeable and (machine or machines.paired()):
             self.placing[task["id"]] = placing = asyncio.create_task(self._place_task(task, machine))
             placing.add_done_callback(lambda _: self.placing.pop(task["id"], None))
         if item:
@@ -371,7 +377,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             raise ValueError(f"Task {task_id} is a {learning.TITLE}, which has nothing to carry on; apply or dismiss "
                              "its suggested edits with task_edits.")
         running = task["status"] in ("queued", "running")
-        if not running and task["worktree"] and not Path(task["worktree"]).exists():
+        if not running and task["worktree"] and not self._lives_on(task) and not Path(task["worktree"]).exists():
             folder = "project folder" if task["in_place"] else "worktree"
             raise ValueError(f"Task {task_id}'s {folder} has been removed, so it can't carry on.")
         note = ""
@@ -536,8 +542,8 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
 
     async def _still_there(self, task: dict) -> dict:
         """A task for a machine that has gone away since it was placed: one that never ran there runs here instead
-        (and says so); one whose session is there waits for it (Offload.run_task)."""
-        if self.hub.connected(task["node"]) is not None or task["session_id"]:
+        (and says so); one whose session or project is there waits for it (Offload.run_task)."""
+        if self.hub.connected(task["node"]) is not None or task["session_id"] or self._lives_on(task):
             return task
         said = f"{self.offload.name(task['node'])} isn't online now, so it's running on this computer instead."
         self.store.log(task["id"], "machine", said)
@@ -554,6 +560,8 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             if remote := bool(task["node"]):
                 task = await self._still_there(task)
                 remote = bool(task["node"])
+            if remote and self._lives_on(task):  # its git steps run there too
+                await self.offload.reachable(task)
             if task["kind"] == "code_change" and not task["in_place"] and not task["worktree"]:
                 await self._make_worktree(task)
             async with self._folder(task):
