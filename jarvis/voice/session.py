@@ -253,7 +253,7 @@ class VoiceSession:
                 await self.floor.say(session, spoken)
 
     async def watch_tasks(self) -> None:
-        """Queue task updates and heartbeat alerts as announcements; approval requests go to `asks`.
+        """Queue task updates and alerts as announcements; approval requests go to `asks`.
 
         Reconnects per RUNNER_EVENTS when the stream ends or fails."""
 
@@ -269,7 +269,7 @@ class VoiceSession:
             self.asks.add(event["approval"])
         elif event["type"] == "approval_answered":
             self.asks.drop(event["approval"]["id"])
-        elif event["type"] == "heartbeat":  # alerts and reminders
+        elif event["type"] == "alert":  # notices, reminders and watch findings
             self.announcements.add(Announcement(event["text"], seen=list(event["tasks"] or []),
                                                 urgency=event.get("urgency", "soon"), at=event.get("at"),
                                                 pushed=event.get("pushed", True)))

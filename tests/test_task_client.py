@@ -18,7 +18,7 @@ def test_the_runner_stopping_mid_stream_is_it_being_down_not_an_error(monkeypatc
     async def events(request):  # one event, then the runner goes away, as on Ctrl-C
         r = web.StreamResponse()
         await r.prepare(request)
-        await r.write(b'{"type": "heartbeat"}\n')
+        await r.write(b'{"type": "alert"}\n')
         request.transport.close()
         return r
 
@@ -40,7 +40,7 @@ def test_the_runner_stopping_mid_stream_is_it_being_down_not_an_error(monkeypatc
             await site_runner.cleanup()
         return got
 
-    assert asyncio.run(main()) == [{"type": "heartbeat"}]
+    assert asyncio.run(main()) == [{"type": "alert"}]
 
 
 def test_a_tool_finding_the_runner_down_logs_one_line_not_a_traceback(monkeypatch, caplog):

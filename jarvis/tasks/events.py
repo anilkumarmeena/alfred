@@ -38,7 +38,7 @@ def bell_entry(event: dict) -> tuple[str, str, int | None] | None:
             else:
                 said = f"Task {a['task']}'s request to run {_commands(a)}: {word}"
             return said, light, a["task"]
-        case "heartbeat":
+        case "alert":
             return event["text"], "warn", None
     return None
 

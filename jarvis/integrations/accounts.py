@@ -2,7 +2,7 @@
 
 Each has a label, email, optional note, a Google Chat flag, and one is the default for anything made without naming an
 account. Accounts are signed in from the control panel (jarvis.integrations.google_signin). Running services pick up a
-change at their next conversation, task or heartbeat check (jarvis.tools.google.fresh), so no restart is needed.
+change at their next conversation, task or watch check (jarvis.tools.google.fresh), so no restart is needed.
 
     uv run python -m jarvis.integrations.accounts                  list
     uv run python -m jarvis.integrations.accounts add LABEL [--email E] [--note N] [--chat] [--default]
@@ -13,11 +13,10 @@ change at their next conversation, task or heartbeat check (jarvis.tools.google.
     uv run python -m jarvis.integrations.accounts check-chat [LABEL]
 
 Changes run in one write-locked transaction (`change`) so concurrent processes can't undo each other. Sign-ins live in
-secrets/google-<label>.json and secrets/google-<label>-chat.json; renaming moves both plus the heartbeat history keys.
+secrets/google-<label>.json and secrets/google-<label>-chat.json; renaming moves both.
 """
 
 import argparse
-import json
 import logging
 import re
 import sqlite3
@@ -28,12 +27,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from jarvis.core import database, profile
-from jarvis.core.files import write_atomic
 
 log = logging.getLogger("jarvis.integrations.accounts")
 
-LABEL = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")  # used in file names and heartbeat keys
-HISTORY = ("calendar", "email", "chat")  # heartbeat sources keyed by account label
+LABEL = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")  # used in file names
 
 _SCHEMA = """
 create table accounts (
@@ -199,9 +196,9 @@ def _files(label: str) -> list[Path]:
     return [token_path(label), chat_state_path(label)]
 
 
-def move_files(old: str, new: str, history: Path | None = None) -> list[str]:
-    """Move sign-in, Chat state and heartbeat keys from `old` to `new`; returns what moved. Raises ValueError (and
-    changes nothing) if `new` files already exist."""
+def move_files(old: str, new: str) -> list[str]:
+    """Move sign-in and Chat state from `old` to `new`; returns what moved. Raises ValueError (and changes nothing) if
+    `new` files already exist."""
     if clash := [n.name for n in _files(new) if n.exists()]:
         raise ValueError(f"{', '.join(clash)} is already there, from an earlier {new} account. Remove it first.")
     moved = []
@@ -209,29 +206,7 @@ def move_files(old: str, new: str, history: Path | None = None) -> list[str]:
         if src.exists():
             src.rename(dst)
             moved.append(dst.name)
-    if relabel_history(old, new, history or profile.current().heartbeat_file):
-        moved.append("the heartbeat's history")
     return moved
-
-
-def relabel_history(old: str, new: str, path: Path) -> bool:
-    """Rewrite heartbeat seen-keys (calendar:<label>:..., etc.) to `new` so flagged items don't repeat. False if
-    nothing changed."""
-    try:
-        data = json.loads(path.read_text())
-        seen = data["seen"]
-    except (OSError, ValueError, KeyError, TypeError):
-        return False
-    changed = {}
-    for key, when in seen.items():
-        source, _, rest = key.partition(":")
-        if source in HISTORY and rest.startswith(old + ":"):
-            key = f"{source}:{new}:{rest[len(old) + 1:]}"
-        changed[key] = when
-    if changed == seen:
-        return False
-    write_atomic(path, json.dumps(data | {"seen": changed}))
-    return True
 
 
 def remove_files(label: str) -> list[str]:

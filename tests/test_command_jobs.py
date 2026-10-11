@@ -605,6 +605,33 @@ def test_each_scheduled_run_is_a_command_task_said_under_the_jobs_title(env):
     assert listed["latest_run"]["task"] == done["id"] and listed["latest_run"]["summary"] == SUMMARY
 
 
+def test_a_monitor_script_stays_silent_with_no_model_until_it_prints_news(env):
+    news = env["project"] / "news.txt"
+    job = schedules.add("command", "Price watch", f"cat {news} 2>/dev/null; true", every_minutes=10,
+                        project="video-agent", only_changes=True, now=NOW)
+    assert job["only_changes"] == 1
+
+    async def run_once(r, s, minutes):
+        s.clock.now = at(minutes=minutes)
+        assert await s.tick() == [job["id"]]
+        return await ended(r, schedules.get(job["id"])["last_task"])
+
+    async def main():
+        r = make()
+        s, _ = scheduled(r, NOW)
+        quiet = await run_once(r, s, 10)
+        news.write_text("The price fell to 40.\n")
+        told = await run_once(r, s, 20)
+        return r, quiet, told
+
+    r, quiet, told = asyncio.run(main())
+    assert (quiet["status"], quiet["hidden"], quiet["seen"]) == ("done", 1, 1)
+    assert quiet["id"] not in [t["id"] for t in r.store.recent()]  # kept out of the task list
+    assert len(env["asked"]) == 1 and "The price fell to 40." in env["asked"][0][0]  # the model read only the news
+    assert told["hidden"] == 0 and env["pushed"] == [{"title": "Price watch", "body": told["spoken"]}]
+    assert SUMMARY in told["spoken"]
+
+
 def test_no_scheduled_run_starts_while_the_last_is_still_going(env):
     job = schedules.add("command", "Sync", "sleep 30", every_minutes=10, folder=str(env["project"]), now=NOW)
 

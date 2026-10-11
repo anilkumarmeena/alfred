@@ -117,7 +117,7 @@ A stem or button press mutes and unmutes; see [Voice](voice.md#-earphones-and-sw
 <td valign="top">
 
 **🔔 Notifications**<br>
-Task updates and heartbeat alerts, even when JARVIS isn't open. [Turn them on](#-notifications) below.
+Task updates, reminders and alerts, even when JARVIS isn't open. [Turn them on](#-notifications) below.
 
 </td>
 </tr>
@@ -125,13 +125,13 @@ Task updates and heartbeat alerts, even when JARVIS isn't open. [Turn them on](#
 
 ## 🔔 Notifications
 
-With push on (the default), **heartbeat alerts** and **task updates** (done, failed, has a question) reach your phone even when JARVIS isn't open.
+With push on (the default), **alerts** (reminders, what your monitors find, JARVIS's [notices](tasks.md#-notices)) and **task updates** (done, failed, has a question) reach your phone even when JARVIS isn't open.
 
 | | What | Detail |
 |:-:|---|---|
 | 📡 | **How** | **Web Push** for the web app; **APNs** (iOS) and **FCM** (Android) for the native app |
 | 👆 | **Tapping one** | Opens JARVIS on that task or alert, with a button to talk about it |
-| 💓 | **Heartbeat pushes** | Follow the heartbeat's rules: never twice, nothing in quiet hours |
+| 🔁 | **Notice pushes** | Never twice, nothing in quiet hours |
 | 🔒 | **Lock screen** | Chat alerts say only who wrote, never what |
 
 > [!IMPORTANT]

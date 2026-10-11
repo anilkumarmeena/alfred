@@ -1,7 +1,7 @@
 """Recent-activity feed for the control panel's bell (activity table).
 
 Writers: the voice brain (successful state-changing tools and MCP writes) and the task runner (task lifecycle,
-approvals, heartbeat alerts). Reads/searches are not recorded. Entries older than KEEP_DAYS are pruned.
+approvals, alerts). Reads/searches are not recorded. Entries older than KEEP_DAYS are pruned.
 add() never raises: failures are logged and the caller carries on.
 """
 
