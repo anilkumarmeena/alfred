@@ -6,8 +6,8 @@
 It reads only JARVIS's own state, never a service: what to watch is each user's choice, made with scheduled jobs
 (jarvis.tasks.schedules). Each notice goes out once as a desktop notification, a phone push and a spoken update;
 lock-screen surfaces get only `text`. Keys already given live in data/notices.json, and an ongoing notice (a stall)
-is forgotten once it clears, so it can recur. Nothing is checked in quiet hours or
-do-not-disturb; what still holds is said after. A failing check is logged and skipped.
+is forgotten once it clears, so it can recur. Nothing is checked in quiet hours or do-not-disturb; what still holds
+is said after. A failing check is logged and skipped.
 """
 
 import asyncio
