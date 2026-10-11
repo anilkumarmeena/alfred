@@ -266,17 +266,15 @@ sequenceDiagram
 | 🤖 | **Model** | `JARVIS_CLI_MODEL` (default `claude-opus-5-5`), effort `low`, `max_turns` 8 |
 | 🔒 | **Lockdown** | `setting_sources=[]`, `strict_mcp_config=True`, **no file editing** |
 | 🧰 | **Tool servers** | In-process MCP `jarvis` (`sdk.jarvis_server`), `shell` (long jobs), enabled external MCP servers |
-| 🔎 | **Lookup subagent** | `lookup`: read-only (`Read`, `Glob`, `Grep`) on `JARVIS_LOOKUP_MODEL` (Haiku) |
-| 🧵 | **Side jobs** | `background_lookup` (`jarvis/brain/side.py`): slow reading while the talk goes on |
+| 🧵 | **Side jobs** | `background_lookup` and `file_lookup` (`jarvis/brain/side.py`): slow reading while the talk goes on |
 | ⏳ | **Kept calls** | `jarvis/brain/kept.py`: a JARVIS tool still running after `JARVIS_TOOL_WAIT` (8 s) leaves the turn; the brain follows up on its result |
 | ⚡ | **Quick routing** | Optional (`JARVIS_VOICE_QUICK_MODEL`): `jarvis/brain/route.py` sends small talk to a lighter model |
 | 📊 | **Usage limits** | `jarvis/brain/usage.py` records each `rate_limit_event` in `data/usage.json` |
 | 🔂 | **Retries** | `jarvis/brain/retry.py`: failures are `LIMIT`, `PASSING` or `ERROR` |
 
-- **Lockdown:** built-ins are `WebSearch`, `WebFetch`, `Bash`, `Agent` (lookup only) and `Skill` when skills are on. Everything else meets `ShellGate`.
-- **Lookup subagent:** the brain can't read files itself. Built-in subagents are denied (`sdk.BUILTIN_AGENTS_DENIED`).
-- **Side jobs** run in a read-only session; the answer comes back through the floor.
-- **Kept calls** (a merge running the tests, a slow read) carry on in the voice process. Their result is screened, queued on the floor, and taken up in a **follow-up turn** the brain starts itself (`CliBrain.follow_up`), so it can finish what depended on it (push after a merge). The user's own turn always comes first and stops a follow-up under way.
+- **Lockdown:** built-ins are `WebSearch`, `WebFetch`, `Bash` and `Skill` when skills are on; no subagents (`sdk.BUILTIN_AGENTS_DENIED`). Everything else meets `ShellGate`.
+- **Side jobs** run in a read-only session; the answer comes back through the floor. The brain can't read files itself: `file_lookup` searches with `Read`, `Glob` and `Grep` on `JARVIS_LOOKUP_MODEL` (Haiku), never secrets, a dozen reads at most. Its answer comes back in the turn only within `JARVIS_LOOKUP_WAIT` seconds a turn; after that it carries on in the background, so no lookup holds a spoken reply for long.
+- **Kept calls** (a merge running the tests, a slow read) carry on in the voice process. Their result is screened, queued on the floor, and taken up in a **follow-up turn** the brain starts itself (`CliBrain.follow_up`), so it can finish what depended on it (push after a merge). The user's own turn always comes first and stops a follow-up under way. Side-job tools (`stays`) manage their own background work and never become kept calls.
 - **Quick routing** stays in the same CLI session.
 - **Usage limits:** `usage.available` steps down a model when one model's weekly window is spent; `usage.hold_until` holds scheduled runs.
 - **Retries** are classified from what the SDK reports, **never from error text**.

@@ -29,12 +29,12 @@ def test_any_prompt_may_name_the_os_without_being_given_it(tmp_path, monkeypatch
 
 
 def test_every_prompt_file_loads_where_it_is_used():
-    from jarvis.brain import cli
+    from jarvis.brain import cli, side
     from jarvis.safety import injection
     from jarvis.skills import review
     from jarvis.tasks import announce, briefs, goal, heartbeat, learning
 
-    for text in (persona.persona(), cli.lookup().prompt, cli.LOOKUP_PROMPT, briefs.brief(), briefs._host_brief(1),
+    for text in (persona.persona(), side.lookup_system(), cli.LOOKUP_PROMPT, briefs.brief(), briefs._host_brief(1),
                  goal.system(), learning.system(), heartbeat.triage_system(), review.system(), announce.system(),
                  injection.PROMPT):
         assert "{{" not in text and "<!--" not in text
