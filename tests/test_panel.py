@@ -520,6 +520,7 @@ def test_on_linux_system_reads_systemd_user_units(db, monkeypatch):
                       "ExecMainStartTimestampMonotonic=0\n",
              "web": "LoadState=not-found\nActiveState=inactive\nExecMainStatus=0\n"}
     asked = []
+    ago = min(3600, panel.time.monotonic() / 2)  # an hour ago, or less on a computer up for less
 
     class Proc:
         def __init__(self, out: str):
@@ -531,7 +532,7 @@ def test_on_linux_system_reads_systemd_user_units(db, monkeypatch):
     async def exec_(*cmd, **kwargs):
         asked.append(cmd)
         name = cmd[-1].removesuffix(".service").rpartition(".")[2]
-        started = int((panel.time.monotonic() - 3600) * 1e6)
+        started = int((panel.time.monotonic() - ago) * 1e6)
         return Proc(shown.get(name, "").format(started))
 
     monkeypatch.setattr(panel.setup_local, "MANAGER", "systemd")
@@ -541,6 +542,6 @@ def test_on_linux_system_reads_systemd_user_units(db, monkeypatch):
     livekit, agent, web, tasks = call("system")["services"]
     assert asked[0][:3] == ("systemctl", "--user", "show")
     assert asked[0][-1] == config.service_label("livekit") + ".service"
-    assert livekit["state"] == "running" and abs(panel.time.time() - 3600 - livekit["since"]) < 5
+    assert livekit["state"] == "running" and abs(panel.time.time() - ago - livekit["since"]) < 5
     assert agent == {"name": "Voice agent", "state": "stopped", "exit": 1}
     assert web == {"name": "Web", "state": "not loaded"} and tasks == {"name": "Task runner", "state": "not loaded"}
