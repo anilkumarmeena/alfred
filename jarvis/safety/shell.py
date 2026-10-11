@@ -87,18 +87,13 @@ Shell:
 # ── The gate ────────────────────────────────────────────────────
 
 
-FILE_READS = ["Read", "Glob", "Grep"]  # lookup subagents only
-_AGENT_TOOLS = {"Agent", "Task"}  # the bundled CLI may name the subagent tool either way
-
-
 class ShellGate:
-    """Permission callback for calls the CLI won't allow alone: unsandboxed Bash, start_job, scheduled commands,
-    subagents and their file reads. The brain itself never reads files, keeping contents out of the spoken turn.
+    """Permission callback for calls the CLI won't allow alone: unsandboxed Bash, start_job and scheduled commands.
+    The brain never reads files itself (jarvis.brain.side does, for file_lookup), keeping contents out of the turn.
     """
 
-    def __init__(self, clock: Callable[[], float] = time.monotonic, agents: tuple[str, ...] = ()) -> None:
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self.clock = clock
-        self.agents = set(agents)
         self.session = f"voice:{uuid.uuid4().hex[:12]}"  # session id for remembered rules
         self.said = ""  # user's words this turn
         self.asked: list[str] = []  # keys needing a yes, from this turn
@@ -171,16 +166,6 @@ class ShellGate:
             self.offer = (found[0], None, found[1], example)
 
     async def __call__(self, name: str, args: dict, ctx) -> PermissionResultAllow | PermissionResultDeny:
-        if name in _AGENT_TOOLS:
-            if args.get("subagent_type") in self.agents:
-                return PermissionResultAllow()
-            return PermissionResultDeny(message=f"The subagents here are {', '.join(sorted(self.agents)) or 'none'}.")
-        if name in FILE_READS:
-            if not getattr(ctx, "agent_id", None):
-                return PermissionResultDeny(message="Hand file lookups to the lookup subagent.")
-            if names_secret(" ".join(str(v) for v in args.values())):
-                return PermissionResultDeny(message="Secrets stay out of reach.")
-            return PermissionResultAllow()
         if name.startswith(JARVIS_TOOLS) and (tool := name.removeprefix(JARVIS_TOOLS)) in schedules.COMMAND_TOOLS:
             if (command := schedules.command_called(tool, args)) is None:
                 return PermissionResultAllow()
