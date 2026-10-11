@@ -169,7 +169,7 @@ then run `wsl --shutdown` from Windows and open Ubuntu again.
 ### ✅ Then, everywhere
 
 ```sh
-git clone <repo-url> jarvis && cd jarvis
+git clone https://github.com/anilkumarmeena/jarvis.git && cd jarvis
 make install
 ```
 
