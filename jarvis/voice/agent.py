@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import logging
 import os
+from urllib.parse import urlparse
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobProcess, cli, inference, llm
 from livekit.plugins import silero
@@ -76,9 +77,13 @@ def prewarm(proc: JobProcess) -> None:
 speech.register_runners()
 os.environ["LIVEKIT_URL"] = config.LIVEKIT_URL  # the worker reads it from env
 # LiveKit keys from the vault (or .env on first setup)
+# LiveKit sends the worker's connection through HTTPS_PROXY/HTTP_PROXY, ignoring NO_PROXY; a company proxy can't
+# reach this machine's server and answers 500, so a local server goes direct
+LOCAL_LIVEKIT = urlparse(config.LIVEKIT_URL).hostname in ("127.0.0.1", "localhost", "::1")
 server = AgentServer(setup_fnc=prewarm, num_idle_processes=config.VOICE_IDLE_PROCESSES, initialize_process_timeout=120,
                      api_key=credentials.get(credentials.LIVEKIT_KEY),
-                     api_secret=credentials.get(credentials.LIVEKIT_SECRET))
+                     api_secret=credentials.get(credentials.LIVEKIT_SECRET),
+                     **({"http_proxy": None} if LOCAL_LIVEKIT else {}))
 
 
 @server.rtc_session()
