@@ -137,7 +137,7 @@ JARVIS runs on **macOS on Apple silicon** and **Linux** (x86_64 and aarch64, wit
 | | `goal.py`, `announce.py`, `data_edits.py`, `merge_check.py`, `stall.py` | Goal check, spoken endings, suggested data edits, tests before merging JARVIS's own branches, stall watchdog |
 | | `notices.py`, `scheduler.py`, `schedules.py`, `hold.py`, `learning.py` | Services that run inside the runner |
 | | `command_jobs.py`, `connection_jobs.py`, `projects.py`, `client.py` | Command and connection task kinds, the project list, the socket client |
-| `jarvis/integrations/` | `accounts.py`, `signins.py`, `browser.py` | Google accounts, sign-in health, JARVIS's own Chrome |
+| `jarvis/integrations/` | `accounts.py`, `browser.py` | Google accounts, JARVIS's own Chrome |
 | | `mcp_servers.py`, `mcp_launch.py`, `mcp_relay.py`, `mcp_bridge.py`, `mcp_registry.py`, `mcp_oauth.py` | External MCP servers: list, launcher, relay, HTTP bridge, registry search, OAuth |
 | `jarvis/state/` | `memory.py`, `todo.py`, `settings.py`, `vocabulary.py`, `voiceprints.py`, `conversation.py`, `activity.py`, `history.py`, `pictures.py`, `shared_files.py` | What JARVIS keeps for the user |
 | `jarvis/core/` | `config.py`, `database.py`, `vault.py`, `profile.py`, `logins.py`, `credentials.py`, `documents.py`, `transcribe.py`, `proc.py` | Config, SQLite, encrypted secrets, profiles, logins, file reading, transcription |
@@ -597,10 +597,9 @@ All three run **inside the task runner**, which is always on and already reaches
 |:-:|---|---|
 | 🛠️ | `tasks` | Questions unanswered for 15 minutes, runs cut off by a restart, stalled tasks |
 | 📊 | `usage` | A Claude usage window nearly or fully used |
-| 🔑 | `signins` | Google, `gh` and MCP tokens failing or expiring (`jarvis/integrations/signins.py`) |
 
 - **Quiet hours** (`JARVIS_QUIET_HOURS`) and **do not disturb** skip the round; what still holds is said after.
-- Checks run in parallel with a 60 s limit each. Notices have **stable keys**, kept for 30 days in `data/notices.json`, so each is said once; an ongoing one (a stall, a sign-in) is forgotten when it clears, so it can come back. At most 5 per round.
+- Checks run in parallel with a 60 s limit each. Notices have **stable keys**, kept for 30 days in `data/notices.json`, so each is said once; an ongoing one (a stall) is forgotten when it clears, so it can come back. At most 5 per round.
 - Each goes out as a desktop notification and a push (`text` only), and is spoken at the next pause. Logs hold counts only, **never notice text**.
 
 ### Monitoring

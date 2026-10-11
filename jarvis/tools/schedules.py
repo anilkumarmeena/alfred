@@ -239,7 +239,7 @@ def schedule_change(id: int, title: str = "", text: str = "", when: str = "", in
     "schedule_hold",
     "Do not disturb: pause everything, or resume it all (\"hold alerts till three, I'm presenting\", \"pause all\", "
     "\"I'm back\"). While it's on, no reminder, scheduled task, watch or command runs, JARVIS keeps its own notices "
-    "(a stuck task, a sign-in failing) to itself, and finished tasks send no notifications (requests for a yes still "
+    "(a stuck task, a usage limit) to itself, and finished tasks send no notifications (requests for a yes still "
     "come through). When it ends, at until or on resume, held reminders are said, each held job runs once, and "
     "notices that still hold are given. It's separate from the "
     "nightly quiet hours, which stay as they are. With neither until nor minutes it lasts until resumed. With no "

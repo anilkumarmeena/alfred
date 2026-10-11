@@ -306,9 +306,8 @@ Answers only your enrolled voice. What each case means is in **[🗣️ Voice](v
 
 | Setting | Default | What it does |
 |---|---|---|
-| `JARVIS_NOTICES` | `on` | JARVIS's [notices](tasks.md#-notices) about itself: stuck or waiting tasks, usage limits, sign-ins |
+| `JARVIS_NOTICES` | `on` | JARVIS's [notices](tasks.md#-notices) about itself: stuck or waiting tasks, usage limits |
 | `JARVIS_QUIET_HOURS` | `23:00-08:00` | Local hours with no notices; watches pause too. Empty: never quiet |
-| `JARVIS_SIGNIN_WARN_DAYS` | `7` | Warn this many days before a GitHub or GitLab token expires |
 
 ### Scheduler
 

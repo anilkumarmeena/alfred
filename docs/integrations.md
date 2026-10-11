@@ -264,7 +264,7 @@ Package runners (`npx`, `uvx`) must name a **pinned version**. Settings and head
 
 - **GitHub:** "connect GitHub" adds its own server from the registry. Add the `workflow` scope only to change `.github/workflows`; authorise the token for SSO if needed.
 - **Self-hosted GitLab:** `make servers ARGS="set gitlab --env GITLAB_API_URL=https://gitlab.example.com/api/v4"`.
-- **The shell and tasks** use the `gh` CLI (`gh auth login`) separately; JARVIS warns if it's signed out.
+- **The shell and tasks** use the `gh` CLI (`gh auth login`) separately.
 
 ## 🔒 Secrets vault
 

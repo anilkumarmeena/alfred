@@ -20,7 +20,7 @@ flowchart TB
     Runner --> T["🛠️ Tasks<br/>code · research"]
     Runner --> C["💻 Commands<br/>long shell jobs"]
     Runner --> S["⏰ Scheduler<br/>reminders · watches"]
-    Runner --> H["🔔 Notices<br/>stuck tasks · sign-ins"]
+    Runner --> H["🔔 Notices<br/>stuck tasks · usage"]
     Runner --> L["🧠 Learning<br/>after each chat"]
     T & C & S & H & L --> Tell(["🔔 Said aloud · desktop notification · phone push"])
 
@@ -325,10 +325,9 @@ Every 15 minutes the runner checks on **JARVIS itself** and speaks up unasked:
 |:-:|---|---|
 | 🛠️ | **Tasks** | Waiting for your answer for 15 minutes, cut off by a restart, or stalled |
 | 📊 | **Claude usage** | Nearing or out of a plan limit, once per window |
-| 🔑 | **Sign-ins** | A Google account, `gh`, or a GitHub/GitLab token signed out or expiring within a week |
 
 - **You hear about it** as a desktop notification, a phone push if enabled, and **spoken at the next pause** if you're in a session.
-- **Rules:** nothing said twice (a stall or sign-in again only once it has cleared and come back); nothing checked in quiet hours (23:00–08:00) or do not disturb.
+- **Rules:** nothing said twice (a stall again only once it has cleared and come back); nothing checked in quiet hours (23:00–08:00) or do not disturb.
 
 ## 🧠 Learning review
 
