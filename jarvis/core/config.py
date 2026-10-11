@@ -218,13 +218,10 @@ ANNOUNCE_ENABLED = _flag("JARVIS_ANNOUNCE", True)
 ANNOUNCE_MODEL = os.environ.get("JARVIS_ANNOUNCE_MODEL", "") or FAST_MODEL
 ANNOUNCE_SECONDS = _number(os.environ.get("JARVIS_ANNOUNCE_SECONDS", ""), 30.0, 5.0, 120.0)
 
-# Heartbeat (jarvis.tasks.heartbeat): periodic read-only check for anything new
-HEARTBEAT_ENABLED = _flag("JARVIS_HEARTBEAT", True)
-HEARTBEAT_MINUTES = max(1, int(os.environ.get("JARVIS_HEARTBEAT_MINUTES", "") or "15"))
-HEARTBEAT_EVENT_MINUTES = max(1, int(os.environ.get("JARVIS_HEARTBEAT_EVENT_MINUTES", "") or "30"))  # "starting soon"
-HEARTBEAT_QUIET_HOURS = os.environ.get("JARVIS_HEARTBEAT_QUIET_HOURS", "23:00-08:00")  # local time; empty = never quiet
-HEARTBEAT_TRIAGE = _flag("JARVIS_HEARTBEAT_TRIAGE", False)
-HEARTBEAT_MODEL = os.environ.get("JARVIS_HEARTBEAT_MODEL", "") or CLI_MODEL  # only used when triage is on
+# Notices (jarvis.tasks.notices): JARVIS's own news, said unasked: tasks stuck or waiting, usage limits, sign-ins
+NOTICES_ENABLED = _flag("JARVIS_NOTICES", True)
+# Local hours with no watch checks or notices (jarvis.tasks.hold); empty = never quiet
+QUIET_HOURS = os.environ.get("JARVIS_QUIET_HOURS", "23:00-08:00")
 
 # Scheduler (jarvis.tasks.scheduler): reminders, repeating tasks and watches
 SCHEDULER_ENABLED = _flag("JARVIS_SCHEDULER", True)
@@ -241,7 +238,7 @@ COMMAND_TRIAGE_MODEL = os.environ.get("JARVIS_COMMAND_TRIAGE_MODEL", "") or HELP
 # USAGE_HOLD of it is used (1 = never), and for any window that is exhausted.
 USAGE_FILE = DATA_DIR / "usage.json"
 USAGE_HOLD = _number(os.environ.get("JARVIS_USAGE_HOLD", ""), 0.9, 0.5, 1.0)
-# Days before a GitHub/GitLab token expires that the heartbeat warns (jarvis.integrations.signins)
+# Days before a GitHub/GitLab token expires that JARVIS warns (jarvis.integrations.signins)
 SIGNIN_WARN_DAYS = int(_number(os.environ.get("JARVIS_SIGNIN_WARN_DAYS", ""), 7, 1, 60))
 
 # Learning review (jarvis.tasks.learning): after a conversation ends (hang-up or quiet), suggest memory edits

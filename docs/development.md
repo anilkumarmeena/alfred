@@ -39,7 +39,7 @@ jarvis/
 ├── prompts/         the long prompts as markdown, {{name}} placeholders filled by prompts.load()
 ├── tools/           what the brain can call: Google, Mac (macOS) or desktop (Linux), files,
 │                    memory, to-dos, tasks, schedules, browser, skills
-├── tasks/           the task runner, its worker and client, projects, heartbeat, scheduler,
+├── tasks/           the task runner, its worker and client, projects, notices, scheduler,
 │                    learning review
 ├── safety/          command rules, the host walls (Seatbelt or bubblewrap), approvals, consent,
 │                    the gates, hidden-instruction scan and injection check
@@ -158,7 +158,7 @@ These work the same on macOS and Linux; `make livekit` runs the `livekit-server`
 
 ## 📝 Prompts
 
-The long prompts live in `jarvis/prompts/*.md`, one file each: persona, task brief, goal check, learning review, heartbeat triage, injection check, skill review...
+The long prompts live in `jarvis/prompts/*.md`, one file each: persona, task brief, goal check, learning review, injection check, skill review...
 
 - **Placeholders** like `{{name}}` are filled by `prompts.load(name, ...)`.
 - **Edit them as markdown**; `tests/test_prompts.py` checks each one loads where it's used.

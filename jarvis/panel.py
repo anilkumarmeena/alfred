@@ -1,8 +1,8 @@
 """Control panel actions: POST /api/panel/ACTION (jarvis.server checks the passcode first).
 
 Each action takes the JSON body and returns what the page shows. Tasks and approvals go through the task runner
-(tasks.client); everything else (schedules, to-dos, projects, memory, vocabulary, skills, accounts, devices, heartbeat
-sources, voiceprints, history) is changed directly. Keys for connections and JARVIS itself are entered only here,
+(tasks.client); everything else (schedules, to-dos, projects, memory, vocabulary, skills, accounts, devices,
+voiceprints, history) is changed directly. Keys for connections and JARVIS itself are entered only here,
 write-only, so they're never spoken or typed to the brain.
 
 Deliberately not possible here, since anyone with a login can reach the page: showing secrets, adding MCP servers or
@@ -30,7 +30,7 @@ from jarvis.notify import apns, fcm, push
 from jarvis.safety import remembered
 from jarvis.skills import home as skills, review
 from jarvis.state import activity, history, memory, settings, todo, vocabulary, voiceprints
-from jarvis.tasks import client, data_edits, heartbeat, hold, projects, schedules
+from jarvis.tasks import client, data_edits, hold, projects, schedules
 from jarvis.voice import speaker
 
 log = logging.getLogger("jarvis.panel")
@@ -249,7 +249,7 @@ async def schedule_cancel(body: dict) -> list[dict]:
     return await _jobs()
 
 
-# Do not disturb (tasks.hold) pauses jobs, heartbeat and notifications; scheduled runs also wait on usage limits
+# Do not disturb (tasks.hold) pauses jobs, notices and notifications; scheduled runs also wait on usage limits
 
 def _quiet_now() -> dict:
     h = hold.status()
@@ -558,48 +558,6 @@ async def preference_save(body: dict) -> dict:
     """Set one preference {"key", "value"}; empty resets to default."""
     settings.set_preference(_text(body, "key", 40), _text(body, "value", 100))
     return await asyncio.to_thread(settings.preferences)
-
-
-# ── Heartbeat sources (re-read every beat) ──────────────────────
-
-
-def _settings(body: dict) -> dict:
-    found = body.get("settings") or {}
-    if not isinstance(found, dict):
-        raise ValueError("settings must be an object.")
-    return {str(k)[:40]: _text(found, k, 300) for k in found}
-
-
-def _heartbeat(change: Callable[[], object] = lambda: None) -> dict:
-    change()
-    return heartbeat.described()
-
-
-@action
-async def heartbeat_sources(_: dict) -> dict:
-    return await asyncio.to_thread(_heartbeat)
-
-
-@action
-async def heartbeat_source_save(body: dict) -> dict:
-    """Toggle or configure a source: {"id", "on"?, "settings"?}; empty values reset to default."""
-    id_, on, values = _text(body, "id", 80), body.get("on"), _settings(body)
-    if on is not None and not isinstance(on, bool):
-        raise ValueError("on must be true or false.")
-    return await asyncio.to_thread(_heartbeat, lambda: heartbeat.change_source(id_, on, values))
-
-
-@action
-async def heartbeat_source_add(body: dict) -> dict:
-    """Add a source instance: {"kind", "title", "settings"}."""
-    kind, title, values = _text(body, "kind", 40), _text(body, "title", 80), _settings(body)
-    return await asyncio.to_thread(_heartbeat, lambda: heartbeat.add_source(kind, title, values, "in the panel"))
-
-
-@action
-async def heartbeat_source_remove(body: dict) -> dict:
-    id_ = _text(body, "id", 80)
-    return await asyncio.to_thread(_heartbeat, lambda: heartbeat.remove_source(id_))
 
 
 # ── Voiceprints (speaker check) ─────────────────────────────────

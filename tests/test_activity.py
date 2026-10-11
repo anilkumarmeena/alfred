@@ -139,7 +139,7 @@ APPROVAL = {"id": 14, "task": 8, "commands": [{"tool": "host_run", "command": "b
      ("Declined brew install jq for task 8, by voice", "bad", 8)),
     ({"type": "approval_answered", "approval": APPROVAL | {"state": "expired", "via": None}},
      ("Task 8's request to run brew install jq: lapsed", "warn", 8)),
-    ({"type": "heartbeat", "text": "Heads up. Standup soon."}, ("Heads up. Standup soon.", "warn", None)),
+    ({"type": "alert", "text": "Heads up. Standup soon."}, ("Heads up. Standup soon.", "warn", None)),
     ({"type": "progress", "text": "step"}, None),
 ])
 def test_what_each_runner_event_says_in_the_bell(event, said):
@@ -148,7 +148,7 @@ def test_what_each_runner_event_says_in_the_bell(event, said):
 
 def test_broadcasting_an_event_keeps_it(db):
     r = runner.Runner()
-    r.broadcast({"type": "heartbeat", "text": "Heads up."})
+    r.broadcast({"type": "alert", "text": "Heads up."})
     assert [(e["text"], e["kind"]) for e in activity.recent()] == [("Heads up.", "warn")]
 
 

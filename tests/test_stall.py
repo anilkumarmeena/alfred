@@ -5,14 +5,14 @@ import time
 
 import pytest
 from claude_agent_sdk import AssistantMessage, RateLimitEvent, RateLimitInfo, ToolResultBlock, ToolUseBlock, UserMessage
-from test_heartbeat import AFTERNOON, Notifier
 from test_in_place import env  # noqa: F401  (a fixture)
+from test_notices import AFTERNOON, Notifier
 from test_nudges import FakeClient, result, settle, until, worker_run
 from test_subagents import Recorder
 
 from jarvis.brain import usage
 from jarvis.safety import host
-from jarvis.tasks import heartbeat, runner, stall
+from jarvis.tasks import notices, runner, stall
 from jarvis.tasks.stall import GRACE, Pulse
 from jarvis.tasks.worker import HOST_RUN, JOB_WAIT, Outcome
 from jarvis.tools import tasks as task_tools
@@ -207,7 +207,7 @@ def test_the_runner_shows_a_stall_in_its_views_and_never_stops_the_task(env, mon
     assert "stalled" not in task_tools._brief(r.view(r.store.get(task_id)))
 
 
-# ── The heartbeat flags it once ─────────────────────────────────
+# ── Said once, as a notice ──────────────────────────────────────
 
 
 class Tasks:
@@ -217,7 +217,7 @@ class Tasks:
         return []
 
 
-def test_the_heartbeat_flags_a_stall_once_and_again_only_after_it_moved_on(tmp_path):
+def test_a_stall_is_said_once_and_again_only_after_it_moved_on(tmp_path):
     stuck = [running(stalled={"minutes": 20, "since": NOW - 20 * MINUTE})]
     phone: list[tuple] = []
 
@@ -226,28 +226,28 @@ def test_the_heartbeat_flags_a_stall_once_and_again_only_after_it_moved_on(tmp_p
 
     events: list[dict] = []
     notify = Notifier()
-    beat = heartbeat.Heartbeat({"tasks": heartbeat.task_changes(Tasks(), stalls=lambda now: list(stuck))}, notify,
-                               events.append, state_file=tmp_path / "heartbeat.json", quiet_hours="", push=push,
-                               clock=lambda: AFTERNOON)
+    told = notices.Notices({"tasks": notices.task_notices(Tasks(), stalls=lambda now: list(stuck))}, notify,
+                           events.append, state_file=tmp_path / "notices.json", quiet_hours="", push=push,
+                           clock=lambda: AFTERNOON)
 
-    flagged = asyncio.run(beat.beat())
+    given = asyncio.run(told.check())
     text = "Task 7, retry logic, seems stuck: no progress for 20 minutes. Nudge it or stop it?"
-    assert [(a.text, a.task_id) for a in flagged] == [(text, 7)]
+    assert [(n.text, n.task_id) for n in given] == [(text, 7)]
     assert notify.sent == [("JARVIS · tasks", text)]
     assert phone == [("Tasks", text, "/?task=7", "task-7")]
     assert events[0]["tasks"] == [7] and "Shall I nudge it with a message, or stop it?" in events[0]["text"]
 
-    assert asyncio.run(beat.beat()) == []  # still stuck: not said again
+    assert asyncio.run(told.check()) == []  # still stuck: not said again
     stuck[0]["stalled"]["minutes"] = 35
-    assert asyncio.run(beat.beat()) == []
+    assert asyncio.run(told.check()) == []
     stuck.clear()  # it moved on, or ended
-    assert asyncio.run(beat.beat()) == []
+    assert asyncio.run(told.check()) == []
     stuck.append(running(stalled={"minutes": 16, "since": NOW - 16 * MINUTE}))  # and stalled afresh
-    assert [a.task_id for a in asyncio.run(beat.beat())] == [7]
+    assert [n.task_id for n in asyncio.run(told.check())] == [7]
     assert len(notify.sent) == 2
 
 
-def test_heartbeat_takes_the_runners_stalls():
-    beat = heartbeat.make(Tasks(), Notifier(), stalls=lambda now: [running(stalled={"minutes": 30, "since": NOW})])
-    assert [a.key for a in asyncio.run(beat.sources()["tasks"](AFTERNOON))] == ["task:7:stalled"]
-    assert asyncio.run(heartbeat.task_changes(Tasks())(AFTERNOON)) == []  # without the runner's, nothing
+def test_notices_take_the_runners_stalls():
+    told = notices.make(Tasks(), Notifier(), stalls=lambda now: [running(stalled={"minutes": 30, "since": NOW})])
+    assert [n.key for n in asyncio.run(told.checks["tasks"](AFTERNOON))] == ["task:7:stalled"]
+    assert asyncio.run(notices.task_notices(Tasks())(AFTERNOON)) == []  # without the runner's, nothing

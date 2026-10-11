@@ -133,7 +133,7 @@ A failing account is skipped during a search, and named.
 make accounts                                  # list
 make accounts ARGS='add home --note "my own"'  # also --chat, --default, --no-login
 make google-login LABEL=home                   # sign in again
-make accounts ARGS="rename home family"        # moves its sign-in and heartbeat history
+make accounts ARGS="rename home family"        # moves its sign-in and Chat state
 make accounts ARGS="remove family"             # and deletes its sign-in
 make accounts ARGS="default work"
 make accounts ARGS='set work --email me@example.com --note "for work" --chat'
@@ -169,7 +169,7 @@ On accounts marked `--chat` (Workspace only: personal Gmail has no Chat API).
 | "mark the alert spaces as read" | Done at once, no yes needed (only your own read state) |
 | "reply to Sam that I'll join at four" | Reads the exact draft and recipient aloud, sends after your yes |
 
-- **Sending is enforced in code:** a clear yes within five minutes; for a space, JARVIS says how many people are in it. Background tasks and the heartbeat can read Chat but **never send**.
+- **Sending is enforced in code:** a clear yes within five minutes; for a space, JARVIS says how many people are in it. Background tasks and watches can read Chat but **never send**.
 - **New DMs** to someone you've never messaged are drafted as "To Sam Lee, in a new direct message: …" and created only on send.
 - **People** are found loosely by name (speech recognition) from the Workspace directory and your chats; if several match, JARVIS asks which.
 
@@ -266,7 +266,7 @@ Package runners (`npx`, `uvx`) must name a **pinned version**. Settings and head
 
 - **GitHub:** "connect GitHub" adds its own server from the registry. Add the `workflow` scope only to change `.github/workflows`; authorise the token for SSO if needed.
 - **Self-hosted GitLab:** `make servers ARGS="set gitlab --env GITLAB_API_URL=https://gitlab.example.com/api/v4"`.
-- **The heartbeat's** GitHub checks use the `gh` CLI (`gh auth login`) separately.
+- **The shell and tasks** use the `gh` CLI (`gh auth login`) separately; JARVIS warns if it's signed out.
 
 ## 🔒 Secrets vault
 

@@ -85,6 +85,16 @@ def test_a_migration_added_later_runs_on_a_table_already_versioned(db):
     assert versions(db) == {"notes": 3}
 
 
+def test_settings_lose_the_retired_heartbeat_sources_and_keep_the_rest(db):
+    from jarvis.state import settings
+
+    with database.table("settings", settings._SCHEMA) as conn:  # as an older JARVIS left it
+        conn.execute("insert into settings values ('heartbeat_sources', '{\"github\": {\"on\": false}}'), "
+                     "('hold', '{}')")
+    assert settings.get("heartbeat_sources") == "" and settings.get("hold") == "{}"
+    assert versions(db)["settings"] == 1 + len(settings._MIGRATIONS)
+
+
 def test_a_migration_that_fails_changes_nothing(db):
     with database.table("notes", NOTES) as conn:
         conn.execute("insert into notes (text) values ('kept')")

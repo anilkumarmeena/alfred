@@ -41,7 +41,7 @@
 | 👂 | [Speaker check](#-speaker-check) | Answering only your voice |
 | 🧰 | [Background tasks](#-background-tasks) | Task limits, models, goal loop |
 | 🌐 | [Web browser](#-web-browser) | The browser tools |
-| 💓 | [Heartbeat, scheduler and learning](#-heartbeat-scheduler-and-learning) | Proactive checks and scheduled work |
+| 🔔 | [Notices, scheduler and learning](#-notices-scheduler-and-learning) | JARVIS's own notices and scheduled work |
 | 🔔 | [Notifications](#-notifications) | Web Push and the native app |
 
 </details>
@@ -298,17 +298,14 @@ Answers only your enrolled voice. What each case means is in **[🗣️ Voice](v
 | `JARVIS_BROWSER` | `on` | Give the voice brain the [web browser](integrations.md#-web-browser) tools |
 | `JARVIS_BROWSER_WINDOW` | `headed` | `headed` shows its window (to watch and log in); `headless` hides it |
 
-## 💓 Heartbeat, scheduler and learning
+## 🔔 Notices, scheduler and learning
 
-### Heartbeat
+### Notices
 
 | Setting | Default | What it does |
 |---|---|---|
-| `JARVIS_HEARTBEAT` | `on` | The [heartbeat](tasks.md#-heartbeat) |
-| `JARVIS_HEARTBEAT_MINUTES` | `15` | Minutes between checks |
-| `JARVIS_HEARTBEAT_EVENT_MINUTES` | `30` | How soon a meeting must start to be flagged (the app's Heartbeat page can override) |
-| `JARVIS_HEARTBEAT_QUIET_HOURS` | `23:00-08:00` | Local hours with no checks or alerts; watches pause too. Empty: never quiet |
-| `JARVIS_HEARTBEAT_TRIAGE`<br>`JARVIS_HEARTBEAT_MODEL` | `off`<br>The CLI model | A model drops newsletters and noise from new mail and GitHub notifications |
+| `JARVIS_NOTICES` | `on` | JARVIS's [notices](tasks.md#-notices) about itself: stuck or waiting tasks, usage limits, sign-ins |
+| `JARVIS_QUIET_HOURS` | `23:00-08:00` | Local hours with no notices; watches pause too. Empty: never quiet |
 | `JARVIS_SIGNIN_WARN_DAYS` | `7` | Warn this many days before a GitHub or GitLab token expires |
 
 ### Scheduler
@@ -335,7 +332,7 @@ Answers only your enrolled voice. What each case means is in **[🗣️ Voice](v
 
 | Setting | Default | What it does |
 |---|---|---|
-| `JARVIS_PUSH` | `on` | Send heartbeat alerts and task updates to subscribed phones |
+| `JARVIS_PUSH` | `on` | Send alerts and task updates to subscribed phones |
 | `JARVIS_PUSH_CONTACT` | Default Google account's address | `mailto:` or `https:` contact push services may use |
 | `JARVIS_APNS_TEAM_ID` | *(none)* | Apple developer team id, for the [native app](mobile.md#-native-app) |
 | `JARVIS_APNS_KEY_ID` | *(none)* | The APNs key id; moved into the vault on start |

@@ -158,7 +158,7 @@ def said(now: float | None = None) -> str:
 
 
 def alerts(now: float | None = None) -> list[tuple[str, str]]:
-    """Warnings as (key, sentence); a key is stable per window until reset, so the heartbeat says each once."""
+    """Warnings as (key, sentence); a key is stable per window until reset, so notices say each once."""
     now = now or time.time()
     out_ = []
     for name, w in windows(now).items():

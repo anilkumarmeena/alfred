@@ -26,7 +26,7 @@ Concepts:
               may be remembered as rules; user `orders` from this turn's speech pre-approve what they name
   access      extra grants at start, on reply, or via request_access (task waits)
   shutdown    SIGTERM marks queued/running tasks `interrupted`; next start resumes up to RESUME_TASKS (_after_restart)
-Also runs the heartbeat, scheduler and learning review. API: Unix socket in data/ (mode 600), unreachable from
+Also runs notices, the scheduler and the learning review. API: Unix socket in data/ (mode 600), unreachable from
 browsers and from tasks' host commands. Mixins: approvals, command_tasks, git_ops, task_edits, events; HTTP in api.
 """
 
@@ -48,10 +48,9 @@ from jarvis.brain import retry
 from jarvis.core import profile
 from jarvis.core.config import (
     GOAL_DAILY_CHECKS,
-    HEARTBEAT_ENABLED,
-    HEARTBEAT_MINUTES,
     LEARNING_ENABLED,
     MAX_TASKS,
+    NOTICES_ENABLED,
     PUSH_ENABLED,
     RESUME_TASKS,
     RUNNER_SOCKET,
@@ -78,8 +77,8 @@ from jarvis.tasks import (
     command_jobs,
     data_edits,
     goal,
-    heartbeat,
     learning,
+    notices,
     projects,
     scheduler,
     stall,
@@ -136,7 +135,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         self.host_jobs.on_end = self._job_ended
         self.checks = goal.Budget(GOAL_DAILY_CHECKS)  # goal checks per rolling 24 h, all tasks
         self.prompts: dict[int, str] = {}  # launch prompt per queued/running task
-        self.services: list[asyncio.Task] = []  # heartbeat/scheduler/learning loops
+        self.services: list[asyncio.Task] = []  # notices/scheduler/learning loops
         self.closing = False  # shutdown begun: no new work
         self.resuming = self._after_restart()
 
@@ -264,7 +263,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         self.resuming = []
 
     def service(self, coro) -> None:
-        """Run a self-starting loop (heartbeat, scheduler, learning); cancelled first on shutdown."""
+        """Run a self-starting loop (notices, scheduler, learning); cancelled first on shutdown."""
         self.services.append(self._background(coro))
 
     async def shutdown(self, wait: float = SHUTDOWN_SECONDS) -> None:
@@ -641,10 +640,10 @@ async def serve() -> None:
     if runner.resuming:
         log.info("resuming tasks %s, cut off by the last shutdown", ", ".join(str(i) for i, _ in runner.resuming))
     runner.start_background()
-    if HEARTBEAT_ENABLED:
-        runner.service(heartbeat.make(runner.store, runner._notify, runner.broadcast, push=runner._push,
-                                      stalls=runner.stalls).run())
-        log.info("heartbeat every %d minutes", HEARTBEAT_MINUTES)
+    if NOTICES_ENABLED:
+        runner.service(notices.make(runner.store, runner._notify, runner.broadcast, push=runner._push,
+                                    stalls=runner.stalls).run())
+        log.info("notices every %d minutes", notices.MINUTES)
     if SCHEDULER_ENABLED:
         runner.scheduler = scheduler.Scheduler(runner, runner._notify, runner.broadcast, push=runner._push)
         runner.service(runner.scheduler.run())

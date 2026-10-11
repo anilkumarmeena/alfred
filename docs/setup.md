@@ -351,7 +351,7 @@ make services-install
 | 📡 | `com.jarvis.livekit` | The local LiveKit server |
 | 🎙️ | `com.jarvis.agent` | The voice agent |
 | 🌐 | `com.jarvis.web` | The web app and control panel on 127.0.0.1:8787 |
-| ⚙️ | `com.jarvis.tasks` | The task runner: background tasks, heartbeat, scheduler, learning review |
+| ⚙️ | `com.jarvis.tasks` | The task runner: background tasks, notices, scheduler, learning review |
 
 | | On | They run as |
 |:-:|---|---|

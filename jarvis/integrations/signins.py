@@ -1,10 +1,10 @@
-"""Sign-in health checks, so the heartbeat warns before a tool fails on an expired or revoked login.
+"""Sign-in health checks, so JARVIS warns (jarvis.tasks.notices) before a tool fails on an expired or revoked login.
 
   google  each account still refreshes. Google gives no expiry, so this only detects failure (within ~1 h)
   github  gh CLI login, plus the GitHub MCP token if enabled (expiry from github-authentication-token-expiration)
   gitlab  the GitLab MCP token if enabled: active, and expires_at from personal_access_tokens/self
 
-Each Problem has a stable key so the heartbeat says it once. Warns SIGNIN_WARN_DAYS before expiry. Unreachable
+Each Problem has a stable key so it is said once. Warns SIGNIN_WARN_DAYS before expiry. Unreachable
 services are silent (offline isn't a sign-in problem). Tokens are never shown or logged; the only write is saving a
 refreshed Google access token.
 """
@@ -138,8 +138,8 @@ async def github(now: datetime) -> list[Problem]:
     said = said.lower()
     offline = any(w in said for w in ("connect", "timeout", "timed out", "network", "no such host"))
     if code and not offline and any(w in said for w in ("not logged", "invalid", "expired", "re-authenticate")):
-        out.append(Problem("signin:github:gh:out", "The GitHub CLI on the computer is signed out, so the heartbeat "
-                                                   "can't see reviews or mentions. Sign it in again: gh auth login."))
+        out.append(Problem("signin:github:gh:out", "The GitHub CLI on the computer is signed out, so JARVIS and "
+                                                   "its tasks can't use it. Sign it in again: gh auth login."))
     token = await asyncio.to_thread(_secret, "github")
     if token:
         r = await _token_check(f"{GITHUB_API}/user", {"Authorization": f"Bearer {token}",
@@ -198,6 +198,6 @@ async def check(now: datetime) -> list[Problem]:
 
 
 if __name__ == "__main__":
-    # Print what the heartbeat would say now
+    # Print what JARVIS would say now
     for p in asyncio.run(check(datetime.now(profile.tz()))) or [Problem("", "Every connection works.")]:
         print(p.text)

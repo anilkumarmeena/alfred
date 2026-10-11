@@ -16,18 +16,17 @@ import {
   type Vocabulary as VocabularyData, type Voiceprints, type Word,
 } from "../../state/panel";
 import {
-  BellIcon, BrainIcon, CheckIcon, ChevronIcon, EditIcon, HeartIcon, KeyIcon, KeysIcon, LockIcon, MoonIcon, NoteIcon, PlugIcon,
+  BellIcon, BrainIcon, CheckIcon, ChevronIcon, EditIcon, KeyIcon, KeysIcon, LockIcon, MoonIcon, NoteIcon, PlugIcon,
   PrefsIcon, PulseIcon, ShieldIcon, SkillIcon, TrashIcon, UserIcon, WordsIcon,
 } from "../icons";
 import { cap, Empty, InlineForm, Led, Pill } from "./bits";
 import { Markdown, MarkdownEditor } from "./Markdown";
 import { ConnectionsPage } from "./Connections";
-import { HeartbeatPage, heartbeatSummary } from "./Heartbeat";
 import { SkillsPage } from "./Skills";
 
 export const SETTINGS_TITLES: Record<SettingsItem, string> = {
   conn: "Connections", accounts: "Google accounts", memory: "Memory", vocabulary: "Vocabulary", skills: "Skills", approvals: "Approvals", about: "About you",
-  prefs: "Behaviour", dnd: "Do not disturb", safety: "Safety check", heartbeat: "Heartbeat", notify: "Notifications", system: "System", access: "Logins and keys",
+  prefs: "Behaviour", dnd: "Do not disturb", safety: "Safety check", notify: "Notifications", system: "System", access: "Logins and keys",
   keys: "Keyboard shortcuts",
 };
 
@@ -101,7 +100,6 @@ export function SettingsList() {
       <div class="grp">General</div>
       <Row to="dnd" icon={<MoonIcon />} title="Do not disturb" sub={dnd} led={dndLed} />
       <Row to="prefs" icon={<PrefsIcon />} title="Behaviour" sub={behaviourSummary()} />
-      <Row to="heartbeat" icon={<HeartIcon />} title="Heartbeat" sub={heartbeatSummary()} />
       <Row to="notify" icon={<BellIcon />} title="Notifications" sub={pushOn.value ? "On for this device" : "Off for this device"} />
       <div class="grp">Security</div>
       <Row to="approvals" icon={<CheckIcon />} title="Approvals" sub={rulesSummary()} />
@@ -490,8 +488,8 @@ function DoNotDisturb() {
           <button class="btn sm" disabled={busy.value || !until.value}>Until then</button>
         </form>
       </div>
-      <p class="hint">While it's on, no reminder, scheduled task or watch runs, the heartbeat waits and finished tasks don't
-        notify; requests for a yes still come through. Held reminders and jobs run when it ends. The nightly quiet hours
+      <p class="hint">While it's on, no reminder, scheduled task, watch or command runs, JARVIS keeps its own notices
+        back and finished tasks don't notify; requests for a yes still come through. Held reminders and jobs run when it ends. The nightly quiet hours
         stay as they are.</p>
     </>
   );
@@ -871,7 +869,7 @@ function Keys() {
 
 const PAGES: Record<SettingsItem, () => preact.JSX.Element> = {
   conn: ConnectionsPage, accounts: Accounts, memory: Memory, vocabulary: VocabularyPage, skills: SkillsPage, approvals: Approvals, about: About, prefs: BehaviourPage, dnd: DoNotDisturb, safety: SafetyPage,
-  heartbeat: HeartbeatPage, notify: Notifications, system: SystemPage, access: AccessPage, keys: Keys,
+  notify: Notifications, system: SystemPage, access: AccessPage, keys: Keys,
 };
 
 export function SettingsPage({ page }: { page: SettingsItem }) {
