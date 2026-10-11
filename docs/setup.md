@@ -112,6 +112,9 @@ Without `brew`, `make install` **builds the LiveKit server from source** into `~
 
 </details>
 
+> [!NOTE]
+> **Behind a company proxy?** If the browser downloads fine but the terminal times out, `make install` uses the proxy macOS is set to for GitHub (a fixed proxy, a PAC file or WPAD) whenever `HTTPS_PROXY` isn't set, and says so. It passes that proxy to uv, curl, Go and npm, and has uv trust the macOS certificate store. To use a different proxy, set `HTTPS_PROXY` yourself.
+
 ### 🐧 Linux
 
 **Packages** — Debian and Ubuntu names; Fedora's are alike (`portaudio` for `libportaudio2`, `libnotify` for `libnotify-bin`, `words` for `wamerican`):

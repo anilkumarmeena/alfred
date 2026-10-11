@@ -13,6 +13,25 @@ export PATH := $(PATH):$(subst $(empty) $(empty),:,$(strip $(UV_DIRS)))
 UV_VERSION := 0.13.0
 UV        := uv run
 UNAME     := $(shell uname -s)
+# Behind a company proxy the browser follows the macOS settings, but uv, curl, go and npm only read HTTPS_PROXY.
+# The downloading targets take the proxy macOS uses for GitHub (a set proxy, a PAC file or WPAD), unless one is set.
+DOWNLOADS := install uv-bin livekit-bin models models-int8 web-install web-build
+ifeq ($(UNAME)$(HTTPS_PROXY)$(https_proxy),Darwin)
+ifneq ($(filter $(DOWNLOADS),$(MAKECMDGOALS)),)
+SYSTEM_PROXY := $(shell osascript -l JavaScript $(CURDIR)/deploy/macos-proxy.js https://github.com 2>/dev/null)
+ifneq ($(SYSTEM_PROXY),)
+$(info Using the macOS proxy $(SYSTEM_PROXY) (set HTTPS_PROXY to override))
+export HTTPS_PROXY := $(SYSTEM_PROXY)
+export https_proxy := $(SYSTEM_PROXY)
+export HTTP_PROXY  := $(SYSTEM_PROXY)
+export http_proxy  := $(SYSTEM_PROXY)
+export NO_PROXY    := localhost,127.0.0.1,::1
+export no_proxy    := $(NO_PROXY)
+# Proxies that inspect TLS sign with a company certificate, which macOS trusts but uv's own store doesn't
+export UV_SYSTEM_CERTS := 1
+endif
+endif
+endif
 # Main checkout, even when run from a task's worktree (data/worktrees/jarvis-N)
 MAIN_DIR  := $(or $(patsubst %/.git,%,$(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)),$(CURDIR))
 # Main checkout's Python (services, artifact-check), also from a worktree. Override with JARVIS_PYTHON=...
