@@ -35,7 +35,7 @@ from jarvis.node.agent import Agent
 from jarvis.node.journal import Journal
 from jarvis.node.link import Link, LinkDown, Refused
 from jarvis.safety import commands
-from jarvis.tasks import command_jobs, git_ops, projects, stall
+from jarvis.tasks import command_jobs, git_ops, projects, schedules, stall
 from jarvis.tasks.host_tools import TaskJobs
 from jarvis.tasks.worker import Outcome, run as run_task
 
@@ -152,6 +152,7 @@ class Work:
         self.run_task = run  # worker.run; a test gives a stand-in
         self.state = DATA_DIR / "node"
         self.jobs = command_jobs.Runs(self.state / "jobs")
+        self.scheduled = command_jobs.Runs(self.state / "scheduled")  # runs of the jobs this machine owns
         self.host_jobs = TaskJobs()
         self.runs: dict[int, tuple[str, asyncio.Task]] = {}  # task id -> (run id, its coroutine)
         self.stopped: set[int] = set()  # runs the main computer stopped (others cut off by a shutdown here resume)
@@ -162,7 +163,7 @@ class Work:
             "copy.sync": self.copy_sync, "copy.back": self.copy_back, "copy.backed": self.copy_backed,
             "copy.forget": self.copy_forget, "job.start": self.job_start, "job.poll": self.job_poll,
             "job.stop": self.job_stop, "task.run": self.task_run, "task.stop": self.task_stop,
-            "task.running": self.task_running, "folder.check": self.folder_check,
+            "task.running": self.task_running, "folder.check": self.folder_check, "schedule.sync": self.schedule_sync,
             **{f"folder.{op}": self._folder_step(op) for op in git_ops.OPS}}
         agent.busy = self.busy
         agent.on_link.append(self.on_link)
@@ -383,6 +384,77 @@ class Work:
                 body["worktree"] = str(self.own_folder(body["worktree"], worktrees=True))
             return await git_ops.OPS[op](body)
         return step
+
+    # ── Scheduled commands of projects living here ───────────────
+    # The main computer sends the definitions (schedule.sync); this machine runs them on time whether or not the
+    # main computer is on, keeps its own record of when each last ran (it wins on that; the main computer wins on
+    # definitions), honours do-not-disturb as last sent, and reports each run through the journal.
+
+    def _schedules(self) -> dict:
+        try:
+            found = json.loads((self.state / "schedules.json").read_text())
+        except (OSError, ValueError):
+            found = {}
+        return {"jobs": [], "hold": None, "ran": {}} | found
+
+    def _keep_schedules(self, kept: dict) -> None:
+        self.state.mkdir(parents=True, exist_ok=True)
+        write_atomic(self.state / "schedules.json", json.dumps(kept))
+
+    async def schedule_sync(self, body: dict) -> dict:
+        self._keep_schedules(self._schedules() | {"jobs": list(body.get("jobs") or []), "hold": body.get("hold")})
+        return {}
+
+    async def schedule_tick(self, now: float | None = None) -> list[int]:
+        """Report runs that ended, stop ones past their limit, start jobs that are due. Returns the jobs started."""
+        now = now or time.time()
+        kept = self._schedules()
+        jobs = {str(j["id"]): j for j in kept["jobs"]}
+        for key, ran in kept["ran"].items():
+            if ran.get("reported") or (record := self.scheduled.get(ran["run"])) is None:
+                continue
+            if (ended := self.scheduled.how(record)) is None:
+                limit = (jobs.get(key) or {}).get("timeout_minutes")
+                if limit and now - ran["at"] > limit * 60:
+                    with contextlib.suppress(ValueError):
+                        await self.scheduled.stop(ran["run"])
+                continue
+            self.journal.add("scheduled", 0, "", {
+                "job": int(key), "started": ran["at"], "ended": now, "code": ended[1], "next_run": ran["next_run"],
+                "output": command_jobs.tail(self.scheduled.log_file(ran["run"]), 4000),
+                "away": self.agent.link is None or not self.agent.link.up})
+            ran["reported"] = True
+            self.agent.awake.release(f"scheduled {key}")
+        hold = kept.get("hold")
+        held = bool(hold) and (hold.get("until") is None or hold["until"] > now)
+        started = []
+        for key, job in jobs.items():
+            ran = kept["ran"].get(key)
+            due = ran["next_run"] if ran and ran["at"] > (job.get("last_run") or 0) else job.get("next_run")
+            if job["status"] != "active" or held or not due or due > now or (ran and not ran.get("reported")):
+                continue
+            try:
+                folder = self.own_folder(job["folder"])
+            except Refused as e:
+                log.warning("scheduled job %s can't run here: %s", key, e)
+                continue
+            if why := self.refusal(job["text"], "made through the gate"):  # weighed when it was made: secrets never
+                log.warning("scheduled job %s refused: %s", key, why)
+                continue
+            record = self.scheduled.launch(job["text"], job["title"], folder, extra={"schedule": job["id"]})
+            self.agent.awake.hold(f"scheduled {key}")
+            kept["ran"][key] = {"at": now, "run": record["id"], "next_run": schedules.following(job, now)}
+            started.append(job["id"])
+        self._keep_schedules(kept)
+        return started
+
+    async def schedule_loop(self, every: float = 30.0) -> None:
+        while True:
+            try:
+                await self.schedule_tick()
+            except Exception:
+                log.exception("the scheduled jobs here couldn't be checked")
+            await asyncio.sleep(every)
 
     # ── Command jobs ─────────────────────────────────────────────
 

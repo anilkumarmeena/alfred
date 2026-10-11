@@ -35,6 +35,7 @@ def _serve() -> int:
         jobs = work.Work(node)  # registers the work handlers
         jobs.prune()  # old copies go
         jobs.resume()  # runs a restart here cut off carry on
+        asyncio.create_task(jobs.schedule_loop())  # its projects' scheduled commands, main computer on or not
         for sig in (signal.SIGTERM, signal.SIGINT):
             asyncio.get_running_loop().add_signal_handler(sig, node.stop)
         await node.run()

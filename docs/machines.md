@@ -58,8 +58,17 @@ the placement setting: in place, or on a branch in a worktree there. The git ste
 `refs/jarvis/`, worktrees, commits, merge and discard) run on that machine (`git_ops.OPS`, sent over the link). Nothing
 is copied. If the machine is away, the task waits for it (`JARVIS_NODE_WAIT_MINUTES`); it never runs here.
 
+## Scheduled commands of projects that live on a machine
+
+That machine owns them, so none runs twice: the main computer sends their definitions and do-not-disturb on every
+connect and whenever they change, and skips them itself. The machine runs each on time whether the main computer is on
+or not, keeps its own record of when each last ran, and reports every run through its journal; the main computer
+records it as a command task and updates the job. Runs reported after the main computer was away come together in one
+summary (spoken, and one push).
+
 ## Not built yet
 
-- The machine's own scheduler for those projects while the main computer is off, with one summary afterwards.
+- Scheduled Claude tasks of projects on a machine still start from the main computer's scheduler (they then run on
+  the machine, and a risky command there waits for the user's yes); while the main computer is off they wait for it.
 - JARVIS's own skills shipped to runs on the machine; the goal check's diff evidence for runs there.
 - Restricting pairing to the owner's login (today any panel login can pair a machine).

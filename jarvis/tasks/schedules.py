@@ -367,10 +367,12 @@ def place(folder: str, project: str = "") -> tuple[str, str | None]:
     else:
         raise ValueError("A command job needs folder, where it runs, or its project.")
     path = path.resolve()
-    if not path.is_dir():
-        raise ValueError(f"{path} isn't a folder.")
     if secret_path(path):
         raise ValueError("That folder holds secrets, which stay out of reach.")
+    if there := (named if named and named.node else projects.living_at(path)):
+        return str(path), there.name  # its folder is on that machine, which runs the job
+    if not path.is_dir():
+        raise ValueError(f"{path} isn't a folder.")
     return str(path), project_of(path, named)
 
 
