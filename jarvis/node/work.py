@@ -45,6 +45,10 @@ KEY = re.compile(r"[a-z0-9][a-z0-9_.-]{0,80}")  # a copy's name, as the main com
 POLL_BYTES = 256 * 1024  # most job output sent per poll
 ALIVE_SECONDS = 20.0  # how often a run's signs of life reach the main computer
 COPY_DAYS = 14  # copies untouched this long are removed
+# Prompt for a run resumed in its own session after this machine restarted
+RESUMED = ("The computer this task runs on restarted while you were working on it, cutting your last step off. Carry "
+           "on with the task from where you were: first check what that step left behind, as it may not have "
+           "finished, then end with your summary of the whole task as before.")
 
 
 class NetReporter:
@@ -62,6 +66,7 @@ class NetReporter:
 
     def session(self, task_id: int, session_id: str) -> None:
         self._note("session", session_id=session_id)
+        self.work.kept_session(task_id, session_id)
 
     def alive(self, task_id: int, msg: object = None) -> None:
         self.pulse.saw(task_id, msg)
@@ -149,6 +154,7 @@ class Work:
         self.jobs = command_jobs.Runs(self.state / "jobs")
         self.host_jobs = TaskJobs()
         self.runs: dict[int, tuple[str, asyncio.Task]] = {}  # task id -> (run id, its coroutine)
+        self.stopped: set[int] = set()  # runs the main computer stopped (others cut off by a shutdown here resume)
         self.locks: dict[str, asyncio.Lock] = {}
         self._sent = asyncio.Event()  # the journal is empty, as far as the sender knows
         self._sent.set()
@@ -253,6 +259,7 @@ class Work:
     async def _history(self, up: Link, key: str, folder: Path, mirror: Path, head: str) -> None:
         """Make `folder` a git checkout of `head`, its history fetched into the project's mirror as needed."""
         if not mirror.exists():
+            mirror.parent.mkdir(parents=True, exist_ok=True)
             await self._git(mirror.parent, "init", "-q", "--bare", str(mirror))
         if (await proc.run_try("git", "-C", str(mirror), "cat-file", "-e", f"{head}^{{commit}}"))[0] != 0:
             code, out = await proc.run_try("git", "-C", str(mirror), "for-each-ref", "--format=%(objectname)")
@@ -341,19 +348,21 @@ class Work:
     # ── Command jobs ─────────────────────────────────────────────
 
     @staticmethod
-    def check(command: str, approved: str) -> None:
-        """Refuse what the main computer couldn't have let run: secrets, environment reads, or a risky command
-        without the user's yes."""
+    def refusal(command: str, approved: str) -> str:
+        """Why the main computer couldn't have let this run (secrets, environment reads, or a risky command without
+        the user's yes), or ""."""
         if commands.names_secret(command) or commands.reads_environment(command):
-            raise Refused("it touches secrets, which stay out of reach even with a yes")
+            return "it touches secrets, which stay out of reach even with a yes"
         if (why := commands.risky(command)) and not approved:
-            raise Refused(f"it {why}, and the main computer didn't say the user agreed to it")
+            return f"it {why}, and the main computer didn't say the user agreed to it"
+        return ""
 
     async def job_start(self, body: dict) -> dict:
-        """{"task", "key", "rel", "command", "title", "approved"} -> its record. Runs as the main computer runs a
-        job: outside the sandbox in a login shell, without JARVIS's keys."""
+        """{"task", "key", "rel", "command", "title", "approved"} -> {"started"}, or {"refused": why}. Runs as the
+        main computer runs a job: outside the sandbox in a login shell, without JARVIS's keys."""
         task, command = int(body["task"]), str(body["command"]).strip()
-        self.check(command, str(body.get("approved") or ""))
+        if why := self.refusal(command, str(body.get("approved") or "")):
+            return {"refused": why}
         folder = self._inside(str(body["key"]), str(body.get("rel") or ""))
         if (old := self.jobs.get(task)) is not None:
             if self.jobs.how(old) is None:
@@ -405,30 +414,66 @@ class Work:
         self.runs[task_id] = (run, asyncio.create_task(self._run(task, prompt, run)))
         return {"started": True}
 
+    def _run_file(self, task_id: int) -> Path:
+        return self.state / "runs" / f"{task_id}.json"
+
+    def kept_session(self, task_id: int, session_id: str) -> None:
+        """Note a run's session, so it can carry on in it if this machine restarts."""
+        if (kept := self._run_file(task_id)).exists():
+            write_atomic(kept, json.dumps(json.loads(kept.read_text()) | {"session_id": session_id}))
+
     async def _run(self, task: dict, prompt: str, run: str) -> None:
+        """One run, reported through the journal. Kept on disk while it goes, so a restart here can resume it."""
         task_id = task["id"]
+        self._run_file(task_id).parent.mkdir(parents=True, exist_ok=True)
+        write_atomic(self._run_file(task_id), json.dumps({"task": task, "run": run,
+                                                          "session_id": task.get("session_id")}))
         reporter = NetReporter(self, task_id, run)
         self.agent.awake.hold(f"task {task_id}")
         outcome: Outcome | None = None
         try:
             outcome = await self.run_task(task, prompt, reporter)
         except asyncio.CancelledError:
-            outcome = None
+            if task_id not in self.stopped:  # this machine is shutting down: resumed when it starts again
+                self.runs.pop(task_id, None)
+                raise
         except Exception as e:
             log.exception("task %s failed here", task_id)
             outcome = Outcome("", f"{type(e).__name__}: {e}"[:200], 0, "error")
         finally:
-            self.runs.pop(task_id, None)
             self.agent.awake.release(f"task {task_id}")
-            ended = None if outcome is None else {"result": outcome.result, "error": outcome.error,
-                                                  "cost": outcome.cost, "kind": outcome.kind}
-            self.journal.add("ended", task_id, run, {"outcome": ended})
+        self.stopped.discard(task_id)
+        self.runs.pop(task_id, None)
+        self._run_file(task_id).unlink(missing_ok=True)
+        ended = None if outcome is None else {"result": outcome.result, "error": outcome.error, "cost": outcome.cost,
+                                              "kind": outcome.kind}
+        self.journal.add("ended", task_id, run, {"outcome": ended})
+
+    def resume(self) -> list[int]:
+        """At start-up: runs cut off by a restart here carry on in their sessions; one that never got a session is
+        reported cut off. Returns the tasks resumed."""
+        resumed = []
+        for kept in sorted((self.state / "runs").glob("*.json")):
+            found = json.loads(kept.read_text())
+            task, run = found["task"], found["run"]
+            if not found.get("session_id"):
+                kept.unlink()
+                self.journal.add("ended", task["id"], run, {"outcome": None})
+                continue
+            task["session_id"] = found["session_id"]
+            self.runs[task["id"]] = (run, asyncio.create_task(self._run(task, RESUMED, run)))
+            resumed.append(task["id"])
+        return resumed
 
     async def task_stop(self, body: dict) -> dict:
         if found := self.runs.get(int(body["task"])):
+            self.stopped.add(int(body["task"]))
             found[1].cancel()
         stopped = self.host_jobs.stop_all(int(body["task"]))
         return {"stopped": bool(found), "jobs": stopped}
 
     async def task_running(self, _: dict) -> dict:
+        """Runs going here, once the journal has gone out (so a run that ended is reported, not listed)."""
+        with contextlib.suppress(TimeoutError):
+            await self.caught_up(60)
         return {"runs": {str(t): run for t, (run, _) in self.runs.items()}}

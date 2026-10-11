@@ -22,6 +22,7 @@ export interface Task {
   stalled?: Stalled | null;  // running with no progress for a while
   command?: CommandRun | null;  // kind "command": shell job, no model
   fixes?: number | null;  // id of the failed command task this one fixes
+  machine?: string;  // the other machine it runs on (jarvis.node); absent = this computer
 }
 // A command task's run. attempt is 2+ for a rerun after a fix (`after` says what failed and what fixed it).
 export interface CommandRun {

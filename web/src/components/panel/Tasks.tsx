@@ -14,8 +14,8 @@ import { Answer } from "./Answer";
 import { cap, Empty, InlineForm, Led, Pill, StatusPill } from "./bits";
 import { Markdown } from "./Markdown";
 
-const where = (t: Task) => [t.project, t.kind === "code_change" ? (t.in_place ? "in place" : "worktree") : t.kind.replace("_", " ")]
-  .filter(Boolean).join(" · ");
+const where = (t: Task) => [t.project, t.kind === "code_change" ? (t.in_place ? "in place" : "worktree") : t.kind.replace("_", " "),
+  t.machine && `on ${t.machine}`].filter(Boolean).join(" · ");
 
 function Request({ a, named = true }: { a: Approval; named?: boolean }) {
   return (

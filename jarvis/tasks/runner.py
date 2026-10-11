@@ -728,7 +728,7 @@ async def serve() -> None:
     runner.start_background()
     if HEARTBEAT_ENABLED:
         runner.service(heartbeat.make(runner.store, runner._notify, runner.broadcast, push=runner._push,
-                                      stalls=runner.stalls).run())
+                                      stalls=runner.stalls, lost=runner.offload.lost).run())
         log.info("heartbeat every %d minutes", HEARTBEAT_MINUTES)
     if SCHEDULER_ENABLED:
         runner.scheduler = scheduler.Scheduler(runner, runner._notify, runner.broadcast, push=runner._push)

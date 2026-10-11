@@ -368,13 +368,20 @@ async def chat_news(now: datetime) -> list[Alert]:
     return out
 
 
-def task_changes(store, minutes: int = HEARTBEAT_MINUTES,
-                 stalls: Callable[[float], list[dict]] | None = None) -> Source:
-    """Source for tasks the runner didn't announce: questions unanswered for a beat, runs cut off by a restart, and
-    stalls (`stalls`; ongoing, so re-flagged only after recovering)."""
+def task_changes(store, minutes: int = HEARTBEAT_MINUTES, stalls: Callable[[float], list[dict]] | None = None,
+                 lost: Callable[[float], list[dict]] | None = None) -> Source:
+    """Source for tasks the runner didn't announce: questions unanswered for a beat, runs cut off by a restart,
+    stalls (`stalls`), and machines unreachable with work on them (`lost`); both ongoing, so re-flagged only after
+    recovering."""
 
     async def source(now: datetime) -> list[Alert]:
         out = []
+        for m in lost(now.timestamp()) if lost else []:
+            work = ", ".join(map(str, m["tasks"]))
+            out.append(Alert(f"machine:{m['node']}:lost:{int(m['since'])}", "tasks",
+                             f"{m['name']} has been unreachable for {_plural(m['minutes'], 'minute')}, with task {work} "
+                             "on it. It carries on there and reports back once it's online.",
+                             task_id=m["tasks"][0], ongoing=True))
         for t in stalls(now.timestamp()) if stalls else []:
             name, quiet = f"Task {t['id']}, {t['title']},", _plural(t["stalled"]["minutes"], "minute")
             out.append(Alert(f"task:{t['id']}:stalled", "tasks",
@@ -418,9 +425,10 @@ TITLE_CHARS = 40
 
 @dataclass(frozen=True)
 class Context:
-    """Runner state a source may need: the task store and Runner.stalls."""
+    """Runner state a source may need: the task store, Runner.stalls and the machines lost with work on them."""
     store: object
     stalls: Callable[[float], list[dict]] | None = None
+    lost: Callable[[float], list[dict]] | None = None
 
 
 @dataclass(frozen=True)
@@ -494,7 +502,7 @@ for _kind in (
     Kind("chat", "Chat", "Unread Google Chat messages and @mentions", lambda s, _: chat_news, baseline=True,
          ready=_chat_ready),
     Kind("tasks", "Tasks", "Background tasks waiting for you, cut off or stuck",
-         lambda s, c: task_changes(c.store, stalls=c.stalls)),
+         lambda s, c: task_changes(c.store, stalls=c.stalls, lost=c.lost)),
     Kind("usage", "Claude usage", "Claude's usage limits nearly or all used", lambda s, _: usage_news),
     Kind("signins", "Sign-in", "Accounts signed out, or about to be", lambda s, _: signin_news),
 ):
@@ -632,9 +640,10 @@ def remove_source(id_: str) -> None:
     _keep(kept)
 
 
-def sources_on(store, stalls: Callable[[float], list[dict]] | None = None) -> dict[str, Source]:
+def sources_on(store, stalls: Callable[[float], list[dict]] | None = None,
+               lost: Callable[[float], list[dict]] | None = None) -> dict[str, Source]:
     """Enabled, ready sources by id, built from the user's settings."""
-    context, out = Context(store, stalls), {}
+    context, out = Context(store, stalls, lost), {}
     for c in lineup():
         if not c.on:
             continue
@@ -679,10 +688,12 @@ async def model_triage(alerts: list[Alert]) -> dict[str, bool]:
 
 
 def make(store, notify: Notify, announce: Callable[[dict], None] | None = None, push: Push | None = None,
-         stalls: Callable[[float], list[dict]] | None = None, **settings) -> Heartbeat:
-    """The runner's Heartbeat from config. `stalls` is Runner.stalls; `settings` override Heartbeat kwargs."""
-    return Heartbeat(lambda: sources_on(store, stalls), notify, announce, triage=model_triage if HEARTBEAT_TRIAGE else None,
-                     push=push, **settings)
+         stalls: Callable[[float], list[dict]] | None = None, lost: Callable[[float], list[dict]] | None = None,
+         **settings) -> Heartbeat:
+    """The runner's Heartbeat from config. `stalls` is Runner.stalls, `lost` Offload.lost; `settings` override
+    Heartbeat kwargs."""
+    return Heartbeat(lambda: sources_on(store, stalls, lost), notify, announce,
+                     triage=model_triage if HEARTBEAT_TRIAGE else None, push=push, **settings)
 
 
 if __name__ == "__main__":

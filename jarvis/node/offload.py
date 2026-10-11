@@ -58,6 +58,10 @@ class Offline(RuntimeError):
     """The task's machine didn't come back in time."""
 
 
+class TurnedDown(RuntimeError):
+    """The machine's own check refused the command: it runs nowhere."""
+
+
 @dataclass
 class Copy:
     node: int
@@ -235,14 +239,16 @@ class Offload:
         task_id, key = task["id"], self.key(task["id"])
         self.runner.store.set(task_id, activity=f"copying {project.name} to {self.name(node)}")
         copied = await self.copy_to(node, key, project.path, self.mirror(project.name))
-        self.runner.store.log(task_id, "machine", f"copied {project.name} to {self.name(node)}: {copied['copied']} "
-                                                  f"files sent, {copied['removed']} removed")
+        self.runner.store.log(task_id, "machine", f"copied {project.name} to {self.name(node)}: "
+                                                  f"{copied['copied']} new or changed, {copied['removed']} removed")
         runs = self.runner.commands
         runs.folder.mkdir(parents=True, exist_ok=True)
         rel = str(folder.resolve().relative_to(project.path.resolve()))
-        await self.up(node).call("job.start", {"task": task_id, "key": key, "rel": "" if rel == "." else rel,
-                                               "command": task["instruction"], "title": task["title"],
-                                               "approved": approved}, timeout=60)
+        got = await self.up(node).call("job.start", {"task": task_id, "key": key, "rel": "" if rel == "." else rel,
+                                                     "command": task["instruction"], "title": task["title"],
+                                                     "approved": approved}, timeout=60)
+        if why := got.get("refused"):
+            raise TurnedDown(str(why))
         runs.log_file(task_id).write_bytes(b"")
         write_atomic(runs.folder / f"{task_id}.json", json.dumps({
             "id": task_id, "title": task["title"], "command": task["instruction"], "folder": str(folder), "pid": 0,
@@ -305,7 +311,8 @@ class Offload:
         return Path(record["folder"])
 
     def said_back(self, back: dict, node: int) -> str:
-        parts = [f"{len(back['changed'])} changed files brought back from {self.name(node)}"]
+        n = len(back["changed"])
+        parts = [f"{n} changed file{'s' * (n != 1)} brought back from {self.name(node)}"]
         if back["deleted"]:
             parts.append(f"{len(back['deleted'])} deleted")
         if back["kept_apart"]:
@@ -365,22 +372,27 @@ class Offload:
                 await asyncio.wait_for(self._ending(task_id, run), 60)
             run = None
         ended = self.ended.pop(task_id, None) if reattach and not run else None
-        if ended is None and not run:
-            folder = self.folder(task)
-            self.runner.store.set(task_id, activity=f"copying {task['project']} to {self.name(node)}")
-            await self.copy_to(node, self.key(task_id), folder, self.mirror(task["project"]))
-            run = secrets.token_hex(6)
-            await up.call("task.run", {"task": {k: task.get(k) for k in TASK_FIELDS}, "prompt": prompt, "run": run,
-                                       "key": self.key(task_id)}, timeout=60)
-            self.runner.store.set(task_id, activity=f"running on {self.name(node)}")
-        try:
-            outcome = ended[1] if ended else await self._ending(task_id, run or ended[0])
-        except asyncio.CancelledError:
-            if not self.runner.closing:  # stopped by the user: stop it there, keep what it did
-                await self._stop_there("task", node, task_id)
-                with contextlib.suppress(Exception):
-                    await asyncio.wait_for(self._bring_back(task), 120)
-            raise
+        if ended:
+            outcome = ended[1]
+        else:
+            if not run:
+                folder = self.folder(task)
+                self.runner.store.set(task_id, activity=f"copying {task['project']} to {self.name(node)}")
+                await self.copy_to(node, self.key(task_id), folder, self.mirror(task["project"]))
+            try:
+                if not run:
+                    run = secrets.token_hex(6)
+                    self._ending(task_id, run)  # waited for before it starts: a quick run may end at once
+                    await up.call("task.run", {"task": {k: task.get(k) for k in TASK_FIELDS}, "prompt": prompt,
+                                               "run": run, "key": self.key(task_id)}, timeout=60)
+                    self.runner.store.set(task_id, activity=f"running on {self.name(node)}")
+                outcome = await self._ending(task_id, run)
+            except asyncio.CancelledError:
+                if not self.runner.closing:  # stopped by the user: stop it there, keep what it did
+                    await self._stop_there("task", node, task_id)
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(self._bring_back(task), 120)
+                raise
         await self._bring_back(task)
         if outcome is None:
             return Outcome("", f"it was cut off on {self.name(node)}, which stopped or restarted; reply to carry on",
@@ -404,8 +416,12 @@ class Offload:
             return waiting[1]
         future = asyncio.get_running_loop().create_future()
         self.waiting[task_id] = (run, future)
-        future.add_done_callback(lambda _: self.waiting.pop(task_id, None) if self.waiting.get(task_id, (None,))[1]
-                                 is future else None)
+
+        def done(_) -> None:
+            if self.waiting.get(task_id, ("", None))[1] is future:
+                del self.waiting[task_id]
+
+        future.add_done_callback(done)
         return future
 
     async def _reachable(self, task: dict) -> Link:

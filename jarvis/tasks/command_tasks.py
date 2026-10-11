@@ -9,7 +9,7 @@ from pathlib import Path
 from jarvis.brain import usage
 from jarvis.core.database import ACTIVE, COMMAND, CONNECTION, WAIT_QUESTION
 from jarvis.node import machines, placement
-from jarvis.node.link import Refused
+from jarvis.node.offload import TurnedDown
 from jarvis.safety.commands import secret_path
 from jarvis.state import activity as bell
 from jarvis.tasks import command_jobs, connection_jobs, projects, scheduler, schedules
@@ -110,8 +110,9 @@ class CommandTasks(RunnerBase):
                                                  how.get("approved", ""))
             except asyncio.CancelledError:
                 raise
-            except Refused as e:  # the machine's own check turned it down: it doesn't run anywhere
+            except TurnedDown as e:  # the machine's own check turned it down: it doesn't run anywhere
                 await self.offload.forget(place.node, self.offload.key(task_id))
+                self.store.set(task_id, node=None)
                 self._finish(task_id, "failed", f"Task {task_id}, {task['title']}, didn't start: {place.name} turned "
                                                 f"it down, as {e}."[:400], error=str(e)[:300])
                 return

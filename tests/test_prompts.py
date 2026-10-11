@@ -36,13 +36,13 @@ def test_every_prompt_file_loads_where_it_is_used():
 
     for text in (persona.persona(), cli.lookup().prompt, cli.LOOKUP_PROMPT, briefs.brief(), briefs._host_brief(1),
                  goal.system(), learning.system(), heartbeat.triage_system(), review.system(), announce.system(),
-                 injection.PROMPT):
+                 injection.PROMPT, prompts.load("placement", user_name=profile.name())):
         assert "{{" not in text and "<!--" not in text
     assert persona.persona().startswith(f"You are JARVIS, {profile.name()}'s personal AI assistant")
     assert f"You run on {profile.name()}'s computer ({platform.NAME})" in persona.persona()
     assert f"computer ({platform.NAME})" in review.system()
     used = {"persona", "lookup_agent", "voice_lookups", "task_brief", "task_host", "goal_check", "learning_review",
-            "heartbeat_triage", "skill_review", "task_announcement", "injection_check"}
+            "heartbeat_triage", "skill_review", "task_announcement", "injection_check", "placement"}
     assert {p.stem for p in prompts.DIR.glob("*.md")} == used
 
 

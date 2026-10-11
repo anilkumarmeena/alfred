@@ -32,7 +32,9 @@ def _serve() -> int:
     async def main() -> None:
         node = agent.Agent(int(pairing["node"]), home.key(), pairing["main_public"],
                            lambda: agent.websocket_dial(pairing["main"]))
-        work.Work(node).prune()  # registers the work handlers; old copies go
+        jobs = work.Work(node)  # registers the work handlers
+        jobs.prune()  # old copies go
+        jobs.resume()  # runs a restart here cut off carry on
         for sig in (signal.SIGTERM, signal.SIGINT):
             asyncio.get_running_loop().add_signal_handler(sig, node.stop)
         await node.run()
