@@ -34,6 +34,9 @@ ENV = ROOT / ".env"
 LIVEKIT_CONFIG = SECRETS_DIR / "livekit.yaml"
 LAUNCH_AGENTS = Path.home() / "Library/LaunchAgents"
 SYSTEMD_USER = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd/user"
+# launchd opens a service's log itself, before the program runs, and macOS denies it inside ~/Desktop, ~/Documents
+# and ~/Downloads whatever access the program has. So on macOS the service logs live here, linked from logs/.
+SERVICE_LOGS = Path.home() / "Library/Logs" / config.SERVICE_PREFIX
 # deploy/<name>.plist -> <label>.plist; deploy/systemd/<name>.service -> <label>.service
 SERVICES = config.SERVICE_NAMES
 MANAGER = platform.SERVICE_MANAGER  # "launchd" or "systemd"
@@ -94,12 +97,12 @@ def livekit_server() -> str:
 
 
 def _fill(template: Path, name: str) -> str:
-    """`template` with ${LABEL}, ${ROOT}, ${HOME}, ${NODE} (current node's bin dir plus ":", or "") and ${LIVEKIT}
-    (the livekit-server binary) substituted."""
+    """`template` with ${LABEL}, ${ROOT}, ${HOME}, ${NODE} (current node's bin dir plus ":", or ""), ${LIVEKIT}
+    (the livekit-server binary) and ${LOGS} (where launchd writes service logs) substituted."""
     node = shutil.which("node")
     return Template(template.read_text()).substitute(
         LABEL=config.service_label(name), ROOT=ROOT, HOME=Path.home(), NODE=f"{Path(node).parent}:" if node else "",
-        LIVEKIT=livekit_server())
+        LIVEKIT=livekit_server(), LOGS=SERVICE_LOGS)
 
 
 def service_plist(name: str) -> str:
@@ -133,8 +136,22 @@ def _write(name: str) -> Path:
     dest = installed(name)
     dest.parent.mkdir(parents=True, exist_ok=True)
     (ROOT / "logs").mkdir(exist_ok=True)
+    if not _systemd():
+        _link_log(name)
     dest.write_text(service_unit(name) if _systemd() else service_plist(name))
     return dest
+
+
+def _link_log(name: str) -> None:
+    """Make logs/<name>.log a link to the service log in SERVICE_LOGS, moving an existing log's history there."""
+    link, target = ROOT / "logs" / f"{name}.log", SERVICE_LOGS / f"{name}.log"
+    SERVICE_LOGS.mkdir(parents=True, exist_ok=True)
+    if link.is_symlink() and link.resolve() == target:
+        return
+    if link.is_file() and not link.is_symlink() and not target.exists():
+        shutil.move(link, target)
+    link.unlink(missing_ok=True)
+    link.symlink_to(target)
 
 
 def _log_file(path: Path) -> object:
@@ -158,7 +175,7 @@ def stale() -> list[Path]:
         if path in current or _service(path) not in SERVICES:
             continue
         logs = _log_file(path)
-        if isinstance(logs, str) and Path(logs).parent == ROOT / "logs":
+        if isinstance(logs, str) and Path(logs).parent in (ROOT / "logs", SERVICE_LOGS):
             found.append(path)
     return found
 
