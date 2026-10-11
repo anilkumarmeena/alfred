@@ -41,9 +41,9 @@ KEEP_DAYS = 30  # verdict cache lifetime
 PRUNE_EVERY = 100  # inserts between prunes of expired verdicts
 IDLE_SECONDS = 300  # close an unused warmed session after this
 WITHHELD = "[withheld by JARVIS's safety check: hidden instructions aimed at the assistant]"
-# Results are model-authored or a subagent's answer (whose reads were screened)
+# Results are model-authored, or a subagent's or file lookup's answer (whose reads were screened in its session)
 UNSCREENED = {"Edit", "Write", "MultiEdit", "NotebookEdit", "TodoWrite", "ToolSearch", "ExitPlanMode", "Skill",
-              "Agent", "Task"}
+              "Agent", "Task", "mcp__jarvis__file_lookup"}
 _PICTURES = ("image", "document", "audio")  # non-text content block types
 _STRUCTURE = {"type", "mimeType", "filePath", "file_path", "url"}  # metadata keys, not content
 PROMPT = prompts.load("injection_check")

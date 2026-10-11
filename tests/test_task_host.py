@@ -263,7 +263,8 @@ def test_host_run_gives_its_temp_folder_and_names_what_it_left_running(folder, u
 def test_what_host_run_leaves_running_the_task_may_stop_without_asking(folder, unwalled):
     run = tools(folder, unwalled)["host_run"]
     done = text(asyncio.run(run({"command": "sleep 30 >/dev/null 2>&1 &"})))
-    [pid] = [int(p) for p in re.findall(r"(\d+) \(sleep\)", done)]
+    # Named by whatever it is when listed: under load the forked shell may not have become sleep yet
+    [pid] = [int(p) for p in re.findall(r"still running from this command: (\d+) \(", done)]
     try:
         reporter = Asking()
         reporter.host_jobs = unwalled  # the runner's, which the command ran in
