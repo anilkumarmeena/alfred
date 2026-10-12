@@ -292,9 +292,18 @@ class CommandTasks(RunnerBase):
                 f"fixed it: {sentence(after.get('fixed', ''))}")
 
     async def _command_done(self, task: dict, how: dict) -> None:
-        """Announce success: `report` jobs say their last line; else a model summary, falling back to the last lines."""
+        """Announce success: `report` jobs say their last line; else a model summary, falling back to the last lines.
+        An only_changes job's run that printed nothing ends quietly and hidden, with no model call."""
         task_id, seconds = task["id"], how["ended"] - how["started"]
         output = self.commands.output(task_id, command_jobs.SUMMARY_CHARS, how.get("log_file"), how["started"])
+        job = schedules.get(task["job"]) if task["job"] is not None else None
+        if job and job["only_changes"] and not output.strip() and not how.get("after"):
+            how["summary"] = "Nothing to report."
+            self.store.set(task_id, command=json.dumps(how))
+            self._settle_run(task, how, how["summary"])
+            self._finish(task_id, "done", f"{task['title']}: nothing to report.", quiet=True, hidden=1, seen=1,
+                         summary=how["summary"])
+            return
         summary = ""
         if how.get("report"):
             summary = command_jobs.last_line(output)

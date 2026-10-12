@@ -84,7 +84,7 @@ def test_runs_while_this_computer_was_away_come_back_as_one_summary(there, tmp_p
 
     made, heard = asyncio.run(main())
     assert schedules.get(made["id"])["runs"] == 1
-    said = [e["text"] for e in heard if e["type"] == "heartbeat"]
+    said = [e["text"] for e in heard if e["type"] == "alert"]
     assert len(said) == 1 and said[0].startswith("While JARVIS was away, Studio ran 1 scheduled job:")
 
 

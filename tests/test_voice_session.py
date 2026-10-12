@@ -276,7 +276,7 @@ def test_the_runners_events_bring_requests_and_take_back_those_answered_elsewher
     async def main():
         runner = Runner({"type": "approval", "approval": REQUEST}, {"type": "approval", "approval": OTHER},
                         {"type": "approval_answered", "approval": {"id": 13}},
-                        {"type": "heartbeat", "text": "Your 3 o'clock starts soon.", "tasks": None})
+                        {"type": "alert", "text": "Your 3 o'clock starts soon.", "tasks": None})
         voice, session = call(runner=runner), Session()
         watching = asyncio.create_task(voice.watch_tasks())
         asking = asyncio.create_task(voice.ask_approvals(session))

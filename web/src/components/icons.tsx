@@ -68,7 +68,6 @@ export const BrainIcon = () => (
 export const WordsIcon = () => <svg viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4V5Z" /><path d="M8 9h8M8 12h5" /></svg>;
 export const NoteIcon =() => <svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6V3Z" /><path d="M9 11h7M9 15h5" /></svg>;
 export const SkillIcon = () => <svg viewBox="0 0 24 24"><path d="M13 3 5 13h6l-1 8 8-10h-6l1-8Z" /></svg>;
-export const HeartIcon = () => <svg viewBox="0 0 24 24"><path d="M12 20s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.5-7 10-7 10Z" /></svg>;
 export const PulseIcon = () => <svg viewBox="0 0 24 24"><path d="M3 12h4l2-5 4 10 2-5h6" /></svg>;
 export const KeyIcon = () => <svg viewBox="0 0 24 24"><circle cx="8" cy="15" r="4.5" /><path d="m11.2 11.8 8.8-8.8M16 7l3 3M13.5 9.5l2 2" /></svg>;
 export const KeysIcon = () => (

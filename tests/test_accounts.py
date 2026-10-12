@@ -27,7 +27,7 @@ PANEL = "the Sign in button beside the {} account on the control panel's Google 
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
-    """Isolated database, secrets folder and heartbeat file."""
+    """Isolated database and secrets folder."""
     secrets = tmp_path / "secrets"
     secrets.mkdir()
     use_profile(monkeypatch, tmp_path)  # sign-ins land in tmp_path/secrets
@@ -127,14 +127,13 @@ def test_a_fresh_install_starts_without_google_tools_or_a_crash(home):
     code = ("from ai_armory.toolsets.google import current\n"
             "from jarvis import tools\n"
             "from jarvis.brain import persona\n"
-            "from jarvis.tasks import heartbeat\n"
             "names = {t.name for t in tools.all_tools()}\n"
             "print(sorted(n for n in names if n.split('_')[0] in ('gmail', 'calendar', 'chat', 'docs', 'sheets')))\n"
-            "print(repr(current().default_label), 'chat' in heartbeat.sources_on(None), 'task_start' in names)\n"
+            "print(repr(current().default_label), 'task_start' in names)\n"
             "print('No Google account is set up yet' in persona.persona())\n")
     done = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stderr
-    assert done.stdout.splitlines() == ["[]", "'' False True", "True"]
+    assert done.stdout.splitlines() == ["[]", "'' True", "True"]
 
 
 def test_one_account_alone_gets_every_tool_and_everything_by_default(home):
@@ -234,24 +233,17 @@ def test_removing_the_default_makes_the_next_one_the_default():
     assert found.default == ""
 
 
-def test_rename_moves_the_sign_in_the_chat_state_and_the_heartbeats_history(home, capsys):
+def test_rename_moves_the_sign_in_and_the_chat_state(home, capsys):
     store(two())
     (home.secrets / "google-work.json").write_text('{"token": "w"}')
     (home.secrets / "google-work-chat.json").write_text('{"status": "ok"}')
-    seen = {"email:work:m1": 1.0, "calendar:work:2026-10-04T10:00:00+05:30:Standup": 2.0, "chat:work:spaces/A/m": 3.0,
-            "email:workshop:m2": 4.0, "email:personal:m3": 5.0, "github:work:1": 6.0, "task:7:done:1": 7.0}
-    (home.dir / "heartbeat.json").write_text(json.dumps({"started": ["email"], "seen": seen}))
 
     assert run("rename", "work", "job") == 0
     assert (home.secrets / "google-job.json").read_text() == '{"token": "w"}'
     assert (home.secrets / "google-job-chat.json").exists() and not (home.secrets / "google-work.json").exists()
-    state = json.loads((home.dir / "heartbeat.json").read_text())
-    assert state["started"] == ["email"] and state["seen"] == {
-        "email:job:m1": 1.0, "calendar:job:2026-10-04T10:00:00+05:30:Standup": 2.0, "chat:job:spaces/A/m": 3.0,
-        "email:workshop:m2": 4.0, "email:personal:m3": 5.0, "github:work:1": 6.0, "task:7:done:1": 7.0}
     found = accounts.load()
     assert found.labels == ["job", "personal"] and found.default == "job" and found.get("job").chat
-    assert "moving google-job.json, google-job-chat.json, the heartbeat's history" in capsys.readouterr().out
+    assert "moving google-job.json, google-job-chat.json." in capsys.readouterr().out
 
 
 def test_rename_changes_nothing_if_the_new_label_has_files_already(home):
@@ -354,6 +346,6 @@ def test_the_tools_use_jarvis_sign_ins_and_send_you_to_the_panel_to_sign_in_agai
         + PANEL.format("work"))
 
 
-def test_the_heartbeat_reads_only_signed_in_accounts(monkeypatch):
+def test_watches_read_only_signed_in_accounts(monkeypatch):
     monkeypatch.setattr(common, "token_path", lambda label: Path("/") if label == "personal" else Path("/nowhere"))
     assert common.connected() == ["personal"] and common.accounts_for("all") == ["work", "personal"]

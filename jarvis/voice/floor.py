@@ -1,4 +1,4 @@
-"""When JARVIS may speak unprompted: task updates, heartbeat alerts, finished shell jobs, approval requests.
+"""When JARVIS may speak unprompted: task updates, alerts, finished shell jobs, approval requests.
 
 The floor is busy while JARVIS thinks or speaks, the user speaks or their words are in flight, or JARVIS's last
 question is unanswered (lapses after QUESTION_MINUTES of silence). Items are said one at a time, in order, never

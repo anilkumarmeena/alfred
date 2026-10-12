@@ -430,6 +430,18 @@ def test_a_run_cut_off_by_a_restart_there_carries_on_in_its_session(world, tmp_p
     assert prompts[1] == (work.RESUMED, "s-5") and done["status"] == "done" and done["summary"] == "Carried on."
 
 
+def test_a_machine_lost_with_work_on_it_is_a_notice_until_it_comes_back(world, tmp_path):
+    from datetime import datetime
+
+    from jarvis.tasks import notices
+
+    lost = [{"node": 1, "name": "Studio", "minutes": 45, "since": 1000.0, "tasks": [7, 8]}]
+    check = notices.task_notices(runner.Runner().store, lost=lambda now: lost)
+    found = asyncio.run(check(datetime.now()))
+    assert [(n.key, n.ongoing, n.task_id) for n in found] == [("machine:1:lost:1000", True, 7)]
+    assert found[0].text.startswith("Studio has been unreachable for 45 minutes, with task 7, 8 on it.")
+
+
 def test_a_machine_may_only_report_on_its_own_tasks(world, tmp_path):
     async def main():
         w = World(tmp_path)

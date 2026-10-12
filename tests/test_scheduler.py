@@ -16,7 +16,7 @@ from jarvis import tools
 from jarvis.brain import retry
 from jarvis.core import profile
 from jarvis.core.database import Store
-from jarvis.tasks import heartbeat, runner, schedules, scheduler, worker
+from jarvis.tasks import runner, schedules, scheduler, worker
 from jarvis.tasks.scheduler import Found, Reading, Scheduler
 
 # A Tuesday, 09:15
@@ -217,7 +217,7 @@ def test_a_reminder_is_said_every_way_once(db):
     clock.now = at(hours=7, minutes=45, )  # 17:00
     assert tick(s) == [job["id"]]
     assert said["notified"] == [("JARVIS · Reminder", "Call Priya about the budget.")]
-    assert said["events"] == [{"type": "heartbeat", "text": "Reminder: Call Priya about the budget.", "tasks": [],
+    assert said["events"] == [{"type": "alert", "text": "Reminder: Call Priya about the budget.", "tasks": [],
                                "urgency": "soon", "pushed": True}]
     assert said["pushed"] == [("Reminder", "Call Priya about the budget.", "/?alert=schedule", f"schedule-{job['id']}")]
     assert schedules.get(job["id"])["status"] == schedules.DONE
@@ -349,7 +349,7 @@ def test_a_watch_is_silent_until_met_then_says_so_once_and_stops(db):
 
 def test_failing_checks_are_said_once_and_the_watch_keeps_going(db):
     job = schedules.add("watch", "Reply", "Priya replied", probe="gmail", target="from:priya", now=NOW)
-    probe, _ = probe_that(*[heartbeat.SourceFailed("every account failed")] * 4)
+    probe, _ = probe_that(*[scheduler.ProbeFailed("every account failed")] * 4)
     s, said, clock = make({"gmail": probe})
     for i in range(4):
         clock.now = at(minutes=10 * i)
@@ -467,7 +467,7 @@ def test_gmail_probe_counts_only_mail_since_the_watch_began(monkeypatch):
     async def accounts(read):
         return list(mail)
 
-    monkeypatch.setattr(heartbeat, "_each_account", accounts)
+    monkeypatch.setattr(scheduler, "each_account", accounts)
     job = {"target": "from:priya", "created": began}
     assert not asyncio.run(scheduler.probe_gmail(job)).met  # from before the watch
     mail.append({"from": "Priya <priya@acme.example>", "subject": "Re: budget",
@@ -482,7 +482,7 @@ def test_chat_probe_takes_what_is_there_at_first_as_old_news(db, monkeypatch):
     async def accounts(read):
         return list(news)
 
-    monkeypatch.setattr(heartbeat, "_each_account", accounts)
+    monkeypatch.setattr(scheduler, "each_account", accounts)
     job = schedules.add("watch", "Priya on Chat", "Priya writes", probe="chat", target="priya", now=NOW)
     s, said, clock = make({"chat": scheduler.probe_chat})
     tick(s)

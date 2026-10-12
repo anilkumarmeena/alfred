@@ -6,8 +6,8 @@ A running task with none for TASK_STALL_MINUTES is stalled unless the quiet is e
   a command still within its time limit (host_run, Bash, job_wait), or a running start_job job.
 Queued and waiting tasks never count.
 
-The pulse is in memory only. Task views show `stalled` at once; the heartbeat flags it once per stall (voice, desktop
-notification, push), so within HEARTBEAT_MINUTES and not in quiet hours or do-not-disturb. Never stops a task itself.
+The pulse is in memory only. Task views show `stalled` at once; jarvis.tasks.notices says it once per stall (voice,
+desktop notification, push), within notices.MINUTES and not in quiet hours or do-not-disturb. Never stops a task itself.
 """
 
 import time

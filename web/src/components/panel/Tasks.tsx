@@ -201,6 +201,7 @@ export function ScheduleView({ id }: { id: number }) {
         {j.folder && <><dt>Runs in</dt><dd>{j.folder}</dd></>}
         <dt>Runs</dt><dd>{j.runs}{j.last_run ? ` · last ${when(j.last_run)}` : ""}</dd>
         {j.kind === "task" && <><dt>Speaks</dt><dd>{j.only_changes ? "only when there's something new" : "after every run"}</dd></>}
+        {j.kind === "command" && <><dt>Speaks</dt><dd>{j.only_changes ? "only when a run prints something" : "after every run"}</dd></>}
       </dl>
       <label class="lbl">{SAYS[j.kind] ?? "What"}</label>
       <Markdown text={j.text} class="summary" />

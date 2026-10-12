@@ -17,7 +17,7 @@ main computer.
 | **Same gates** | Tasks run the same `worker.run`, sandbox, file gate and host walls there. A risky command waits for a yes asked on the main computer (described there from the command itself); the machine also refuses a risky job command without the main computer's word that the user agreed. Keys, accounts and push stay on the main computer. |
 | **Reports** | Every step, question and approval request goes through the machine's journal and is replayed in order after a dropped link. The main computer's database stays the one record; JARVIS names the machine in replies, task cards and announcements. |
 | **Restarts** | A run still going on the machine is taken up again after the main computer restarts; a run cut off by the machine restarting carries on in its own session. |
-| **Unreachable** | After 2 minutes the bell says so; after `JARVIS_NODE_LOST_MINUTES` (30) one heartbeat alert. A task whose session lives there waits `JARVIS_NODE_WAIT_MINUTES` for it. |
+| **Unreachable** | After 2 minutes the bell says so; after `JARVIS_NODE_LOST_MINUTES` (30) one notice (spoken, and a push). A task whose session lives there waits `JARVIS_NODE_WAIT_MINUTES` for it. |
 | **Updates** | On connecting, a machine on another commit waits until it's idle, fetches a bundle of the main computer's commit over the link, installs its locked dependencies and restarts. If the new code fails to start 3 times it rolls back and tells the main computer once. |
 
 ## Decisions

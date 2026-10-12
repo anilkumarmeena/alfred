@@ -11,7 +11,7 @@ import { loginShown, passcode, pushSub, setPasscode, showLogin } from "./store";
 
 export type Section = "tasks" | "todos" | "projects" | "jarvis" | "history" | "settings";  // jarvis: what it can do and knows
 export type SettingsItem =
-  "conn" | "accounts" | "memory" | "vocabulary" | "skills" | "approvals" | "about" | "prefs" | "dnd" | "safety" | "heartbeat"
+  "conn" | "accounts" | "memory" | "vocabulary" | "skills" | "approvals" | "about" | "prefs" | "dnd" | "safety"
   | "notify" | "system" | "access" | "keys" | "machines";
 
 export interface Task {
@@ -109,13 +109,6 @@ export type PrefKey = "name" | "timezone" | "voice" | "voice_speed" | "speech_ga
 export interface Voiceprint { name: string; seconds: number; consistency: number; via: string; created: number; current: boolean }
 export interface Voiceprints { owner: Voiceprint | null; model: boolean; passage: string; seconds: number }
 export interface Prefs { preferences: Record<PrefKey, Preference>; voices: string[] }
-// Heartbeat sources, each setting with its current value and default
-export interface SourceSetting { key: string; label: string; default: string; value: string }
-export interface HeartbeatSource {
-  id: string; kind: string; title: string; about: string; on: boolean; ready: boolean; added: string; settings: SourceSetting[];
-}
-export interface SourceKind { name: string; title: string; about: string; settings: SourceSetting[] }
-export interface Heartbeat { sources: HeartbeatSource[]; kinds: SourceKind[] }
 export interface System { services: Service[]; vault: { state: string; secrets?: number; problem?: string } }
 // A login (never its passcode). this: the one this device uses
 export interface Login { name: string; created: number; used: number | null; this: boolean }
@@ -204,7 +197,6 @@ export const access = signal<Access | null>(null);
 export const prefs = signal<Prefs | null>(null);
 export const rules = signal<Rule[] | null>(null);
 export const voiceprints = signal<Voiceprints | null>(null);
-export const heartbeat = signal<Heartbeat | null>(null);
 export const machines = signal<Machines | null>(null);
 
 // Waiting on the user: approval requests and task questions
@@ -330,7 +322,6 @@ const SETTINGS: Record<SettingsItem, () => Promise<void>> = {
   },
   dnd: async () => { const r = await act<Quiet>("hold_status"); if (r) quiet.value = r; },
   safety: loadPrefs,
-  heartbeat: async () => { heartbeat.value = await act("heartbeat_sources") ?? heartbeat.peek(); },
   notify: async () => { devices.value = await act("devices", { endpoint: pushSub.peek()?.endpoint ?? "" }) ?? devices.peek(); },
   system: async () => { system.value = await act("system") ?? system.peek(); },
   access: async () => { access.value = await act("access") ?? access.peek(); },
@@ -338,7 +329,7 @@ const SETTINGS: Record<SettingsItem, () => Promise<void>> = {
   machines: async () => { machines.value = await act("machines") ?? machines.peek(); },
 };
 // Loaded whenever Settings or JARVIS opens, for the summaries on their lists
-const LISTED: SettingsItem[] = ["system", "conn", "skills", "prefs", "heartbeat", "access", "machines"];
+const LISTED: SettingsItem[] = ["system", "conn", "skills", "prefs", "access", "machines"];
 
 async function loadPrefs() { prefs.value = await act<Prefs>("preferences") ?? prefs.peek(); }
 
@@ -495,7 +486,7 @@ function handle(event: any) {
       loadTasks();
       if (event.task) refreshDetail(event.task.id);
       break;
-    case "heartbeat":  // also sent for reminders and watch findings: the job's next run moved
+    case "alert":  // notices, reminders and watch findings: a job's next run may have moved
       if (section.peek() === "tasks") loadTasks();
       break;
     case "progress":

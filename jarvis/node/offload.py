@@ -330,7 +330,7 @@ class Offload:
             return
         text = (f"While JARVIS was away, {self.name(node)} ran {len(said)} scheduled job{'s' * (len(said) != 1)}: "
                 + " ".join(said))
-        self.runner.broadcast({"type": "heartbeat", "text": text})
+        self.runner.broadcast({"type": "alert", "text": text})
         await self.runner._push(f"{self.name(node)} while JARVIS was away", text[:400], "/", f"away-{node}")
 
     # ── Commands ─────────────────────────────────────────────────
@@ -656,7 +656,7 @@ class Offload:
         return doing if doing and now - at < 120 else ""
 
     def lost(self, now: float | None = None) -> list[dict]:
-        """Machines with work, unreachable for NODE_LOST_MINUTES or more (for the heartbeat)."""
+        """Machines with work, unreachable for NODE_LOST_MINUTES or more (for the notices)."""
         now = now or time.time()
         found = []
         for node, ids in self.working().items():

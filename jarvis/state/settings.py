@@ -33,6 +33,9 @@ create table settings (
     key text primary key,
     value text not null
 )"""
+_MIGRATIONS = (
+    "delete from settings where key = 'heartbeat_sources'",  # 2: the retired heartbeat's per-user sources
+)
 
 
 def tidy(text: str) -> str:
@@ -41,7 +44,7 @@ def tidy(text: str) -> str:
 
 
 def _db() -> AbstractContextManager[sqlite3.Connection]:
-    return database.table("settings", _SCHEMA)
+    return database.table("settings", _SCHEMA, migrations=_MIGRATIONS)
 
 
 def get(key: str, default: str = "") -> str:

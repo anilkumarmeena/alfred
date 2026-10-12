@@ -84,7 +84,7 @@ NPM       := npm --prefix web
 # web-install reruns only when the manifests change
 WEB_STAMP := web/node_modules/.install-stamp
 
-.PHONY: help install uv-bin livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks heartbeat speech-gate voice-timing voiceprint test host-check artifact-check \
+.PHONY: help install uv-bin livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks speech-gate voice-timing voiceprint test host-check artifact-check \
         services-install services-start services-stop services-restart status logs awake sleep-normal \
         claude-login claude-status accounts about servers passcode vault chat-check tailscale-serve check clean \
         node-setup node-login node-pair node-install node-stop node-check node-status
@@ -290,9 +290,6 @@ endif
 tasks: ## List recent tasks
 	@$(UV) python -m jarvis.tasks.runner list
 
-heartbeat: ## Dry-run one heartbeat
-	$(UV) python -m jarvis.tasks.heartbeat
-
 speech-gate: ## Clips the speech gate dropped (last day)
 	@$(UV) python -m jarvis.voice.speech_gate
 
@@ -355,7 +352,7 @@ check: ## Compile, type-check, import all
 # Errors only; see warnings with `uv run --with pyright pyright`
 	$(UV) --with pyright==$(PYRIGHT) pyright --level error
 	$(NPM) run typecheck
-	$(UV) python -c "import jarvis.voice.agent, jarvis.server, jarvis.setup_local, jarvis.integrations.accounts, jarvis.state.settings, jarvis.brain.cli, jarvis.tasks.runner, jarvis.tasks.heartbeat; from jarvis import tools; print(len(tools.all_tools()), 'tools, imports ok')"
+	$(UV) python -c "import jarvis.voice.agent, jarvis.server, jarvis.setup_local, jarvis.integrations.accounts, jarvis.state.settings, jarvis.brain.cli, jarvis.tasks.runner, jarvis.tasks.notices; from jarvis import tools; print(len(tools.all_tools()), 'tools, imports ok')"
 
 clean: ## Remove caches and logs
 	find . -name __pycache__ -not -path './.venv/*' -prune -exec rm -rf {} +
