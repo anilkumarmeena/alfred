@@ -11,7 +11,10 @@ empty     :=
 UV_DIRS   := $(HOME)/.local/bin $(HOME)/.cargo/bin $(wildcard $(HOME)/Library/Python/*/bin)
 export PATH := $(PATH):$(subst $(empty) $(empty),:,$(strip $(UV_DIRS)))
 UV_VERSION := 0.13.0
-UV        := uv run
+# macOS's make 3.81 runs a plain recipe line (`uv sync`) itself, looking it up on the PATH make started with, not the
+# one above. So recipes name uv by its full path, found when each one runs (after uv-bin may have just installed it).
+uv         = $(shell PATH="$(PATH)" command -v uv || echo uv)
+UV         = $(uv) run
 UNAME     := $(shell uname -s)
 # Behind a company proxy the browser follows the macOS settings, but uv, curl, go and npm only read HTTPS_PROXY.
 # The downloading targets take the proxy macOS uses for GitHub (a set proxy, a PAC file or WPAD), unless one is set.
@@ -100,7 +103,7 @@ ifeq ($(UNAME),Darwin)
 else
 	@command -v livekit-server >/dev/null || [ -x $(LOCAL_BIN)/livekit-server ] || $(MAKE) --no-print-directory livekit-bin
 endif
-	uv sync
+	$(uv) sync
 	$(MAKE) models web-build
 
 uv-bin: ## Install the pinned uv into ~/.local/bin if no working one is found (no sudo)
