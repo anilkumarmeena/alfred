@@ -77,7 +77,7 @@ Reminders, recurring jobs, "tell me when…" watches and monitors you choose, fr
 <td valign="top">
 
 **🔌 Connections**<br>
-Finds and connects MCP servers (GitHub, GitLab, Notion, …) from the official registry, with keys in an **encrypted vault**.
+Finds and connects MCP servers for the services you use, from the official registry, with keys in an **encrypted vault**.
 
 </td>
 <td valign="top">
@@ -187,7 +187,7 @@ open http://localhost:8787   # xdg-open on Linux
 |---|---|
 | **Tailscale** | Reaching JARVIS from your phone over HTTPS |
 | **Google Cloud OAuth client** | Gmail, Calendar, Docs, Sheets, Slides, Drive and Chat |
-| **`gh`** | GitHub from the shell and background tasks |
+| **Your services' own CLIs**, signed in | Those services from the shell and background tasks |
 | **`ffmpeg`** | mp3 audio files (and m4a on Linux) |
 | **Linux desktop packages** | Notifications, opening files, clipboard, volume and screenshots ([list](docs/setup.md#-linux)) |
 | **NVIDIA GPU** (Linux) | Whisper large-v3-turbo instead of small.en on the CPU |

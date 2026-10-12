@@ -160,6 +160,49 @@ def test_a_server_that_doesnt_list_its_tools_says_what_it_said(fresh, tmp_path):
         mcp_servers.offered(mcp_servers.get("broken"), timeout=30)
 
 
+CHECKED_SERVER = textwrap.dedent("""
+    import json, sys
+    for line in sys.stdin:
+        m = json.loads(line)
+        if "id" not in m:
+            continue
+        if m["method"] == "initialize":
+            result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "fake"}}
+        elif m["params"] == {"name": "whoami", "arguments": {}}:
+            result = {"content": [{"type": "text", "text": "you are sam"}]}
+        else:
+            result = {"isError": True, "content": [{"type": "text", "text": "bad credentials"}]}
+        print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": result}), flush=True)
+""")
+
+
+def test_a_sign_in_check_says_whether_its_tool_answered_refused_or_nothing_came_back(fresh, tmp_path):
+    script, silent = tmp_path / "checked.py", tmp_path / "silent.py"
+    script.write_text(CHECKED_SERVER)
+    silent.write_text("")
+    tools = {"whoami": Tool("read"), "expired": Tool("read")}
+    mcp_servers.save(Server("fake", "Fake", command=sys.executable, args=[str(script)], tools=tools,
+                            check_tool="whoami"), new=True)
+    mcp_servers.save(Server("quiet", "Quiet", command=sys.executable, args=[str(silent)], tools=tools,
+                            check_tool="whoami"), new=True)
+    fake = mcp_servers.get("fake")
+    assert fake.check_tool == "whoami" and mcp_servers.check(fake, timeout=30) == ""
+    assert mcp_servers.check(replace(fake, check_tool="expired"), timeout=30) == "bad credentials"
+    assert mcp_servers.check(mcp_servers.get("quiet"), timeout=30) is None
+
+
+def test_a_sign_in_check_has_to_be_a_reading_tool(fresh, capsys):
+    tools = {"whoami": Tool("read"), "post": Tool("write")}
+    for check in ("post", "nothing"):
+        with pytest.raises(ValueError, match="has to be one of its reading tools"):
+            mcp_servers.save(Server("acme", "Acme", command="acme-mcp", tools=tools, check_tool=check), new=True)
+    mcp_servers.save(Server("acme", "Acme", command="acme-mcp", tools=tools), new=True)
+    assert mcp_servers.main(["tools", "acme", "--check", "whoami"]) == 0
+    assert mcp_servers.get("acme").check_tool == "whoami" and "(its sign-in check)" in capsys.readouterr().out
+    assert mcp_servers.main(["tools", "acme", "--forget", "whoami"]) == 0
+    assert mcp_servers.get("acme").check_tool == ""  # gone with its tool
+
+
 def test_an_unsorted_server_is_offered_to_no_session_even_when_on(fresh):
     mcp_servers.save(Server("acme", "Acme", command="acme-mcp", reviewed=False, tools={"look": Tool("read")}), new=True)
     assert mcp_servers.for_voice() == [] and mcp_servers.for_research() == []

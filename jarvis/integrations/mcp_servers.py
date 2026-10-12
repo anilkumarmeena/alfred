@@ -5,7 +5,9 @@ starts it via mcp_launch, the only place its secrets are decrypted, which then r
   read, own   run freely (own = changes only the user's own inbox)
   write       needs the user's spoken yes (safety.mcp_gate), read out from the tool's `says` phrase
   blocked     never offered; unlisted tools are refused too
-Servers added by voice start disabled and unreviewed until the user approves the `sort` of their tools.
+Servers added by voice start disabled and unreviewed until the user approves the `sort` of their tools. A server may
+name a sign-in check (`check_tool`), which the notices service calls now and then to warn when its key or sign-in stops
+working (jarvis.tasks.notices).
 
 Sessions read the tables at start, so changes need no restart. Voice gets every enabled server; research tasks get
 the for_research ones, read-only; code tasks none. Servers missing their program or secrets are skipped. With tool
@@ -18,7 +20,7 @@ search on, their tools are deferred until looked up via ToolSearch.
     uv run python -m jarvis.integrations.mcp_servers set NAME [the same options]
     uv run python -m jarvis.integrations.mcp_servers enable|disable|remove NAME
     uv run python -m jarvis.integrations.mcp_servers tools NAME [--sort] [--read T ...] [--own T ...]
-                                        [--write T=SAYS ...] [--block T ...] [--forget T ...]
+                                        [--write T=SAYS ...] [--block T ...] [--forget T ...] [--check T]
     uv run python -m jarvis.integrations.mcp_servers set-secret NAME [VAR]   typed (hidden) or stdin, never an argument
     uv run python -m jarvis.integrations.mcp_servers clear-secret NAME [VAR]
     uv run python -m jarvis.integrations.mcp_servers test NAME [--read-only] start it and list its tools
@@ -39,6 +41,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -66,7 +69,7 @@ ON_DEMAND = TOOL_SEARCH != "false"
 _SCHEMA = ("""
 create table mcp_servers (
     name text primary key,               -- tools are mcp__<name>__<tool>
-    label text not null,                 -- spoken name: "GitHub"
+    label text not null,                 -- spoken name
     position integer not null,
     enabled integer not null default 1,
     transport text not null default 'stdio',   -- stdio or http
@@ -95,6 +98,10 @@ create table mcp_tools (
     says text not null default '',       -- write: phrase read out, with {argument} placeholders
     primary key (server, tool)
 )""")
+_MIGRATIONS = (
+    # 2: its sign-in check, a reading tool taking no arguments called now and then (check()); '' for none
+    "alter table mcp_servers add column check_tool text not null default ''",
+)
 
 
 @dataclass(frozen=True)
@@ -125,6 +132,7 @@ class Server:
     headers: dict[str, str] = field(default_factory=dict)
     sign_in: bool = False
     reviewed: bool = True
+    check_tool: str = ""  # its sign-in check (check()): a reading tool that takes no arguments
 
     def tool(self, name: str) -> str:
         return f"mcp__{self.name}__{name}"
@@ -169,7 +177,7 @@ def problems(server: Server, taken: list[str] = ()) -> list[str]:
     if server.name in taken:
         said.append(f"There's already a {server.name} server.")
     if not server.label.strip() or len(server.label) > 40:
-        said.append("Give it a label of up to 40 characters, as it's said aloud: --label GitHub.")
+        said.append("Give it a label of up to 40 characters, as it's said aloud.")
     if server.transport not in TRANSPORTS:
         said.append(f"The transport is {' or '.join(TRANSPORTS)}.")
     elif server.transport == "stdio":
@@ -216,20 +224,23 @@ def problems(server: Server, taken: list[str] = ()) -> list[str]:
             said.append(f"{name}: access is one of {', '.join(ACCESS)}.")
         elif spec.says and spec.access != "write":
             said.append(f"{name}: only write tools say what they'd do.")
+    if server.check_tool and server.tools.get(server.check_tool, Tool("")).access != "read":
+        said.append(f"Its sign-in check, {server.check_tool}, has to be one of its reading tools.")
     return said
 
 
 # ── Storage ─────────────────────────────────────────────────────
 
 def _db() -> AbstractContextManager[sqlite3.Connection]:
-    return database.table("mcp_servers", *_SCHEMA)
+    return database.table("mcp_servers", *_SCHEMA, migrations=_MIGRATIONS)
 
 
 def _row(r: sqlite3.Row, tools: dict[str, Tool]) -> Server:
     return Server(r["name"], r["label"], bool(r["enabled"]), r["transport"], r["command"], json.loads(r["args"]),
                   json.loads(r["read_only_args"]), r["url"], json.loads(r["env"]), json.loads(r["read_only_env"]),
                   json.loads(r["secret_env"]), bool(r["for_research"]), r["prompt"], tools, r["source"],
-                  bool(r["verified"]), r["version"], json.loads(r["headers"]), bool(r["sign_in"]), bool(r["reviewed"]))
+                  bool(r["verified"]), r["version"], json.loads(r["headers"]), bool(r["sign_in"]), bool(r["reviewed"]),
+                  r["check_tool"])
 
 
 def _read(db: sqlite3.Connection) -> list[Server]:
@@ -278,7 +289,8 @@ def save(server: Server, new: bool = False) -> None:
                "read_only_env": json.dumps(server.read_only_env), "secret_env": json.dumps(server.secret_env),
                "for_research": int(server.for_research), "prompt": server.prompt.strip(), "created": created,
                "updated": now, "source": server.source, "verified": int(server.verified), "version": server.version,
-               "headers": json.dumps(server.headers), "sign_in": int(server.sign_in), "reviewed": int(server.reviewed)}
+               "headers": json.dumps(server.headers), "sign_in": int(server.sign_in), "reviewed": int(server.reviewed),
+               "check_tool": server.check_tool}
         db.execute(f"insert or replace into mcp_servers ({', '.join(row)}) values ({', '.join('?' * len(row))})",
                    tuple(row.values()))
         db.execute("delete from mcp_tools where server = ?", (server.name,))
@@ -420,7 +432,7 @@ def show(servers: list[Server]) -> str:
         where = s.url or " ".join([s.command, *s.args])
         counts = ", ".join(f"{len(s.named(a))} {a}" for a in ACCESS if s.named(a))
         secrets = ", ".join(f"{var} ({'set' if vault.has(sec) else 'not set'})" for var, sec in s.secret_env.items())
-        urls = ", ".join(f"{k}={v}" for k, v in s.env.items() if k.endswith("_URL"))  # e.g. GitLab's host
+        urls = ", ".join(f"{k}={v}" for k, v in s.env.items() if k.endswith("_URL"))  # e.g. a self-hosted address
         lines.append(f"  {s.name}  {s.label}  [{', '.join(flags)}]\n      {where[:120]}\n      tools: {counts or 'none listed'}"
                      + (f"\n      {urls}" if urls else "") + (f"\n      secrets: {secrets}" if secrets else ""))
     return "\n".join(lines)
@@ -433,69 +445,108 @@ def _secret_value(var: str) -> str:
 
 
 LIST_TIMEOUT = 90  # seconds to start and list tools; npx/uvx may download first
+CHECK_TIMEOUT = 45  # seconds to start and answer a sign-in check
 MAX_TOOLS = 300  # stop paging tools/list past this
+_HELLO = {"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
+    "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "jarvis", "version": "1"}}}
+_READY = {"jsonrpc": "2.0", "method": "notifications/initialized"}
 
 
-def offered(server: Server, read_only: bool = False, timeout: float = LIST_TIMEOUT) -> list[dict]:
-    """Probe-start the server via the launcher (even if disabled or unreviewed) and return its tools as
-    {name, title, description, annotations}. Raises RuntimeError with the tail of its stderr if listing fails."""
-    hello = {"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
-        "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "jarvis", "version": "1"}}}
-    proc = subprocess.Popen([sys.executable, "-m", "jarvis.integrations.mcp_launch", server.name, "--probe",
-                             *(["--read-only"] * read_only)],
-                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                            env=os.environ | session_env() | launcher(server.name)["env"],
-                            start_new_session=True)  # own process group, so killpg reaches npx's children
-    lines: queue.Queue[str] = queue.Queue()
-    threading.Thread(target=lambda: [lines.put(l) for l in proc.stdout] + [lines.put("")], daemon=True).start()
+class _Probe:
+    """The server started bare via the launcher (even if disabled or unreviewed), spoken to in JSON-RPC lines."""
 
-    def send(*messages: dict) -> None:
-        proc.stdin.write("".join(json.dumps(m) + "\n" for m in messages))
-        proc.stdin.flush()  # keep stdin open: some servers exit on EOF before answering
+    def __init__(self, server: Server, read_only: bool) -> None:
+        self.proc = subprocess.Popen([sys.executable, "-m", "jarvis.integrations.mcp_launch", server.name, "--probe",
+                                      *(["--read-only"] * read_only)],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                     env=os.environ | session_env() | launcher(server.name)["env"],
+                                     start_new_session=True)  # own process group, so killpg reaches npx's children
+        self.lines: queue.Queue[str] = queue.Queue()
+        threading.Thread(target=lambda: [self.lines.put(l) for l in self.proc.stdout] + [self.lines.put("")],
+                         daemon=True).start()
+        self.err = ""
 
-    found: list[dict] = []
-    done, asked, deadline = False, 0, time.monotonic() + timeout
-    try:
-        send(hello)
-        while not done and (left := deadline - time.monotonic()) > 0:
+    def send(self, *messages: dict) -> None:
+        self.proc.stdin.write("".join(json.dumps(m) + "\n" for m in messages))
+        self.proc.stdin.flush()  # keep stdin open: some servers exit on EOF before answering
+
+    def replies(self, timeout: float) -> Iterator[dict]:
+        """Answers to our requests, until the server stops or `timeout` seconds pass."""
+        deadline = time.monotonic() + timeout
+        while (left := deadline - time.monotonic()) > 0:
             try:
-                line = lines.get(timeout=left)
+                line = self.lines.get(timeout=left)
             except queue.Empty:
-                break
+                return
             if not line:
-                break
+                return
             try:
                 reply = json.loads(line)
             except ValueError:
                 continue
-            if not isinstance(reply, dict) or "id" not in reply or "method" in reply:
-                continue  # server notifications/requests (logging, pings)
+            if isinstance(reply, dict) and "id" in reply and "method" not in reply:  # not its notifications or requests
+                yield reply
+
+    def __enter__(self) -> "_Probe":
+        return self
+
+    def __exit__(self, *_) -> None:
+        try:
+            os.killpg(self.proc.pid, signal.SIGKILL)  # killing only npx leaves node holding stderr, hanging the read
+        except (ProcessLookupError, PermissionError):  # already gone (macOS gives EPERM for a zombie)
+            pass
+        self.err = self.proc.stderr.read()
+        self.proc.wait()
+
+
+def offered(server: Server, read_only: bool = False, timeout: float = LIST_TIMEOUT) -> list[dict]:
+    """Probe-start the server and return its tools as {name, title, description, annotations}. Raises RuntimeError
+    with the tail of its stderr if listing fails."""
+    found: list[dict] = []
+    done, asked = False, 0
+    with _Probe(server, read_only) as probe:
+        probe.send(_HELLO)
+        for reply in probe.replies(timeout):
             if reply.get("error"):
                 raise RuntimeError(f"{server.label} refused: {str(reply['error'].get('message', ''))[:300]}")
             result = reply.get("result") or {}
             if reply["id"] == 0:
-                send({"jsonrpc": "2.0", "method": "notifications/initialized"},
-                     {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+                probe.send(_READY, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
                 asked = 1
             elif reply["id"] == asked:
                 found += [t for t in result.get("tools", []) if isinstance(t, dict) and isinstance(t.get("name"), str)]
                 if (cursor := result.get("nextCursor")) and len(found) < MAX_TOOLS:
                     asked += 1
-                    send({"jsonrpc": "2.0", "id": asked, "method": "tools/list", "params": {"cursor": cursor}})
+                    probe.send({"jsonrpc": "2.0", "id": asked, "method": "tools/list", "params": {"cursor": cursor}})
                 else:
                     done = True
-    finally:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)  # killing only npx leaves node holding stderr, hanging the read
-        except (ProcessLookupError, PermissionError):  # already gone (macOS gives EPERM for a zombie)
-            pass
-        err = proc.stderr.read()
-        proc.wait()
+                    break
     if not done:
-        raise RuntimeError(f"{server.label} didn't list its tools. What it said: {err.strip()[-1500:] or 'nothing'}")
+        said = probe.err.strip()[-1500:] or "nothing"
+        raise RuntimeError(f"{server.label} didn't list its tools. What it said: {said}")
     return [{"name": t["name"], "title": str(t.get("title") or (t.get("annotations") or {}).get("title") or ""),
              "description": str(t.get("description") or ""), "annotations": t.get("annotations") or {}}
             for t in found]
+
+
+def check(server: Server, timeout: float = CHECK_TIMEOUT) -> str | None:
+    """Its sign-in check: `check_tool` called with no arguments, read-only. '' if it answered, the reason (its own
+    words, cut short) if it refused, or None if it never answered (it didn't start, or nothing came back)."""
+    with _Probe(server, read_only=True) as probe:
+        probe.send(_HELLO)
+        for reply in probe.replies(timeout):
+            if error := reply.get("error"):
+                return str(error.get("message") or "an error")[:300]
+            if reply["id"] == 0:
+                probe.send(_READY, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                    "params": {"name": server.check_tool, "arguments": {}}})
+            elif reply["id"] == 1:
+                result = reply.get("result") or {}
+                if not result.get("isError"):
+                    return ""
+                said = " ".join(str(c.get("text", "")) for c in result.get("content") or [] if isinstance(c, dict))
+                return said.strip()[:300] or "an error"
+    return None
 
 
 def changes(tool: dict) -> bool:
@@ -575,6 +626,8 @@ def main(argv: list[str] | None = None) -> int:
     tools_.add_argument("--write", action="append", metavar="TOOL=SAYS",
                         help="held for a yes; SAYS is read out, e.g. 'comment on {owner}/{repo}, saying {body}'")
     tools_.add_argument("--forget", action="append", metavar="TOOL", help="unlist it, so it's refused")
+    tools_.add_argument("--check", metavar="TOOL", help="its sign-in check: a reading tool taking no arguments, called "
+                                                         "now and then so JARVIS warns when it fails ('' for none)")
     tools_.add_argument("--sort", action="store_true", help="start it and list every tool it offers, read or write by "
                                                             "its own markings, before the changes given here")
     secret = commands.add_parser("set-secret", help="set a server's secret, typed in or from stdin")
@@ -639,11 +692,15 @@ def main(argv: list[str] | None = None) -> int:
                 tools[tool] = Tool("write", says.strip())
             for tool in args.forget or []:
                 tools.pop(tool, None)
-            if tools != server.tools or not server.reviewed:
-                save(replace(server, tools=tools, reviewed=True))  # sorted by hand at the command line counts as reviewed
+            checked = server.check_tool if args.check is None else args.check
+            checked = checked if checked in tools else ""  # a forgotten check goes with its tool
+            if tools != server.tools or checked != server.check_tool or not server.reviewed:
+                # sorted by hand at the command line counts as reviewed
+                save(replace(server, tools=tools, reviewed=True, check_tool=checked))
                 print(f"Changed the {server.name} server's tools. {APPLIES}")
             for tool, spec in sorted(tools.items()):
-                print(f"  {tool:<40} {spec.access}" + (f"  says: {spec.says}" if spec.says else ""))
+                print(f"  {tool:<40} {spec.access}" + (f"  says: {spec.says}" if spec.says else "")
+                      + ("  (its sign-in check)" if tool == checked else ""))
             return 0
         if command in ("set-secret", "clear-secret"):
             server = need(args.name)

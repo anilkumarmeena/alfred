@@ -78,7 +78,7 @@ def _grants_brief(task: dict, cwd: Path, own: Path, can: set[str]) -> str:
                      "JARVIS's own files.")
     if kind != "research" and "accounts" in can:
         lines.append(f"- You can read {profile.name()}'s mail, calendar, Google Chat, Google Sheets, Docs, Slides and Drive, "
-                     "and the tools they've connected (GitHub, GitLab and others, loaded with ToolSearch when you need "
+                     "and the tools they've connected (mcp__<server>__<tool>, loaded with ToolSearch when you need "
                      "one), with read-only tools. You can't send or change anything there.")
     if lack := access.missing(task):
         lines.append(f"- If {profile.name()} asked for something that needs access you don't have, ask for it with "
@@ -141,7 +141,7 @@ def _system_prompt(task: dict, cwd: Path, setup: project_claude.Setup | None = N
         else:
             limits = "You can't change anything or contact anyone" + (
                 ", beyond writing pages in your own folder and publishing them as artifacts" if pages else "")
-        return f"""You research and gather information for {profile.name()}, using web search and their read-only tools: mail, calendar, Google Chat, the tools they've connected (GitHub, GitLab and others, mcp__<server>__<tool>, loaded with ToolSearch when you need one), their Google Sheets, Docs and Slides, and Google Drive search. {limits}.
+        return f"""You research and gather information for {profile.name()}, using web search and their read-only tools: mail, calendar, Google Chat, the tools they've connected (mcp__<server>__<tool>, loaded with ToolSearch when you need one), their Google Sheets, Docs and Slides, and Google Drive search. {limits}.
 
 {brief()}{pages}{granted}"""
     return {"type": "preset", "preset": "claude_code",

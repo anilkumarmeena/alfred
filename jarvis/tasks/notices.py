@@ -1,9 +1,10 @@
 """Notices: JARVIS's news about itself, said unasked, every MINUTES inside the task runner.
 
-  tasks    a question unanswered for MINUTES, a run cut off by a restart, a running task gone quiet (jarvis.tasks.stall)
-  usage    Claude's usage limits nearly or all used, once per limit window (jarvis.brain.usage)
+  tasks        a question unanswered for MINUTES, a run cut off by a restart, a task gone quiet (jarvis.tasks.stall)
+  usage        Claude's usage limits nearly or all used, once per limit window (jarvis.brain.usage)
+  connections  a connection whose sign-in check fails: the tool its row names, called hourly (mcp_servers.check)
 
-It reads only JARVIS's own state, never a service: what to watch is each user's choice, made with scheduled jobs
+Beyond those sign-in checks it watches no service: what to watch is each user's choice, made with scheduled jobs
 (jarvis.tasks.schedules). Each notice goes out once as a desktop notification, a phone push and a spoken update;
 lock-screen surfaces get only `text`. Keys already given live in data/notices.json, and an ongoing notice (a stall)
 is forgotten once it clears, so it can recur. Nothing is checked in quiet hours or do-not-disturb; what still holds
@@ -31,7 +32,8 @@ MINUTES = 15
 MAX_NOTICES = 5  # per round; the rest wait for the next
 KEEP_DAYS = 30  # how long given keys are remembered
 CHECK_TIMEOUT = 60
-TITLES = {"tasks": "Tasks", "usage": "Claude usage"}  # push titles
+CONNECTION_MINUTES = 60  # between one connection's sign-in checks
+TITLES = {"tasks": "Tasks", "usage": "Claude usage", "connections": "Connections"}  # push titles
 
 
 @dataclass(frozen=True)
@@ -230,6 +232,37 @@ async def usage_notices(now: datetime) -> list[Notice]:
     return [Notice(key, "usage", text) for key, text in usage.alerts(now.timestamp())]
 
 
+def connection_notices(every: int = CONNECTION_MINUTES, call: Callable | None = None) -> Check:
+    """Connections whose sign-in check (the tool each names, mcp_servers.check) refused, each called at most every
+    `every` minutes; ongoing, so given again only after it passes. One that never answers keeps its last result."""
+    from jarvis.integrations import mcp_servers
+
+    call = call or mcp_servers.check
+    last: dict[str, tuple[float, Notice | None]] = {}  # name -> (checked at, its notice)
+
+    async def run(server, now: float) -> Notice | None:
+        at, given = last.get(server.name, (0.0, None))
+        if now - at < every * 60:
+            return given
+        why = await asyncio.to_thread(call, server)
+        if why:
+            log.warning("%s's sign-in check refused: %s", server.name, why)
+            given = Notice(f"connection:{server.name}:check", "connections",
+                           f"{server.label}'s sign-in check failed, so its tools may not work. Its key or sign-in "
+                           "may need renewing in the control panel's Connections page.", ongoing=True)
+        elif why == "":  # passed; None (no answer) keeps the last result
+            given = None
+        last[server.name] = (now, given)
+        return given
+
+    async def check(now: datetime) -> list[Notice]:
+        servers = [s for s in mcp_servers.for_voice() if s.check_tool and not mcp_servers.missing(s)]
+        found = await asyncio.gather(*(run(s, now.timestamp()) for s in servers))
+        return [n for n in found if n]
+
+    return check
+
+
 def _carry_over(path: Path) -> None:
     """Migration: keep the keys data/heartbeat.json recorded, so nothing it already said is said again."""
     if not path.exists() and (old := path.with_name("heartbeat.json")).exists():
@@ -242,5 +275,6 @@ def make(store, notify: Notify, announce: Callable[[dict], None] | None = None, 
     """The runner's Notices. `stalls` is Runner.stalls, `lost` Offload.lost; `settings` override Notices kwargs."""
     if "state_file" not in settings:
         _carry_over(profile.current().notices_file)
-    checks = {"tasks": task_notices(store, stalls, lost=lost), "usage": usage_notices}
+    checks = {"tasks": task_notices(store, stalls, lost=lost), "usage": usage_notices,
+              "connections": connection_notices()}
     return Notices(checks, notify, announce, push=push, **settings)

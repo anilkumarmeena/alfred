@@ -96,7 +96,7 @@ async def search(query: str, client: httpx.AsyncClient | None = None) -> list[di
 
 
 async def fetch(name: str, client: httpx.AsyncClient | None = None) -> dict:
-    """Latest entry for `name`, e.g. io.github.github/github-mcp-server."""
+    """Latest entry for `name`, its registry name (namespace/server)."""
     item = await _get(f"/v0/servers/{quote(name.strip(), safe='')}/versions/latest", client=client)
     if _status(item) != "active":
         raise RegistryError(f"The MCP registry marks {name} as {_status(item)}.")
@@ -419,4 +419,6 @@ async def _main(query: str) -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(_main(" ".join(sys.argv[1:]) or "github"))
+    if not sys.argv[1:]:
+        sys.exit("Usage: python -m jarvis.integrations.mcp_registry SEARCH WORDS")
+    asyncio.run(_main(" ".join(sys.argv[1:])))

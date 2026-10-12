@@ -20,7 +20,7 @@ flowchart TB
     Runner --> T["🛠️ Tasks<br/>code · research"]
     Runner --> C["💻 Commands<br/>long shell jobs"]
     Runner --> S["⏰ Scheduler<br/>reminders · watches"]
-    Runner --> H["🔔 Notices<br/>stuck tasks · usage"]
+    Runner --> H["🔔 Notices<br/>stuck tasks · usage · sign-ins"]
     Runner --> L["🧠 Learning<br/>after each chat"]
     T & C & S & H & L --> Tell(["🔔 Said aloud · desktop notification · phone push"])
 
@@ -307,7 +307,7 @@ A missed **daily** job runs once if missed by under 2 hours, else waits.
 
 ## 👀 Monitoring
 
-JARVIS watches **nothing on its own**: no mail, calendar, Chat or GitHub polling is built in. Ask for what you want kept an eye on ("let me know about new issues on my repo", "keep an eye on that price") and JARVIS offers the ways that fit, then sets up the one you pick:
+JARVIS watches **nothing on its own**: no mail, calendar, Chat or other service polling is built in (only each connection's [sign-in check](integrations.md#-sign-in-checks)). Ask for what you want kept an eye on ("let me know about new issues on my repo", "keep an eye on that price") and JARVIS offers the ways that fit, then sets up the one you pick:
 
 | | Way | Costs | Good for |
 |:-:|---|---|---|
@@ -325,6 +325,7 @@ Every 15 minutes the runner checks on **JARVIS itself** and speaks up unasked:
 |:-:|---|---|
 | 🛠️ | **Tasks** | Waiting for your answer for 15 minutes, cut off by a restart, or stalled |
 | 📊 | **Claude usage** | Nearing or out of a plan limit, once per window |
+| 🩺 | **Connections** | A connection's [sign-in check](integrations.md#-sign-in-checks) fails (checked hourly) |
 
 - **You hear about it** as a desktop notification, a phone push if enabled, and **spoken at the next pause** if you're in a session.
 - **Rules:** nothing said twice (a stall again only once it has cleared and come back); nothing checked in quiet hours (23:00–08:00) or do not disturb.

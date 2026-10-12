@@ -5,7 +5,7 @@
   shell      sandboxed shell, any host, writes only to the task's folders (default: code_change)
   mac        host_run and jobs outside the sandbox; risky ones still need the user's yes (default: code_change)
   projects   edit files in any of the user's projects (TASK_READ_DIRS), never secrets or JARVIS's files
-  accounts   read-only mail, calendar, Chat, Sheets, Docs, GitHub, GitLab (default: research)
+  accounts   read-only mail, calendar, Chat, Sheets, Docs and connected tools (default: research)
 
 Granted via task_start / task_reply, or requested mid-run with request_access (the task waits, then resumes in the same
 session). Secrets and JARVIS's own data stay out of reach whatever is granted.
@@ -21,7 +21,7 @@ GRANTS = {
     "shell": "run sandboxed shell commands that reach any host",
     "mac": "run commands on the computer itself outside the sandbox",
     "projects": "edit files in other projects",
-    "accounts": "read mail, calendar, Chat, Sheets, Docs, GitHub and GitLab",
+    "accounts": "read mail, calendar, Chat, Sheets, Docs and the tools the user connected",
 }
 _DEFAULTS = {"code_change": {"artifacts", "shell", "mac"}, "code_question": set(), "research": {"artifacts", "accounts"}}
 # What only this computer has (account keys, the user's other projects): a task with these never runs on a machine

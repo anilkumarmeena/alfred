@@ -92,7 +92,7 @@ docs/                these pages
 - **`make test`** fetches pytest with `uv run --with pytest`. The vitest tests are skipped if `web/node_modules` is missing (`make web-install`).
 - **Pyright** is a pinned version, errors only. Its softer rules are listed under `[tool.pyright]` in `pyproject.toml`; `uv run --with pyright pyright` shows their warnings.
 - **`make check`** passes with **only one speech engine installed**: MLX Whisper on Apple silicon, faster-whisper elsewhere (`pyproject.toml` picks by platform marker), and the other's imports are marked for pyright.
-- **`make host-check`** checks that secrets and JARVIS's files are blocked, while PyPI, the task cache and the SSH agent stay reachable. Each OS has its own list: macOS adds code signing; Linux adds the session bus, other processes, `sudo` and new files at the top of home.
+- **`make host-check`** checks that secrets and JARVIS's files are blocked, while PyPI, the task cache and the SSH agent stay reachable, and signing in over SSH works for each SSH git host in your projects' remotes (skipped when none use SSH). Each OS has its own list: macOS adds code signing; Linux adds the session bus, other processes, `sudo` and new files at the top of home.
 - **`make artifact-check`** takes `FILE=page.html` to publish a real page.
 
 > [!NOTE]

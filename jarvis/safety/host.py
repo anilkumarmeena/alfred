@@ -21,6 +21,7 @@ import logging
 import os
 import pwd
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -862,6 +863,46 @@ class Jobs:
 
 # ── Checking the walls on this computer ─────────────────────────
 
+_SCP_REMOTE = re.compile(r"((?:[^@/:\s]+@)?[^@/:\s]+):")  # git's short SSH form, user@host:path
+
+
+def _ssh_remote(url: str) -> str:
+    """Where an SSH git remote signs in (ssh://user@host:port, or user@host), or '' for any other remote."""
+    if re.match(r"(git\+)?ssh(\+git)?://", url):
+        return "ssh://" + url.split("://", 1)[1].split("/", 1)[0]
+    m = _SCP_REMOTE.match(url)
+    return m[1] if m and "://" not in url else ""
+
+
+def _git_hosts() -> list[str]:
+    """Where the SSH git remotes of JARVIS's own repo and the user's projects on this computer sign in, each once."""
+    from jarvis.tasks import projects
+
+    try:
+        folders = [ROOT, *(p.path for p in projects.load() if p.node is None)]
+    except Exception:  # an unreadable project list leaves JARVIS's own repo
+        folders = [ROOT]
+    found: list[str] = []
+    for folder in folders:
+        try:
+            urls = subprocess.run(["git", "-C", str(folder), "config", "--get-regexp", r"^remote\..*\.url$"],
+                                  capture_output=True, text=True, timeout=10).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        for line in urls.splitlines():
+            if (where := _ssh_remote(line.partition(" ")[2].strip())) and where not in found:
+                found.append(where)
+    return found
+
+
+def _ssh_checks() -> list[tuple[str, str, bool]]:
+    """Signing in over SSH through the agent to each of the user's own git hosts; none when no remote uses SSH.
+    ssh exits 255 only when it couldn't connect or sign in; otherwise with what the host's shell returned."""
+    return [(f"signs in to {where} over SSH, through the agent",
+             f"ssh -o BatchMode=yes -o ConnectTimeout=15 -T {shlex.quote(where)} </dev/null >/dev/null 2>&1; "
+             "test $? -ne 255", True) for where in _git_hosts()]
+
+
 def _mac_checks() -> list[tuple[str, str, bool]]:  # (what, command, should succeed)
     return [
         ("reads JARVIS's .env", f"head -c1 {ROOT / '.env'}", False),
@@ -869,8 +910,7 @@ def _mac_checks() -> list[tuple[str, str, bool]]:  # (what, command, should succ
         ("lists ~/.ssh", "ls ~/.ssh", False),
         ("reads an SSH key file", "head -c1 ~/.ssh/id_ed25519 || head -c1 ~/.ssh/id_rsa || head -c1 ~/.ssh/id_ecdsa", False),
         ("reaches the SSH agent", "ssh-add -l >/dev/null 2>&1; test $? -ne 2", True),
-        ("signs in to GitHub over SSH, through the agent",
-         "ssh -o BatchMode=yes -o ConnectTimeout=15 -T git@github.com 2>&1 | grep -q 'successfully authenticated'", True),
+        *_ssh_checks(),
         ("reads the keychain files", "ls ~/Library/Keychains", False),
         ("writes tasks.db", f"touch {DB_FILE}", False),
         ("writes in JARVIS's folder", f"touch {ROOT / '.host-check'} && rm {ROOT / '.host-check'}", False),
@@ -898,8 +938,7 @@ def _linux_checks() -> list[tuple[str, str, bool]]:  # (what, command, should su
          False),
         ("reads an SSH key file", "head -c1 ~/.ssh/id_ed25519 || head -c1 ~/.ssh/id_rsa || head -c1 ~/.ssh/id_ecdsa", False),
         ("reaches the SSH agent", "ssh-add -l >/dev/null 2>&1; test $? -ne 2", True),
-        ("signs in to GitHub over SSH, through the agent",
-         "ssh -o BatchMode=yes -o ConnectTimeout=15 -T git@github.com 2>&1 | grep -q 'successfully authenticated'", True),
+        *_ssh_checks(),
         ("sees the keyring files", "ls -A ~/.local/share/keyrings | grep -q .", False),
         ("reaches the session bus (Secret Service, systemd-run)", 'test -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus"',
          False),

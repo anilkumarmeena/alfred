@@ -38,8 +38,8 @@ MCP servers from the official registry. Each server's reading tools run at once;
 <tr>
 <td valign="top">
 
-**[🐙 GitHub and GitLab](#-github-and-gitlab)**<br>
-PRs, reviews, issues and merge requests, through their own MCP servers.
+**[🩺 Sign-in checks](#-sign-in-checks)**<br>
+Each connection can name a reading tool JARVIS calls hourly, so you **hear when a key or sign-in stops working**.
 
 </td>
 <td valign="top">
@@ -202,7 +202,7 @@ JARVIS finds and connects new tools for you as **MCP servers**. Say "connect Not
 | 🔑 | **Keys** | Pasted in **Settings → Connections → Enter key**. A key said aloud is refused |
 | 🔐 | **Sign-in** | OAuth services sign in through JARVIS's own browser on its computer |
 | 🗂️ | **Sort its tools** | **Reading** tools run at once; **changing** tools each wait for your yes |
-| 🔁 | **Later** | "What tools are connected?", "switch Notion off", "is there a newer GitHub?", "remove Notion" |
+| 🔁 | **Later** | "What tools are connected?", "switch Notion off", "is there a newer Notion?", "remove Notion" |
 
 - **Runs** hosted, or locally with `npx`/`uvx`/`docker` at a **pinned version**.
 - **Keys and sign-ins** are kept encrypted; a key is never shown again.
@@ -253,18 +253,14 @@ make servers ARGS="disable acme"                          # or enable, remove, s
 
 Package runners (`npx`, `uvx`) must name a **pinned version**. Settings and headers that look like credentials are **refused** outside `--secret-env` and the vault.
 
-## 🐙 GitHub and GitLab
+## 🩺 Sign-in checks
 
-"Any PRs waiting for my review?", "comment LGTM on it", "open a merge request from fix-login into main". **Reading runs at once**; commenting, reviewing, opening, merging, issues, branches and commits wait for your yes.
+Keys expire and sign-ins get revoked. So a tool doesn't fail you mid-conversation, each connection can name a **sign-in check**: one of its reading tools that takes no arguments and only confirms who is signed in. JARVIS picks it while sorting the tools (it's in the summary you say yes to), and you can change it with "make *that* its sign-in check".
 
-| | Service | Token |
-|:-:|---|---|
-| 🐙 | **GitHub** | A classic token with `repo`, `notifications`, `read:org` |
-| 🦊 | **GitLab** | A personal access token with `api` |
-
-- **GitHub:** "connect GitHub" adds its own server from the registry. Add the `workflow` scope only to change `.github/workflows`; authorise the token for SSO if needed.
-- **Self-hosted GitLab:** `make servers ARGS="set gitlab --env GITLAB_API_URL=https://gitlab.example.com/api/v4"`.
-- **The shell and tasks** use the `gh` CLI (`gh auth login`) separately.
+- **Hourly.** The notices service calls each switched-on connection's check about once an hour.
+- **Said once.** A refusal is said once, as a notification, a phone push and a spoken heads-up, and again only after the check has passed in between.
+- **Silent when unreachable.** A server that doesn't start or answer at all isn't reported as a sign-in problem.
+- **By hand:** `make servers ARGS="tools acme --check whoami"`, or `--check ''` for none.
 
 ## 🔒 Secrets vault
 

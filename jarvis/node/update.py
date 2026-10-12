@@ -1,7 +1,7 @@
 """A machine keeps its JARVIS on the same commit as the main computer's, updating itself from the main computer.
 
 On connecting, the main computer says which commit it runs. A machine on another one waits until it's idle (its runs
-and jobs finished), fetches a bundle of that commit over the link (no GitHub login needed, and unpushed commits come
+and jobs finished), fetches a bundle of that commit over the link (no git host login needed, and unpushed commits come
 too), checks it out, installs its locked dependencies and restarts. If the new code fails to start STARTS_ALLOWED
 times in a row, the next start rolls back to the commit before, and the main computer is told once.
 
