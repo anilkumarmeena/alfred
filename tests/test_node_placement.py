@@ -8,7 +8,7 @@ import pytest
 from test_node_link import mine, paired  # noqa: F401  (mine is a fixture)
 
 from jarvis.brain import sdk, usage
-from jarvis.node import link, machines, placement
+from jarvis.node import machines, placement
 
 FREE = {"same_protocol": True, "free": 2, "usage": {}, "online": True}
 USED_UP = {"five_hour": {"status": "rejected", "resets_at": time.time() + 3600, "overage": "rejected"}}
@@ -25,6 +25,21 @@ class Hub:
 
     async def check_all(self, timeout: float = 5) -> dict:
         return {m.id: self.answers.get(m.id) for m in machines.paired()}
+
+
+@pytest.fixture(autouse=True)
+def no_model(monkeypatch):
+    """The real placement model never runs here: its answer would depend on the computer's Claude login. A test that
+    reaches it fakes sdk.ask_json itself; any other call fails the test."""
+    stray = []
+
+    async def unexpected(*args, **kwargs):
+        stray.append(args[0])
+        raise RuntimeError("an unfaked model call")
+
+    monkeypatch.setattr(sdk, "ask_json", unexpected)
+    yield
+    assert not stray, "a placement test reached the model without faking it"
 
 
 def choose(hub, kind=placement.TASKS, asked=""):
@@ -81,8 +96,8 @@ def test_a_failed_choice_runs_here(mine, monkeypatch):
 def test_when_this_computers_account_is_used_up_a_task_goes_to_a_machine(mine, monkeypatch):
     studio, _ = paired("Studio")
     machines.set_placement("tasks", machines.HERE)
+    machines.set_placement("commands", machines.HERE)
     monkeypatch.setattr(usage, "_read", lambda: USED_UP)
     place = choose(Hub({studio.id: FREE}))
     assert place.node == studio.id and "hit its limit" in place.said
     assert choose(Hub({studio.id: FREE}), placement.COMMANDS) == placement.HERE  # commands use no Claude account
-    assert link.PROTOCOL >= 1
