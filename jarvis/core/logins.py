@@ -114,9 +114,13 @@ def owner() -> str:
     return found["name"] if found else first_name()
 
 
+def is_owner(login: str) -> bool:
+    return bool(login) and login.lower() == owner().lower()
+
+
 def owner_only(login: str, what: str) -> None:
     """PermissionError unless `login` is the owner's: some things only the owner may do, even from the panel."""
-    if not login or login.lower() != owner().lower():
+    if not is_owner(login):
         raise PermissionError(f"Only {owner()}'s login, the owner's, can {what}.")
 
 

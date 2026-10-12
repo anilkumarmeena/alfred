@@ -90,15 +90,12 @@ def _standing(m: machines.Machine, check: dict) -> Standing:
                     usage_left(check.get("usage") or {}))
 
 
-def _load() -> float | None:
-    try:
-        return round(os.getloadavg()[0], 2)
-    except OSError:
-        return None
-
-
 def _here(running: int, slots: int) -> Standing:
-    return Standing(os.cpu_count() or 0, _load(), max(0, slots - running), usage_left())
+    try:
+        load = round(os.getloadavg()[0], 2)
+    except OSError:
+        load = None
+    return Standing(os.cpu_count() or 0, load, max(0, slots - running), usage_left())
 
 
 def _there(found: machines.Machine, said: str = "") -> Place:
@@ -157,10 +154,11 @@ async def _cover(hub, kind: str, needs: list[str], cant: str) -> Place:
 def _best(kind: str, able: dict, here: Standing | None, said: str = "") -> Place:
     """The computer with the most room for the job: an able machine, or this one (`here`, when it can take it), which
     wins a tie. `said` is what to say, with {name} for the machine's."""
-    ranked = sorted(able.values(), key=lambda mc: _standing(*mc).room(kind), reverse=True)
-    if not ranked or (here is not None and here.room(kind) >= _standing(*ranked[0]).room(kind)):
+    if not able:
         return HERE
-    m = ranked[0][0]
+    m, check = max(able.values(), key=lambda mc: _standing(*mc).room(kind))
+    if here is not None and here.room(kind) >= _standing(m, check).room(kind):
+        return HERE
     return _there(m, said.format(name=m.name))
 
 

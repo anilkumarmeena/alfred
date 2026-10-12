@@ -504,13 +504,13 @@ def shipped(folders: list[str]) -> list[Skill]:
     approved, there. Their files are checked again here; a broken one is left out."""
     found = []
     for path in map(Path, folders):
-        name, now = str(_meta(path).get("name") or ""), time.time()
-        skill = Skill(name, description_of(path), INSTALLED, "", True, scripts(path), digest(path), digest(path), None,
-                      now, now, problems(path, name or None), path)
-        if skill.usable:
-            found.append(skill)
-        else:
-            log.warning("sent skill %s left out: %s", path.name, "; ".join(skill.problems))
+        name = str(_meta(path).get("name") or "")
+        if broken := problems(path, name or None):
+            log.warning("sent skill %s left out: %s", path.name, "; ".join(broken))
+            continue
+        approved, now = digest(path), time.time()  # approved on the main computer
+        found.append(Skill(name, description_of(path), INSTALLED, "", True, scripts(path), approved, approved, None, now,
+                           now, [], path))
     return found
 
 

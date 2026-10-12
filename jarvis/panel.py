@@ -738,8 +738,8 @@ PAIRING = "pair, confirm or forget machines"
 
 async def _machines(body: dict) -> dict:
     """The machines as the page shows them, and whether this login may pair them."""
-    owner = await asyncio.to_thread(logins.owner)
-    return await client.machines() | {"owner": owner, "can_pair": str(body.get("login", "")).lower() == owner.lower()}
+    return await client.machines() | {"owner": await asyncio.to_thread(logins.owner),
+                                      "can_pair": await asyncio.to_thread(logins.is_owner, str(body.get("login", "")))}
 
 
 def _owner_only(body: dict) -> None:
