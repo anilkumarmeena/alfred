@@ -14,8 +14,10 @@ body {
   color: var(--fg); font: 16px/1.45 var(--sans); -webkit-font-smoothing: antialiased;
   -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
 }
-/* Page shell. body[data-*] attributes carry UI state (set in App.tsx). */
+/* Page shell. body[data-*] attributes carry UI state (set in App.tsx). Clipped: the core's aura reaches past the screen
+   edge, and iOS would scroll the page sideways to it (body's overflow: hidden doesn't stop the web view's own scroll). */
 #app {
+  overflow: clip;
   height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr);
   padding: max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
 }
