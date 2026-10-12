@@ -4,8 +4,10 @@ Serves web/dist and, for a valid login passcode (jarvis.core.logins), issues Liv
 registrations, accepts photos (/api/picture), phone debug logs (/api/log) and control panel actions
 (/api/panel/ACTION). /api/events streams runner events and activity as JSON lines. Exceptions to passcode auth:
 /api/approvals/ID uses the push's one-time nonce; /api/files/TOKEN is a capability link; /api/google/callback is where
-Google returns a panel sign-in, checked by its one-time state (jarvis.integrations.google_signin). Reached via
-Tailscale Serve (tailnet-only HTTPS) or http://localhost:8787. Wrong passcodes and nonces share one rate limit.
+Google returns a panel sign-in, checked by its one-time state (jarvis.integrations.google_signin); a paired machine's
+link (/api/node) is passed on to the task runner, which signs it in with its keys, and /api/node/pair takes a one-time
+pairing code. Reached via Tailscale Serve (tailnet-only HTTPS) or http://localhost:8787. Wrong passcodes, nonces and
+pairing codes share one rate limit.
 """
 
 import asyncio
@@ -21,13 +23,15 @@ from datetime import timedelta
 from functools import wraps
 from urllib.parse import quote
 
+import aiohttp
 from aiohttp import web
 from livekit import api
 
 from jarvis import panel
-from jarvis.core import credentials, logins
+from jarvis.core import credentials, logins, vault
 from jarvis.core.config import LIVEKIT_URL, PUSH_ENABLED, ROOT, WEB_PORT
 from jarvis.integrations import google_signin
+from jarvis.node import link as node_link, machines
 from jarvis.notify import apns, fcm, push
 from jarvis.state import activity, pictures, shared_files, todo
 from jarvis.tasks import client
@@ -294,6 +298,62 @@ async def events(request: web.Request, _: dict) -> web.StreamResponse:
     return resp
 
 
+async def node_pair(request: web.Request) -> web.Response:
+    """A machine pairs: {"code", "public_key", "facts"} -> this computer's public key. The code is the credential;
+    the machine connects only once the user confirms its fingerprint in the panel. Wrong codes count toward the
+    lockout."""
+    now = time.time()
+    if _locked_out(now):
+        return web.json_response({"error": "Too many wrong codes. Try again in a few minutes."}, status=429)
+    body = await _json_body(request)
+    facts = body.get("facts") if isinstance(body.get("facts"), dict) else {}
+    try:
+        found = await asyncio.to_thread(machines.redeem, str(body.get("code", ""))[:40], str(body.get("public_key", "")),
+                                        facts)
+        main_public = await asyncio.to_thread(machines.main_public)
+    except ValueError as e:
+        _failures.append(now)
+        log.warning("wrong pairing code from %s", request.remote)
+        return web.json_response({"error": str(e)}, status=403)
+    except vault.VaultError as e:
+        return web.json_response({"error": f"This computer's vault isn't ready: {e}"}, status=503)
+    await asyncio.to_thread(activity.add, f"{found.name} asks to be paired: check its fingerprint, {found.fingerprint}, "
+                                          "and confirm it in Settings › Machines.", "warn")
+    return web.json_response({"node": found.id, "name": found.name, "main_public": main_public,
+                              "fingerprint": found.fingerprint})
+
+
+async def node_relay(request: web.Request) -> web.WebSocketResponse:
+    """A machine's link, passed on to the task runner as is: the runner signs it in, so nothing here is trusted."""
+    ws = web.WebSocketResponse(heartbeat=PING_SECONDS, max_msg_size=node_link.MAX_MESSAGE)
+    await ws.prepare(request)
+    try:
+        async with client.node_link() as upstream:
+            await _pipe(ws, upstream)
+    except client.RunnerUnavailable:
+        await ws.close(code=aiohttp.WSCloseCode.TRY_AGAIN_LATER, message=b"task runner down")
+    return ws
+
+
+async def _pipe(a, b) -> None:
+    """Pass text messages both ways between two WebSockets until either closes, then close both."""
+    async def one_way(source, sink) -> None:
+        async for msg in source:
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                break
+            await sink.send_str(msg.data)
+
+    ways = [asyncio.create_task(one_way(a, b)), asyncio.create_task(one_way(b, a))]
+    try:
+        await asyncio.wait(ways, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for way in ways:
+            way.cancel()
+        for ws in (a, b):
+            with contextlib.suppress(Exception):
+                await ws.close()
+
+
 async def shared_file(request: web.Request) -> web.StreamResponse:
     """Serve a shared file by capability token (sent only in pushes). aiohttp handles the player's range requests."""
     path = shared_files.shared(request.match_info["token"])
@@ -342,6 +402,8 @@ def app() -> web.Application:
     a.router.add_post("/api/events", events)
     a.router.add_get(f"/api/files/{{token:{shared_files.TOKEN}}}", shared_file)
     a.router.add_get(google_signin.CALLBACK, google_callback)
+    a.router.add_post("/api/node/pair", node_pair)
+    a.router.add_get("/api/node", node_relay)
     if WEB_DIR.is_dir():  # aiohttp rejects a missing folder
         a.router.add_static("/static/", WEB_DIR)
     else:

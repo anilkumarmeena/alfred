@@ -283,7 +283,7 @@ def test_a_running_task_granted_more_carries_on_with_it_after_its_turn(env, monk
 def test_jarvis_passes_access_on_and_knows_when_to_grant_it(monkeypatch):
     sent = []
 
-    async def start(kind, title, instruction, project=None, access=None, order="", todo=""):
+    async def start(kind, title, instruction, project=None, access=None, order="", todo="", machine=""):
         sent.append(("start", access))
         return {"id": 1, "title": title, "kind": kind, "status": "queued", "updated": 0}
 

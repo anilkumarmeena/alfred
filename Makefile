@@ -95,7 +95,8 @@ WEB_STAMP := web/node_modules/.install-stamp
 
 .PHONY: help install uv-bin livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks speech-gate voice-timing voiceprint test host-check artifact-check \
         services-install services-start services-stop services-restart status logs awake sleep-normal \
-        claude-login claude-status accounts about servers passcode vault chat-check tailscale-serve check clean
+        claude-login claude-status accounts about servers passcode vault chat-check tailscale-serve check clean \
+        node-setup node-login node-pair node-install node-stop node-check node-status
 
 help: ## Show this list
 	@grep -hE '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -306,6 +307,31 @@ voice-timing: ## Voice turn latency by stage (HOURS=24)
 
 voiceprint: ## Voiceprint (ARGS=enroll|test|remove|log)
 	@$(UV) python -m jarvis.voice.speaker $(or $(ARGS),status)
+
+## ── A second machine that takes JARVIS's heavy work (jarvis.node) ──
+
+node-setup: ## On a second machine: Python dependencies only (no voice models or web app)
+	uv sync
+	@echo "Next: make node-login, then pair from Settings › Machines on the main computer"
+
+node-login: ## On a second machine: log in its own Claude account
+	CLAUDE_CONFIG_DIR=$(CLAUDE_DIR) claude auth login
+
+node-pair: ## On a second machine: pair with the main computer (CODE=from Settings › Machines MAIN=https://host)
+	@[ -n "$(CODE)" ] && [ -n "$(MAIN)" ] || { echo "make node-pair CODE=... MAIN=https://<main computer>"; exit 2; }
+	$(UV) python -m jarvis.node pair "$(CODE)" "$(MAIN)"
+
+node-install: ## On a second machine: install and start its service
+	$(UV) python -m jarvis.setup_local node-install
+
+node-stop: ## On a second machine: stop its service (stays installed)
+	@$(UV) python -m jarvis.setup_local node-stop; true
+
+node-check: ## On a second machine: walls, pairing, link to the main computer, tools
+	$(UV) python -m jarvis.node check
+
+node-status: ## On a second machine: its pairing and both fingerprints
+	@$(UV) python -m jarvis.node status
 
 ## ── Web app (web/: Vite, TypeScript, Preact) ───────────────────
 

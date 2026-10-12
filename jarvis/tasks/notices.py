@@ -191,12 +191,19 @@ def _plural(n: int, word: str) -> str:
     return f"{n} {word}" if n == 1 else f"{n} {word}s"
 
 
-def task_notices(store, stalls: Callable[[float], list[dict]] | None = None, minutes: int = MINUTES) -> Check:
-    """Tasks the runner didn't announce: questions unanswered for `minutes`, runs cut off by a restart, and stalls
-    (`stalls`, Runner.stalls; ongoing, so given again only after recovering)."""
+def task_notices(store, stalls: Callable[[float], list[dict]] | None = None, minutes: int = MINUTES,
+                 lost: Callable[[float], list[dict]] | None = None) -> Check:
+    """Tasks the runner didn't announce: questions unanswered for `minutes`, runs cut off by a restart, stalls
+    (`stalls`, Runner.stalls) and machines unreachable with work on them (`lost`, Offload.lost); both ongoing, so
+    given again only after recovering."""
 
     async def check(now: datetime) -> list[Notice]:
         out = []
+        for m in lost(now.timestamp()) if lost else []:
+            out.append(Notice(f"machine:{m['node']}:lost:{int(m['since'])}", "tasks",
+                              f"{m['name']} has been unreachable for {_plural(m['minutes'], 'minute')}, with task "
+                              f"{', '.join(map(str, m['tasks']))} on it. It carries on there and reports back once "
+                              "it's online.", task_id=m["tasks"][0], ongoing=True))
         for t in stalls(now.timestamp()) if stalls else []:
             name, quiet = f"Task {t['id']}, {t['title']},", _plural(t["stalled"]["minutes"], "minute")
             out.append(Notice(f"task:{t['id']}:stalled", "tasks",
@@ -230,9 +237,10 @@ def _carry_over(path: Path) -> None:
 
 
 def make(store, notify: Notify, announce: Callable[[dict], None] | None = None, push: Push | None = None,
-         stalls: Callable[[float], list[dict]] | None = None, **settings) -> Notices:
-    """The runner's Notices. `stalls` is Runner.stalls; `settings` override Notices kwargs."""
+         stalls: Callable[[float], list[dict]] | None = None, lost: Callable[[float], list[dict]] | None = None,
+         **settings) -> Notices:
+    """The runner's Notices. `stalls` is Runner.stalls, `lost` Offload.lost; `settings` override Notices kwargs."""
     if "state_file" not in settings:
         _carry_over(profile.current().notices_file)
-    checks = {"tasks": task_notices(store, stalls), "usage": usage_notices}
+    checks = {"tasks": task_notices(store, stalls, lost=lost), "usage": usage_notices}
     return Notices(checks, notify, announce, push=push, **settings)

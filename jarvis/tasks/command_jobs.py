@@ -59,7 +59,8 @@ def project_of(folder: Path, named=None) -> str | None:
     path = folder.resolve()
     if any(path.is_relative_to(p.resolve()) for p in (DATA_DIR, SECRETS_DIR)):
         return None
-    holding = [p for p in ([named] if named else []) + projects.load() if path.is_relative_to(p.path.resolve())]
+    holding = [p for p in ([named] if named else []) + projects.load()
+               if not p.node and path.is_relative_to(p.path.resolve())]  # one on another machine has its folder there
     found = max(holding, key=lambda p: len(p.path.resolve().parts), default=None)  # max keeps the first on ties
     return found.name if found else None
 
@@ -75,12 +76,16 @@ class Runs(host.Jobs):
         return self.launch(command, title, folder, job_id=task_id)
 
     def how(self, record: dict) -> tuple[str, int | None] | None:
-        """(DONE|FAILED, exit code), (STOPPED, None), (LOST, None) if it died without an exit file; None while running."""
+        """(DONE|FAILED, exit code), (STOPPED, None), (LOST, None) if it died without an exit file; None while running.
+
+        One running on another machine (`node`) is mirrored here: its end is written here once its files are back."""
         if self._stopped(record):
             return STOPPED, None
         try:
             code = int((self.folder / f"{record['id']}.exit").read_text().strip())
         except (OSError, ValueError):
+            if record.get("node"):
+                return (LOST, None) if (self.folder / f"{record['id']}.lost").exists() else None
             return None if host.alive(record["pid"]) else (LOST, None)
         return (DONE if code == 0 else FAILED), code
 

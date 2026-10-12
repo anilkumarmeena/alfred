@@ -230,7 +230,16 @@ ANNOUNCE_ENABLED = _flag("JARVIS_ANNOUNCE", True)
 ANNOUNCE_MODEL = os.environ.get("JARVIS_ANNOUNCE_MODEL", "") or FAST_MODEL
 ANNOUNCE_SECONDS = _number(os.environ.get("JARVIS_ANNOUNCE_SECONDS", ""), 30.0, 5.0, 120.0)
 
-# Notices (jarvis.tasks.notices): JARVIS's own news, said unasked: tasks stuck or waiting, usage limits
+# Other machines (jarvis.node). Where jobs run is a per-user setting (Settings › Machines); when it lets JARVIS choose,
+# PLACEMENT_MODEL picks among the machines online. A machine unreachable for NODE_LOST_MINUTES while it has work is
+# reported once; a task whose session lives on a machine waits NODE_WAIT_MINUTES for it to come back. Copies of a
+# project sent to a machine stop at NODE_SYNC_MAX_GB.
+PLACEMENT_MODEL = os.environ.get("JARVIS_PLACEMENT_MODEL", "") or FAST_MODEL
+NODE_LOST_MINUTES = _number(os.environ.get("JARVIS_NODE_LOST_MINUTES", ""), 30, 1, 24 * 60)
+NODE_WAIT_MINUTES = _number(os.environ.get("JARVIS_NODE_WAIT_MINUTES", ""), 30, 0, 24 * 60)
+NODE_SYNC_MAX_GB = _number(os.environ.get("JARVIS_NODE_SYNC_MAX_GB", ""), 20, 0.1, 10000)
+
+# Notices (jarvis.tasks.notices): JARVIS's own news, said unasked: tasks stuck or waiting, usage limits, machines lost
 NOTICES_ENABLED = _flag("JARVIS_NOTICES", True)
 # Local hours with no watch checks or notices (jarvis.tasks.hold); empty = never quiet
 QUIET_HOURS = os.environ.get("JARVIS_QUIET_HOURS", "23:00-08:00")

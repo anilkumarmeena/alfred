@@ -305,12 +305,16 @@ class Scheduler:
         if stamp - self.pruned > PRUNE_SECONDS:
             self.pruned = stamp
             await self.prune()
+        if offload := getattr(self.runner, "offload", None):  # a machine runs its projects' commands itself
+            await offload.sync_schedules()
         if hold.held(stamp):  # do not disturb: everything waits
             return []
         for job in schedules.lapsed(stamp):
             await self._lapse(job)
         ran = []
         for job in schedules.due(stamp):
+            if offload and offload.owner(job):
+                continue
             try:
                 if await self._run(job, now):
                     ran.append(job["id"])

@@ -297,17 +297,21 @@ class Jobs:
     """
 
     async def start(self, command: str, title: str, folder: str = "", timeout_minutes: int = 0,
-                    fix: bool = True) -> str:
+                    fix: bool = True, machine: str = "") -> str:
+        """Start a long job. It may run on one of the user's machines (their setting, or `machine` where they said);
+        a risky one reached here only with their yes (the gate), which that machine is told."""
         path = Path(folder).expanduser() if folder.strip() else scratch_dir()
         try:
             task = await client.start_command(command, title, str(path if path.is_absolute() else scratch_dir() / path),
-                                              timeout_minutes or None, auto_fix=fix)
+                                              timeout_minutes or None, auto_fix=fix, placeable=True, machine=machine,
+                                              approved="voice" if risky(command) else "")
         except client.RunnerUnavailable:
             return "Not started: JARVIS's task runner isn't running, so no job can start right now."
         except ValueError as e:
             return f"Not started: {e}"
-        return (f"Started job {task['id']}, {task['title']}: task {task['id']} in the task list. It runs on its own, "
-                "whatever happens in the conversation, and JARVIS says when it finishes"
+        where = f" {task['where']}" if task.get("where") else ""
+        return (f"Started job {task['id']}, {task['title']}: task {task['id']} in the task list.{where} It runs on its "
+                "own, whatever happens in the conversation, and JARVIS says when it finishes"
                 + (", or if it fails, why, and what it does about it." if fix else "."))
 
     async def status(self) -> list[dict]:
@@ -397,11 +401,14 @@ def job_server(jobs: Jobs):
                                                                  "a limit."},
             "fix": {"type": "boolean", "description": "false when the user doesn't want JARVIS fixing it if it fails "
                                                      "(default true)."},
+            "machine": {"type": "string", "description": "Only when the user says where this one should run: \"here\" "
+                                                         "for this computer, or the name of one of their machines. "
+                                                         "Leave it out to follow their setting (Settings › Machines)."},
         }, "required": ["command", "title"]},
     )
     async def start_job(args: dict) -> dict:
         text = await jobs.start(args["command"], args["title"], args.get("folder", ""), args.get("timeout_minutes") or 0,
-                                args.get("fix", True))
+                                args.get("fix", True), str(args.get("machine") or ""))
         return {"content": [{"type": "text", "text": text}]}
 
     @sdk_tool("job_status", "How the jobs are going: the ones running (the scheduled commands' runs among them, each with "

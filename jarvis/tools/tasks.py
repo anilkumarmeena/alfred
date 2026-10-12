@@ -5,6 +5,7 @@ import time
 from jarvis.core import profile
 from jarvis.core.config import NEW_PROJECTS_DIR
 from jarvis.core.database import COMMAND, KINDS, edits, minutes_since_update, nudges
+from jarvis.node import machines
 from jarvis.safety import approvals, consent, remembered
 from jarvis.safety.commands import ordered, orders, said_scope, tells_approve, tells_deny
 from jarvis.state import conversation, todo
@@ -23,12 +24,18 @@ _ACCESS = {"type": "array", "items": {"type": "string", "enum": list(access.GRAN
 _NOW = ("The result's now says how the task stands: started, queued (not started yet, and what it waits on), or "
         "already running and getting the message after its current step. Say just that, in a few words (\"It's "
         "started.\", \"It's queued and will start shortly.\"), never that it started when it's queued, and what it "
-        "waits on only when asked.")
+        "waits on only when asked. When the result has where, say that too: it names the machine the task runs on, or "
+        "why it runs on this computer instead.")
+_MACHINE = {"type": "string", "description": "Only when the user says where this one should run: \"here\" for this "
+                                             "computer, or the name of one of their machines (see machines). Leave it "
+                                             "out to follow their setting."}
 
 
 def _brief(t: dict, requests: list[dict] = ()) -> dict:
     out = {"id": t["id"], "title": t["title"], "kind": t["kind"], "status": t["status"],
            "minutes_since_update": minutes_since_update(t)}
+    if t.get("machine"):
+        out["runs_on"] = t["machine"]
     for key in ("project", "activity", "question", "spoken", "changes", "branch", "error"):
         if t.get(key):
             out[key] = t[key]
@@ -66,8 +73,10 @@ def _brief(t: dict, requests: list[dict] = ()) -> dict:
 
 
 def _launched(t: dict) -> dict:
-    """`_brief` plus `now`: started, queued (and on what), or running with a pending nudge."""
+    """`_brief` plus `now`: started, queued (and on what), or running with a pending nudge; and `where` it runs."""
     out = _brief(t)
+    if t.get("where"):
+        out["where"] = t["where"]
     if t["status"] == "running":  # undelivered message = nudge, delivered after the current step
         out["now"] = "running: it gets the message after its current step" if nudges(t) else "started: it's running"
     elif t["status"] == "queued":
@@ -138,12 +147,13 @@ async def _mark_seen(tasks: list[dict]) -> None:
                                                   "item off, or suggests rewording it to what's left, and its "
                                                   "announcement says so. Leave it out otherwise: a task without one "
                                                   "is still checked against the open items as it ends."},
+        "machine": _MACHINE,
     },
     ["kind", "title", "instruction"],
 )
 async def task_start(kind: str, title: str, instruction: str, project: str = "", access: list[str] | None = None,
-                     todo: str = "") -> dict:
-    return _launched(await client.start(kind, title, instruction, project or None, access, _order(), todo))
+                     todo: str = "", machine: str = "") -> dict:
+    return _launched(await client.start(kind, title, instruction, project or None, access, _order(), todo, machine))
 
 
 @tool("task_list", "Background tasks: every active one, plus any that changed in the last day, newest first. Kind "
@@ -384,9 +394,11 @@ async def task_edits(id: int, action: str, edits: list[int]) -> dict:
 @tool("projects_list", "The user's projects that code tasks can work on, with their folders, aliases and what each one "
       "is. in_place true (the default) means code changes happen directly in the project's folder, uncommitted, "
       "one task at a time; in_place false means each task gets its own git branch in a separate worktree. "
-      "JARVIS's own project is always in_place false.", reads=True)
+      "JARVIS's own project is always in_place false. lives_on names the other machine a project lives on: its "
+      "folder is there, and its tasks and jobs run there.", reads=True)
 def projects_list() -> list[dict]:
-    return [{"name": p.name, "path": projects.shown(p.path), "aliases": p.aliases, "about": p.about, "in_place": p.in_place}
+    return [{"name": p.name, "path": str(p.path) if p.node else projects.shown(p.path), "aliases": p.aliases,
+             "about": p.about, "in_place": p.in_place} | ({"lives_on": machines.where(str(p.node))} if p.node else {})
             for p in projects.load()]
 
 
@@ -403,14 +415,17 @@ def projects_list() -> list[dict]:
         "aliases": {"type": "array", "items": {"type": "string"}, "description": "Other names speech recognition might hear."},
         "about": {"type": "string", "description": "What it is, and whether it's work or personal."},
         "in_place": {"type": "boolean", "description": "Code tasks edit its folder directly, uncommitted (default true; leave it out unless the user asks for branches)."},
+        "machine": {"type": "string", "description": "Only for a project that lives on one of the user's other "
+                                                     "machines (see machines): that machine's name; path is then a "
+                                                     "folder on it. Its tasks and jobs always run there."},
     },
     ["name"],
     said="Added the project {name}",
 )
 async def project_register(name: str, path: str = "", aliases: list[str] | None = None, about: str = "",
-                           in_place: bool = projects.IN_PLACE_DEFAULT) -> dict:
+                           in_place: bool = projects.IN_PLACE_DEFAULT, machine: str = "") -> dict:
     vetted("\n".join([name, about, *(aliases or [])]), "the project's entry")  # register strips invisible chars itself
-    return await client.register_project(name, path or None, aliases or [], about, in_place)
+    return await client.register_project(name, path or None, aliases or [], about, in_place, machine)
 
 
 @tool(

@@ -22,6 +22,13 @@ class RunnerBase:
     commands: command_jobs.Runs
     ending: dict[int, asyncio.Task]
     closing: bool
+    placing: dict[int, asyncio.Task]
+    if TYPE_CHECKING:
+        from jarvis.node.hub import Hub
+        from jarvis.node.offload import Offload
+        from jarvis.node.placement import Place
+        offload: Offload
+        hub: Hub
 
     if TYPE_CHECKING:
         # jarvis.tasks.runner
@@ -29,6 +36,7 @@ class RunnerBase:
                   hidden: bool = False, grants: list[str] | None = None, order: str | None = None,
                   fixes: int | None = None, todo: str | None = None) -> dict: ...
         def _launch(self, task_id: int, prompt: str) -> dict: ...
+        def _placed(self, task_id: int, place: "Place") -> None: ...
         # jarvis.tasks.approvals
         def _close_approvals(self, task_id: int, why: str = "stopped") -> None: ...
         # jarvis.tasks.events

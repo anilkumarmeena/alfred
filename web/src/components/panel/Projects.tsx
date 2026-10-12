@@ -8,6 +8,7 @@ import { Empty, Led } from "./bits";
 const set = (r: Project[] | null) => { if (r) projects.value = r; return !!r; };
 
 function state(p: Project): [string, "ok" | "warn" | "bad"] {
+  if (p.machine) return [`lives on ${p.machine}`, "ok"];
   if (!p.exists) return ["folder missing", "bad"];
   if (p.git === "none") return ["not a git repo", "bad"];
   if (p.git === "no commits") return ["no commits yet", "warn"];
@@ -51,7 +52,7 @@ function Card({ p }: { p: Project }) {
         <div class="grow">
           <div class="pname">{p.name}</div>
           {p.about && <div class="sub">{p.about}</div>}
-          <div class="pmeta" title={p.path}>{p.in_place ? <ProjectsIcon /> : <BranchIcon />}{p.in_place ? "In place" : "Worktree"} · {short(p.path)}</div>
+          <div class="pmeta" title={p.path}>{p.in_place ? <ProjectsIcon /> : <BranchIcon />}{p.in_place ? "In place" : "Worktree"} · {short(p.path)}{p.machine ? ` on ${p.machine}` : ""}</div>
           {led !== "ok" && <div class={`pstate ${led}`}>{said}</div>}
         </div>
         <ChevronIcon />
@@ -67,8 +68,9 @@ function Card({ p }: { p: Project }) {
         <label class="lbl">About</label>
         <input class="field" value={about.value} onInput={(e) => { about.value = e.currentTarget.value; }} />
         <label class="lbl">Mode</label>
-        <Mode inPlace={inPlace.value} fixed={p.jarvis || p.git !== "repo"} set={(v) => { inPlace.value = v; }} />
+        <Mode inPlace={inPlace.value} fixed={p.jarvis || (!p.machine && p.git !== "repo")} set={(v) => { inPlace.value = v; }} />
         <p class="hint">{p.jarvis ? "JARVIS always uses a worktree for itself."
+          : p.machine ? `Its folder is on ${p.machine}, and its tasks and jobs run there.`
           : p.git !== "repo" ? "Worktrees need git history, so tasks here work in place."
           : "In place: tasks edit the folder and leave changes uncommitted. Worktree: each gets its own branch to merge."}</p>
         <div class="acts">

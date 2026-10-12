@@ -1,9 +1,10 @@
 """Control panel actions: POST /api/panel/ACTION (jarvis.server checks the passcode first).
 
-Each action takes the JSON body and returns what the page shows. Tasks and approvals go through the task runner
-(tasks.client); everything else (schedules, to-dos, projects, memory, vocabulary, skills, accounts, devices,
-voiceprints, history) is changed directly. Keys for connections and JARVIS itself are entered only here,
-write-only, so they're never spoken or typed to the brain.
+Each action takes the JSON body and returns what the page shows. Tasks, approvals and the machines' live state go
+through the task runner (tasks.client); everything else (schedules, to-dos, projects, memory, vocabulary, skills,
+accounts, devices, voiceprints, history, pairing codes) is changed directly. Machines are paired only here, never by
+voice: a code made here, run on the machine, and its fingerprint confirmed here. Keys for connections and JARVIS
+itself are entered only here, write-only, so they're never spoken or typed to the brain.
 
 Deliberately not possible here, since anyone with a login can reach the page: showing secrets, adding MCP servers or
 changing their command or tool access, changing a project's folder. Those need voice with a yes, or the computer's
@@ -27,6 +28,7 @@ from jarvis.brain import usage
 from jarvis.core import config, credentials, logins, vault
 from jarvis.core.database import COMMAND, WAIT_APPROVAL, edits
 from jarvis.integrations import accounts, google_signin, mcp_servers
+from jarvis.node import keys, machines
 from jarvis.notify import apns, fcm, push
 from jarvis.safety import remembered
 from jarvis.skills import home as skills, review
@@ -341,6 +343,9 @@ async def _changed(folder: Path) -> int | None:
 
 
 async def _project(p: projects.Project) -> dict:
+    if p.node:  # its folder is on that machine
+        return {"name": p.name, "path": str(p.path), "aliases": p.aliases, "about": p.about, "in_place": p.in_place,
+                "jarvis": False, "exists": True, "git": None, "changed": None, "machine": machines.where(str(p.node))}
     state = await asyncio.to_thread(projects.git_state, p.path)
     return {"name": p.name, "path": projects.shown(p.path), "aliases": p.aliases, "about": p.about,
             "in_place": p.in_place, "jarvis": projects.is_jarvis(p.path), "exists": p.path.is_dir(), "git": state,
@@ -722,6 +727,53 @@ async def device_remove(body: dict) -> list[dict]:
     for store in (apns.Devices(), fcm.Devices()):
         store.remove({d["token"] for d in store.all() if _device_id(d["token"]) == gone})
     return _devices(str(body.get("endpoint", "")))
+
+
+# ── Machines (jarvis.node): pairing, confirming, where jobs run ─
+# Pairing itself is finished on the machine (make node-pair), with a code made here
+
+
+@action
+async def machines_(_: dict) -> dict:
+    """Paired machines, each checked online just now, and where each kind of job runs."""
+    return await client.machines()
+
+
+@action
+async def machine_code(_: dict) -> dict:
+    """A one-time pairing code, with this computer's fingerprint for the machine's screen to match."""
+    made = await asyncio.to_thread(machines.new_code)
+    return made | {"main_fingerprint": keys.fingerprint(await asyncio.to_thread(machines.main_public))}
+
+
+@action
+async def machine_confirm(body: dict) -> dict:
+    """The user checked a pending machine's fingerprint: it may connect."""
+    found = await asyncio.to_thread(machines.confirm, _id(body))
+    await asyncio.to_thread(activity.add, f"Paired {found.name} in the control panel.", "ok")
+    return await client.machines()
+
+
+@action
+async def machine_save(body: dict) -> dict:
+    """Rename a machine: {"id", "name", "aliases"}."""
+    await asyncio.to_thread(machines.rename, _id(body), _text(body, "name", machines.NAME_MOST), _aliases(body))
+    return await client.machines()
+
+
+@action
+async def machine_remove(body: dict) -> dict:
+    """Forget a machine (the page confirms first); it must pair again to come back."""
+    gone = await client.machine_remove(_id(body))
+    await asyncio.to_thread(activity.add, f"Removed {gone['removed']} in the control panel.", "warn")
+    return await client.machines()
+
+
+@action
+async def placement_save(body: dict) -> dict:
+    """Where a kind of job runs: {"kind": "commands" | "tasks", "value": "here" | "auto" | machine id}."""
+    await asyncio.to_thread(machines.set_placement, _text(body, "kind", 20), _text(body, "value", 20))
+    return await client.machines()
 
 
 # ── Bell ───────────────────────────────────────────────────────

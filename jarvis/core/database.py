@@ -63,6 +63,9 @@ create table tasks (
     todo integer,               -- to-do item it serves, settled on finish
     interrupted text            -- JSON {at, on_mac, prompt}: cut off by shutdown, to resume
 )"""
+_TASKS_MIGRATIONS = (
+    "alter table tasks add column node integer",  # 2: the machine it runs on (jarvis.node); null = this computer
+)
 _LOG = """
 create table log (
     task integer not null,
@@ -203,7 +206,7 @@ class Store:
     def __init__(self) -> None:
         self._file = profile.current().db  # pinned so write_steps on another thread uses it
         self._db = connect(self._file)
-        migrate(self._db, "tasks", [_TASKS])
+        migrate(self._db, "tasks", [_TASKS], migrations=_TASKS_MIGRATIONS)
         migrate(self._db, "log", [_LOG], migrations=_LOG_MIGRATIONS)
         migrate(self._db, "approvals", [_APPROVALS])
         # Buffered tool calls (task, at, activity, logged) for write_steps(). Deque: filled on the event loop, drained

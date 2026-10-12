@@ -2,10 +2,12 @@
 
 import json
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import aiohttp
 
 from jarvis.core.config import RUNNER_SOCKET
+from jarvis.node.link import MAX_MESSAGE
 from jarvis.tasks import merge_check
 
 
@@ -39,23 +41,29 @@ async def call(method: str, path: str, body: dict | None = None, timeout: float 
 
 
 async def start(kind: str, title: str, instruction: str, project: str | None = None,
-                access: list[str] | None = None, order: str = "", todo: str = "") -> dict:
+                access: list[str] | None = None, order: str = "", todo: str = "", machine: str = "") -> dict:
     """Start a task with extra `access`.
 
-    `order`: the user's words authorising risky actions without asking ("and push it"). `todo`: linked to-do id."""
+    `order`: the user's words authorising risky actions without asking ("and push it"). `todo`: linked to-do id.
+    `machine`: where the user said it runs ("here" or a machine's name). The reply's `where` says where it runs, when
+    that's worth saying."""
     return await call("POST", "/tasks", {"kind": kind, "title": title, "instruction": instruction, "project": project,
                                          "access": access or []} | ({"order": order} if order else {})
-                      | ({"todo": todo} if todo else {}))
+                      | ({"todo": todo} if todo else {}) | ({"machine": machine} if machine else {}), timeout=60)
 
 
 async def start_command(command: str, title: str, folder: str, timeout_minutes: int | None = None,
-                        summarize: bool = True, auto_fix: bool = True, report: bool = False) -> dict:
+                        summarize: bool = True, auto_fix: bool = True, report: bool = False, placeable: bool = False,
+                        machine: str = "", approved: str = "") -> dict:
     """Start a command task: run `command` in absolute `folder` with no model while it runs.
 
-    On success: summarised (`summarize`) or its last line said (`report`). On failure: diagnosed, fixed if `auto_fix`."""
+    On success: summarised (`summarize`) or its last line said (`report`). On failure: diagnosed, fixed if `auto_fix`.
+    `placeable`: it may run on another machine (`machine` where the user said); `approved`: how a risky one got the
+    user's yes."""
     return await call("POST", "/commands", {"command": command, "title": title, "folder": folder,
                                             "timeout_minutes": timeout_minutes, "summarize": summarize,
-                                            "auto_fix": auto_fix, "report": report})
+                                            "auto_fix": auto_fix, "report": report, "placeable": placeable,
+                                            "machine": machine, "approved": approved}, timeout=60)
 
 
 async def start_connection(title: str, instruction: str, pid: int) -> dict:
@@ -157,9 +165,12 @@ async def mark_seen(ids: list[int]) -> None:
     await call("POST", "/tasks/seen", {"ids": ids})
 
 
-async def register_project(name: str, path: str | None, aliases: list[str], about: str, in_place: bool) -> dict:
+async def register_project(name: str, path: str | None, aliases: list[str], about: str, in_place: bool,
+                           machine: str = "") -> dict:
+    """Add a project; with `machine`, one that lives on that machine (its folder checked there)."""
     return await call("POST", "/projects", {"name": name, "path": path, "aliases": aliases, "about": about,
-                                            "in_place": in_place})
+                                            "in_place": in_place} | ({"machine": machine} if machine else {}),
+                      timeout=60)
 
 
 async def git_init(name: str) -> dict:
@@ -169,6 +180,26 @@ async def git_init(name: str) -> dict:
 async def session_ended() -> None:
     """Signal a voice session ended so the learning review picks it up."""
     await call("POST", "/learn", timeout=5)
+
+
+async def machines() -> dict:
+    """Paired machines, each with a live online check, plus where each kind of job runs."""
+    return await call("GET", "/machines", timeout=20)
+
+
+async def machine_remove(node: int) -> dict:
+    """Forget a machine, dropping its link."""
+    return await call("POST", f"/machines/{int(node)}/remove")
+
+
+@asynccontextmanager
+async def node_link() -> AsyncIterator[aiohttp.ClientWebSocketResponse]:
+    """A WebSocket to the runner's machine link, for the web server to pass a machine's connection on to."""
+    try:
+        async with _session(None) as s, s.ws_connect("http://runner/node", max_msg_size=MAX_MESSAGE) as ws:
+            yield ws
+    except aiohttp.ClientConnectionError as e:
+        raise RunnerUnavailable(DOWN) from e
 
 
 async def events() -> AsyncIterator[dict]:
