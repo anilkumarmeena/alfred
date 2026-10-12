@@ -216,9 +216,9 @@ def _options(task: dict, reporter: Reporter) -> ClaudeAgentOptions:
             reporter.flag(task["id"], f"Left out of {task['project']}'s setup, as they look like hidden instructions: "
                                       f"{'; '.join(setup.flagged)}")
         flags["disableAllHooks"] = True  # project hooks off; SDK callback hooks still run
-    # JARVIS's enabled skills, as a per-run plugin
+    # JARVIS's enabled skills, as a per-run plugin; on a machine, the ones the main computer sent ("skills")
     mine_at = DATA_DIR / "tasks" / str(task["id"]) / "jarvis-skills"
-    mine = skills.plugin(mine_at)
+    mine = skills.plugin(mine_at, skills.shipped(task["skills"]) if "skills" in task else None)
     if mine:
         flags |= skills.FLAGS  # no hooks or !`commands` from them
     skill_names = (setup.skills if setup else []) + [skills.qualified(s) for s in mine]

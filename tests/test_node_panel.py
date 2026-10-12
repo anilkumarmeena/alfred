@@ -7,6 +7,7 @@ import pytest
 from test_node_link import connect, mine, paired, until  # noqa: F401  (mine is a fixture)
 
 from jarvis import panel, server
+from jarvis.core import logins
 from jarvis.node import hub as hubs, keys, machines
 from jarvis.state import activity
 from jarvis.tasks import client
@@ -41,9 +42,14 @@ def call(name: str, body: dict | None = None):
     return asyncio.run(panel.call(name, body or {}))
 
 
+def owner() -> dict:
+    """A panel call's body from the owner's login, as the web server sets it."""
+    return {"login": logins.owner()}
+
+
 def test_a_machine_pairs_over_http_with_a_code_and_gets_this_computers_key(mine, monkeypatch):
     monkeypatch.setattr(server, "_failures", [])
-    code = call("machine_code")
+    code = call("machine_code", owner())
     key = keys.public(keys.new())
     status, got = pair({"code": code["code"], "public_key": key, "facts": {"name": "Studio", "cores": 12}})
     assert status == 200 and got["main_public"] == machines.main_public() and got["name"] == "Studio"
@@ -59,7 +65,7 @@ def test_too_many_wrong_codes_lock_pairing_out(mine, monkeypatch):
     monkeypatch.setattr(server, "_failures", [])
     for _ in range(server.MAX_FAILURES):
         pair({"code": "ABCD-EFGH", "public_key": keys.public(keys.new())})
-    status, got = pair({"code": call("machine_code")["code"], "public_key": keys.public(keys.new())})
+    status, got = pair({"code": call("machine_code", owner())["code"], "public_key": keys.public(keys.new())})
     assert status == 429 and machines.load() == []
 
 
@@ -74,7 +80,7 @@ def test_confirming_renaming_and_placing_from_the_panel(runner_hub):
     shown = call("machines")
     assert shown["machines"][0]["status"] == machines.PENDING and shown["machines"][0]["online"] is False
     assert shown["fingerprint"] == keys.fingerprint(machines.main_public())
-    shown = call("machine_confirm", {"id": found.id})
+    shown = call("machine_confirm", owner() | {"id": found.id})
     assert shown["machines"][0]["status"] == machines.PAIRED
     assert shown["placement"] == {"commands": machines.AUTO, "tasks": machines.AUTO}
     shown = call("machine_save", {"id": found.id, "name": "Render box", "aliases": "the studio, studio mac"})
@@ -85,6 +91,23 @@ def test_confirming_renaming_and_placing_from_the_panel(runner_hub):
         call("placement_save", {"kind": "research", "value": machines.AUTO})
 
 
+def test_only_the_owners_login_pairs_confirms_or_forgets_a_machine(runner_hub, tmp_path, monkeypatch):
+    monkeypatch.setattr(logins, "FILE", tmp_path / "logins.json")
+    logins.add("Alex", "alex-secret")  # the first login: the owner's
+    logins.add("Sam", "sam-secret")
+    found = machines.redeem(machines.new_code()["code"], keys.public(keys.new()), {"name": "Studio"})
+    for name, body in (("machine_code", {}), ("machine_confirm", {"id": found.id}), ("machine_remove", {"id": found.id})):
+        with pytest.raises(PermissionError, match="Only Alex's login"):
+            call(name, {"login": "Sam"} | body)
+    assert machines.need(found.id).status == machines.PENDING
+    shown = call("machines", {"login": "Sam"})
+    assert shown["can_pair"] is False and shown["owner"] == "Alex"
+    shown = call("machine_confirm", {"login": "Alex", "id": found.id})
+    assert shown["can_pair"] is True and shown["machines"][0]["status"] == machines.PAIRED
+    assert call("placement_save", {"login": "Sam", "kind": "tasks", "value": machines.HERE})["placement"]["tasks"] == \
+        machines.HERE  # where jobs run is anyone's to say
+
+
 def test_removing_from_the_panel_drops_the_live_link(runner_hub):
     async def main():
         found, key = paired()
@@ -93,7 +116,7 @@ def test_removing_from_the_panel_drops_the_live_link(runner_hub):
         await until(lambda: runner_hub.connected(found.id) is not None)
         shown = await panel.call("machines", {})
         assert shown["machines"][0]["online"] is True
-        shown = await panel.call("machine_remove", {"id": found.id})
+        shown = await panel.call("machine_remove", owner() | {"id": found.id})
         assert shown["machines"] == [] and runner_hub.connected(found.id) is None
         machine.stop()
         await running

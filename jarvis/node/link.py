@@ -25,7 +25,8 @@ from jarvis.node import keys
 
 log = logging.getLogger("jarvis.node.link")
 
-PROTOCOL = 1  # bumped when messages change incompatibly; a machine on another one takes no new work
+PROTOCOL = 2  # bumped when messages change incompatibly; a machine on another one takes no new work (2: skills,
+#               scheduled Claude tasks)
 CONTEXT = "jarvis-link/1"
 HANDSHAKE_SECONDS = 10.0
 MAX_MESSAGE = 8 * 1024 * 1024  # bytes per message; files go in chunks well under it

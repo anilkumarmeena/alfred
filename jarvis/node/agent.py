@@ -163,17 +163,20 @@ class Agent:
 
     # ── The online check ────────────────────────────────────────
 
-    async def ping(self, _: dict) -> dict:
-        """How this machine stands: free slots, load, its commit and protocol, its own Claude account's usage."""
+    async def ping(self, body: dict) -> dict:
+        """How this machine stands: free slots, load, its commit and protocol, its own Claude account's usage, and
+        which of the programs asked about ("programs") it has."""
         running = self.busy()
         try:
             load = round(os.getloadavg()[0], 2)
         except OSError:
             load = None
+        asked = [str(p) for p in body.get("programs") or []]
         return {"free": max(0, MAX_TASKS - running), "max_tasks": MAX_TASKS, "running": running, "load": load,
                 "cores": os.cpu_count() or 0, "version": self.commit, "protocol": link.PROTOCOL,
                 "usage": await asyncio.to_thread(usage.windows), "hold_until": await asyncio.to_thread(usage.hold_until),
-                "updating": self.updater.pending, "update_problem": self.updater.problem}
+                "updating": self.updater.pending, "update_problem": self.updater.problem} | (
+                    {"has": await home.have(asked)} if asked else {})
 
 
 async def websocket_dial(main: str) -> Channel:

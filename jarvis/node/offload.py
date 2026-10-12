@@ -29,14 +29,15 @@ from typing import TYPE_CHECKING
 
 from jarvis.core import profile
 from jarvis.core.config import DATA_DIR, NODE_LOST_MINUTES, NODE_SYNC_MAX_GB, NODE_WAIT_MINUTES
-from jarvis.core.database import COMMAND
+from jarvis.core.database import ACTIVE, COMMAND
 from jarvis.core.files import write_atomic
 from jarvis.node import bundles, machines, placement, sync, transfer
 from jarvis.node.hub import Hub
 from jarvis.node.link import Link, LinkDown, Refused
 from jarvis.safety import commands, remembered
+from jarvis.skills import home as skills
 from jarvis.state import activity as bell
-from jarvis.tasks import command_jobs, hold, projects, schedules
+from jarvis.tasks import command_jobs, hold, projects, scheduler, schedules
 from jarvis.tasks.host_tools import HOST_COMMANDS
 from jarvis.tasks.worker import Outcome
 
@@ -52,6 +53,7 @@ SUMMARY_WAIT = 5.0  # seconds without a new report from a machine back from away
 # What a machine needs of a scheduled job to run it itself
 SCHEDULE_FIELDS = ("id", "title", "text", "folder", "at", "days", "every", "until", "status", "next_run",
                    "last_run", "timeout_minutes")
+MACHINE_KINDS = ("code_change", "code_question")  # scheduled Claude tasks a machine can run (research needs accounts)
 STATE = DATA_DIR / "node"
 # Task fields a machine needs to run one, nothing more
 TASK_FIELDS = ("id", "kind", "title", "instruction", "project", "in_place", "branch", "base", "session_id", "job",
@@ -90,9 +92,11 @@ class Offload:
         self.synced: dict[int, str] = {}  # machine -> the scheduled jobs it was last sent
         self.away: dict[int, list[str]] = {}  # machine -> its runs reported from while away, for one summary
         self.summing: set[int] = set()
+        self.adopted: dict[int, int] = {}  # task a machine ran alone while away, taken up here -> the machine
         self.stops_file = STATE / "stops.json"  # stops for machines that were away, sent when they're back
-        hub.handlers |= {"copy.pack": self._pack, "copy.bundle": self._bundle, "report": self._report,
-                         "alive": self._alive, "task.nudges": self._nudges, "task.cleared": self._cleared,
+        self.adoptions_file = STATE / "adopted.json"  # "machine:run" -> the task each run alone became here
+        hub.handlers |= {"copy.pack": self._pack, "copy.bundle": self._bundle, "skills.pack": self._skills_pack,
+                         "schedule.due": self._due, "report": self._report, "alive": self._alive, "task.nudges": self._nudges, "task.cleared": self._cleared,
                          "task.approval": self._approval, "task.propose": self._propose, "task.access": self._access}
         hub.on_connect.append(self._connected)
         hub.on_lost.append(self._gone)
@@ -179,6 +183,24 @@ class Offload:
             raise Refused(f"couldn't bundle the history: {said}"[:300])
         return self.hub.outbox.offer(out, remove=True)
 
+    # ── JARVIS's skills ──────────────────────────────────────────
+    # Runs on a machine get the skills switched on here: each run (and the scheduled jobs a machine owns) names them
+    # by version, and the machine fetches a version it lacks.
+
+    @staticmethod
+    def skills_offer() -> list[dict]:
+        """The skills a run here would load, by name and version."""
+        return [{"name": s.name, "digest": skills.whole_digest(s.folder)} for s in skills.usable()]
+
+    async def _skills_pack(self, node: int, body: dict) -> dict:
+        """A machine fetches skills it was offered: only ones switched on here."""
+        names = {str(n) for n in body.get("names") or []}
+        usable = [s for s in await asyncio.to_thread(skills.usable) if s.name in names]
+        rels = [f"{s.name}/{rel}" for s in usable for rel in skills.files(s.folder)]
+        archive = await asyncio.to_thread(sync.pack, skills.home(), rels,
+                                          STATE / "spool" / f"skills-{node}-{secrets.token_hex(4)}.tar")
+        return self.hub.outbox.offer(archive, remove=True)
+
     async def copy_back(self, node: int, key: str, folder: Path) -> dict:
         """Bring the run's changes into `folder`. Returns {"changed", "deleted", "kept_apart"}: kept apart are files
         that changed here too, whose machine version was saved beside them."""
@@ -259,33 +281,119 @@ class Offload:
         except Refused as e:
             raise ValueError(str(e)) from None
 
-    # ── Scheduled commands of projects that live on a machine ────
-    # That machine owns them: it runs them on time even while this computer is off (so one never runs twice),
-    # and reports each run; runs reported after being away come together in one summary.
+    # ── Scheduled jobs of projects that live on a machine ────────
+    # That machine owns them: it keeps their times and starts each when due, so one never runs twice. A command it
+    # runs itself and reports. A Claude task it hands to this computer when the link is up (schedule.due), so it runs
+    # as any task does; while this computer is away it runs the task on its own and reports it on return ("away"),
+    # when it's taken up here as the task it was. Runs reported after being away come together in one summary.
 
     @staticmethod
     def owner(job: dict) -> int | None:
-        """The machine that runs a scheduled job itself: a command job whose project lives there."""
-        if job["kind"] != "command" or not job.get("project"):
+        """The machine that runs a scheduled job itself: a command job, or a code task, whose project lives there."""
+        if job["kind"] not in ("command", "task") or not job.get("project") \
+                or (job["kind"] == "task" and job.get("task_kind") not in MACHINE_KINDS):
             return None
         try:
             return projects.find(job["project"]).node
         except ValueError:
             return None
 
+    def _sent_job(self, job: dict) -> dict:
+        """What a machine keeps of a job it owns; for a Claude task, enough to run it alone."""
+        sent = {k: job[k] for k in SCHEDULE_FIELDS}
+        if job["kind"] != "task":
+            return sent
+        project = projects.find(job["project"])
+        return sent | {"kind": "task", "task_kind": job["task_kind"], "project": project.name,
+                       "folder": str(project.path), "in_place": project.in_place and job["task_kind"] == "code_change",
+                       "prompt": scheduler.task_prompt(job)}
+
     async def sync_schedules(self) -> None:
-        """Send each connected machine its jobs (and do-not-disturb), when they've changed since last sent."""
+        """Send each connected machine its jobs, do-not-disturb and switched-on skills, when they've changed since last
+        sent."""
         if not self.hub.conns:
             return
         jobs = [j for j in schedules.items() if self.owner(j)]
+        offered = await asyncio.to_thread(self.skills_offer) if any(j["kind"] == "task" for j in jobs) else []
         for node in list(self.hub.conns):
-            mine = [{k: j[k] for k in SCHEDULE_FIELDS} for j in jobs if self.owner(j) == node]
-            body = {"jobs": mine, "hold": hold.status()}
+            mine = [self._sent_job(j) for j in jobs if self.owner(j) == node]
+            body = {"jobs": mine, "hold": hold.status(), "skills": offered}
             if self.synced.get(node) == (digest := json.dumps(body, sort_keys=True)):
                 continue
             with contextlib.suppress(LinkDown, Refused, TimeoutError):
-                await self.up(node).call("schedule.sync", body, timeout=30)
+                await self.up(node).call("schedule.sync", body, timeout=300)
                 self.synced[node] = digest
+
+    async def _due(self, node: int, body: dict) -> dict:
+        """A machine says one of its scheduled Claude tasks is due ({"job", "due", "at": its time now}): start it here,
+        as the scheduler would, once per due time (asked again after a dropped reply, it gets the same task)."""
+        job = schedules.get(int(body["job"]))
+        if not job or self.owner(job) != node or job["kind"] != "task":
+            raise Refused("that scheduled task isn't this machine's")
+        due, now = str(body["due"]), float(body.get("at") or time.time())
+        if (json.loads(job["run"] or "null") or {}).get("due") == due:
+            return {"task": job["last_task"], "next_run": job["next_run"]}
+        nxt = schedules.following(job, now)
+        last = self.runner.store.get(job["last_task"]) if job["last_task"] else None
+        if last and last["status"] in ACTIVE:
+            schedules.update(job["id"], **scheduler.moved_on(nxt), last_result="Skipped a run: the previous one was "
+                                                                               "still going.")
+            return {"skipped": True, "next_run": nxt}
+        task = self.runner.start(job["task_kind"], job["title"], scheduler.task_prompt(job), job["project"],
+                                 job=job["id"])
+        schedules.update(job["id"], **scheduler.moved_on(nxt), last_run=now, runs=job["runs"] + 1, fails=0,
+                         last_task=task["id"], run=json.dumps({"task": task["id"], "started": now, "due": due}))
+        return {"task": task["id"], "next_run": nxt}
+
+    def _adoptions(self) -> dict[str, int]:
+        try:
+            return json.loads(self.adoptions_file.read_text())
+        except (OSError, ValueError):
+            return {}
+
+    async def _adopt(self, node: int, run: str, data: dict) -> dict:
+        """A machine ran a scheduled Claude task on its own while this computer was away: record it as the task it
+        is, and take it up here as after a restart (its run may still be going there, or already have ended)."""
+        job = schedules.get(int(data["job"]))
+        if not job or self.owner(job) != node or job["kind"] != "task":
+            raise Refused("that scheduled task isn't this machine's")
+        kept, key = self._adoptions(), f"{node}:{run}"
+        if key in kept and self.runner.store.get(kept[key]):  # told again after a dropped reply
+            return {"task": kept[key]}
+        r, ran = self.runner, dict(data.get("task") or {})
+        task = r.store.create(job["task_kind"], job["title"], str(ran.get("instruction") or job["text"]),
+                              job["project"], bool(ran.get("in_place")), job["id"])
+        task_id, name, started = task["id"], self.name(node), float(data["started"])
+        r.store.set(task_id, node=node, status="running", worktree=ran.get("worktree"), branch=ran.get("branch"),
+                    base=ran.get("base"), activity=f"running on {name}")
+        r.store.log(task_id, "start", str(ran.get("instruction") or job["text"]))
+        r.store.log(task_id, "machine", f"{name} started this scheduled run itself, while JARVIS was away")
+        if ran.get("saved"):
+            r.store.log(task_id, "saved", f"uncommitted changes in {ran.get('worktree')} saved to {ran['saved']} "
+                                          "before this run")
+        schedules.update(job["id"], **scheduler.moved_on(data.get("next_run")), last_run=started, runs=job["runs"] + 1,
+                         fails=0, last_task=task_id,
+                         run=json.dumps({"task": task_id, "started": started, "due": data.get("due")}))
+        self.adoptions_file.parent.mkdir(parents=True, exist_ok=True)
+        write_atomic(self.adoptions_file, json.dumps(kept | {key: task_id}))
+        self.adopted[task_id] = node
+        r.take_up(task_id)
+        return {"task": task_id}
+
+    def while_away(self, task_id: int, status: str, said: str, quiet: bool = False) -> bool:
+        """A task's run has ended: True if it ran alone while this computer was away, and its ending goes into the one
+        summary of what ran then (one that needs the user is said at once; a quiet one isn't said at all)."""
+        node = self.adopted.pop(task_id, None)
+        if node is None or quiet or status not in ("done", "failed"):
+            return False
+        self._away_said(node, said)
+        return True
+
+    def _away_said(self, node: int, said: str) -> None:
+        self.away.setdefault(node, []).append(said)
+        if node not in self.summing:
+            self.summing.add(node)
+            self.runner._background(self._sum_up(node))
 
     async def _scheduled(self, node: int, body: dict) -> None:
         """A machine ran one of its scheduled commands: record it as a command task, update the job, and say so (or
@@ -311,17 +419,15 @@ class Offload:
         r.store.set(task["id"], node=node)
         if body.get("away"):
             r._finish(task["id"], "done" if ok else "failed", said, quiet=True, seen=1)
-            self.away.setdefault(node, []).append(said)
-            if node not in self.summing:
-                self.summing.add(node)
-                r._background(self._sum_up(node))
+            self._away_said(node, said)
         else:
             r._finish(task["id"], "done" if ok else "failed", said, title=job["title"])
 
     async def _sum_up(self, node: int, wait: float = SUMMARY_WAIT) -> None:
-        """One summary of the runs a machine reports from while away, once its reports stop coming."""
+        """One summary of the runs a machine reports from while away, once its reports stop coming and the tasks it
+        ran alone have been taken up and ended here."""
         count = -1
-        while count != len(self.away.get(node, [])):
+        while count != len(self.away.get(node, [])) or node in self.adopted.values():
             count = len(self.away.get(node, []))
             await asyncio.sleep(wait)
         said = self.away.pop(node, [])
@@ -495,8 +601,9 @@ class Offload:
                 if not run:
                     run = secrets.token_hex(6)
                     self._ending(task_id, run)  # waited for before it starts: a quick run may end at once
+                    offered = await asyncio.to_thread(self.skills_offer)
                     await up.call("task.run", {"task": {k: task.get(k) for k in TASK_FIELDS}, "prompt": prompt,
-                                               "run": run} | where, timeout=60)
+                                               "run": run, "skills": offered} | where, timeout=600)
                     self.runner.store.set(task_id, activity=f"running on {self.name(node)}")
                 outcome = await self._ending(task_id, run)
             except asyncio.CancelledError:
@@ -589,6 +696,10 @@ class Offload:
             await self._scheduled(node, body.get("body") or {})
             self.seen[node] = seq
             return {}
+        if body["kind"] == "away":  # a scheduled task it began alone: from here on known by the id it gets now
+            got = await self._adopt(node, str(body["run"]), body.get("body") or {})
+            self.seen[node] = seq
+            return got
         task = self._own(node, body["task"])
         task_id, data, kind = task["id"], body.get("body") or {}, str(body["kind"])
         r = self.runner

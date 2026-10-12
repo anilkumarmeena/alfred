@@ -77,7 +77,7 @@ def headline(summary: str) -> str:
     return sentence(first_line(summary)[:300])
 
 
-def _moved_on(nxt: float | None) -> dict:
+def moved_on(nxt: float | None) -> dict:
     """Fields after a run: next_run, and DONE when there is none."""
     return {"next_run": nxt, "status": schedules.ACTIVE if nxt else schedules.DONE}
 
@@ -375,12 +375,12 @@ class Scheduler:
         if job["days"] and late > CATCH_UP_HOURS * 3600 and not hold.covered(due, stamp):
             missed = schedules.clock(due, now)
             log.info("scheduled job %s missed its run at %s; next at %s", job["id"], missed, nxt)
-            schedules.update(job["id"], **_moved_on(nxt), last_result=f"Skipped its run due {missed}: JARVIS wasn't running then.")
+            schedules.update(job["id"], **moved_on(nxt), last_result=f"Skipped its run due {missed}: JARVIS wasn't running then.")
             return False
         if job["kind"] in ("task", "command") and self._busy(job):
-            schedules.update(job["id"], **_moved_on(nxt), last_result="Skipped a run: the previous one was still going.")
+            schedules.update(job["id"], **moved_on(nxt), last_result="Skipped a run: the previous one was still going.")
             return False
-        fields = _moved_on(nxt) | {"last_run": stamp, "runs": job["runs"] + 1, "fails": 0}
+        fields = moved_on(nxt) | {"last_run": stamp, "runs": job["runs"] + 1, "fails": 0}
         if job["kind"] == "reminder":
             schedules.update(job["id"], **fields, last_result="Reminded.")  # update first: never said twice
             text = sentence(job["text"]) + (f" It was due at {schedules.clock(due, now)}." if late > LATE_SECONDS else "")
@@ -400,7 +400,7 @@ class Scheduler:
     async def _unrunnable(self, job: dict, stamp: float, why: str) -> None:
         """Move a job that couldn't start to its next time; announce the first consecutive failure."""
         fails = job["fails"] + 1
-        schedules.update(job["id"], **_moved_on(self._following(job, stamp)), fails=fails,
+        schedules.update(job["id"], **moved_on(self._following(job, stamp)), fails=fails,
                          last_result=f"Couldn't run: {why}")
         if fails == 1:
             await self._alert(job, sentence(f"JARVIS couldn't run \"{job['title']}\": {why}"))
@@ -436,7 +436,7 @@ class Scheduler:
     async def _lapse(self, job: dict) -> None:
         """Finish a job past `until`; an expiring watch announces it never saw its condition."""
         if job["kind"] != "watch":
-            schedules.update(job["id"], **_moved_on(None))
+            schedules.update(job["id"], **moved_on(None))
             return
         schedules.update(job["id"], status=schedules.EXPIRED, next_run=None)
         until = schedules.clock(job["until"], self.clock())

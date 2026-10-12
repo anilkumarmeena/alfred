@@ -9,6 +9,8 @@ Command jobs (as `start_job` runs them on the main computer: a login shell, with
   job.start / job.poll / job.stop   numbered by the main computer's task id
 Claude task runs (jarvis.tasks.worker.run, unchanged: the same sandbox, file gate and host walls as there):
   task.run / task.stop / task.running
+  with JARVIS's skills as the main computer has them switched on: each version fetched once (skills.pack) and kept
+  in data/node/skills/, checked against the digest it was offered with
 A run's reports go through the journal (`NetReporter`); questions the gate must ask (has this command been approved?
 is there a message for the task?) go to the main computer live, and get the safe answer when it can't be reached:
 not approved, nothing new.
@@ -23,10 +25,12 @@ import contextlib
 import json
 import logging
 import re
+import secrets
 import shutil
 import time
 from pathlib import Path
 
+from jarvis.brain import usage
 from jarvis.core import proc
 from jarvis.core.config import DATA_DIR, ROOT, WORKTREES_DIR
 from jarvis.core.files import write_atomic
@@ -35,6 +39,7 @@ from jarvis.node.agent import Agent
 from jarvis.node.journal import Journal
 from jarvis.node.link import Link, LinkDown, Refused
 from jarvis.safety import commands
+from jarvis.skills import home as skills
 from jarvis.tasks import command_jobs, git_ops, projects, schedules, stall
 from jarvis.tasks.host_tools import TaskJobs
 from jarvis.tasks.worker import Outcome, run as run_task
@@ -53,7 +58,10 @@ RESUMED = ("The computer this task runs on restarted while you were working on i
 
 class NetReporter:
     """The Reporter a run here uses: reports go through the journal; the gate's questions go live, with safe answers
-    when the main computer can't be reached."""
+    when the main computer can't be reached.
+
+    `task_id` is the task as the main computer knows it. A scheduled task begun here while it was away has a stand-in
+    id (below 0) until the main computer takes it up and gives it its own; the run itself keeps the stand-in."""
 
     def __init__(self, work: "Work", task_id: int, run: str) -> None:
         self.work, self.task_id, self.run = work, task_id, run
@@ -70,11 +78,11 @@ class NetReporter:
 
     def alive(self, task_id: int, msg: object = None) -> None:
         self.pulse.saw(task_id, msg)
-        if (now := time.time()) - self.sent_alive >= ALIVE_SECONDS:
+        if (now := time.time()) - self.sent_alive >= ALIVE_SECONDS and self.task_id > 0:
             self.sent_alive = now
             busy = self.pulse.busy(task_id, now) or ("a long job it started is still running" if any(
                 j["state"] == "running" for j in self.host_jobs.status(task=task_id)) else "")
-            self.work.tell("alive", {"task": task_id, "busy": busy, "limited": self.pulse.limit(task_id, now)})
+            self.work.tell("alive", {"task": self.task_id, "busy": busy, "limited": self.pulse.limit(task_id, now)})
 
     def activity(self, task_id: int, text: str) -> None:
         self._note("activity", text=text)
@@ -98,6 +106,8 @@ class NetReporter:
             return None
         try:
             await self.work.caught_up(timeout)
+            if self.task_id < 0:  # not taken up by the main computer yet
+                return None
             return await up.call(kind, {"task": self.task_id, "run": self.run} | body, timeout)
         except (LinkDown, TimeoutError):
             return None
@@ -154,7 +164,9 @@ class Work:
         self.jobs = command_jobs.Runs(self.state / "jobs")
         self.scheduled = command_jobs.Runs(self.state / "scheduled")  # runs of the jobs this machine owns
         self.host_jobs = TaskJobs()
-        self.runs: dict[int, tuple[str, asyncio.Task]] = {}  # task id -> (run id, its coroutine)
+        self.runs: dict[int, tuple[str, asyncio.Task]] = {}  # task id (as the main computer knows it) -> (run, coroutine)
+        self.reporters: dict[str, NetReporter] = {}  # run -> its reporter
+        self.aliases: dict[int, int] = {}  # task id -> the stand-in id its run began with here, while it was away
         self.stopped: set[int] = set()  # runs the main computer stopped (others cut off by a shutdown here resume)
         self.locks: dict[str, asyncio.Lock] = {}
         self._sent = asyncio.Event()  # the journal is empty, as far as the sender knows
@@ -198,12 +210,16 @@ class Work:
             self._sent.clear()
             for event in pending:
                 try:
-                    await up.call("report", event, timeout=60)
+                    got = await up.call("report", event, timeout=60)
                 except (LinkDown, TimeoutError):
                     return
                 except Refused as e:  # the main computer won't take it (say, the task is gone): drop it
                     log.warning("the main computer refused %s for task %s: %s", event["kind"], event["task"], e)
+                    got = {}
                 self.journal.done(event["seq"])
+                if event["kind"] == "away" and got.get("task"):  # the rest of the run's events now carry its id
+                    self._adopted(event["task"], int(got["task"]), event["run"])
+                    break
 
     async def caught_up(self, timeout: float) -> None:
         """Wait until the journal has been sent, so a live question can't overtake what came before it."""
@@ -333,6 +349,10 @@ class Work:
             if time.time() - folder.stat().st_mtime > days * 86400 and folder.name.removeprefix("node-") not in self.locks:
                 shutil.rmtree(folder, ignore_errors=True)
                 gone.append(folder.name)
+        for folder in (self.state / "skills").glob("*@*"):  # skill versions no run has used lately
+            if time.time() - folder.stat().st_mtime > days * 86400:
+                shutil.rmtree(folder, ignore_errors=True)
+                gone.append(folder.name)
         return gone
 
     def _link(self) -> Link:
@@ -385,25 +405,85 @@ class Work:
             return await git_ops.OPS[op](body)
         return step
 
-    # ── Scheduled commands of projects living here ───────────────
-    # The main computer sends the definitions (schedule.sync); this machine runs them on time whether or not the
+    # ── Scheduled jobs of projects living here ───────────────────
+    # The main computer sends the definitions (schedule.sync); this machine starts them on time whether or not the
     # main computer is on, keeps its own record of when each last ran (it wins on that; the main computer wins on
-    # definitions), honours do-not-disturb as last sent, and reports each run through the journal.
+    # definitions), and honours do-not-disturb as last sent. A command it runs itself, reported through the journal.
+    # A Claude task it hands to the main computer when the link is up (schedule.due: it runs as any task does, here);
+    # while the main computer is away, it begins the task here alone, under a stand-in id, and reports it ("away")
+    # for the main computer to take up on its return. A run asked for but not answered is never begun alone: it's
+    # asked again once the link is back, so it can't run twice.
 
     def _schedules(self) -> dict:
         try:
             found = json.loads((self.state / "schedules.json").read_text())
         except (OSError, ValueError):
             found = {}
-        return {"jobs": [], "hold": None, "ran": {}} | found
+        return {"jobs": [], "hold": None, "ran": {}, "skills": [], "stand_in": 0} | found
 
     def _keep_schedules(self, kept: dict) -> None:
         self.state.mkdir(parents=True, exist_ok=True)
         write_atomic(self.state / "schedules.json", json.dumps(kept))
 
     async def schedule_sync(self, body: dict) -> dict:
-        self._keep_schedules(self._schedules() | {"jobs": list(body.get("jobs") or []), "hold": body.get("hold")})
+        offered = list(body.get("skills") or [])
+        await self.skills(offered)  # fetched now, for tasks begun while the main computer is away
+        self._keep_schedules(self._schedules() | {"jobs": list(body.get("jobs") or []), "hold": body.get("hold"),
+                                                  "skills": offered})
         return {}
+
+    async def _start_task(self, kept: dict, job: dict, due: float, now: float) -> dict | None:
+        """A scheduled Claude task that's due, handed to the main computer or begun here alone. Returns what to keep
+        of the run, or None to try again on the next tick."""
+        if usage.hold_until(now):  # this machine's own Claude account is (nearly) used up
+            return None
+        token, nxt = f"{job['id']}-{int(due)}", schedules.following(job, now)
+        if self.agent.link is not None and self.agent.link.up:
+            return await self._hand_over(job["id"], token, nxt, now)
+        try:
+            return await self._run_alone(kept, job, token, nxt, now)
+        except (Refused, ValueError, RuntimeError, OSError) as e:
+            log.warning("scheduled task %s couldn't begin here: %s", job["id"], e)
+            return {"at": now, "claude": "failed", "next_run": nxt, "reported": True}
+
+    async def _hand_over(self, job_id: int, token: str, nxt: float | None, now: float) -> dict:
+        """Ask the main computer to start the run; one asked but not answered waits to be asked again."""
+        try:
+            got = await self._link().call("schedule.due", {"job": job_id, "due": token, "at": now}, timeout=60)
+        except Refused as e:
+            log.warning("the main computer didn't start scheduled task %s: %s", job_id, e)
+            return {"at": now, "claude": "refused", "next_run": nxt, "reported": True}
+        except (LinkDown, TimeoutError):
+            return {"at": now, "claude": "asked", "due": token, "next_run": nxt}
+        return {"at": now, "claude": "main", "task": got.get("task"), "next_run": got.get("next_run", nxt),
+                "reported": True}
+
+    async def _run_alone(self, kept: dict, job: dict, token: str, nxt: float | None, now: float) -> dict:
+        """Begin a scheduled task here while the main computer is away, as it would: on a branch in a worktree, or in
+        the project's folder with uncommitted work saved first."""
+        folder = self.own_folder(job["folder"])
+        kept["stand_in"] = stand_in = int(kept.get("stand_in") or 0) - 1
+        name = f"away{-stand_in}"
+        task = {"id": stand_in, "kind": job["task_kind"], "title": job["title"], "instruction": job["prompt"],
+                "project": job["project"], "in_place": int(bool(job["in_place"])), "branch": None, "base": None,
+                "session_id": None, "job": job["id"], "grants": None, "todo": None, "status": "running",
+                "worktree": str(folder)}
+        saved = ""
+        if job["task_kind"] == "code_change" and not job["in_place"]:
+            made = await git_ops.worktree_op({"repo": str(folder), "task": name, "title": job["title"],
+                                              "name": job["project"]})
+            task |= {k: made[k] for k in ("worktree", "branch", "base")}
+        elif job["in_place"]:
+            found = await git_ops.enter_op({"folder": str(folder), "task": name})
+            task |= {"branch": found.get("branch"), "base": found.get("base")}
+            saved = found.get("saved") or ""
+        task["skills"] = await self.skills(kept.get("skills") or [])
+        run = secrets.token_hex(6)
+        self.journal.add("away", stand_in, run, {
+            "job": job["id"], "due": token, "started": now, "next_run": nxt, "saved": saved,
+            "task": {k: task[k] for k in ("instruction", "in_place", "worktree", "branch", "base")}})
+        self.runs[stand_in] = (run, asyncio.create_task(self._run(task, job["prompt"], run)))
+        return {"at": now, "claude": "alone", "run": run, "next_run": nxt}
 
     async def schedule_tick(self, now: float | None = None) -> list[int]:
         """Report runs that ended, stop ones past their limit, start jobs that are due. Returns the jobs started."""
@@ -411,6 +491,12 @@ class Work:
         kept = self._schedules()
         jobs = {str(j["id"]): j for j in kept["jobs"]}
         for key, ran in kept["ran"].items():
+            if "claude" in ran and not ran.get("reported"):  # a scheduled task: begun alone, or asked for
+                if ran["claude"] == "asked" and self.agent.link is not None and self.agent.link.up:
+                    kept["ran"][key] = await self._hand_over(int(key), ran["due"], ran["next_run"], ran["at"])
+                elif ran["claude"] == "alone":
+                    ran["reported"] = all(r != ran["run"] for r, _ in self.runs.values())
+                continue
             if ran.get("reported") or (record := self.scheduled.get(ran["run"])) is None:
                 continue
             if (ended := self.scheduled.how(record)) is None:
@@ -432,6 +518,11 @@ class Work:
             ran = kept["ran"].get(key)
             due = ran["next_run"] if ran and ran["at"] > (job.get("last_run") or 0) else job.get("next_run")
             if job["status"] != "active" or held or not due or due > now or (ran and not ran.get("reported")):
+                continue
+            if job.get("kind") == "task":
+                if begun := await self._start_task(kept, job, due, now):
+                    kept["ran"][key] = begun
+                    started.append(job["id"])
                 continue
             try:
                 folder = self.own_folder(job["folder"])
@@ -519,7 +610,8 @@ class Work:
     # ── Claude task runs ─────────────────────────────────────────
 
     async def task_run(self, body: dict) -> dict:
-        """{"task": its row, "prompt", "run", "key"}: run it here in the copy, reporting through the journal."""
+        """{"task": its row, "prompt", "run", "key" or "folder", "skills"}: run it here in the copy (or the project's
+        own folder), with the main computer's skills, reporting through the journal."""
         task, prompt, run = dict(body["task"]), str(body["prompt"]), str(body["run"])
         task_id = int(task["id"])
         if task_id in self.runs:
@@ -530,8 +622,48 @@ class Work:
             task["worktree"] = str(self.own_folder(body["folder"], worktrees=True))
         else:
             task["worktree"] = str(self._inside(str(body["key"]), ""))
+        task["skills"] = await self.skills(body.get("skills") or [])
         self.runs[task_id] = (run, asyncio.create_task(self._run(task, prompt, run)))
         return {"started": True}
+
+    # ── JARVIS's skills, as the main computer has them switched on ──
+
+    async def skills(self, offered: list[dict]) -> list[str]:
+        """Folders here of the skills the main computer sent ({"name", "digest"} each), fetching the versions this
+        machine lacks. A version that arrives altered is left out."""
+        wanted = {}
+        for s in offered:
+            name, digest = str(s.get("name") or ""), str(s.get("digest") or "")
+            if skills.NAME.fullmatch(name) and re.fullmatch(r"[0-9a-f]{64}", digest):
+                wanted[name] = (digest, self.state / "skills" / f"{name}@{digest[:16]}")
+        if missing := [n for n, (_, folder) in wanted.items() if not folder.is_dir()]:
+            try:
+                await self._fetch_skills(missing, wanted)
+            except (LinkDown, Refused, TimeoutError, ValueError, OSError) as e:  # the run goes on without them
+                log.warning("skills %s couldn't be fetched: %s", ", ".join(missing), e)
+        found = []
+        for _, folder in wanted.values():
+            if folder.is_dir():
+                folder.touch()  # in use: kept from pruning
+                found.append(str(folder))
+        return found
+
+    async def _fetch_skills(self, names: list[str], wanted: dict[str, tuple[str, Path]]) -> None:
+        up = self._link()
+        offer = await up.call("skills.pack", {"names": names}, timeout=300)
+        staging = self.state / "skills" / f".staging-{secrets.token_hex(4)}"
+        archive = await transfer.fetch(up, offer, staging.with_suffix(".tar"), timeout=300)
+        try:
+            await asyncio.to_thread(sync.unpack, archive, staging)
+            for name in names:
+                digest, folder = wanted[name]
+                if (staging / name).is_dir() and await asyncio.to_thread(skills.whole_digest, staging / name) == digest:
+                    (staging / name).replace(folder)
+                else:
+                    log.warning("skill %s arrived altered or not at all, so runs here go without it", name)
+        finally:
+            archive.unlink(missing_ok=True)
+            shutil.rmtree(staging, ignore_errors=True)
 
     def _run_file(self, task_id: int) -> Path:
         return self.state / "runs" / f"{task_id}.json"
@@ -541,32 +673,47 @@ class Work:
         if (kept := self._run_file(task_id)).exists():
             write_atomic(kept, json.dumps(json.loads(kept.read_text()) | {"session_id": session_id}))
 
-    async def _run(self, task: dict, prompt: str, run: str) -> None:
-        """One run, reported through the journal. Kept on disk while it goes, so a restart here can resume it."""
-        task_id = task["id"]
-        self._run_file(task_id).parent.mkdir(parents=True, exist_ok=True)
-        write_atomic(self._run_file(task_id), json.dumps({"task": task, "run": run,
-                                                          "session_id": task.get("session_id")}))
-        reporter = NetReporter(self, task_id, run)
-        self.agent.awake.hold(f"task {task_id}")
+    async def _run(self, task: dict, prompt: str, run: str, known_as: int | None = None) -> None:
+        """One run, reported through the journal (as task `known_as` when the main computer knows it by another id).
+        Kept on disk while it goes, so a restart here can resume it."""
+        own_id = task["id"]
+        self._run_file(own_id).parent.mkdir(parents=True, exist_ok=True)
+        write_atomic(self._run_file(own_id), json.dumps({"task": task, "run": run, "session_id": task.get("session_id")}
+                                                        | ({"as": known_as} if known_as else {})))
+        reporter = self.reporters[run] = NetReporter(self, known_as or own_id, run)
+        self.agent.awake.hold(f"task {own_id}")
         outcome: Outcome | None = None
         try:
             outcome = await self.run_task(task, prompt, reporter)
         except asyncio.CancelledError:
-            if task_id not in self.stopped:  # this machine is shutting down: resumed when it starts again
-                self.runs.pop(task_id, None)
+            if reporter.task_id not in self.stopped:  # this machine is shutting down: resumed when it starts again
+                self.runs.pop(reporter.task_id, None)
+                self.reporters.pop(run, None)
                 raise
         except Exception as e:
-            log.exception("task %s failed here", task_id)
+            log.exception("task %s failed here", own_id)
             outcome = Outcome("", f"{type(e).__name__}: {e}"[:200], 0, "error")
         finally:
-            self.agent.awake.release(f"task {task_id}")
-        self.stopped.discard(task_id)
-        self.runs.pop(task_id, None)
-        self._run_file(task_id).unlink(missing_ok=True)
+            self.agent.awake.release(f"task {own_id}")
+        self.stopped.discard(reporter.task_id)
+        self.runs.pop(reporter.task_id, None)
+        self.reporters.pop(run, None)
+        self._run_file(own_id).unlink(missing_ok=True)
         ended = None if outcome is None else {"result": outcome.result, "error": outcome.error, "cost": outcome.cost,
                                               "kind": outcome.kind}
-        self.journal.add("ended", task_id, run, {"outcome": ended})
+        self.journal.add("ended", reporter.task_id, run, {"outcome": ended})
+
+    def _adopted(self, stand_in: int, task_id: int, run: str) -> None:
+        """The main computer took up a run begun here alone: from now on it's task `task_id` there (the run itself
+        keeps its stand-in id here)."""
+        self.journal.db.execute("update events set task = ? where task = ? and run = ?", (task_id, stand_in, run))
+        if reporter := self.reporters.get(run):
+            reporter.task_id = task_id
+        if found := self.runs.pop(stand_in, None):
+            self.runs[task_id] = found
+        if (kept := self._run_file(stand_in)).exists():
+            write_atomic(kept, json.dumps(json.loads(kept.read_text()) | {"as": task_id}))
+        self.aliases[task_id] = stand_in
 
     def resume(self) -> list[int]:
         """At start-up: runs cut off by a restart here carry on in their sessions; one that never got a session is
@@ -574,21 +721,25 @@ class Work:
         resumed = []
         for kept in sorted((self.state / "runs").glob("*.json")):
             found = json.loads(kept.read_text())
-            task, run = found["task"], found["run"]
+            task, run, known_as = found["task"], found["run"], found.get("as")
+            task_id = known_as or task["id"]
             if not found.get("session_id"):
                 kept.unlink()
-                self.journal.add("ended", task["id"], run, {"outcome": None})
+                self.journal.add("ended", task_id, run, {"outcome": None})
                 continue
             task["session_id"] = found["session_id"]
-            self.runs[task["id"]] = (run, asyncio.create_task(self._run(task, RESUMED, run)))
-            resumed.append(task["id"])
+            if known_as:
+                self.aliases[known_as] = task["id"]
+            self.runs[task_id] = (run, asyncio.create_task(self._run(task, RESUMED, run, known_as)))
+            resumed.append(task_id)
         return resumed
 
     async def task_stop(self, body: dict) -> dict:
-        if found := self.runs.get(int(body["task"])):
-            self.stopped.add(int(body["task"]))
+        task_id = int(body["task"])
+        if found := self.runs.get(task_id):
+            self.stopped.add(task_id)
             found[1].cancel()
-        stopped = self.host_jobs.stop_all(int(body["task"]))
+        stopped = self.host_jobs.stop_all(self.aliases.get(task_id, task_id))
         return {"stopped": bool(found), "jobs": stopped}
 
     async def task_running(self, _: dict) -> dict:

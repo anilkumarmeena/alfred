@@ -1,8 +1,9 @@
 """Phone/browser logins: name + passcode, checked against salted scrypt hashes in secrets/logins.json (0600).
 
 The passcode alone identifies the login, so passcodes are unique. Managed only in the control panel, never by voice;
-every login reaches the whole panel. adopt() turns JARVIS_PASSCODE from .env into the owner's login and strips it
-from .env. With no logins, JARVIS_PASSCODE is checked directly so nobody is locked out.
+every login reaches the whole panel, but only the owner's login (the first one made, marked "owner") pairs machines
+and changes or removes the owner's login. adopt() turns JARVIS_PASSCODE from .env into the owner's login and strips
+it from .env. With no logins, JARVIS_PASSCODE is checked directly so nobody is locked out.
 
 Each passcode is also kept encrypted in the vault, so `make passcode` can show it on this computer (whoever can
 run that can read .env and the vault key anyway). Nothing served over HTTP ever returns it.
@@ -102,9 +103,28 @@ def ready() -> bool:
     return bool(_read() or os.environ.get(VAR, "").strip())
 
 
+def _owner_row(rows: list[dict]) -> dict | None:
+    """The row marked as the owner's, else the oldest (logins made before the mark existed)."""
+    return next((r for r in rows if r.get("owner")), None) or min(rows, key=lambda r: r["created"], default=None)
+
+
+def owner() -> str:
+    """The owner's login name: the first login made (with none yet, the name JARVIS_PASSCODE is checked as)."""
+    found = _owner_row(_read())
+    return found["name"] if found else first_name()
+
+
+def owner_only(login: str, what: str) -> None:
+    """PermissionError unless `login` is the owner's: some things only the owner may do, even from the panel."""
+    if not login or login.lower() != owner().lower():
+        raise PermissionError(f"Only {owner()}'s login, the owner's, can {what}.")
+
+
 def listed() -> list[dict]:
-    """Logins, oldest first: name, created, last used (never the hash)."""
-    return [{"name": r["name"], "created": r["created"], "used": r.get("used")} for r in _read()]
+    """Logins, oldest first: name, created, last used, whether it's the owner's (never the hash)."""
+    rows = _read()
+    mine = _owner_row(rows)
+    return [{"name": r["name"], "created": r["created"], "used": r.get("used"), "owner": r is mine} for r in rows]
 
 
 def _secret(name: str) -> str:
@@ -156,26 +176,36 @@ def add(name: str, passcode: str) -> None:
         rows = _read()
         if any(r["name"].lower() == name.lower() for r in rows):
             raise ValueError(f"There's a login called {name} already.")
-        rows.append({"name": name, "hash": _new_passcode(rows, passcode), "created": time.time(), "used": None})
+        rows.append({"name": name, "hash": _new_passcode(rows, passcode), "created": time.time(), "used": None}
+                    | ({} if rows else {"owner": True}))
         _write(rows)
     _keep(name, passcode)
     log.warning("login %s added", name)
 
 
-def set_passcode(name: str, passcode: str) -> None:
+def _guard_owner(rows: list[dict], row: dict, by: str | None, what: str) -> None:
+    """Only the owner changes the owner's login. `by` is the login asking (None: this computer's command line)."""
+    if by is not None and row is _owner_row(rows) and by.lower() != row["name"].lower():
+        raise PermissionError(f"Only {row['name']} can {what} their own login: it's the owner's.")
+
+
+def set_passcode(name: str, passcode: str, by: str | None = None) -> None:
     with _lock:
         rows = _read()
         row = _named(rows, name)
+        _guard_owner(rows, row, by, "change the passcode of")
         row["hash"] = _new_passcode(rows, passcode, row)
         _write(rows)
     _keep(row["name"], passcode)
     log.warning("login %s has a new passcode", row["name"])
 
 
-def remove(name: str) -> None:
+def remove(name: str, by: str | None = None) -> None:
+    """Remove a login. When the owner removes their own, the oldest login left becomes the owner's."""
     with _lock:
         rows = _read()
         row = _named(rows, name)
+        _guard_owner(rows, row, by, "remove")
         if len(rows) == 1:
             raise ValueError("That's the only login: add another first, or nobody could connect.")
         _write([r for r in rows if r is not row])
@@ -201,7 +231,7 @@ def adopt() -> str:
         if _read() or not passcode:
             return ""
         # Skip length rules: existing devices already use this passcode
-        _write([{"name": name, "hash": hashed(passcode), "created": time.time(), "used": None}])
+        _write([{"name": name, "hash": hashed(passcode), "created": time.time(), "used": None, "owner": True}])
     _keep(name, passcode)
     vault.unset_env([VAR])
     log.warning("the passcode in .env is now %s's login", name)

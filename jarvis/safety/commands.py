@@ -957,6 +957,16 @@ def program(argv: list[str]) -> str:
     return " ".join(words)
 
 
+PROGRAM_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.+-]{0,63}")  # a program found on the PATH, safe in a shell line
+
+
+def programs(command: str) -> list[str]:
+    """The programs a command runs by name (found on the PATH, not ./script), wrappers like env and nohup skipped, in
+    order, each once; [] if it can't be read."""
+    found = (argv[0] for argv in map(_strip_prefixes, _simple_commands(command) or []) if argv)
+    return list(dict.fromkeys(name for name in found if PROGRAM_NAME.fullmatch(name)))
+
+
 # Programs that wait on the network or a build, often for minutes: run as jobs, never in a spoken turn. (Installs
 # keep their in-turn yes; the shell prompt sends long ones to start_job.)
 _SLOW = dict.fromkeys(["git pull", "git fetch", "git clone", "git submodule", "docker pull"],

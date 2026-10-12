@@ -358,6 +358,11 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             bell.add(f"{started} {task['id']}: {title}" + (f", on {name}" if name else ""), "run", task["id"])
         return self._launch(task["id"], instruction)
 
+    def take_up(self, task_id: int) -> dict:
+        """Follow a run already going on (or ended on) the task's machine, as after a restart: one a machine began on
+        its own while this computer was away (Offload._adopt)."""
+        return self._launch(task_id, RESUMED)
+
     def reply(self, task_id: int, message: str, grants: list[str] | None = None, order: str | None = None) -> dict:
         """Send a message to a task, optionally with extra `grants`.
 
@@ -568,8 +573,9 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
                     if not self._slot_free(task_id):
                         self.store.set(task_id, activity=self._slot_wait())
                     self.in_line.add(task_id)
+                reattach = remote and prompt == RESUMED  # its run there goes on: taken up, not begun again
                 async with nullcontext() if remote else self.slots:  # one on another machine takes no slot here
-                    if task["in_place"]:
+                    if task["in_place"] and not reattach:
                         await self._enter_folder(task)
                     task = self.store.update(task_id, status="running", activity=STARTING)
                     had = access.has(task)
@@ -582,7 +588,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
                     began = time.time()
                     try:
                         if remote:
-                            outcome = await self.offload.run_task(task, prompt, reattach=prompt == RESUMED)
+                            outcome = await self.offload.run_task(task, prompt, reattach=reattach)
                         else:
                             outcome = await run(task, prompt, self)
                     finally:

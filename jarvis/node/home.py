@@ -13,10 +13,11 @@ import subprocess
 
 import psutil
 
-from jarvis.core import platform
+from jarvis.core import platform, proc
 from jarvis.core.config import MAX_TASKS, SECRETS_DIR
 from jarvis.core.files import write_atomic
 from jarvis.node import keys
+from jarvis.safety import commands, host
 
 PRIVATE = SECRETS_DIR / "node"
 KEY_FILE = PRIVATE / "node.key"
@@ -60,6 +61,20 @@ def computer_name() -> str:
         except (OSError, subprocess.SubprocessError):
             pass
     return socket.gethostname().split(".")[0]
+
+
+async def have(names: list[str]) -> list[str] | None:
+    """Which of these programs a job here finds, looked up in a login shell as jobs run (`command -v`, so shell
+    builtins count); None if that couldn't be told."""
+    names = [n for n in dict.fromkeys(names) if commands.PROGRAM_NAME.fullmatch(n)][:30]
+    if not names:
+        return []
+    script = "; ".join(f"command -v -- {n} >/dev/null 2>&1 && echo {n}" for n in names)
+    try:
+        _, out = await proc.run_try(*host.SHELL, script, timeout=4)  # inside the online check's 5 s
+    except (OSError, TimeoutError):
+        return None
+    return [n for n in out.split() if n in names]
 
 
 def facts(version: str = "") -> dict:

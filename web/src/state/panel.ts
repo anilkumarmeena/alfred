@@ -110,8 +110,8 @@ export interface Voiceprint { name: string; seconds: number; consistency: number
 export interface Voiceprints { owner: Voiceprint | null; model: boolean; passage: string; seconds: number }
 export interface Prefs { preferences: Record<PrefKey, Preference>; voices: string[] }
 export interface System { services: Service[]; vault: { state: string; secrets?: number; problem?: string } }
-// A login (never its passcode). this: the one this device uses
-export interface Login { name: string; created: number; used: number | null; this: boolean }
+// A login (never its passcode). this: the one this device uses; owner: the owner's, which alone pairs machines
+export interface Login { name: string; created: number; used: number | null; this: boolean; owner: boolean }
 // A JARVIS key: its source ("" = unset), never its value. required: can't be cleared
 export interface JarvisKey { name: string; label: string; hint: string; required: boolean; source: "vault" | ".env" | "file" | "" }
 export interface Access { logins: Login[]; keys: JarvisKey[] }
@@ -123,9 +123,10 @@ export interface Machine {
   online: boolean; usage: string; free?: number; max_tasks?: number; running?: number; load?: number | null;
   updating?: boolean; update_problem?: string; takes_work?: boolean;
 }
-// Per job kind: "here", "auto" (let JARVIS choose) or a machine's id
+// Per job kind: "here", "auto" (let JARVIS choose) or a machine's id. can_pair: this login is the owner's
 export interface Machines {
   machines: Machine[]; placement: Record<string, string>; kinds: Record<string, string>; commit: string; fingerprint: string;
+  owner: string; can_pair: boolean;
 }
 export interface PairingCode { code: string; expires: number; main_fingerprint: string }
 

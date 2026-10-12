@@ -673,7 +673,7 @@ Monitors are ordinary scheduled jobs, listed with the rest in the panel's Tasks 
 <td width="50%" valign="top">
 
 **🔐 Logins**<br>
-`jarvis/core/logins.py`: one login per person; the passcode alone identifies it, checked against a salted scrypt hash in `secrets/logins.json`. An encrypted copy in the vault lets `make passcode` show it in the terminal; no HTTP route returns it.
+`jarvis/core/logins.py`: one login per person; the passcode alone identifies it, checked against a salted scrypt hash in `secrets/logins.json`. An encrypted copy in the vault lets `make passcode` show it in the terminal; no HTTP route returns it. The first login made is the owner's: only it pairs, confirms or forgets machines, and only it changes or removes itself.
 
 </td>
 <td width="50%" valign="top">
