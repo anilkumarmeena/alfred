@@ -61,7 +61,7 @@ class Hub:
         self.on_connect: list[Callable[[int], Awaitable[None]]] = []  # e.g. sending what a machine missed meanwhile
         self.on_lost: list[Callable[[int], None]] = []  # a machine's link dropped
         self.lost_at: dict[int, float] = {}  # when each machine's link last dropped
-        self._serving: set[asyncio.Task] = set()
+        self._catching_up: set[asyncio.Task] = set()  # on_connect hooks running, held so they aren't collected
 
     # ── Links ────────────────────────────────────────────────────
 
@@ -94,7 +94,9 @@ class Hub:
         log.info("%s connected (protocol %s, commit %s)", found.name, facts.get("protocol"), str(facts.get("version"))[:7])
         served = asyncio.create_task(conn.link.serve())
         for hook in self.on_connect:
-            asyncio.create_task(self._quietly(hook(node), f"catching up with {found.name}"))
+            hooked = asyncio.create_task(self._quietly(hook(node), f"catching up with {found.name}"))
+            self._catching_up.add(hooked)
+            hooked.add_done_callback(self._catching_up.discard)
         try:
             await served
         finally:

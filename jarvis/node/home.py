@@ -7,16 +7,14 @@ out here: its key, its pairing with the main computer, and its journal. Work cop
 
 import json
 import os
-import re
 import shutil
 import socket
 import subprocess
-from pathlib import Path
 
 import psutil
 
 from jarvis.core import platform
-from jarvis.core.config import DATA_DIR, MAX_TASKS, SECRETS_DIR, WORKTREES_DIR
+from jarvis.core.config import MAX_TASKS, SECRETS_DIR
 from jarvis.core.files import write_atomic
 from jarvis.node import keys
 
@@ -24,7 +22,6 @@ PRIVATE = SECRETS_DIR / "node"
 KEY_FILE = PRIVATE / "node.key"
 PAIRING_FILE = PRIVATE / "pairing.json"  # {"node", "main", "main_public", "name"}
 JOURNAL_FILE = PRIVATE / "journal.db"
-STATE = DATA_DIR / "node"
 # Programs worth knowing a machine has, reported at pairing and on each online check
 TOOLS = ("git", "uv", "python3", "node", "npm", "ffmpeg", "xcrun", "xcodebuild", "docker", "brew", "cargo", "go")
 
@@ -70,9 +67,3 @@ def facts(version: str = "") -> dict:
     return {"name": computer_name(), "host": socket.gethostname().split(".")[0], "os": platform.NAME,
             "cores": os.cpu_count() or 0, "ram_gb": round(psutil.virtual_memory().total / 1e9, 1),
             "tools": [t for t in TOOLS if shutil.which(t)], "max_tasks": MAX_TASKS, "version": version}
-
-
-def work_folder(profile_id: str, name: str) -> Path:
-    """Where a project from the main computer is copied to work on here (one per profile and project)."""
-    safe = re.sub(r"[^\w.-]", "-", f"{profile_id}-{name}")[:80]
-    return WORKTREES_DIR / f"node-{safe}"
