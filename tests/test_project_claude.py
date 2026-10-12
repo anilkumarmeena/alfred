@@ -120,7 +120,7 @@ def test_the_project_s_settings_never_load_and_its_hooks_are_off(project, kind):
     opts = options(project, kind)
     assert opts.setting_sources == []  # none of settings.json applies
     flags = json.loads(opts.settings)
-    assert flags["disableAllHooks"] is True and set(flags) == {"permissions", "disableAllHooks"}
+    assert flags["disableAllHooks"] is True and set(flags) == {"permissions", "disableAllHooks", "attribution"}
     assert flags["permissions"].keys() == {"deny"}
     assert "Write" not in opts.allowed_tools and not any(r.startswith("Bash(rm") for r in opts.allowed_tools)
     assert "evil.example" not in json.dumps(opts.sandbox) and "ANTHROPIC_BASE_URL" not in opts.env
@@ -130,7 +130,8 @@ def test_the_project_s_settings_never_load_and_its_hooks_are_off(project, kind):
 
 def test_research_loads_no_project(project):
     opts = worker._options(worker_task(kind="research", project=None), Asking())
-    assert opts.skills == [] and opts.plugins == [] and "Skill" not in opts.tools and opts.settings is None
+    assert opts.skills == [] and opts.plugins == [] and "Skill" not in opts.tools
+    assert set(json.loads(opts.settings)) == {"attribution"}
     assert set(opts.agents) == {"web-researcher"}
 
 
