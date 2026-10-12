@@ -160,10 +160,10 @@ git clone https://github.com/anilkumarmeena/jarvis.git && cd jarvis
 make install
 ```
 
-**2. Sign in and configure** — JARVIS gets its own Claude login, then `.env`, keys and your passcode:
+**2. Sign in and configure** — JARVIS uses your Claude Code login (`make claude-login` if you aren't signed in), then `.env`, keys and your passcode:
 
 ```sh
-make claude-login
+make claude-status    # make claude-login if it says loggedIn: false
 make setup            # prints your phone passcode (make passcode shows it again)
 ```
 

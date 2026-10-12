@@ -21,7 +21,7 @@ UNAME     := $(shell uname -s)
 DOWNLOADS := install uv-bin livekit-bin models models-int8 web-install web-build
 ifeq ($(UNAME)$(HTTPS_PROXY)$(https_proxy),Darwin)
 ifneq ($(filter $(DOWNLOADS),$(MAKECMDGOALS)),)
-SYSTEM_PROXY := $(shell osascript -l JavaScript $(CURDIR)/deploy/macos-proxy.js https://github.com 2>/dev/null)
+SYSTEM_PROXY := $(shell osascript -l JavaScript "$(CURDIR)/deploy/macos-proxy.js" https://github.com 2>/dev/null)
 ifneq ($(SYSTEM_PROXY),)
 $(info Using the macOS proxy $(SYSTEM_PROXY) (set HTTPS_PROXY to override))
 export HTTPS_PROXY := $(SYSTEM_PROXY)
@@ -36,19 +36,25 @@ endif
 endif
 endif
 # Main checkout, even when run from a task's worktree (data/worktrees/jarvis-N)
-MAIN_DIR  := $(or $(patsubst %/.git,%,$(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)),$(CURDIR))
+# Paths may contain spaces ("Office Work"): make functions split words on them, so quote paths in recipes
+GIT_COMMON := $(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+MAIN_DIR  := $(or $(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/\.git$$||'),$(CURDIR))
 # Main checkout's Python (services, artifact-check), also from a worktree. Override with JARVIS_PYTHON=...
-ifeq ($(realpath $(MAIN_DIR)),$(realpath $(CURDIR)))
+ifeq ($(GIT_COMMON),$(shell git rev-parse --path-format=absolute --git-dir 2>/dev/null))
 JARVIS_PYTHON ?= $(UV) python
 else
-JARVIS_PYTHON ?= $(MAIN_DIR)/.venv/bin/python
+JARVIS_PYTHON ?= "$(MAIN_DIR)/.venv/bin/python"
 endif
 # Service labels (com.jarvis.* or JARVIS_SERVICE_PREFIX): launchd on macOS, systemd user units on Linux; evaluated
 # lazily. Service control always runs in the main
 # checkout so a worktree never installs its own copy.
-SERVICE_CTL = cd $(MAIN_DIR) && $(JARVIS_PYTHON) -m jarvis.setup_local
+SERVICE_CTL = cd "$(MAIN_DIR)" && $(JARVIS_PYTHON) -m jarvis.setup_local
 SERVICES    = $(shell $(SERVICE_CTL) labels)
-CLAUDE_DIR := $(MAIN_DIR)/secrets/claude
+# Claude login: the user's own, unless .env (or the environment) sets JARVIS_CLAUDE_CONFIG_DIR, a login of JARVIS's own
+CLAUDE_DIR := $(or $(JARVIS_CLAUDE_CONFIG_DIR),$(shell sed -n "s/^JARVIS_CLAUDE_CONFIG_DIR=[\"']*\([^\"']*\)[\"']*$$/\1/p" \
+               "$(MAIN_DIR)/.env" 2>/dev/null | tail -1))
+# ...relative to the main checkout, as jarvis.core.config reads it
+CLAUDE_PATH = $(if $(CLAUDE_DIR),$(if $(filter /%,$(CLAUDE_DIR)),,$(MAIN_DIR)/)$(CLAUDE_DIR))
 # Kokoro voice: kokoro-onnx's model files, from a pinned Hugging Face mirror (byte-identical to the GitHub release,
 # which serves ~120 KB/s per connection), hash-checked
 KOKORO_HF   := https://huggingface.co/fastrtc/kokoro-onnx/resolve/8d07950c9b6c87ce6809e9bba7bd494336217c2a
@@ -160,11 +166,11 @@ models-int8: ## Download the 8-bit Kokoro (~230 MB less memory, slower; JARVIS_T
 setup: uv-bin ## Generate keys, passcode and LiveKit config (rerunnable)
 	$(UV) python -m jarvis.setup_local
 
-claude-login: ## Log in JARVIS's own Claude CLI
-	CLAUDE_CONFIG_DIR=$(CLAUDE_DIR) claude auth login
+claude-login: ## Log in to Claude (yours; JARVIS's own if .env sets JARVIS_CLAUDE_CONFIG_DIR)
+	$(if $(CLAUDE_PATH),CLAUDE_CONFIG_DIR="$(CLAUDE_PATH)" )claude auth login
 
-claude-status: ## Show JARVIS's Claude account
-	@CLAUDE_CONFIG_DIR=$(CLAUDE_DIR) claude auth status | grep -E '"(loggedIn|email|orgName|subscriptionType)"'
+claude-status: ## Show the Claude account JARVIS uses
+	@$(if $(CLAUDE_PATH),CLAUDE_CONFIG_DIR="$(CLAUDE_PATH)" )claude auth status | grep -E '"(loggedIn|email|orgName|subscriptionType)"'
 
 accounts: ## Google accounts (ARGS="add home ...")
 	$(UV) python -m jarvis.integrations.accounts $(or $(ARGS),list)
@@ -250,12 +256,12 @@ DETACH  = $(if $(shell command -v systemd-run),systemd-run --user --collect --qu
 endif
 
 services-restart: web-build ## Rebuild web app, restart services
-	@mkdir -p $(MAIN_DIR)/logs; rm -f $(RESTART_LOG).done
+	@mkdir -p "$(MAIN_DIR)/logs"; rm -f "$(RESTART_LOG).done"
 	@$(DETACH) \
-		sh -c '$(MAKE) --no-print-directory -C $(MAIN_DIR) services-stop services-start > $(RESTART_LOG) 2>&1; touch $(RESTART_LOG).done' \
+		sh -c '$(MAKE) --no-print-directory -C "$(MAIN_DIR)" services-stop services-start > "$(RESTART_LOG)" 2>&1; touch "$(RESTART_LOG).done"' \
 		</dev/null >/dev/null 2>&1 &
-	@for i in $$(seq 180); do [ -f $(RESTART_LOG).done ] && break; sleep 1; done; cat $(RESTART_LOG); \
-		[ -f $(RESTART_LOG).done ] || echo "still restarting, see $(RESTART_LOG)"
+	@for i in $$(seq 180); do [ -f "$(RESTART_LOG).done" ] && break; sleep 1; done; cat "$(RESTART_LOG)"; \
+		[ -f "$(RESTART_LOG).done" ] || echo "still restarting, see $(RESTART_LOG)"
 
 status: ## Show service status
 ifeq ($(UNAME),Darwin)
@@ -321,8 +327,7 @@ host-check: ## Check task sandbox walls
 	$(UV) python -m jarvis.safety.host check
 
 artifact-check: ## Test artifact publishing (FILE=page.html)
-	JARVIS_CLAUDE_CONFIG_DIR="$${JARVIS_CLAUDE_CONFIG_DIR:-$(CLAUDE_DIR)}" \
-		$(JARVIS_PYTHON) -m jarvis.tasks.artifact_check $(if $(FILE),--file $(abspath $(FILE)))
+	$(if $(CLAUDE_PATH),JARVIS_CLAUDE_CONFIG_DIR="$(CLAUDE_PATH)" )$(JARVIS_PYTHON) -m jarvis.tasks.artifact_check $(if $(FILE),--file "$(abspath $(FILE))")
 
 check: ## Compile, type-check, import all
 	$(UV) python -m compileall -q jarvis

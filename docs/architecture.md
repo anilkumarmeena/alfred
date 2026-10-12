@@ -82,7 +82,7 @@ flowchart TB
 
 - **On the computer itself**, a browser skips Tailscale and goes straight to the web server and LiveKit; `make console` talks to a job process directly.
 - **Inside the agent**, each call gets its own job process (VAD, noise filter, brain), and all calls share one speech process for Whisper and Kokoro.
-- **Shared state:** the agent's job processes, the runner and the web server all use `data/`; the runner also holds `secrets/`, and the CLI keeps its own login in `secrets/claude`.
+- **Shared state:** the agent's job processes, the runner and the web server all use `data/`; the runner also holds `secrets/`, and the CLI signs in with the user's Claude Code login (or one of JARVIS's own, `JARVIS_CLAUDE_CONFIG_DIR`).
 
 | | Service | Entry point | Listens on | Role |
 |:-:|---|---|---|---|
@@ -262,7 +262,7 @@ sequenceDiagram
 | | Property | Detail |
 |:-:|---|---|
 | 🔁 | **Process** | One CLI process per voice session, started while the room connects |
-| 🔑 | **Login** | `CLAUDE_CONFIG_DIR=secrets/claude`, separate from the user's own Claude Code |
+| 🔑 | **Login** | The user's own Claude Code login; their settings, CLAUDE.md, hooks and MCP servers still stay out. `JARVIS_CLAUDE_CONFIG_DIR` gives JARVIS its own |
 | 🤖 | **Model** | `JARVIS_CLI_MODEL` (default `claude-opus-5-5`), effort `low`, `max_turns` 8 |
 | 🔒 | **Lockdown** | `setting_sources=[]`, `strict_mcp_config=True`, **no file editing** |
 | 🧰 | **Tool servers** | In-process MCP `jarvis` (`sdk.jarvis_server`), `shell` (long jobs), enabled external MCP servers |

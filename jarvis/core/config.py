@@ -132,7 +132,14 @@ ASSISTANT_NAME = "JARVIS"
 
 # Empty = CLI bundled with claude-agent-sdk, so its version tracks the SDK
 CLAUDE_CLI = os.environ.get("JARVIS_CLAUDE_CLI", "")
-CLAUDE_CONFIG_DIR = os.environ.get("JARVIS_CLAUDE_CONFIG_DIR", "") or str(SECRETS_DIR / "claude")
+# Claude login: the user's own Claude Code sign-in, unless JARVIS_CLAUDE_CONFIG_DIR gives JARVIS one of its own
+# (relative to ROOT, e.g. secrets/claude). Only that one is passed to the CLI: setting CLAUDE_CONFIG_DIR at all, even to
+# ~/.claude, makes the CLI look for a different macOS Keychain entry, so the user's own login wouldn't be found.
+CLAUDE_OWN_CONFIG_DIR = (os.environ.get("JARVIS_CLAUDE_CONFIG_DIR", "")
+                         and str(ROOT / Path(os.environ["JARVIS_CLAUDE_CONFIG_DIR"]).expanduser()))
+# The CLI's folder either way: its session transcripts, and on Linux the login
+CLAUDE_CONFIG_DIR = (CLAUDE_OWN_CONFIG_DIR or os.environ.get("CLAUDE_CONFIG_DIR", "")
+                     or str(Path.home() / ".claude"))
 DEFAULT_MODEL = "claude-opus-5-5"
 CLI_MODEL = os.environ.get("JARVIS_CLI_MODEL", "") or DEFAULT_MODEL
 FAST_MODEL = "claude-haiku-4-5-20251001"  # subagents that only look things up

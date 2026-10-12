@@ -73,7 +73,7 @@ def test_other_tasks_dont_get_them_yet(folder, monkeypatch, kind):
 def test_the_cli_gets_none_of_jarvis_keys(folder):
     env = options(folder).env
     assert env["JARVIS_PASSCODE"] == "" == env["LIVEKIT_API_SECRET"]
-    assert env["CLAUDE_CONFIG_DIR"] != ""  # the CLI's own, as sdk_options sets it
+    assert env.get("CLAUDE_CONFIG_DIR") != ""  # never blanked: unset (the user's login) or JARVIS's own login
 
 
 def test_a_big_message_doesnt_end_the_task(folder):

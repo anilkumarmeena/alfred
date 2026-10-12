@@ -1,6 +1,6 @@
 """Voice brain on the local `claude` CLI via the Claude Agent SDK.
 
-Own login under CLAUDE_CONFIG_DIR; one CLI process per voice session. Claude Code's own abilities (file edits,
+The user's own Claude login (or JARVIS's, see CLAUDE_OWN_CONFIG_DIR); one CLI process per voice session. Claude Code's own abilities (file edits,
 settings, its skills, other MCP servers) are off. Available: JARVIS tools, web search/fetch, sandboxed shell and jobs
 (jarvis.safety.shell), the browser when on, enabled MCP servers (writes gated by jarvis.safety.mcp_gate), side jobs
 for slow reading and file lookups (jarvis.brain.side), and enabled skills as a per-session plugin. The brain has no

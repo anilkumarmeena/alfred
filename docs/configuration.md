@@ -93,7 +93,7 @@ uv run python -m jarvis.state.settings prefs voice bm_lewis  # change one
 | Setting | Default | What it does |
 |---|---|---|
 | `JARVIS_CLAUDE_CLI` | Bundled with `claude-agent-sdk` | Path to a `claude` binary |
-| `JARVIS_CLAUDE_CONFIG_DIR` | `secrets/claude` | JARVIS's own Claude login |
+| `JARVIS_CLAUDE_CONFIG_DIR` | Empty: your Claude Code login | A Claude login of JARVIS's own, e.g. `secrets/claude` (then `make claude-login`) |
 | `JARVIS_MASTER_KEY` | Made by setup | Encrypts the vault; `make vault ARGS=init` makes one |
 | `JARVIS_CLI_MODEL` | Opus | The voice brain's model |
 | `JARVIS_EFFORT` | `low` | Its effort; low keeps spoken turns quick |
