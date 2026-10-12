@@ -18,10 +18,12 @@ import json
 import logging
 import re
 import shutil
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from email.utils import parseaddr, parsedate_to_datetime
+from pathlib import Path
 
 from jarvis.brain import retry, usage
 from jarvis.core import profile
@@ -38,6 +40,7 @@ MAX_FAILS = 3  # consecutive failed watch checks before announcing (once)
 PROBE_TIMEOUT = 60
 PAGE_BYTES = 2_000_000  # url probe read cap
 HIDDEN_DAYS, FINISHED_DAYS = 3, 30  # retention for hidden runs and finished jobs
+TEMP_DAYS = 7  # an ended task's temp folder is kept this long, for follow-ups
 PRUNE_SECONDS = 6 * 3600
 NOTEPAD = "NOTEPAD:"
 NOTEPAD_CHARS = 1500
@@ -543,18 +546,36 @@ class Scheduler:
     # ── Pruning ─────────────────────────────────────────────────
 
     async def prune(self) -> None:
-        """Delete old hidden runs (with folders and Claude sessions) and old finished jobs."""
+        """Delete old hidden runs (with folders and Claude sessions), old finished jobs and ended tasks' temp folders."""
         ids = self.runner.store.prune_hidden(HIDDEN_DAYS)  # runner's connection: must stay on the loop thread
-        jobs = await asyncio.to_thread(self._tidy, ids)
-        if ids or jobs:
-            log.info("scheduler: forgot %d hidden runs and %d finished jobs", len(ids), jobs)
+        temps = self._ended_temps()
+        jobs = await asyncio.to_thread(self._tidy, ids, temps)
+        if ids or jobs or temps:
+            log.info("scheduler: forgot %d hidden runs, %d finished jobs and %d task temp folders", len(ids), jobs,
+                     len(temps))
+
+    def _ended_temps(self) -> list[Path]:
+        """Temp folders of tasks that ended over TEMP_DAYS ago, or are gone (forgotten runs). On the loop thread."""
+        from jarvis.tasks.host_tools import task_temp  # here: host_tools pulls in the SDK and safety layers
+
+        before, found = time.time() - TEMP_DAYS * 86400, []
+        for folder in task_temp(0).parent.glob("task-*"):
+            if not folder.name[5:].isdigit():
+                continue
+            task = self.runner.store.get(int(folder.name[5:]))
+            if task is None or (task["status"] not in TASK_ACTIVE and task["updated"] < before):
+                found.append(folder)
+        return found
 
     @staticmethod
-    def _tidy(task_ids: list[int]) -> int:
-        """Remove pruned runs' folders and sessions and old finished jobs; returns the job count."""
+    def _tidy(task_ids: list[int], temps: list[Path]) -> int:
+        """Remove pruned runs' folders and sessions, ended tasks' temp folders and old finished jobs; returns the job
+        count."""
         for task_id in task_ids:
             folder = DATA_DIR / "tasks" / str(task_id)
             shutil.rmtree(folder, ignore_errors=True)
             # CLI session dir: cwd path with non-alphanumerics replaced by dashes
             shutil.rmtree(f"{CLAUDE_CONFIG_DIR}/projects/{re.sub(r'[^A-Za-z0-9]', '-', str(folder))}", ignore_errors=True)
+        for folder in temps:
+            shutil.rmtree(folder, ignore_errors=True)
         return schedules.prune(FINISHED_DAYS)

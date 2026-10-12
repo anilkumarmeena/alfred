@@ -11,7 +11,7 @@ from test_approvals import drained, events, pushes  # noqa: F401  (fixture)
 from test_in_place import env  # noqa: F401  (fixture)
 from test_nudges import fake_run, finishes, settle
 
-from conftest import use_profile
+from conftest import use_profile, use_task_cache
 from jarvis import tools
 from jarvis.brain import retry
 from jarvis.core import profile
@@ -670,6 +670,23 @@ def test_tidying_removes_forgotten_runs_folders_and_old_jobs(db, tmp_path, monke
     assert not folder.exists() and not sessions.exists()
     assert (tmp_path / "data" / "tasks" / str(newest["id"])).exists()
     assert schedules.get(ended["id"]) is None and schedules.get(kept["id"])
+
+
+def test_tidying_removes_ended_tasks_temp_folders_after_a_week(db, tmp_path, monkeypatch):
+    monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path / "data")
+    temp = use_task_cache(monkeypatch, tmp_path / "cache") / "tmp"
+    store = Store()
+    ended, running, recent = (store.create("research", "Check", "x", None) for _ in range(3))
+    store.db.execute("update tasks set status = 'done', updated = 0")
+    store.set(running["id"], status="running")
+    store.set(recent["id"], status="done")  # ended just now: a follow-up may still use its folder
+    folders = {name: temp / f"task-{i}" for name, i in
+               (("ended", ended["id"]), ("running", running["id"]), ("recent", recent["id"]), ("gone", 999))}
+    for d in [*folders.values(), temp / "task-notes"]:
+        d.mkdir(parents=True)
+    asyncio.run(Scheduler(type("R", (), {"store": store})(), None).prune())
+    assert not folders["ended"].exists() and not folders["gone"].exists()
+    assert folders["running"].exists() and folders["recent"].exists() and (temp / "task-notes").exists()
 
 
 # ── The voice tools ─────────────────────────────────────────────
