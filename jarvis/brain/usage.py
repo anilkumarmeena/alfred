@@ -63,19 +63,19 @@ def _ends(w: dict) -> float:
     return w.get("seen", 0) + (UNKNOWN_RESET if w.get("status") == "rejected" else FORGET)
 
 
-def windows(now: float | None = None) -> dict[str, dict]:
-    """Known state of each window that hasn't reset yet."""
+def windows(now: float | None = None, kept: dict | None = None) -> dict[str, dict]:
+    """Known state of each window that hasn't reset yet: this computer's, or `kept` (another machine's account)."""
     now = now or time.time()
-    return {k: w for k, w in _read().items() if isinstance(w, dict) and _ends(w) > now}
+    return {k: w for k, w in (_read() if kept is None else kept).items() if isinstance(w, dict) and _ends(w) > now}
 
 
 def _used_up(w: dict) -> bool:
     return w.get("status") == "rejected" and w.get("overage") != "allowed"  # extra usage carries on past it
 
 
-def out(now: float | None = None) -> tuple[str, dict] | None:
+def out(now: float | None = None, kept: dict | None = None) -> tuple[str, dict] | None:
     """(name, details) of a window used up for every model (latest reset if several), or None."""
-    found = [(k, w) for k, w in windows(now).items() if k not in OWN and _used_up(w)]
+    found = [(k, w) for k, w in windows(now, kept).items() if k not in OWN and _used_up(w)]
     return max(found, key=lambda kw: _ends(kw[1]), default=None)
 
 
@@ -143,10 +143,10 @@ def _window(name: str, w: dict, now: float) -> str:
     return said + (f", resetting {when(w['resets_at'], now)}" if w.get("resets_at") else "")
 
 
-def said(now: float | None = None) -> str:
-    """Known state in a sentence or two."""
+def said(now: float | None = None, kept: dict[str, dict] | None = None) -> str:
+    """Known state in a sentence or two: this computer's, or `kept` windows (another machine's account)."""
     now = now or time.time()
-    known = windows(now)
+    known = windows(now, kept)
     if not known:
         return ("Claude hasn't reported anything about the usage limits lately: it says more only as they get close, "
                 "so there's nothing to worry about.")
@@ -158,7 +158,7 @@ def said(now: float | None = None) -> str:
 
 
 def alerts(now: float | None = None) -> list[tuple[str, str]]:
-    """Warnings as (key, sentence); a key is stable per window until reset, so the heartbeat says each once."""
+    """Warnings as (key, sentence); a key is stable per window until reset, so notices say each once."""
     now = now or time.time()
     out_ = []
     for name, w in windows(now).items():

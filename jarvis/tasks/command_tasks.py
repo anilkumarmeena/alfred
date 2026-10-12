@@ -8,9 +8,11 @@ from pathlib import Path
 
 from jarvis.brain import usage
 from jarvis.core.database import ACTIVE, COMMAND, CONNECTION, WAIT_QUESTION
+from jarvis.node import machines, placement
+from jarvis.node.offload import TurnedDown
 from jarvis.safety.commands import secret_path
 from jarvis.state import activity as bell
-from jarvis.tasks import command_jobs, connection_jobs, scheduler, schedules
+from jarvis.tasks import command_jobs, connection_jobs, projects, scheduler, schedules
 from jarvis.tasks.approvals import SAID_MOST
 from jarvis.tasks.command_jobs import ASK, DONE, FIX, LOST, REPORT, STOPPED, TIMEOUT, last_lines, spec, took
 from jarvis.tasks.runner_base import RunnerBase
@@ -26,11 +28,13 @@ class CommandTasks(RunnerBase):
     def start_command(self, command: str, title: str, folder: str | Path, job: int | None = None,
                       project: str | None = None, timeout_minutes: int | None = None, log_file: str | None = None,
                       summarize: bool = True, auto_fix: bool = True, report: bool = False, attempt: int = 1,
-                      after: dict | None = None) -> dict:
+                      after: dict | None = None, placeable: bool = False, machine: str = "", approved: str = "") -> dict:
         """Start a command task in absolute `folder` (~ allowed); takes no task slot.
 
         `job`: owning scheduled job. `log_file`: glob of the command's own log, read with its output. `project`
         defaults to the folder's. A post-fix rerun has `attempt` 2 and `after` = {task, fix, failed, fixed}.
+        `placeable`: it may run on another machine (Settings › Machines, or `machine` where the user said), when its
+        folder is in a project; `approved` says how a risky command got the user's yes, for that machine to check.
         Raises ValueError for an empty command or an unusable folder."""
         self._open()
         command = command.strip()
@@ -41,28 +45,109 @@ class CommandTasks(RunnerBase):
             raise ValueError("Give the folder as a full path (~ allowed).")
         if secret_path(path):
             raise ValueError("That folder holds secrets, which stay out of reach.")
-        if not path.is_dir():
+        there = projects.living_at(path)  # a project that lives on another machine: its folder is there
+        if not there and not path.is_dir():
             raise ValueError(f"{path} isn't a folder.")
-        if project is None and auto_fix:
-            project = command_jobs.project_of(path)
+        if project is None and (auto_fix or there):
+            project = there.name if there else command_jobs.project_of(path)
         title = " ".join(title.split())[:80] or command[:60]
         how = {"folder": str(path), "timeout_minutes": timeout_minutes or None, "log_file": log_file or None,
                "summarize": bool(summarize), "auto_fix": bool(auto_fix), "report": bool(report), "attempt": attempt}
         if after:
             how["after"] = after
+        if placeable:
+            how |= {"placeable": True} | ({"approved": approved} if approved else {})
+        owner = there.name if there else command_jobs.project_of(path) if placeable else None
+        if there:
+            machine = ""  # it runs where its project lives
+        elif machine and machine.strip().lower() != machines.HERE:
+            if not owner:
+                raise ValueError("Only a command in one of the projects can run on another machine: its project is "
+                                 "copied there.")
+            machines.find(machine)  # an unknown name is said now, before anything starts
         task = self.store.create(COMMAND, title, command, project, job=job, command=how)
         task_id = task["id"]
+        if owner and (there or machine or machines.paired()):
+            self._said_start(task, attempt, after, job)
+            self.placing[task_id] = placing = asyncio.create_task(
+                self._place_command(task_id, path, projects.find(owner), how, machine))
+            placing.add_done_callback(lambda _: self.placing.pop(task_id, None))
+            return self.store.update(task_id, status="running", activity="choosing where it runs",
+                                     command=json.dumps(how))
+        self._start_here(task_id, command, title, path, how)
+        self._said_start(task, attempt, after, job)
+        return self.store.update(task_id, status="running", activity="running", command=json.dumps(how))
+
+    def _start_here(self, task_id: int, command: str, title: str, path: Path, how: dict) -> None:
+        """Start the command on this computer; ValueError (recorded on the task) if it can't."""
         try:
             how["started"] = self.commands.start(task_id, command, title, path)["started"]
         except (ValueError, OSError) as e:
             self.store.log(task_id, "failed", f"couldn't start: {e}")
             self.store.set(task_id, status="failed", error=f"Couldn't start: {e}"[:300], spoken=f"Couldn't start: {e}"[:300])
             raise ValueError(f"{e}") from e
-        self.store.log(task_id, "start", f"in {path}: {command}")
+
+    def _said_start(self, task: dict, attempt: int, after: dict | None, job: int | None) -> None:
+        task_id = task["id"]
+        self.store.log(task_id, "start", f"in {command_jobs.spec(task)['folder']}: {task['instruction']}")
         if attempt > 1:
             self.store.log(task_id, "rerun", f"running again after task {after['fix']}'s fix" if after else "running again")
-        bell.add(f"Started {'scheduled command' if job is not None else 'command'} {task_id}: {title}", "run", task_id)
-        return self.store.update(task_id, status="running", activity="running", command=json.dumps(how))
+        bell.add(f"Started {'scheduled command' if job is not None else 'command'} {task_id}: {task['title']}", "run",
+                 task_id)
+
+    async def _place_command(self, task_id: int, path: Path, owner: projects.Project, how: dict, machine: str) -> None:
+        """Choose where a new command runs, then start it there: on its machine (its project copied over), or here
+        when none is chosen, or sending it fails (said with the start)."""
+        task = self.store.get(task_id)
+        job = {"kind": "long command", "title": task["title"], "command": task["instruction"][:500],
+               "folder": str(path), "project": owner.name}
+        if owner.node:  # it lives there, so it runs there or not at all
+            name = self.offload.name(owner.node)
+            if self.hub.connected(owner.node) is None:
+                self._finish(task_id, "failed", f"Task {task_id}, {task['title']}, didn't start: {name}, where "
+                                                f"{owner.name} lives, isn't online.", error=f"{name} isn't online")
+                return
+            place = placement.Place(owner.node, name, f"It's running on {name}, where {owner.name} lives.")
+        else:
+            try:
+                place = await self.offload.place(placement.COMMANDS, job, machine)
+            except Exception as e:
+                log.warning("command task %s: choosing its machine failed: %s", task_id, e)
+                place = placement.HERE
+        if place.node:
+            self._placed(task_id, place)
+            try:
+                await self.offload.start_command(self.store.get(task_id), place.node, owner, path,
+                                                 how.get("approved", ""))
+            except asyncio.CancelledError:
+                raise
+            except TurnedDown as e:  # the machine's own check turned it down: it doesn't run anywhere
+                await self.offload.forget(place.node, self.offload.key(task_id))
+                self.store.set(task_id, node=None)
+                self._finish(task_id, "failed", f"Task {task_id}, {task['title']}, didn't start: {place.name} turned "
+                                                f"it down, as {e}."[:400], error=str(e)[:300])
+                return
+            except Exception as e:
+                log.warning("command task %s couldn't start on %s: %s", task_id, place.name, e)
+                if owner.node:  # its folder is only there
+                    self._finish(task_id, "failed", f"Task {task_id}, {task['title']}, couldn't start on "
+                                                    f"{place.name}: {e}"[:400], error=str(e)[:300])
+                    return
+                await self.offload.forget(place.node, self.offload.key(task_id))
+                place = placement.Place(said=f"It couldn't be sent to {place.name} ({e}), so it's running on this "
+                                             "computer instead."[:400])
+                self.store.set(task_id, node=None)
+            else:
+                how["started"] = time.time()
+                self.store.set(task_id, activity="running", command=json.dumps(how))
+                return
+        self._placed(task_id, place)
+        try:
+            self._start_here(task_id, task["instruction"], task["title"], path, how)
+        except ValueError as e:
+            self._finish(task_id, "failed", f"Task {task_id}, {task['title']}, couldn't start: {e}"[:400])
+            return
+        self.store.set(task_id, activity="running", command=json.dumps(how))
 
     def rerun(self, task_id: int) -> dict:
         """Rerun a finished command task with the same settings, as a new task (the panel's Retry)."""
@@ -74,7 +159,8 @@ class CommandTasks(RunnerBase):
         how = spec(task)
         again = self.start_command(task["instruction"], task["title"], how["folder"], task["job"], task["project"],
                                    how.get("timeout_minutes"), how.get("log_file"), how.get("summarize", True),
-                                   how.get("auto_fix", True), how.get("report", False))
+                                   how.get("auto_fix", True), how.get("report", False),
+                                   placeable=bool(how.get("placeable")), approved=how.get("approved", ""))
         self.store.log(task_id, "rerun", f"run again as task {again['id']}")
         if task["job"] is not None and (job := schedules.get(task["job"])) and job["last_task"] == task_id:
             schedules.update(job["id"], last_task=again["id"], run=json.dumps(self._run_of(again, spec(again))))
@@ -89,14 +175,25 @@ class CommandTasks(RunnerBase):
             raise ValueError(f"Task {task_id}'s command has just ended.")
         self.ending[task_id] = asyncio.current_task()  # keep check_commands off it
         try:
-            try:
-                await self.commands.stop(task_id)
-            except ValueError as e:  # already ended; check_commands handles it
-                raise ValueError(f"Task {task_id}'s command had already ended ({e}).") from None
+            if placing := self.placing.get(task_id):  # not started anywhere yet
+                placing.cancel()
+            else:
+                try:
+                    await self._stop_run(task)
+                except ValueError as e:  # already ended; check_commands handles it
+                    raise ValueError(f"Task {task_id}'s command had already ended ({e}).") from None
             await self._command_ended(task_id, STOPPED, None, time.time())
         finally:
             self.ending.pop(task_id, None)
         return self.store.get(task_id)
+
+    async def _stop_run(self, task: dict) -> None:
+        """Stop the command, here or on its machine (where its copy then goes too). ValueError if it had ended."""
+        if task.get("node"):
+            await self.offload.stop_command(task)
+            await self.offload.forget(task["node"], self.offload.key(task["id"]))
+        else:
+            await self.commands.stop(task["id"])
 
     async def _watch_commands(self) -> None:
         while True:
@@ -112,7 +209,8 @@ class CommandTasks(RunnerBase):
         output line as activity."""
         now = now or time.time()
         for task in self.store.active():
-            if task["kind"] != COMMAND or task["status"] != "running" or task["id"] in self.ending:
+            if task["kind"] != COMMAND or task["status"] != "running" or task["id"] in self.ending \
+                    or task["id"] in self.placing:
                 continue
             how, record = spec(task), self.commands.get(task["id"])
             ended = self.commands.how(record) if record else (LOST, None)
@@ -135,7 +233,7 @@ class CommandTasks(RunnerBase):
 
     async def _time_up(self, task_id: int) -> None:
         try:
-            await self.commands.stop(task_id)
+            await self._stop_run(self.store.get(task_id))
         except ValueError:  # it ended on its own just now
             record = self.commands.get(task_id)
             if record and (ended := self.commands.how(record)) and ended[0] != STOPPED:
@@ -194,9 +292,18 @@ class CommandTasks(RunnerBase):
                 f"fixed it: {sentence(after.get('fixed', ''))}")
 
     async def _command_done(self, task: dict, how: dict) -> None:
-        """Announce success: `report` jobs say their last line; else a model summary, falling back to the last lines."""
+        """Announce success: `report` jobs say their last line; else a model summary, falling back to the last lines.
+        An only_changes job's run that printed nothing ends quietly and hidden, with no model call."""
         task_id, seconds = task["id"], how["ended"] - how["started"]
         output = self.commands.output(task_id, command_jobs.SUMMARY_CHARS, how.get("log_file"), how["started"])
+        job = schedules.get(task["job"]) if task["job"] is not None else None
+        if job and job["only_changes"] and not output.strip() and not how.get("after"):
+            how["summary"] = "Nothing to report."
+            self.store.set(task_id, command=json.dumps(how))
+            self._settle_run(task, how, how["summary"])
+            self._finish(task_id, "done", f"{task['title']}: nothing to report.", quiet=True, hidden=1, seen=1,
+                         summary=how["summary"])
+            return
         summary = ""
         if how.get("report"):
             summary = command_jobs.last_line(output)
@@ -313,7 +420,8 @@ class CommandTasks(RunnerBase):
             rerun = self.start_command(failed["instruction"], failed["title"], how["folder"], failed["job"],
                                        failed["project"], how.get("timeout_minutes"), how.get("log_file"),
                                        how.get("summarize", True), how.get("auto_fix", True), how.get("report", False),
-                                       how.get("attempt", 1) + 1, after)
+                                       how.get("attempt", 1) + 1, after, placeable=bool(how.get("placeable")),
+                                       approved=how.get("approved", ""))
         except ValueError as e:
             return f"{said} The command couldn't run again: {e}", False
         self.store.log(failed["id"], "rerun", f"running again as task {rerun['id']}, after task {task['id']}'s fix")

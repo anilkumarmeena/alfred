@@ -15,7 +15,7 @@ from jarvis.integrations import accounts
 from jarvis.notify import push
 from jarvis.safety.commands import describe
 from jarvis.state import memory, settings, todo
-from jarvis.tasks import api, client, heartbeat, runner, schedules
+from jarvis.tasks import api, client, runner, schedules
 
 TODAY = f"{date.today():%Y-%m-%d}"
 IPHONE = {"endpoint": "https://web.push.apple.com/abc", "keys": {"p256dh": "B" * 87, "auth": "A" * 22}}
@@ -193,40 +193,6 @@ def test_name_and_time_zone_default_to_the_macs(prefs):
     assert shown["name"]["default"] == (config.mac_name() or "the user")
     assert shown["timezone"]["default"] == (config.mac_timezone() or "UTC")
     assert not config.mac_timezone() or config.zone_ok(config.mac_timezone())
-
-
-# ── The heartbeat's sources ─────────────────────────────────────
-
-
-def test_heartbeat_sources_switched_set_added_and_removed(db):
-    shown = call("heartbeat_sources")
-    email = next(s for s in shown["sources"] if s["id"] == "email")
-    assert email["on"] and email["settings"] == [{"key": "query", "label": "Gmail search", "default": heartbeat.MAIL_QUERY,
-                                                  "value": heartbeat.MAIL_QUERY}]
-    assert [k["name"] for k in shown["kinds"]] == ["email"]
-
-    shown = call("heartbeat_source_save", {"id": "github", "on": False})
-    assert next(s for s in shown["sources"] if s["id"] == "github")["on"] is False
-    shown = call("heartbeat_source_save", {"id": "email", "settings": {"query": "from:boss"}})
-    assert next(s for s in shown["sources"] if s["id"] == "email")["settings"][0]["value"] == "from:boss"
-    shown = call("heartbeat_source_add", {"kind": "email", "title": "Invoices", "settings": {"query": "subject:invoice"}})
-    added = shown["sources"][-1]
-    assert (added["id"], added["added"], added["on"]) == ("email:invoices", "in the panel", True)
-    shown = call("heartbeat_source_remove", {"id": "email:invoices"})
-    assert not any(s["added"] for s in shown["sources"])
-    assert set(heartbeat.sources_on(None)) >= {"calendar", "email"} and "github" not in heartbeat.sources_on(None)
-
-
-@pytest.mark.parametrize("action, body", [
-    ("heartbeat_source_save", {"id": "github", "on": "no"}),
-    ("heartbeat_source_save", {"id": "email", "settings": ["from:boss"]}),
-    ("heartbeat_source_save", {"id": "calendar", "settings": {"minutes": 5}}),
-    ("heartbeat_source_add", {"kind": "github", "title": "Mine", "settings": {}}),
-    ("heartbeat_source_remove", {"id": "tasks"}),
-])
-def test_heartbeat_source_changes_it_cant_take(db, action, body):
-    with pytest.raises(ValueError):
-        call(action, body)
 
 
 def test_the_push_contact_is_the_default_google_account(monkeypatch):
@@ -520,6 +486,7 @@ def test_on_linux_system_reads_systemd_user_units(db, monkeypatch):
                       "ExecMainStartTimestampMonotonic=0\n",
              "web": "LoadState=not-found\nActiveState=inactive\nExecMainStatus=0\n"}
     asked = []
+    ago = min(3600, panel.time.monotonic() / 2)  # an hour ago, or less on a computer up for less
 
     class Proc:
         def __init__(self, out: str):
@@ -531,7 +498,7 @@ def test_on_linux_system_reads_systemd_user_units(db, monkeypatch):
     async def exec_(*cmd, **kwargs):
         asked.append(cmd)
         name = cmd[-1].removesuffix(".service").rpartition(".")[2]
-        started = int((panel.time.monotonic() - 3600) * 1e6)
+        started = int((panel.time.monotonic() - ago) * 1e6)
         return Proc(shown.get(name, "").format(started))
 
     monkeypatch.setattr(panel.setup_local, "MANAGER", "systemd")
@@ -541,6 +508,6 @@ def test_on_linux_system_reads_systemd_user_units(db, monkeypatch):
     livekit, agent, web, tasks = call("system")["services"]
     assert asked[0][:3] == ("systemctl", "--user", "show")
     assert asked[0][-1] == config.service_label("livekit") + ".service"
-    assert livekit["state"] == "running" and abs(panel.time.time() - 3600 - livekit["since"]) < 5
+    assert livekit["state"] == "running" and abs(panel.time.time() - ago - livekit["since"]) < 5
     assert agent == {"name": "Voice agent", "state": "stopped", "exit": 1}
     assert web == {"name": "Web", "state": "not loaded"} and tasks == {"name": "Task runner", "state": "not loaded"}

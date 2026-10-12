@@ -41,7 +41,7 @@
 | 👂 | [Speaker check](#-speaker-check) | Answering only your voice |
 | 🧰 | [Background tasks](#-background-tasks) | Task limits, models, goal loop |
 | 🌐 | [Web browser](#-web-browser) | The browser tools |
-| 💓 | [Heartbeat, scheduler and learning](#-heartbeat-scheduler-and-learning) | Proactive checks and scheduled work |
+| 🔔 | [Notices, scheduler and learning](#-notices-scheduler-and-learning) | JARVIS's own notices and scheduled work |
 | 🔔 | [Notifications](#-notifications) | Web Push and the native app |
 
 </details>
@@ -93,13 +93,13 @@ uv run python -m jarvis.state.settings prefs voice bm_lewis  # change one
 | Setting | Default | What it does |
 |---|---|---|
 | `JARVIS_CLAUDE_CLI` | Bundled with `claude-agent-sdk` | Path to a `claude` binary |
-| `JARVIS_CLAUDE_CONFIG_DIR` | `secrets/claude` | JARVIS's own Claude login |
+| `JARVIS_CLAUDE_CONFIG_DIR` | Empty: your Claude Code login | A Claude login of JARVIS's own, e.g. `secrets/claude` (then `make claude-login`) |
 | `JARVIS_MASTER_KEY` | Made by setup | Encrypts the vault; `make vault ARGS=init` makes one |
 | `JARVIS_CLI_MODEL` | Opus | The voice brain's model |
 | `JARVIS_EFFORT` | `low` | Its effort; low keeps spoken turns quick |
 | `JARVIS_MAX_TOOL_ROUNDS` | `8` | Most model turns in one reply |
 | `JARVIS_VOICE_QUICK_MODEL` | *(off)* | A lighter model (e.g. `claude-sonnet-5`) for simple turns |
-| `JARVIS_LOOKUP_MODEL` | Haiku | The voice brain's read-only lookup subagent |
+| `JARVIS_LOOKUP_MODEL`<br>`JARVIS_LOOKUP_WAIT` | Haiku<br>`8` | The voice brain's read-only file lookups: model, and seconds a spoken turn waits on them before they carry on in the background |
 | `JARVIS_SIDE_MODEL`<br>`JARVIS_SIDE_MINUTES` | Sonnet<br>`3` | Background lookups that let the conversation carry on: model and time limit |
 | `JARVIS_PROACTIVE_JUDGE` | `on` | A fast model picks the moment to bring up task updates and alerts |
 | `JARVIS_TOOL_SEARCH` | `true` | Connections' tools load on demand via tool search |
@@ -300,18 +300,14 @@ Answers only your enrolled voice. What each case means is in **[🗣️ Voice](v
 | `JARVIS_BROWSER` | `on` | Give the voice brain the [web browser](integrations.md#-web-browser) tools |
 | `JARVIS_BROWSER_WINDOW` | `headed` | `headed` shows its window (to watch and log in); `headless` hides it |
 
-## 💓 Heartbeat, scheduler and learning
+## 🔔 Notices, scheduler and learning
 
-### Heartbeat
+### Notices
 
 | Setting | Default | What it does |
 |---|---|---|
-| `JARVIS_HEARTBEAT` | `on` | The [heartbeat](tasks.md#-heartbeat) |
-| `JARVIS_HEARTBEAT_MINUTES` | `15` | Minutes between checks |
-| `JARVIS_HEARTBEAT_EVENT_MINUTES` | `30` | How soon a meeting must start to be flagged (the app's Heartbeat page can override) |
-| `JARVIS_HEARTBEAT_QUIET_HOURS` | `23:00-08:00` | Local hours with no checks or alerts; watches pause too. Empty: never quiet |
-| `JARVIS_HEARTBEAT_TRIAGE`<br>`JARVIS_HEARTBEAT_MODEL` | `off`<br>The CLI model | A model drops newsletters and noise from new mail and GitHub notifications |
-| `JARVIS_SIGNIN_WARN_DAYS` | `7` | Warn this many days before a GitHub or GitLab token expires |
+| `JARVIS_NOTICES` | `on` | JARVIS's [notices](tasks.md#-notices) about itself: stuck or waiting tasks, usage limits |
+| `JARVIS_QUIET_HOURS` | `23:00-08:00` | Local hours with no notices; watches pause too. Empty: never quiet |
 
 ### Scheduler
 
@@ -337,7 +333,7 @@ Answers only your enrolled voice. What each case means is in **[🗣️ Voice](v
 
 | Setting | Default | What it does |
 |---|---|---|
-| `JARVIS_PUSH` | `on` | Send heartbeat alerts and task updates to subscribed phones |
+| `JARVIS_PUSH` | `on` | Send alerts and task updates to subscribed phones |
 | `JARVIS_PUSH_CONTACT` | Default Google account's address | `mailto:` or `https:` contact push services may use |
 | `JARVIS_APNS_TEAM_ID` | *(none)* | Apple developer team id, for the [native app](mobile.md#-native-app) |
 | `JARVIS_APNS_KEY_ID` | *(none)* | The APNs key id; moved into the vault on start |

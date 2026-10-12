@@ -22,7 +22,9 @@ LOGIN, RIGHT, WRONG = "Robin", "123456", "000000"  # one login, hashed in a scra
 # Passcode endpoints, and public ones (guarded otherwise or with nothing to guard)
 AUTHED = {"/api/token", "/api/push/subscribe", "/api/push/unsubscribe", "/api/push/native", "/api/log",
           "/api/picture", "/api/picture/drop", "/api/panel/{action}", "/api/events"}
-PUBLIC = {"/", "/sw.js", "/api/push/key", "/api/approvals/{id}", "/api/files/{token}", "/api/google/callback"}
+# A machine's link signs in with its keys at the task runner; pairing takes a one-time code
+PUBLIC = {"/", "/sw.js", "/api/push/key", "/api/approvals/{id}", "/api/files/{token}", "/api/google/callback",
+          "/api/node", "/api/node/pair"}
 
 
 class Request:

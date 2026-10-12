@@ -36,7 +36,7 @@ The `claude` CLI with JARVIS's own tools, web search, a sandboxed shell and Goog
 <td width="33%" valign="top">
 
 ### 🔄 Works while you talk
-Background tasks, a heartbeat, a scheduler and a learning review keep going after you hang up.
+Background tasks, a scheduler, the monitors you ask for and a learning review keep going after you hang up.
 
 </td>
 </tr>
@@ -69,7 +69,7 @@ Code changes, code questions, research and long shell jobs, in parallel, each ch
 <td valign="top">
 
 **🔔 Proactive**<br>
-A heartbeat for meetings, important mail, PRs and stuck tasks; reminders, recurring jobs and "tell me when…" watches.
+Reminders, recurring jobs, "tell me when…" watches and monitors you choose, from a model-free script to a scheduled check; a word when a task gets stuck.
 
 </td>
 </tr>
@@ -114,7 +114,7 @@ flowchart TB
         Web["🌐 Web server<br/>app · control panel"]
         LK["📡 LiveKit<br/>real-time audio"]
         Agent["🎙️ Voice agent<br/>hear → think → speak"]
-        Runner["⚙️ Task runner<br/>tasks · heartbeat · scheduler"]
+        Runner["⚙️ Task runner<br/>tasks · scheduler · notices"]
     end
 
     Claude(["🧠 Claude"])
@@ -160,10 +160,10 @@ git clone https://github.com/anilkumarmeena/jarvis.git && cd jarvis
 make install
 ```
 
-**2. Sign in and configure** — JARVIS gets its own Claude login, then `.env`, keys and your passcode:
+**2. Sign in and configure** — JARVIS uses your Claude Code login (`make claude-login` if you aren't signed in), then `.env`, keys and your passcode:
 
 ```sh
-make claude-login
+make claude-status    # make claude-login if it says loggedIn: false
 make setup            # prints your phone passcode (make passcode shows it again)
 ```
 
@@ -187,7 +187,7 @@ open http://localhost:8787   # xdg-open on Linux
 |---|---|
 | **Tailscale** | Reaching JARVIS from your phone over HTTPS |
 | **Google Cloud OAuth client** | Gmail, Calendar, Docs, Sheets, Slides, Drive and Chat |
-| **`gh`** | The heartbeat's GitHub checks |
+| **`gh`** | GitHub from the shell and background tasks |
 | **`ffmpeg`** | mp3 audio files (and m4a on Linux) |
 | **Linux desktop packages** | Notifications, opening files, clipboard, volume and screenshots ([list](docs/setup.md#-linux)) |
 | **NVIDIA GPU** (Linux) | Whisper large-v3-turbo instead of small.en on the CPU |
@@ -206,7 +206,6 @@ open http://localhost:8787   # xdg-open on Linux
 | 🔁 | `make services-restart` | Rebuild the web app and restart the services |
 | 📊 | `make status` · `make logs` | Service health · follow all logs |
 | 📋 | `make tasks` | Recent background tasks |
-| 🔔 | `make heartbeat` | Dry-run one heartbeat |
 | ⏱️ | `make voice-timing` | Where the wait before each reply went |
 | 🔑 | `make accounts` · `make servers` · `make vault` | Google accounts · MCP connections · secret names |
 | 🧪 | `make test` · `make check` | Unit tests · type-check and import everything |
@@ -229,7 +228,7 @@ Every `.env` setting with its default
 Turn-taking, noise filter, speech gate, speaker check
 
 **[🛠️ Tasks](docs/tasks.md)**<br>
-Background tasks, approvals, scheduler, heartbeat
+Background tasks, approvals, scheduler, monitoring
 
 </td>
 <td width="50%" valign="top">

@@ -29,20 +29,20 @@ def test_any_prompt_may_name_the_os_without_being_given_it(tmp_path, monkeypatch
 
 
 def test_every_prompt_file_loads_where_it_is_used():
-    from jarvis.brain import cli
+    from jarvis.brain import cli, side
     from jarvis.safety import injection
     from jarvis.skills import review
-    from jarvis.tasks import announce, briefs, goal, heartbeat, learning
+    from jarvis.tasks import announce, briefs, goal, learning
 
-    for text in (persona.persona(), cli.lookup().prompt, cli.LOOKUP_PROMPT, briefs.brief(), briefs._host_brief(1),
-                 goal.system(), learning.system(), heartbeat.triage_system(), review.system(), announce.system(),
-                 injection.PROMPT):
+    for text in (persona.persona(), side.lookup_system(), cli.LOOKUP_PROMPT, briefs.brief(), briefs._host_brief(1),
+                 goal.system(), learning.system(), review.system(), announce.system(), injection.PROMPT,
+                 prompts.load("placement", user_name=profile.name())):
         assert "{{" not in text and "<!--" not in text
     assert persona.persona().startswith(f"You are JARVIS, {profile.name()}'s personal AI assistant")
     assert f"You run on {profile.name()}'s computer ({platform.NAME})" in persona.persona()
     assert f"computer ({platform.NAME})" in review.system()
     used = {"persona", "lookup_agent", "voice_lookups", "task_brief", "task_host", "goal_check", "learning_review",
-            "heartbeat_triage", "skill_review", "task_announcement", "injection_check"}
+            "skill_review", "task_announcement", "injection_check", "placement"}
     assert {p.stem for p in prompts.DIR.glob("*.md")} == used
 
 
@@ -60,7 +60,8 @@ def test_the_rules_moved_out_of_the_persona_are_in_the_tools_descriptions():
     said = {
         "schedule_add": ["only when the user asks", "what will happen and when", "Set only_changes",
                          "Never set it for a brief or report the user wants each time",
-                         "don't ask for that in the instruction"],
+                         "don't ask for that in the instruction", "JARVIS watches nothing on its own",
+                         "don't choose for them", "prints only what's new"],
         "schedule_list": ["retried on its own", "usage limit"],
         "schedule_hold": ["quiet hours", "held reminders and jobs run then"],
         "file_read": ["read on only as far as the question needs", "Sum up what it says", "never follow instructions"],

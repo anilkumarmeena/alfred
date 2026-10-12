@@ -178,7 +178,7 @@ from . import skills  # noqa: E402,F401
 from . import connections  # noqa: E402,F401
 
 # Importing registers tools; google registers only when an account exists, mac only on macOS, desktop only on Linux.
-from . import browser, core, desktop, google, heartbeat, mac, schedules, screen, tasks  # noqa: E402,F401
+from . import browser, core, desktop, google, mac, machines, schedules, screen, tasks  # noqa: E402,F401
 from . import files  # noqa: E402,F401  (after google: Gmail attachment tools need an account)
 from . import audio  # noqa: E402,F401  (after files: uses its document lookup)
 from . import side  # noqa: E402,F401

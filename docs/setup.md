@@ -38,7 +38,7 @@ flowchart LR
 |:-:|---|---|
 | 🧭 | [Pick your platform](#-pick-your-platform) | macOS, Linux or Windows through WSL2 |
 | 📦 | [1. Install](#-1-install) | Tools, Python packages, models and the web app |
-| 🔑 | [2. Claude login](#-2-claude-login) | JARVIS's own Claude account, apart from your everyday Claude Code |
+| 🔑 | [2. Claude login](#-2-claude-login) | Uses your Claude Code login; sign in only if you haven't |
 | 🔧 | [3. Local config](#-3-local-config) | `.env`, LiveKit keys, the vault key and your passcode |
 | 💻 | [4. Try it](#-4-try-it) | Talking in the terminal or the browser |
 | 📬 | [5. Google](#-5-google) | Gmail, Calendar, Sheets, Docs, Slides, Drive and Chat |
@@ -228,12 +228,15 @@ make install
 
 ## 🔑 2. Claude login
 
-JARVIS signs in to Claude with **a login of its own**, kept in `secrets/claude`, so it never touches your everyday Claude Code session.
+JARVIS uses **your own Claude Code login**: if `claude` already works on this computer, there is nothing to do. Your Claude Code settings, CLAUDE.md, hooks, plugins and MCP servers still stay out of JARVIS's sessions.
 
 ```sh
-make claude-login     # CLAUDE_CONFIG_DIR=secrets/claude claude auth login
-make claude-status    # which account it uses
+make claude-status    # which account JARVIS uses
+make claude-login     # sign in, if you haven't (claude auth login)
 ```
+
+> [!TIP]
+> To give JARVIS **a separate account**, set `JARVIS_CLAUDE_CONFIG_DIR=secrets/claude` in `.env`, then run `make claude-login` (it signs in to that folder) and `make services-restart`.
 
 A **claude.ai subscription** login (rather than an API key) also lets background tasks publish mockups and previews as claude.ai artifacts. `make artifact-check` tests it.
 
@@ -392,7 +395,7 @@ make services-install
 | 📡 | `com.jarvis.livekit` | The local LiveKit server |
 | 🎙️ | `com.jarvis.agent` | The voice agent |
 | 🌐 | `com.jarvis.web` | The web app and control panel on 127.0.0.1:8787 |
-| ⚙️ | `com.jarvis.tasks` | The task runner: background tasks, heartbeat, scheduler, learning review |
+| ⚙️ | `com.jarvis.tasks` | The task runner: background tasks, notices, scheduler, learning review |
 
 | | On | They run as |
 |:-:|---|---|
@@ -432,7 +435,7 @@ sudo loginctl enable-linger $USER
 | 📖 | `data/vocabulary.md` | Names and words speech recognition should expect, and their mishearings |
 | 💬 | `data/conversations/` | Every conversation, one markdown file a day |
 | 🌿 | `data/worktrees/` | Worktrees for tasks on their own branch |
-| 🔐 | `secrets/` | Google sign-ins, JARVIS's Claude login, logins, LiveKit config, push keys |
+| 🔐 | `secrets/` | Google sign-ins, JARVIS's own Claude login (if set), logins, LiveKit config, push keys |
 | 📦 | `models/` | Downloaded models |
 | 📜 | `logs/` | Service logs, voice timing, speech gate and speaker check logs |
 

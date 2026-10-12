@@ -11,14 +11,17 @@ empty     :=
 UV_DIRS   := $(HOME)/.local/bin $(HOME)/.cargo/bin $(wildcard $(HOME)/Library/Python/*/bin)
 export PATH := $(PATH):$(subst $(empty) $(empty),:,$(strip $(UV_DIRS)))
 UV_VERSION := 0.13.0
-UV        := uv run
+# macOS's make 3.81 runs a plain recipe line (`uv sync`) itself, looking it up on the PATH make started with, not the
+# one above. So recipes name uv by its full path, found when each one runs (after uv-bin may have just installed it).
+uv         = $(shell PATH="$(PATH)" command -v uv || echo uv)
+UV         = $(uv) run
 UNAME     := $(shell uname -s)
 # Behind a company proxy the browser follows the macOS settings, but uv, curl, go and npm only read HTTPS_PROXY.
 # The downloading targets take the proxy macOS uses for GitHub (a set proxy, a PAC file or WPAD), unless one is set.
 DOWNLOADS := install uv-bin livekit-bin models models-int8 web-install web-build
 ifeq ($(UNAME)$(HTTPS_PROXY)$(https_proxy),Darwin)
 ifneq ($(filter $(DOWNLOADS),$(MAKECMDGOALS)),)
-SYSTEM_PROXY := $(shell osascript -l JavaScript $(CURDIR)/deploy/macos-proxy.js https://github.com 2>/dev/null)
+SYSTEM_PROXY := $(shell osascript -l JavaScript "$(CURDIR)/deploy/macos-proxy.js" https://github.com 2>/dev/null)
 ifneq ($(SYSTEM_PROXY),)
 $(info Using the macOS proxy $(SYSTEM_PROXY) (set HTTPS_PROXY to override))
 export HTTPS_PROXY := $(SYSTEM_PROXY)
@@ -33,19 +36,25 @@ endif
 endif
 endif
 # Main checkout, even when run from a task's worktree (data/worktrees/jarvis-N)
-MAIN_DIR  := $(or $(patsubst %/.git,%,$(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)),$(CURDIR))
+# Paths may contain spaces ("Office Work"): make functions split words on them, so quote paths in recipes
+GIT_COMMON := $(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+MAIN_DIR  := $(or $(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/\.git$$||'),$(CURDIR))
 # Main checkout's Python (services, artifact-check), also from a worktree. Override with JARVIS_PYTHON=...
-ifeq ($(realpath $(MAIN_DIR)),$(realpath $(CURDIR)))
+ifeq ($(GIT_COMMON),$(shell git rev-parse --path-format=absolute --git-dir 2>/dev/null))
 JARVIS_PYTHON ?= $(UV) python
 else
-JARVIS_PYTHON ?= $(MAIN_DIR)/.venv/bin/python
+JARVIS_PYTHON ?= "$(MAIN_DIR)/.venv/bin/python"
 endif
 # Service labels (com.jarvis.* or JARVIS_SERVICE_PREFIX): launchd on macOS, systemd user units on Linux; evaluated
 # lazily. Service control always runs in the main
 # checkout so a worktree never installs its own copy.
-SERVICE_CTL = cd $(MAIN_DIR) && $(JARVIS_PYTHON) -m jarvis.setup_local
+SERVICE_CTL = cd "$(MAIN_DIR)" && $(JARVIS_PYTHON) -m jarvis.setup_local
 SERVICES    = $(shell $(SERVICE_CTL) labels)
-CLAUDE_DIR := $(MAIN_DIR)/secrets/claude
+# Claude login: the user's own, unless .env (or the environment) sets JARVIS_CLAUDE_CONFIG_DIR, a login of JARVIS's own
+CLAUDE_DIR := $(or $(JARVIS_CLAUDE_CONFIG_DIR),$(shell sed -n "s/^JARVIS_CLAUDE_CONFIG_DIR=[\"']*\([^\"']*\)[\"']*$$/\1/p" \
+               "$(MAIN_DIR)/.env" 2>/dev/null | tail -1))
+# ...relative to the main checkout, as jarvis.core.config reads it
+CLAUDE_PATH = $(if $(CLAUDE_DIR),$(if $(filter /%,$(CLAUDE_DIR)),,$(MAIN_DIR)/)$(CLAUDE_DIR))
 # Kokoro voice: kokoro-onnx's model files, from a pinned Hugging Face mirror (byte-identical to the GitHub release,
 # which serves ~120 KB/s per connection), hash-checked
 KOKORO_HF   := https://huggingface.co/fastrtc/kokoro-onnx/resolve/8d07950c9b6c87ce6809e9bba7bd494336217c2a
@@ -84,9 +93,10 @@ NPM       := npm --prefix web
 # web-install reruns only when the manifests change
 WEB_STAMP := web/node_modules/.install-stamp
 
-.PHONY: help install uv-bin livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks heartbeat speech-gate voice-timing voiceprint test host-check artifact-check \
+.PHONY: help install uv-bin livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks speech-gate voice-timing voiceprint test host-check artifact-check \
         services-install services-start services-stop services-restart status logs awake sleep-normal \
-        claude-login claude-status accounts about servers passcode vault chat-check tailscale-serve check clean
+        claude-login claude-status accounts about servers passcode vault chat-check tailscale-serve check clean \
+        node-setup node-login node-pair node-install node-stop node-check node-status
 
 help: ## Show this list
 	@grep -hE '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -100,7 +110,7 @@ ifeq ($(UNAME),Darwin)
 else
 	@command -v livekit-server >/dev/null || [ -x $(LOCAL_BIN)/livekit-server ] || $(MAKE) --no-print-directory livekit-bin
 endif
-	uv sync
+	$(uv) sync
 	$(MAKE) models web-build
 
 uv-bin: ## Install the pinned uv into ~/.local/bin if no working one is found (no sudo)
@@ -157,11 +167,11 @@ models-int8: ## Download the 8-bit Kokoro (~230 MB less memory, slower; JARVIS_T
 setup: uv-bin ## Generate keys, passcode and LiveKit config (rerunnable)
 	$(UV) python -m jarvis.setup_local
 
-claude-login: ## Log in JARVIS's own Claude CLI
-	CLAUDE_CONFIG_DIR=$(CLAUDE_DIR) claude auth login
+claude-login: ## Log in to Claude (yours; JARVIS's own if .env sets JARVIS_CLAUDE_CONFIG_DIR)
+	$(if $(CLAUDE_PATH),CLAUDE_CONFIG_DIR="$(CLAUDE_PATH)" )claude auth login
 
-claude-status: ## Show JARVIS's Claude account
-	@CLAUDE_CONFIG_DIR=$(CLAUDE_DIR) claude auth status | grep -E '"(loggedIn|email|orgName|subscriptionType)"'
+claude-status: ## Show the Claude account JARVIS uses
+	@$(if $(CLAUDE_PATH),CLAUDE_CONFIG_DIR="$(CLAUDE_PATH)" )claude auth status | grep -E '"(loggedIn|email|orgName|subscriptionType)"'
 
 accounts: ## Google accounts (ARGS="add home ...")
 	$(UV) python -m jarvis.integrations.accounts $(or $(ARGS),list)
@@ -247,12 +257,12 @@ DETACH  = $(if $(shell command -v systemd-run),systemd-run --user --collect --qu
 endif
 
 services-restart: web-build ## Rebuild web app, restart services
-	@mkdir -p $(MAIN_DIR)/logs; rm -f $(RESTART_LOG).done
+	@mkdir -p "$(MAIN_DIR)/logs"; rm -f "$(RESTART_LOG).done"
 	@$(DETACH) \
-		sh -c '$(MAKE) --no-print-directory -C $(MAIN_DIR) services-stop services-start > $(RESTART_LOG) 2>&1; touch $(RESTART_LOG).done' \
+		sh -c '$(MAKE) --no-print-directory -C "$(MAIN_DIR)" services-stop services-start > "$(RESTART_LOG)" 2>&1; touch "$(RESTART_LOG).done"' \
 		</dev/null >/dev/null 2>&1 &
-	@for i in $$(seq 180); do [ -f $(RESTART_LOG).done ] && break; sleep 1; done; cat $(RESTART_LOG); \
-		[ -f $(RESTART_LOG).done ] || echo "still restarting, see $(RESTART_LOG)"
+	@for i in $$(seq 180); do [ -f "$(RESTART_LOG).done" ] && break; sleep 1; done; cat "$(RESTART_LOG)"; \
+		[ -f "$(RESTART_LOG).done" ] || echo "still restarting, see $(RESTART_LOG)"
 
 status: ## Show service status
 ifeq ($(UNAME),Darwin)
@@ -289,9 +299,6 @@ endif
 tasks: ## List recent tasks
 	@$(UV) python -m jarvis.tasks.runner list
 
-heartbeat: ## Dry-run one heartbeat
-	$(UV) python -m jarvis.tasks.heartbeat
-
 speech-gate: ## Clips the speech gate dropped (last day)
 	@$(UV) python -m jarvis.voice.speech_gate
 
@@ -300,6 +307,31 @@ voice-timing: ## Voice turn latency by stage (HOURS=24)
 
 voiceprint: ## Voiceprint (ARGS=enroll|test|remove|log)
 	@$(UV) python -m jarvis.voice.speaker $(or $(ARGS),status)
+
+## ── A second machine that takes JARVIS's heavy work (jarvis.node) ──
+
+node-setup: ## On a second machine: Python dependencies only (no voice models or web app)
+	uv sync
+	@echo "Next: make node-login, then pair from Settings › Machines on the main computer"
+
+node-login: ## On a second machine: log in its own Claude account
+	CLAUDE_CONFIG_DIR=$(CLAUDE_DIR) claude auth login
+
+node-pair: ## On a second machine: pair with the main computer (CODE=from Settings › Machines MAIN=https://host)
+	@[ -n "$(CODE)" ] && [ -n "$(MAIN)" ] || { echo "make node-pair CODE=... MAIN=https://<main computer>"; exit 2; }
+	$(UV) python -m jarvis.node pair "$(CODE)" "$(MAIN)"
+
+node-install: ## On a second machine: install and start its service
+	$(UV) python -m jarvis.setup_local node-install
+
+node-stop: ## On a second machine: stop its service (stays installed)
+	@$(UV) python -m jarvis.setup_local node-stop; true
+
+node-check: ## On a second machine: walls, pairing, link to the main computer, tools
+	$(UV) python -m jarvis.node check
+
+node-status: ## On a second machine: its pairing and both fingerprints
+	@$(UV) python -m jarvis.node status
 
 ## ── Web app (web/: Vite, TypeScript, Preact) ───────────────────
 
@@ -321,15 +353,14 @@ host-check: ## Check task sandbox walls
 	$(UV) python -m jarvis.safety.host check
 
 artifact-check: ## Test artifact publishing (FILE=page.html)
-	JARVIS_CLAUDE_CONFIG_DIR="$${JARVIS_CLAUDE_CONFIG_DIR:-$(CLAUDE_DIR)}" \
-		$(JARVIS_PYTHON) -m jarvis.tasks.artifact_check $(if $(FILE),--file $(abspath $(FILE)))
+	$(if $(CLAUDE_PATH),JARVIS_CLAUDE_CONFIG_DIR="$(CLAUDE_PATH)" )$(JARVIS_PYTHON) -m jarvis.tasks.artifact_check $(if $(FILE),--file "$(abspath $(FILE))")
 
 check: ## Compile, type-check, import all
 	$(UV) python -m compileall -q jarvis
 # Errors only; see warnings with `uv run --with pyright pyright`
 	$(UV) --with pyright==$(PYRIGHT) pyright --level error
 	$(NPM) run typecheck
-	$(UV) python -c "import jarvis.voice.agent, jarvis.server, jarvis.setup_local, jarvis.integrations.accounts, jarvis.state.settings, jarvis.brain.cli, jarvis.tasks.runner, jarvis.tasks.heartbeat; from jarvis import tools; print(len(tools.all_tools()), 'tools, imports ok')"
+	$(UV) python -c "import jarvis.voice.agent, jarvis.server, jarvis.setup_local, jarvis.integrations.accounts, jarvis.state.settings, jarvis.brain.cli, jarvis.tasks.runner, jarvis.tasks.notices; from jarvis import tools; print(len(tools.all_tools()), 'tools, imports ok')"
 
 clean: ## Remove caches and logs
 	find . -name __pycache__ -not -path './.venv/*' -prune -exec rm -rf {} +

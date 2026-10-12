@@ -1,12 +1,24 @@
-"""Tests for jarvis.brain.side: background reads announced when done, read-only side jobs, cut-off work handed over."""
+"""Tests for jarvis.brain.side: background reads announced when done, read-only side jobs, file lookups that hold a
+turn only briefly, cut-off work handed over."""
 
 import asyncio
 
 import pytest
-from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, ToolResultBlock, ToolUseBlock, UserMessage
+from claude_agent_sdk import (
+    AssistantMessage,
+    PermissionResultAllow,
+    PermissionResultDeny,
+    ResultMessage,
+    StreamEvent,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
+)
 
 from jarvis import tools
 from jarvis.brain import cli, side
+from jarvis.core.config import LOOKUP_MODEL, SECRETS_DIR
+from jarvis.safety import shell
 from jarvis.state import conversation, memory
 
 
@@ -115,6 +127,169 @@ def test_a_side_job_runs_on_its_model_with_reads_only(monkeypatch):
     assert options.permission_mode == "dontAsk" and options.tools == side.WEB
     assert set(options.allowed_tools) <= set(side.WEB) | {f"mcp__jarvis__{t.name}" for t in tools.all_tools() if side.reads(t)}
     assert "Bash" not in options.allowed_tools and options.model
+
+
+# ── File lookups: in the turn only while quick ────────────────────
+
+
+def finds(answers: dict[str, float]):
+    """A fake file lookup: each brief answers after its given seconds."""
+    async def find(brief: str) -> str:
+        await asyncio.sleep(answers[brief])
+        return f"{brief} is in config.py."
+    return find
+
+
+def file_jobs(answers: dict[str, float]) -> tuple[side.Jobs, list[tuple[str, str]]]:
+    said: list[tuple[str, str]] = []
+    return side.Jobs(lambda text, note: said.append((text, note)), find=finds(answers)), said
+
+
+def test_a_quick_file_lookup_answers_in_the_turn_and_isnt_announced(monkeypatch):
+    monkeypatch.setattr(side, "LOOKUP_WAIT", 1.0)
+    j, said = file_jobs({"The port": 0.01})
+
+    async def main():
+        answer = await j.ask("The port", "the port")
+        await asyncio.sleep(0.02)
+        return answer
+
+    assert asyncio.run(main()) == "On the port: The port is in config.py." and said == [] and not j.running
+
+
+def test_a_slow_file_lookup_stops_holding_the_turn_and_is_announced_when_done(monkeypatch):
+    monkeypatch.setattr(side, "LOOKUP_WAIT", 0.05)
+    j, said = file_jobs({"The port": 0.2})
+
+    async def main():
+        loop = asyncio.get_running_loop()
+        began = loop.time()
+        told = await j.ask("The port", "the port")
+        held, running = loop.time() - began, dict(j.running)
+        await asyncio.sleep(0.3)
+        return told, held, running
+
+    told, held, running = asyncio.run(main())
+    assert held < 0.15 and list(running.values()) == ["the port"]
+    assert told.startswith("Still looking into the port") and "announced when it's ready" in told
+    assert said == [("On the port: The port is in config.py.",
+                     "The background lookup on the port came back, and you said: The port is in config.py.")]
+
+
+def test_a_turn_s_lookups_share_one_wait_so_a_second_cant_hold_it_again(monkeypatch):
+    """Two slow lookups chained in one turn hold it no longer than one; the next turn gets a fresh wait."""
+    monkeypatch.setattr(side, "LOOKUP_WAIT", 0.05)
+    j, said = file_jobs({"slow": 0.2, "quick": 0.01})
+
+    async def main():
+        loop = asyncio.get_running_loop()
+        began = loop.time()
+        first = await j.ask("slow", "the first")
+        second = await j.ask("quick", "the second")  # the turn's wait is spent: straight to the background
+        held = loop.time() - began
+        await asyncio.sleep(0.3)
+        j.new_turn()
+        third = await j.ask("quick", "the third")
+        return first, second, held, third
+
+    first, second, held, third = asyncio.run(main())
+    assert first.startswith("Still looking") and second.startswith("Still looking") and held < 0.15
+    assert third == "On the third: quick is in config.py."
+    assert sorted(t for t, _ in said) == ["On the first: slow is in config.py.", "On the second: quick is in config.py."]
+
+
+def test_a_file_lookup_cut_off_with_its_turn_carries_on_and_is_announced(monkeypatch):
+    monkeypatch.setattr(side, "LOOKUP_WAIT", 5.0)
+    j, said = file_jobs({"The port": 0.1})
+
+    async def main():
+        turn = asyncio.create_task(j.ask("The port", "the port"))
+        await asyncio.sleep(0.02)
+        turn.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+        await asyncio.sleep(0.2)
+
+    asyncio.run(main())
+    assert [t for t, _ in said] == ["On the port: The port is in config.py."]
+
+
+def test_file_lookups_count_against_the_running_limit(monkeypatch):
+    monkeypatch.setattr(side, "LOOKUP_WAIT", 0.0)
+    j, _ = file_jobs({"x": 1.0})
+
+    async def main():
+        told = [await j.ask("x", about) for about in ("one", "two", "three")]
+        await j.close()
+        return told
+
+    told = asyncio.run(main())
+    assert told[2].startswith("Not started") and "one, two" in told[2] and "in the turn" not in told[2]
+
+
+def test_a_file_lookup_reads_only_non_secrets_and_only_so_many():
+    reads = side.Reads(limit=2)
+    run = lambda name, args: asyncio.run(reads(name, args, None))  # noqa: E731
+    for name, args in (("Edit", {"file_path": "/Users/x/app/a.py"}), ("Bash", {"command": "ls"}),
+                       ("Agent", {"subagent_type": "lookup"}), ("Read", {"file_path": f"{SECRETS_DIR}/google.json"}),
+                       ("Read", {"file_path": "/Users/x/app/.env"}), ("Glob", {"pattern": "*", "path": "~/.ssh"})):
+        assert isinstance(run(name, args), PermissionResultDeny), name
+    assert isinstance(run("Read", {"file_path": "/Users/x/app/pyproject.toml"}), PermissionResultAllow)
+    assert isinstance(run("Grep", {"pattern": "version", "path": "/Users/x/app"}), PermissionResultAllow)
+    spent = run("Glob", {"pattern": "*.toml", "path": "/Users/x/app"})
+    assert isinstance(spent, PermissionResultDeny) and "answer now with what you found" in spent.message
+
+
+def test_a_file_lookup_runs_on_the_lookup_model_with_every_read_gated(monkeypatch, tmp_path):
+    seen = {}
+
+    async def query(prompt, options):
+        seen["prompt"], seen["options"] = prompt, options
+        yield ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=2,
+                            session_id="s", result=" Port 8080, in config.py. ")
+
+    monkeypatch.setattr("claude_agent_sdk.query", query)
+    monkeypatch.setattr(shell, "scratch_dir", lambda: tmp_path / "scratch")
+    assert asyncio.run(side.find("Which port does the web server use?")) == "Port 8080, in config.py."
+    options = seen["options"]
+    assert options.model == LOOKUP_MODEL and options.tools == side.FILE_READS and options.allowed_tools == []
+    assert isinstance(options.can_use_tool, side.Reads) and options.max_turns == side.LOOKUP_TURNS
+    assert options.cwd == str(tmp_path / "scratch") and (tmp_path / "scratch").is_dir()
+
+
+def test_the_file_lookup_tool_uses_the_conversation_s_jobs(monkeypatch):
+    monkeypatch.setattr(conversation.current(), "lookups", None)
+    content, error = asyncio.run(tools.run("file_lookup", {"brief": "x", "about": "y"}))
+    assert error and "only in a voice conversation" in content
+    j, _ = file_jobs({"The port": 0.0})
+
+    async def main():
+        monkeypatch.setattr(conversation.current(), "lookups", j)
+        return await tools.run("file_lookup", {"brief": "The port", "about": "the port"})
+
+    assert asyncio.run(main()) == ("On the port: The port is in config.py.", False)
+
+
+class OneTurnClient:
+    async def query(self, prompt) -> None: ...
+
+    async def receive_response(self):
+        yield text_event("Sure.")
+        yield result()
+
+
+def test_each_voice_turn_gets_a_fresh_lookup_wait(monkeypatch):
+    monkeypatch.setattr(memory, "log_exchange", lambda *a, **k: None)
+    j, _ = file_jobs({})
+    j.waited = 30.0
+    monkeypatch.setattr(conversation.current(), "lookups", j)
+
+    async def main():
+        brain = cli.CliBrain()
+        brain.client = OneTurnClient()
+        return "".join([c async for c in brain.respond("what port is it on?")])
+
+    assert asyncio.run(main()) == "Sure." and j.waited == 0.0
 
 
 # ── Work cut off by the user speaking ─────────────────────────────

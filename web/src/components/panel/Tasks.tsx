@@ -14,8 +14,8 @@ import { Answer } from "./Answer";
 import { cap, Empty, InlineForm, Led, Pill, StatusPill } from "./bits";
 import { Markdown } from "./Markdown";
 
-const where = (t: Task) => [t.project, t.kind === "code_change" ? (t.in_place ? "in place" : "worktree") : t.kind.replace("_", " ")]
-  .filter(Boolean).join(" · ");
+const where = (t: Task) => [t.project, t.kind === "code_change" ? (t.in_place ? "in place" : "worktree") : t.kind.replace("_", " "),
+  t.machine && `on ${t.machine}`].filter(Boolean).join(" · ");
 
 function Request({ a, named = true }: { a: Approval; named?: boolean }) {
   return (
@@ -201,6 +201,7 @@ export function ScheduleView({ id }: { id: number }) {
         {j.folder && <><dt>Runs in</dt><dd>{j.folder}</dd></>}
         <dt>Runs</dt><dd>{j.runs}{j.last_run ? ` · last ${when(j.last_run)}` : ""}</dd>
         {j.kind === "task" && <><dt>Speaks</dt><dd>{j.only_changes ? "only when there's something new" : "after every run"}</dd></>}
+        {j.kind === "command" && <><dt>Speaks</dt><dd>{j.only_changes ? "only when a run prints something" : "after every run"}</dd></>}
       </dl>
       <label class="lbl">{SAYS[j.kind] ?? "What"}</label>
       <Markdown text={j.text} class="summary" />

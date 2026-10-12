@@ -11,8 +11,8 @@ import { loginShown, passcode, pushSub, setPasscode, showLogin } from "./store";
 
 export type Section = "tasks" | "todos" | "projects" | "jarvis" | "history" | "settings";  // jarvis: what it can do and knows
 export type SettingsItem =
-  "conn" | "accounts" | "memory" | "vocabulary" | "skills" | "approvals" | "about" | "prefs" | "dnd" | "safety" | "heartbeat"
-  | "notify" | "system" | "access" | "keys";
+  "conn" | "accounts" | "memory" | "vocabulary" | "skills" | "approvals" | "about" | "prefs" | "dnd" | "safety"
+  | "notify" | "system" | "access" | "keys" | "machines";
 
 export interface Task {
   id: number; kind: string; title: string; project: string | null; status: string; created: number; updated: number;
@@ -22,6 +22,7 @@ export interface Task {
   stalled?: Stalled | null;  // running with no progress for a while
   command?: CommandRun | null;  // kind "command": shell job, no model
   fixes?: number | null;  // id of the failed command task this one fixes
+  machine?: string;  // the other machine it runs on (jarvis.node); absent = this computer
 }
 // A command task's run. attempt is 2+ for a rerun after a fix (`after` says what failed and what fixed it).
 export interface CommandRun {
@@ -51,7 +52,8 @@ export interface Rule {
 export interface Todo { id: number; text: string; done: boolean; created: number; done_at: number | null }
 export interface Project {
   name: string; path: string; aliases: string[]; about: string; in_place: boolean; jarvis: boolean; exists: boolean;
-  git: string; changed: number | null;
+  git: string | null; changed: number | null;
+  machine?: string;  // the other machine it lives on; its folder is there
 }
 export interface Account { label: string; email: string; note: string; chat: boolean; default: boolean; signed_in: boolean }
 // The Google OAuth client, for the accounts page: kind "installed" (Desktop app) or "web"; `paste`: a sign-in started
@@ -107,13 +109,6 @@ export type PrefKey = "name" | "timezone" | "voice" | "voice_speed" | "speech_ga
 export interface Voiceprint { name: string; seconds: number; consistency: number; via: string; created: number; current: boolean }
 export interface Voiceprints { owner: Voiceprint | null; model: boolean; passage: string; seconds: number }
 export interface Prefs { preferences: Record<PrefKey, Preference>; voices: string[] }
-// Heartbeat sources, each setting with its current value and default
-export interface SourceSetting { key: string; label: string; default: string; value: string }
-export interface HeartbeatSource {
-  id: string; kind: string; title: string; about: string; on: boolean; ready: boolean; added: string; settings: SourceSetting[];
-}
-export interface SourceKind { name: string; title: string; about: string; settings: SourceSetting[] }
-export interface Heartbeat { sources: HeartbeatSource[]; kinds: SourceKind[] }
 export interface System { services: Service[]; vault: { state: string; secrets?: number; problem?: string } }
 // A login (never its passcode). this: the one this device uses
 export interface Login { name: string; created: number; used: number | null; this: boolean }
@@ -121,6 +116,18 @@ export interface Login { name: string; created: number; used: number | null; thi
 export interface JarvisKey { name: string; label: string; hint: string; required: boolean; source: "vault" | ".env" | "file" | "" }
 export interface Access { logins: Login[]; keys: JarvisKey[] }
 export interface Activity { id: number; at: number; text: string; kind: "ok" | "bad" | "warn" | "run"; task: number | null }
+// Another computer JARVIS sends heavy work to. online: it answered a ping just now; pending: awaiting confirmation
+export interface Machine {
+  id: number; name: string; aliases: string[]; status: "pending" | "paired"; fingerprint: string; host: string; os: string;
+  cores: number; ram_gb: number; tools: string[]; version: string; up_to_date: boolean; last_seen: number | null;
+  online: boolean; usage: string; free?: number; max_tasks?: number; running?: number; load?: number | null;
+  updating?: boolean; update_problem?: string; takes_work?: boolean;
+}
+// Per job kind: "here", "auto" (let JARVIS choose) or a machine's id
+export interface Machines {
+  machines: Machine[]; placement: Record<string, string>; kinds: Record<string, string>; commit: string; fingerprint: string;
+}
+export interface PairingCode { code: string; expires: number; main_fingerprint: string }
 
 export const ACTIVE = ["queued", "running", "waiting"];
 const WIDE = matchMedia("(min-width: 900px)");
@@ -190,7 +197,7 @@ export const access = signal<Access | null>(null);
 export const prefs = signal<Prefs | null>(null);
 export const rules = signal<Rule[] | null>(null);
 export const voiceprints = signal<Voiceprints | null>(null);
-export const heartbeat = signal<Heartbeat | null>(null);
+export const machines = signal<Machines | null>(null);
 
 // Waiting on the user: approval requests and task questions
 export const questions = computed(() => tasks.value.filter((t) => t.status === "waiting" && !t.requests_only));
@@ -315,14 +322,14 @@ const SETTINGS: Record<SettingsItem, () => Promise<void>> = {
   },
   dnd: async () => { const r = await act<Quiet>("hold_status"); if (r) quiet.value = r; },
   safety: loadPrefs,
-  heartbeat: async () => { heartbeat.value = await act("heartbeat_sources") ?? heartbeat.peek(); },
   notify: async () => { devices.value = await act("devices", { endpoint: pushSub.peek()?.endpoint ?? "" }) ?? devices.peek(); },
   system: async () => { system.value = await act("system") ?? system.peek(); },
   access: async () => { access.value = await act("access") ?? access.peek(); },
   keys: async () => {},
+  machines: async () => { machines.value = await act("machines") ?? machines.peek(); },
 };
 // Loaded whenever Settings or JARVIS opens, for the summaries on their lists
-const LISTED: SettingsItem[] = ["system", "conn", "skills", "prefs", "heartbeat", "access"];
+const LISTED: SettingsItem[] = ["system", "conn", "skills", "prefs", "access", "machines"];
 
 async function loadPrefs() { prefs.value = await act<Prefs>("preferences") ?? prefs.peek(); }
 
@@ -479,7 +486,7 @@ function handle(event: any) {
       loadTasks();
       if (event.task) refreshDetail(event.task.id);
       break;
-    case "heartbeat":  // also sent for reminders and watch findings: the job's next run moved
+    case "alert":  // notices, reminders and watch findings: a job's next run may have moved
       if (section.peek() === "tasks") loadTasks();
       break;
     case "progress":

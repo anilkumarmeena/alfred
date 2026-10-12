@@ -71,7 +71,7 @@ def _register() -> None:
 def fresh() -> None:
     """Follow changes made elsewhere: reread the accounts (registering the tools again when they changed: added,
     removed, renamed, a new note or email), and reconfigure when profile settings changed. Runs as each session, task
-    and heartbeat check starts (jarvis.brain.sdk.jarvis_server) and before each Google tool call."""
+    and watch check starts (jarvis.brain.sdk.jarvis_server, jarvis.tasks.scheduler) and before each Google tool call."""
     global ACCOUNTS, LABELS, CHAT_LABELS
     if (found := accounts.load()) != ACCOUNTS:
         ACCOUNTS, LABELS, CHAT_LABELS = found, found.labels, found.chat_labels

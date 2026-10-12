@@ -68,7 +68,6 @@ export const BrainIcon = () => (
 export const WordsIcon = () => <svg viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4V5Z" /><path d="M8 9h8M8 12h5" /></svg>;
 export const NoteIcon =() => <svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6V3Z" /><path d="M9 11h7M9 15h5" /></svg>;
 export const SkillIcon = () => <svg viewBox="0 0 24 24"><path d="M13 3 5 13h6l-1 8 8-10h-6l1-8Z" /></svg>;
-export const HeartIcon = () => <svg viewBox="0 0 24 24"><path d="M12 20s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.5-7 10-7 10Z" /></svg>;
 export const PulseIcon = () => <svg viewBox="0 0 24 24"><path d="M3 12h4l2-5 4 10 2-5h6" /></svg>;
 export const KeyIcon = () => <svg viewBox="0 0 24 24"><circle cx="8" cy="15" r="4.5" /><path d="m11.2 11.8 8.8-8.8M16 7l3 3M13.5 9.5l2 2" /></svg>;
 export const KeysIcon = () => (
@@ -78,6 +77,7 @@ export const SearchIcon = () => <svg viewBox="0 0 24 24"><circle cx="11" cy="11"
 export const RetryIcon = () => <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.5-5.8M4 4v5h5" /></svg>;
 export const RepeatIcon = () => <svg viewBox="0 0 24 24"><path d="m17 2 4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3" /></svg>;
 export const EyeIcon = () => <svg viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>;
+export const MachineIcon = () => <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M9 20h6M12 16v4" /></svg>;
 export const TerminalIcon = () => <svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="3" /><path d="m7.5 10 3 2.5-3 2.5M13 15h3.5" /></svg>;
 export const BranchIcon = () => <svg viewBox="0 0 24 24"><circle cx="6" cy="5.5" r="2" /><circle cx="6" cy="18.5" r="2" /><circle cx="18" cy="8" r="2" /><path d="M6 7.5v9M18 10c0 4-6 3.5-11 7" /></svg>;
 export const MoonIcon = () => <svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" /></svg>;

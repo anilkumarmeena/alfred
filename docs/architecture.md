@@ -30,7 +30,7 @@ Around the voice loop sit a **task runner** for long background work, a **web se
 7. [Tools](#-tools)
 8. [Background tasks](#-background-tasks)
 9. [Approvals](#-approvals)
-10. [Heartbeat, scheduler and learning review](#-heartbeat-scheduler-and-learning-review)
+10. [Notices, scheduler and learning review](#-notices-scheduler-and-learning-review)
 11. [Web server, control panel and push](#-web-server-control-panel-and-push)
 12. [Security model](#-security-model)
 13. [Running 24/7](#-running-247)
@@ -82,14 +82,14 @@ flowchart TB
 
 - **On the computer itself**, a browser skips Tailscale and goes straight to the web server and LiveKit; `make console` talks to a job process directly.
 - **Inside the agent**, each call gets its own job process (VAD, noise filter, brain), and all calls share one speech process for Whisper and Kokoro.
-- **Shared state:** the agent's job processes, the runner and the web server all use `data/`; the runner also holds `secrets/`, and the CLI keeps its own login in `secrets/claude`.
+- **Shared state:** the agent's job processes, the runner and the web server all use `data/`; the runner also holds `secrets/`, and the CLI signs in with the user's Claude Code login (or one of JARVIS's own, `JARVIS_CLAUDE_CONFIG_DIR`).
 
 | | Service | Entry point | Listens on | Role |
 |:-:|---|---|---|---|
 | 📡 | **LiveKit server**<br>`com.jarvis.livekit` | `livekit-server` (Homebrew on macOS, else `~/.local/bin`), config `secrets/livekit.yaml` | 7880/tcp (127.0.0.1), 7881/tcp, 7882/udp | WebRTC media, clients ↔ agent |
 | 🎙️ | **Voice agent**<br>`com.jarvis.agent` | `jarvis/voice/agent.py` | 8081/tcp (worker health) | LiveKit Agents worker |
 | 🌐 | **Web server**<br>`com.jarvis.web` | `jarvis/server.py` | 8787/tcp (127.0.0.1) | Web app, passcode → LiveKit token, panel, push, photos |
-| ⚙️ | **Task runner**<br>`com.jarvis.tasks` | `jarvis/tasks/runner.py` | `data/runner.sock` (mode 600) | Tasks, approvals, heartbeat, scheduler, learning review |
+| ⚙️ | **Task runner**<br>`com.jarvis.tasks` | `jarvis/tasks/runner.py` | `data/runner.sock` (mode 600) | Tasks, approvals, notices, scheduler, learning review |
 
 > [!NOTE]
 > **Nothing listens on a public interface.** What leaves the computer: conversation text and task work sent to Claude, calls made by tools (Google, MCP servers, web search), and phone audio inside the Tailscale tunnel.
@@ -135,9 +135,9 @@ JARVIS runs on **macOS on Apple silicon** and **Linux** (x86_64 and aarch64, wit
 | `jarvis/tasks/` | `runner.py`, `runner_base.py` + mixins `approvals.py`, `command_tasks.py`, `git_ops.py`, `task_edits.py`, `events.py`, `api.py` | The runner service, split by concern; `runner_base.py` holds shared state |
 | | `worker.py`, `gate.py`, `host_tools.py`, `reporting.py`, `subagents.py`, `briefs.py`, `access.py`, `project_claude.py` | One run of a task: session, gate, host commands, reporting, nudges, prompts, access grants |
 | | `goal.py`, `announce.py`, `data_edits.py`, `merge_check.py`, `stall.py` | Goal check, spoken endings, suggested data edits, tests before merging JARVIS's own branches, stall watchdog |
-| | `heartbeat.py`, `scheduler.py`, `schedules.py`, `hold.py`, `learning.py` | Services that run inside the runner |
+| | `notices.py`, `scheduler.py`, `schedules.py`, `hold.py`, `learning.py` | Services that run inside the runner |
 | | `command_jobs.py`, `connection_jobs.py`, `projects.py`, `client.py` | Command and connection task kinds, the project list, the socket client |
-| `jarvis/integrations/` | `accounts.py`, `signins.py`, `browser.py` | Google accounts, sign-in health, JARVIS's own Chrome |
+| `jarvis/integrations/` | `accounts.py`, `browser.py` | Google accounts, JARVIS's own Chrome |
 | | `mcp_servers.py`, `mcp_launch.py`, `mcp_relay.py`, `mcp_bridge.py`, `mcp_registry.py`, `mcp_oauth.py` | External MCP servers: list, launcher, relay, HTTP bridge, registry search, OAuth |
 | `jarvis/state/` | `memory.py`, `todo.py`, `settings.py`, `vocabulary.py`, `voiceprints.py`, `conversation.py`, `activity.py`, `history.py`, `pictures.py`, `shared_files.py` | What JARVIS keeps for the user |
 | `jarvis/core/` | `config.py`, `database.py`, `vault.py`, `profile.py`, `logins.py`, `credentials.py`, `documents.py`, `transcribe.py`, `proc.py` | Config, SQLite, encrypted secrets, profiles, logins, file reading, transcription |
@@ -160,7 +160,7 @@ Everything per-user lives under the **profile** (`jarvis/core/profile.py`). The 
 | 🧠 | **Long-term memory** | `data/memory.md` | `- fact (YYYY-MM-DD)` lines under `## User` (2,000 chars) and `## Environment` (3,000 chars) |
 | 💬 | **Conversation logs** | `data/recent.md`, `data/conversations/YYYY-MM-DD.md` | Rolling recent transcript; full daily log |
 | 🔤 | **Speech vocabulary** | `data/vocabulary.md` | Names Whisper should expect, with known mishearings |
-| ⚙️ | **Runner state** | `data/heartbeat.json`, `data/learning.json`, `data/usage.json` | Flagged alert keys, learning review offset, last reported usage limits |
+| ⚙️ | **Runner state** | `data/notices.json`, `data/learning.json`, `data/usage.json` | Keys of notices given, learning review offset, last reported usage limits |
 | 🛠️ | **Task work** | `data/worktrees/`, `data/tasks/<id>/`, `data/task-cache/`, `data/commands/` | Worktrees, per-task folders and plugins, sandbox caches, command task logs |
 | 🐚 | **Voice shell** | `data/shell/` | The voice brain's working folder, the only place its sandbox writes |
 | 🖼️ | **Media** | `data/pictures/`, `data/transcripts/`, `data/audio/` | Photos and screenshots, transcripts, rendered audio |
@@ -250,7 +250,7 @@ sequenceDiagram
 | ⏱️ | **Measuring** | One JSON line per turn in `logs/voice-turns.jsonl` (`timing.py`), each stage's offset from end of speech |
 | 🧮 | **Memory** | The shared speech process stays near **0.9 GB** thanks to three caps |
 
-- **Unprompted speech** covers task updates, heartbeat alerts, finished jobs and approval requests. Held 15 minutes or left at session end, they go to the phone.
+- **Unprompted speech** covers task updates, alerts (notices, reminders, watch findings), finished jobs and approval requests. Held 15 minutes or left at session end, they go to the phone.
 - **Interrupting:** if a `Bash` command of that reply is still running, the reply finishes unheard instead, and the next turn waits for it.
 - **Measuring:** `make voice-timing` reports medians, p90 and the slowest turns. Typical on an M2: Whisper 0.4 s, first words 1–2 s, about 7 s when a tool is needed.
 - **Memory caps:** `JARVIS_MLX_CACHE_MB` (Apple silicon only), `JARVIS_TTS_MEMORY_ARENA` off, and freed memory handed back to the system (`MallocLargeCache=0` on macOS, a pinned glibc mmap threshold on Linux; `JARVIS_VOICE_MALLOC_LARGE_CACHE`). `uv run python -m jarvis.voice.ram` prints footprints.
@@ -262,21 +262,19 @@ sequenceDiagram
 | | Property | Detail |
 |:-:|---|---|
 | 🔁 | **Process** | One CLI process per voice session, started while the room connects |
-| 🔑 | **Login** | `CLAUDE_CONFIG_DIR=secrets/claude`, separate from the user's own Claude Code |
+| 🔑 | **Login** | The user's own Claude Code login; their settings, CLAUDE.md, hooks and MCP servers still stay out. `JARVIS_CLAUDE_CONFIG_DIR` gives JARVIS its own |
 | 🤖 | **Model** | `JARVIS_CLI_MODEL` (default `claude-opus-5-5`), effort `low`, `max_turns` 8 |
 | 🔒 | **Lockdown** | `setting_sources=[]`, `strict_mcp_config=True`, **no file editing** |
 | 🧰 | **Tool servers** | In-process MCP `jarvis` (`sdk.jarvis_server`), `shell` (long jobs), enabled external MCP servers |
-| 🔎 | **Lookup subagent** | `lookup`: read-only (`Read`, `Glob`, `Grep`) on `JARVIS_LOOKUP_MODEL` (Haiku) |
-| 🧵 | **Side jobs** | `background_lookup` (`jarvis/brain/side.py`): slow reading while the talk goes on |
+| 🧵 | **Side jobs** | `background_lookup` and `file_lookup` (`jarvis/brain/side.py`): slow reading while the talk goes on |
 | ⏳ | **Kept calls** | `jarvis/brain/kept.py`: a JARVIS tool still running after `JARVIS_TOOL_WAIT` (8 s) leaves the turn; the brain follows up on its result |
 | ⚡ | **Quick routing** | Optional (`JARVIS_VOICE_QUICK_MODEL`): `jarvis/brain/route.py` sends small talk to a lighter model |
 | 📊 | **Usage limits** | `jarvis/brain/usage.py` records each `rate_limit_event` in `data/usage.json` |
 | 🔂 | **Retries** | `jarvis/brain/retry.py`: failures are `LIMIT`, `PASSING` or `ERROR` |
 
-- **Lockdown:** built-ins are `WebSearch`, `WebFetch`, `Bash`, `Agent` (lookup only) and `Skill` when skills are on. Everything else meets `ShellGate`.
-- **Lookup subagent:** the brain can't read files itself. Built-in subagents are denied (`sdk.BUILTIN_AGENTS_DENIED`).
-- **Side jobs** run in a read-only session; the answer comes back through the floor.
-- **Kept calls** (a merge running the tests, a slow read) carry on in the voice process. Their result is screened, queued on the floor, and taken up in a **follow-up turn** the brain starts itself (`CliBrain.follow_up`), so it can finish what depended on it (push after a merge). The user's own turn always comes first and stops a follow-up under way.
+- **Lockdown:** built-ins are `WebSearch`, `WebFetch`, `Bash` and `Skill` when skills are on; no subagents (`sdk.BUILTIN_AGENTS_DENIED`). Everything else meets `ShellGate`.
+- **Side jobs** run in a read-only session; the answer comes back through the floor. The brain can't read files itself: `file_lookup` searches with `Read`, `Glob` and `Grep` on `JARVIS_LOOKUP_MODEL` (Haiku), never secrets, a dozen reads at most. Its answer comes back in the turn only within `JARVIS_LOOKUP_WAIT` seconds a turn; after that it carries on in the background, so no lookup holds a spoken reply for long.
+- **Kept calls** (a merge running the tests, a slow read) carry on in the voice process. Their result is screened, queued on the floor, and taken up in a **follow-up turn** the brain starts itself (`CliBrain.follow_up`), so it can finish what depended on it (push after a merge). The user's own turn always comes first and stops a follow-up under way. Side-job tools (`stays`) manage their own background work and never become kept calls.
 - **Quick routing** stays in the same CLI session.
 - **Usage limits:** `usage.available` steps down a model when one model's weekly window is spent; `usage.hold_until` holds scheduled runs.
 - **Retries** are classified from what the SDK reports, **never from error text**.
@@ -344,7 +342,6 @@ Tools are Python functions registered with `@tool(name, description, properties,
 | 🧠 | Memory, to-dos, vocabulary, voiceprint, conversation search | `jarvis/tools/core.py` | No (text is scanned first) |
 | 🛠️ | Background tasks, projects, approvals | `jarvis/tools/tasks.py` → runner socket | `task_merge`, `task_discard`, `project_git_init` |
 | ⏰ | Schedules, do not disturb, usage | `jarvis/tools/schedules.py` | Command jobs via `ShellGate` |
-| 💓 | Heartbeat sources | `jarvis/tools/heartbeat.py` | No |
 | 📄 | Files, attachments, recordings | `jarvis/tools/files.py`, `jarvis/core/documents.py`, `jarvis/core/transcribe.py` | No; never reads secrets |
 | 🔊 | Audio files | `jarvis/tools/audio.py` → `jarvis/voice/audio_file.py` | No |
 | 🖥️ | Screen | `jarvis/tools/screen.py` | Only when the user's own words mention the screen |
@@ -503,7 +500,7 @@ Each run resumes the task's own Claude session, so follow-ups keep everything it
 - **Goal loop:** evidence means the diff and test steps. `incomplete` resumes the session, up to `JARVIS_GOAL_ROUNDS` (2). It also settles the to-do the task was started for.
 - **Subagents:** `code-searcher` (Haiku), `test-runner` and `web-researcher` (Sonnet). The run waits for background subagents before finishing (`WAKE_GRACE`, `SUBAGENT_WAIT`).
 - **Announcing:** with a fixed-words fallback. Events go out on `GET /events`, plus a desktop notification (macOS, or notify-send on a Linux desktop) and push.
-- **Stalls:** silent for `JARVIS_TASK_STALL_MINUTES` (15) without a legitimate reason → `stalled` in views and one heartbeat alert.
+- **Stalls:** silent for `JARVIS_TASK_STALL_MINUTES` (15) without a legitimate reason → `stalled` in views and one notice.
 - **Suggested data edits:** riskier edits and anything from research or flagged by the scan are `needs_yes`.
 
 **Command tasks** (`command_jobs.py`, `command_tasks.py`) run in a login shell (`/bin/zsh -lc` on macOS; the user's zsh or bash on Linux) in their own session under `data/commands/`, outside the sandbox but **without `.env` keys**. They're polled every 2 s and keep running across runner restarts.
@@ -588,49 +585,32 @@ flowchart TB
 - A rule matches each risky piece (`commands.risky_pieces`) by program, kind and, by default, **exact words**. **Every risky piece must be covered**, so a remembered install can't carry a push along.
 - Rules are made from the command itself, never from a model's words. Listed and withdrawn in Settings › Approvals or by voice.
 
-## 💓 Heartbeat, scheduler and learning review
+## 🔔 Notices, scheduler and learning review
 
 All three run **inside the task runner**, which is always on and already reaches the user through events, notifications and push.
 
-### Heartbeat
+### Notices
 
-`jarvis/tasks/heartbeat.py`, every `JARVIS_HEARTBEAT_MINUTES` (15). **Read-only by design**, and a test checks it names no write tools.
+`jarvis/tasks/notices.py`, every 15 minutes: JARVIS's news **about itself**, said unasked. It never reads the user's mail, calendar, Chat or repositories: watching those is each user's choice, made with [scheduled jobs](#scheduler) (see [Monitoring](#monitoring)).
 
-```mermaid
-flowchart LR
-    T(["⏰ Every 15 min"]) --> Q{"Quiet hours<br/>or DND?"}
-    Q -->|yes| S["💤 Skip"]
-    Q -->|no| Src["🔎 Sources<br/>in parallel"]
-    Src --> Seen{"Key<br/>seen?"}
-    Seen -->|yes| Drop["🙈 Ignore"]
-    Seen -->|no| Tri["🧪 Optional<br/>triage"]
-    Tri --> Out(["🔔 Notify · push<br/>· speak"])
-
-    classDef you fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
-    classDef mac fill:#ecfdf5,stroke:#059669,color:#064e3b
-    classDef warn fill:#fef2f2,stroke:#dc2626,color:#7f1d1d
-    class T,Q,Src,Seen,Tri mac
-    class S,Drop warn
-    class Out you
-```
-
-- **Quiet hours or do not disturb** skip the beat and record nothing.
-- **Sources** run in parallel with a 60 s limit each. Keys already in `data/heartbeat.json` are ignored.
-- **Triage** is optional: tool-less, JSON only. What's left goes out as a desktop notification and a push, and is spoken at the next pause.
-
-| | Source | Flags |
+| | Check | Says |
 |:-:|---|---|
-| 📅 | `calendar` | Timed events starting soon |
-| 📬 | `email` | New mail matching a Gmail search; can be added again with other searches |
-| 🐙 | `github` | Review requests, mentions, assignments, security alerts (via `gh`) |
-| 💬 | `chat` | Unread Google Chat DMs and @mentions |
-| 🛠️ | `tasks` | Unanswered questions, runs cut off by a restart, stalled tasks |
+| 🛠️ | `tasks` | Questions unanswered for 15 minutes, runs cut off by a restart, stalled tasks |
 | 📊 | `usage` | A Claude usage window nearly or fully used |
-| 🔑 | `signins` | Google, `gh` and MCP tokens failing or expiring (`jarvis/integrations/signins.py`) |
 
-- Sources are `heartbeat.Kind`s in `heartbeat.KINDS`. Per-user choices are stored under `heartbeat_sources` in settings and re-read at every beat.
-- Alerts have **stable keys** (30-day memory). The first answer from mail or GitHub is only recorded (no backlog), and there are at most 5 alerts per beat.
-- Logs hold counts only, **never alert text**.
+- **Quiet hours** (`JARVIS_QUIET_HOURS`) and **do not disturb** skip the round; what still holds is said after.
+- Checks run in parallel with a 60 s limit each. Notices have **stable keys**, kept for 30 days in `data/notices.json`, so each is said once; an ongoing one (a stall) is forgotten when it clears, so it can come back. At most 5 per round.
+- Each goes out as a desktop notification and a push (`text` only), and is spoken at the next pause. Logs hold counts only, **never notice text**.
+
+### Monitoring
+
+Nothing polls a service on a hard-coded timer. When the user asks for something to be watched, the voice brain offers the ways that fit (`schedule_add`'s description says how) and sets up the one they choose:
+
+- **A script and a command job with `only_changes`**: a small script, written by JARVIS or a background task, that prints only what's new and keeps its own note of what it has seen. A run that prints nothing ends quietly and hidden **with no model call**; one that prints something is summed up and said.
+- **A task job with `only_changes`**: a background task looks with its tools each run and speaks only when there's something new.
+- **A watch**, for one thing to wait for: said once, then it stops.
+
+Monitors are ordinary scheduled jobs, listed with the rest in the panel's Tasks tab.
 
 ### Scheduler
 
@@ -643,7 +623,7 @@ flowchart LR
 | 👀 | `watch` | A probe (`task`, `url`, `gmail`, `chat`) checks whether something happened; said once when it has |
 | ⌨️ | `command` | Starts a command task, weighed by `ShellGate` when created |
 
-- **`only_changes` task jobs** stay silent when a fast model judges nothing is new.
+- **`only_changes` task jobs** stay silent when a fast model judges nothing is new; **`only_changes` command jobs** stay silent when a successful run prints nothing.
 
 **Invariants:**
 
@@ -652,7 +632,7 @@ flowchart LR
 - Runs that need a model wait out usage limits (`usage.hold_until`, `JARVIS_USAGE_HOLD`).
 - Passing failures retry after 5, 15 and 30 minutes (`RETRY_MINUTES`).
 
-**Do not disturb** (`jarvis/tasks/hold.py`): `hold` in settings, up to 7 days. While on, the scheduler and heartbeat run nothing and task updates skip notifications and pushes. **Approval requests still go out**, since tasks wait on them.
+**Do not disturb** (`jarvis/tasks/hold.py`): `hold` in settings, up to 7 days. While on, the scheduler runs nothing, notices wait and task updates skip notifications and pushes. **Approval requests still go out**, since tasks wait on them.
 
 ### Learning review
 
@@ -703,7 +683,7 @@ flowchart LR
 </table>
 
 - **The panel is deliberately limited:** it can't add MCP servers, change project folders or sign in Google accounts, because anyone with a login can reach it.
-- **Panel tabs:** Tasks (with scheduled jobs), To-dos, Projects, and **JARVIS**: what it can do (skills, connections, Google accounts) and what it knows (memory, vocabulary, about you). The top bar opens **History** (read-only view of `data/conversations/` through `jarvis/state/history.py`) and **Settings** (behaviour, do not disturb, notifications, heartbeat, approvals, safety check, logins and keys, system).
+- **Panel tabs:** Tasks (with scheduled jobs), To-dos, Projects, and **JARVIS**: what it can do (skills, connections, Google accounts) and what it knows (memory, vocabulary, about you). The top bar opens **History** (read-only view of `data/conversations/` through `jarvis/state/history.py`) and **Settings** (behaviour, do not disturb, notifications, approvals, safety check, logins and keys, system).
 
 **Push** (`jarvis/notify/`):
 
@@ -822,14 +802,14 @@ A task's `host_run` and `start_job` commands run inside `host.walled()`. On Linu
 | 📬 | **A Google or Mac capability** | It belongs in AI Armory's tool sets; `jarvis/tools/google.py` registers whatever they export |
 | 🐧 | **A Linux desktop capability** | A function in `jarvis/core/desktop.py` with a `can_*` check, registered in `jarvis/tools/desktop.py` |
 | 🔀 | **Something OS-specific** | Branch on `platform.MAC` / `platform.LINUX` from `jarvis/core/platform.py`, and test both branches by faking them |
-| 💓 | **A heartbeat source** | An async function returning `heartbeat.Alert`s, registered via `heartbeat.register(heartbeat.Kind(...))` |
+| 👀 | **Something to monitor** | Nothing in code: the user asks, and JARVIS sets up a scheduled job (see [Monitoring](#monitoring)) |
 | 🗄️ | **A schema change** | Append a migration to that table's `migrations` list; never edit an existing one |
 | 📝 | **A prompt** | A markdown file in `jarvis/prompts/`, loaded with `prompts.load(name, **placeholders)` |
 | 📡 | **Another channel** | Reuse `make_brain()`: the brain is text in, text out, and doesn't depend on voice |
 
 - **A tool:** set `gated=True` if it sends, deletes or reaches other people; `reads=True` if it only reads. Put usage guidance in the description, not the persona.
 - **Google or Mac:** their `needs_confirmation` marks become `gated`.
-- **A heartbeat source:** stable keys, read-only tools only.
+- **Something to monitor:** keep it per user and out of the code; no built-in script or source polls a service.
 
 ## 📖 Glossary
 

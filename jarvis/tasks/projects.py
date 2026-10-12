@@ -47,15 +47,19 @@ create table projects (
     about text not null default '',
     in_place integer not null default 1  -- 0: worktree + branch per task
 )"""
+_MIGRATIONS = (
+    "alter table projects add column node integer",  # 2: the machine it lives on (jarvis.node); null = this computer
+)
 
 
 @dataclass
 class Project:
     name: str
-    path: Path
+    path: Path  # on its machine, for one that lives on another (absolute, as that machine resolved it)
     aliases: list[str]
     about: str
     in_place: bool = IN_PLACE_DEFAULT  # edit the folder directly: no worktree, branch or commit
+    node: int | None = None  # the machine it lives on; None = this computer
 
 
 def is_jarvis(path: Path) -> bool:
@@ -72,10 +76,12 @@ def _key(name: str) -> str:
 
 def _db() -> AbstractContextManager[sqlite3.Connection]:
     """DB connection context, creating the table on first use."""
-    return database.table("projects", _SCHEMA)
+    return database.table("projects", _SCHEMA, migrations=_MIGRATIONS)
 
 
 def _project(r: sqlite3.Row) -> Project:
+    if r["node"] is not None:  # its path is that machine's
+        return Project(r["name"], Path(r["path"]), json.loads(r["aliases"]), r["about"], bool(r["in_place"]), r["node"])
     path = Path(r["path"]).expanduser()
     return Project(r["name"], path, json.loads(r["aliases"]), r["about"], bool(r["in_place"]) and not is_jarvis(path))
 
@@ -99,6 +105,11 @@ def _find(known: list[Project], name: str) -> Project:
 
 def find(name: str) -> Project:
     return _find(load(), name)
+
+
+def living_at(folder: Path) -> Project | None:
+    """The project living on another machine whose folder (a path there) holds `folder`, or None."""
+    return next((p for p in load() if p.node and folder.is_relative_to(p.path)), None)
 
 
 # ── Git ─────────────────────────────────────────────────────────
@@ -240,17 +251,42 @@ def mode(in_place: bool) -> str:
     return "in place" if in_place else "with worktrees"
 
 
+def _clean_entry(name: object, about: object, aliases: object) -> tuple[str, str, list[str]]:
+    if not (isinstance(name, str) and isinstance(about, str)):
+        raise ValueError("name, path and about must be text.")
+    name, about = scan.clean(name).strip(), scan.clean(about).strip()  # strip invisible characters
+    if not _key(name):
+        raise ValueError("The project needs a name with letters or digits in it.")
+    return name, about, _tidy_aliases(aliases or [])
+
+
+def register_there(name: str, node: int, folder: str, state: str, aliases: list[str] | None = None, about: str = "",
+                   in_place: bool = IN_PLACE_DEFAULT) -> dict:
+    """Add a project that lives on machine `node`, at `folder` as that machine checked it (absolute, in its home;
+    `state` its git state there)."""
+    name, about, aliases = _clean_entry(name, about, aliases)
+    in_place = in_place or state != GIT
+    with _db() as db:
+        db.execute("begin immediate")
+        known = _read(db)
+        if any(p.node == node and str(p.path) == folder for p in known):
+            raise ValueError(f"{folder} on that machine is already registered.")
+        _check_names(known, [name, *aliases])
+        db.execute("insert into projects (name, path, aliases, about, in_place, node) values (?, ?, ?, ?, ?, ?)",
+                   (name, folder, json.dumps(aliases, ensure_ascii=False), about, int(in_place), node))
+        db.execute("commit")
+    return {"name": name, "path": folder, "in_place": in_place, "node": node,
+            "git": {NO_GIT: "none", NO_COMMITS: "initialised, no commits yet", GIT: "existing repo, left as is"}[state]}
+
+
 def register(name: str, path: str | None = None, aliases: list[str] | None = None, about: str = "",
              in_place: bool = IN_PLACE_DEFAULT) -> dict:
     """Add a project, creating its folder if missing. All checks run before any write; git untouched."""
-    if not (isinstance(name, str) and isinstance(about, str) and (path is None or isinstance(path, str))):
+    if not (path is None or isinstance(path, str)):
         raise ValueError("name, path and about must be text.")
     if not isinstance(in_place, bool):
         raise ValueError("in_place must be true or false.")
-    name, about = scan.clean(name).strip(), scan.clean(about).strip()  # strip invisible characters
-    aliases = _tidy_aliases(aliases or [])
-    if not _key(name):
-        raise ValueError("The project needs a name with letters or digits in it.")
+    name, about, aliases = _clean_entry(name, about, aliases)
     folder = _check_folder(path or str(_default_path(name)))
     _check_own_repo(folder)
     state = git_state(folder)
@@ -292,6 +328,8 @@ def update(name: str, path: str | None = None, aliases: list[str] | None = None,
         about = scan.clean(about)
     if aliases is not None:
         aliases = _tidy_aliases(aliases)
+    if path is not None and find(name).node:
+        raise ValueError(f"{name}'s folder is on another machine: register it again with the new folder there.")
     folder = _check_folder(path) if path is not None else None
     if folder and not folder.is_dir():
         raise ValueError(f"{folder} doesn't exist. Make it, or move the project there, first.")
@@ -314,7 +352,7 @@ def update(name: str, path: str | None = None, aliases: list[str] | None = None,
             if in_place:
                 raise ValueError("JARVIS's own project always works on a branch of its own, never in place.")
             wanted = False
-        elif not wanted and git_state(where) != GIT:
+        elif not wanted and p.node is None and git_state(where) != GIT:  # a machine's folder is checked there
             if in_place is False:
                 raise ValueError(worktree_problem(Project(p.name, where, [], "")))
             wanted = True  # no commits: worktrees impossible

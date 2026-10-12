@@ -1,10 +1,12 @@
 """Channel between a task run (worker) and the runner.
 
-  Reporter   protocol the runner implements for run callbacks
+  Reporter   protocol the runner implements for run callbacks. On another machine (jarvis.node.work) the answers
+             come over the link, so the ones that return something may return an awaitable: `answer` takes either.
   task tools report_progress, ask_user, propose_data_edit, request_access (MCP server "task")
   nudges     user messages to a running task, injected after its next tool call by a PostToolUse hook
 """
 
+from collections.abc import Awaitable
 from typing import Protocol
 
 from claude_agent_sdk import HookMatcher, create_sdk_mcp_server, tool as sdk_tool
@@ -12,7 +14,7 @@ from claude_agent_sdk import HookMatcher, create_sdk_mcp_server, tool as sdk_too
 from jarvis.core import profile
 from jarvis.state.memory import FACT_MAX, LIMITS, SECTIONS
 from jarvis.tasks import access, data_edits
-from jarvis.tasks.host_tools import TaskJobs
+from jarvis.tasks.host_tools import TaskJobs, answer
 
 
 class Reporter(Protocol):
@@ -26,11 +28,11 @@ class Reporter(Protocol):
     def progress(self, task_id: int, text: str) -> None: ...
     def subagent(self, task_id: int, text: str) -> None: ...
     def ask(self, task_id: int, question: str) -> None: ...
-    def take_nudges(self, task_id: int) -> list[str]: ...
-    def propose(self, task_id: int, args: dict) -> dict: ...
-    def cleared(self, task_id: int, item: dict) -> bool: ...
-    def request_approval(self, task_id: int, item: dict) -> dict: ...
-    def request_access(self, task_id: int, names: list[str], reason: str) -> list[str]: ...
+    def take_nudges(self, task_id: int) -> list[str] | Awaitable[list[str]]: ...
+    def propose(self, task_id: int, args: dict) -> dict | Awaitable[dict]: ...
+    def cleared(self, task_id: int, item: dict) -> bool | Awaitable[bool]: ...
+    def request_approval(self, task_id: int, item: dict) -> dict | Awaitable[dict]: ...
+    def request_access(self, task_id: int, names: list[str], reason: str) -> list[str] | Awaitable[list[str]]: ...
     def flag(self, task_id: int, text: str) -> None: ...
 
 
@@ -86,7 +88,7 @@ def _task_server(task_id: int, reporter: Reporter):
     )
     async def propose_data_edit(args: dict) -> dict:
         try:
-            edit = reporter.propose(task_id, args)
+            edit = await answer(reporter.propose(task_id, args))
         except ValueError as e:
             return {"content": [{"type": "text", "text": f"Not suggested: {e}"}], "is_error": True}
         return {"content": [{"type": "text", "text": f"Suggested as edit {edit['n']}: {data_edits.describe(edit)}. "
@@ -105,7 +107,7 @@ def _task_server(task_id: int, reporter: Reporter):
     )
     async def request_access(args: dict) -> dict:
         try:
-            asked = reporter.request_access(task_id, args.get("access") or [], str(args.get("reason") or ""))
+            asked = await answer(reporter.request_access(task_id, args.get("access") or [], str(args.get("reason") or "")))
         except ValueError as e:
             return {"content": [{"type": "text", "text": f"Not asked: {e}"}], "is_error": True}
         return {"content": [{"type": "text", "text": f"Asked for {', '.join(asked)}. End your turn now with one short "
@@ -143,7 +145,7 @@ def _nudge_hook(task_id: int, reporter: Reporter) -> list[HookMatcher]:
             return {}  # subagent call: deliver to the main session only
         if data["tool_name"] in PAUSES:
             return {}  # pausing for an answer: messages go with the reply
-        if not (messages := reporter.take_nudges(task_id)):
+        if not (messages := await answer(reporter.take_nudges(task_id))):
             return {}
         return {"hookSpecificOutput": {"hookEventName": data["hook_event_name"], "additionalContext": nudge_text(messages)}}
 

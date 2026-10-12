@@ -356,7 +356,7 @@ sequenceDiagram
 - Records every CLI `rate_limit_event` into `data/usage.json` (shared across processes). **Never queries Claude.**
 - `available(model)`: step-down chain above.
 - `hold_until()`: scheduled runs wait if an all-model window is spent, or the five-hour window passes `JARVIS_USAGE_HOLD` (90 %), **leaving headroom for voice**.
-- `said()` / `alerts()`: spoken summaries for `usage_left` and the heartbeat.
+- `said()` / `alerts()`: spoken summaries for `usage_left` and notices (`jarvis/tasks/notices.py`).
 
 </details>
 

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from aiohttp import web
 
+from jarvis.node.link import MAX_MESSAGE, WebSocketChannel
 from jarvis.safety import remembered
 from jarvis.tasks import projects
 from jarvis.tasks.approvals import NotAllowed
@@ -45,8 +46,9 @@ def routes(r: "Runner") -> list[web.RouteDef]:
 
     async def create(req: web.Request) -> web.Response:
         b = await req.json()
-        return web.json_response(r.start(b["kind"], b.get("title", ""), b["instruction"], b.get("project"),
-                                         grants=b.get("access"), order=b.get("order"), todo=b.get("todo")))
+        task = r.start(b["kind"], b.get("title", ""), b["instruction"], b.get("project"), grants=b.get("access"),
+                       order=b.get("order"), todo=b.get("todo"), machine=str(b.get("machine") or ""))
+        return web.json_response(await r.where(task["id"]))
 
     async def reply(req: web.Request) -> web.Response:
         b = await req.json()
@@ -58,10 +60,12 @@ def routes(r: "Runner") -> list[web.RouteDef]:
     async def start_command(req: web.Request) -> web.Response:
         b = await req.json()
         timeout = b.get("timeout_minutes")
-        return web.json_response(r.view(r.start_command(
+        task = r.start_command(
             str(b["command"]), str(b.get("title", "")), str(b["folder"]),
             timeout_minutes=int(timeout) if timeout else None, summarize=bool(b.get("summarize", True)),
-            auto_fix=bool(b.get("auto_fix", True)), report=bool(b.get("report", False)))))
+            auto_fix=bool(b.get("auto_fix", True)), report=bool(b.get("report", False)),
+            placeable=bool(b.get("placeable")), machine=str(b.get("machine") or ""), approved=str(b.get("approved") or ""))
+        return web.json_response(await r.where(task["id"]))
 
     async def start_connection(req: web.Request) -> web.Response:
         b = await req.json()
@@ -84,7 +88,7 @@ def routes(r: "Runner") -> list[web.RouteDef]:
         b = await req.json()
         return web.json_response(await r.register_project(
             b["name"], b.get("path") or None, b.get("aliases") or [], b.get("about", ""),
-            b.get("in_place", projects.IN_PLACE_DEFAULT)))
+            b.get("in_place", projects.IN_PLACE_DEFAULT), str(b.get("machine") or "")))
 
     async def merge(req: web.Request) -> web.Response:
         return web.json_response(await r.merge(int(req.match_info["id"])))
@@ -135,7 +139,21 @@ def routes(r: "Runner") -> list[web.RouteDef]:
         finally:
             r.listeners.discard(q)
 
+    async def node_link(req: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse(max_msg_size=MAX_MESSAGE)
+        await ws.prepare(req)
+        await r.hub.accept(WebSocketChannel(ws))
+        return ws
+
+    async def list_machines(req: web.Request) -> web.Response:
+        return web.json_response(await r.hub.listing())
+
+    async def remove_machine(req: web.Request) -> web.Response:
+        return web.json_response(await r.hub.remove(int(req.match_info["id"])))
+
     return [
+        web.get("/node", node_link), web.get("/machines", list_machines),
+        web.post("/machines/{id:\\d+}/remove", remove_machine),
         web.get("/tasks", list_tasks), web.post("/tasks", create), web.get("/tasks/{id:\\d+}", show),
         web.get("/tasks/{id:\\d+}/log", tail),
         web.post("/tasks/{id:\\d+}/reply", reply), web.post("/tasks/{id:\\d+}/stop", stop),

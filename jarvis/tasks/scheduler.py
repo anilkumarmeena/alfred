@@ -6,7 +6,8 @@
             kind is announced once until a run succeeds
   watch     task probe (model judges met via `read`) or model-free url/gmail/chat probe. Met: announce and finish;
             not yet: silent. Expiry unmet is announced once
-  command   model-free command task with no slot; the runner announces, summarises and (auto_fix) fixes
+  command   model-free command task with no slot; the runner announces, summarises and (auto_fix) fixes; with
+            only_changes a successful run that prints nothing stays silent
 Missed runs never pile up: one-offs run once late; day-based jobs catch up only within CATCH_UP_HOURS; interval jobs
 and watches run once now. Overlapping runs are skipped. Watches skip quiet hours. Do-not-disturb holds everything;
 model runs also wait out Claude's usage limit (jarvis.brain.usage).
@@ -24,10 +25,10 @@ from email.utils import parseaddr, parsedate_to_datetime
 
 from jarvis.brain import retry, usage
 from jarvis.core import profile
-from jarvis.core.config import CLAUDE_CONFIG_DIR, DATA_DIR, HEARTBEAT_QUIET_HOURS, VERDICT_MODEL
+from jarvis.core.config import CLAUDE_CONFIG_DIR, DATA_DIR, QUIET_HOURS, VERDICT_MODEL
 from jarvis.core.database import ACTIVE as TASK_ACTIVE, COMMAND
-from jarvis.tasks import heartbeat, hold, schedules
-from jarvis.tasks.heartbeat import in_quiet_hours, parse_quiet_hours
+from jarvis.tasks import hold, schedules
+from jarvis.tasks.hold import in_quiet_hours, parse_quiet_hours
 
 log = logging.getLogger("jarvis.tasks.scheduler")
 TICK_SECONDS = 30
@@ -42,6 +43,7 @@ NOTEPAD = "NOTEPAD:"
 NOTEPAD_CHARS = 1500
 RETRY_MINUTES = (5, 15, 30)  # successive retry delays for transient task failures
 RUNS = retry.Policy(waits=tuple(m * 60 for m in RETRY_MINUTES))
+SNIPPET_WORDS = 12  # Chat message words quoted, in `spoken` only
 _NOTEPAD = re.compile(r"^[\W_]*NOTEPAD[\W_]*:\s*", re.IGNORECASE | re.MULTILINE)
 
 Notify = Callable[[str, str], Awaitable[object]]
@@ -177,6 +179,32 @@ class Found:
     seen: set[str] | None = None  # chat: current message keys, stored as baseline on first check
 
 
+class ProbeFailed(RuntimeError):
+    """Probe failure with a JARVIS-written message, safe to log and say."""
+
+
+async def each_account(read: Callable[[str], list[dict]]) -> list[dict]:
+    """Run `read(label)` for every connected Google account concurrently; ProbeFailed only if all fail."""
+    from ai_armory.toolsets.google.common import connected
+
+    from jarvis.tools import google  # configures AI Armory's Google toolsets with JARVIS's accounts
+
+    google.fresh()  # accounts added or removed, and the current profile name and time zone
+    labels = connected()
+    results = await asyncio.gather(*(asyncio.to_thread(read, label) for label in labels), return_exceptions=True)
+    found, failed = [], []
+    for label, result in zip(labels, results):
+        if isinstance(result, BaseException):
+            failed.append(f"{label} ({type(result).__name__})")
+        else:
+            found += result
+    if failed and not found:
+        raise ProbeFailed("every account failed: " + ", ".join(failed))
+    if failed:
+        log.warning("some Google accounts failed: %s", ", ".join(failed))
+    return found
+
+
 async def probe_url(job: dict) -> Found:
     """Met when the page returns < 400 and contains `expect` (if set). No answer counts as not yet."""
     import httpx
@@ -210,7 +238,7 @@ async def probe_gmail(job: dict) -> Found:
     """Met when mail matching the Gmail search arrived since the watch began."""
     from ai_armory.toolsets.google.gmail import gmail_search
 
-    found = await heartbeat._each_account(lambda label: gmail_search(job["target"], account=label, max_results=10))
+    found = await each_account(lambda label: gmail_search(job["target"], account=label, max_results=10))
     new = sorted((m for m in found if _dated(m.get("date") or "") > job["created"] - 60),
                  key=lambda m: _dated(m["date"]))
     if not new:
@@ -225,7 +253,7 @@ async def probe_chat(job: dict) -> Found:
     from ai_armory.toolsets.google.chat import first_words, news
 
     who = job["target"].lower()
-    mine = [n for n in await heartbeat._each_account(news)
+    mine = [n for n in await each_account(news)
             if who in (n["from"] or "").lower() or (n["kind"] == "dm" and who in (n["name"] or "").lower())]
     keys = {f"{n['account']}:{n['latest']}" for n in mine}
     new = [n for n in mine if f"{n['account']}:{n['latest']}" not in schedules.baseline(job)]
@@ -233,7 +261,7 @@ async def probe_chat(job: dict) -> Found:
         return Found(False, f"Nothing new from {job['target']} on Chat.", seen=keys)
     n = new[0]
     text = f"{n['from']} wrote to you on Chat." if n["kind"] == "dm" else f"{n['from']} mentioned you in {n['name']} on Chat."
-    return Found(True, text, sentence(f"{text[:-1]}: {first_words(n['text'], heartbeat.SNIPPET_WORDS)}"), keys)
+    return Found(True, text, sentence(f"{text[:-1]}: {first_words(n['text'], SNIPPET_WORDS)}"), keys)
 
 
 PROBES = {"url": probe_url, "gmail": probe_gmail, "chat": probe_chat}
@@ -247,7 +275,7 @@ class Scheduler:
     (voice agent events) and `push` (phone)."""
 
     def __init__(self, runner, notify: Notify, announce: Callable[[dict], None] | None = None, push=None,
-                 quiet_hours: str = HEARTBEAT_QUIET_HOURS, probes: dict | None = None,
+                 quiet_hours: str = QUIET_HOURS, probes: dict | None = None,
                  clock: Callable[[], datetime] = lambda: datetime.now(profile.tz()),
                  sleep: Callable[[float], Awaitable[object]] = asyncio.sleep) -> None:
         self.runner = runner
@@ -277,12 +305,16 @@ class Scheduler:
         if stamp - self.pruned > PRUNE_SECONDS:
             self.pruned = stamp
             await self.prune()
+        if offload := getattr(self.runner, "offload", None):  # a machine runs its projects' commands itself
+            await offload.sync_schedules()
         if hold.held(stamp):  # do not disturb: everything waits
             return []
         for job in schedules.lapsed(stamp):
             await self._lapse(job)
         ran = []
         for job in schedules.due(stamp):
+            if offload and offload.owner(job):
+                continue
             try:
                 if await self._run(job, now):
                     ran.append(job["id"])
@@ -386,7 +418,7 @@ class Scheduler:
         try:
             found = await asyncio.wait_for(self.probes[job["probe"]](job), PROBE_TIMEOUT)
         except Exception as e:  # type only: error text may leak request details
-            if said := self._check_failed(job, str(e) if isinstance(e, heartbeat.SourceFailed) else type(e).__name__):
+            if said := self._check_failed(job, str(e) if isinstance(e, ProbeFailed) else type(e).__name__):
                 await self._alert(job, said)
             return
         fields: dict = {"fails": 0, "last_result": found.text}
@@ -422,7 +454,7 @@ class Scheduler:
             except Exception as e:
                 log.warning("scheduler notification failed: %s", type(e).__name__)
         if self.announce:
-            self.announce({"type": "heartbeat", "text": spoken or text, "tasks": [], "urgency": "soon",
+            self.announce({"type": "alert", "text": spoken or text, "tasks": [], "urgency": "soon",
                            "pushed": bool(self.push) and not held})
         if self.push and not held:
             try:

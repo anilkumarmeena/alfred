@@ -73,7 +73,7 @@ def test_other_tasks_dont_get_them_yet(folder, monkeypatch, kind):
 def test_the_cli_gets_none_of_jarvis_keys(folder):
     env = options(folder).env
     assert env["JARVIS_PASSCODE"] == "" == env["LIVEKIT_API_SECRET"]
-    assert env["CLAUDE_CONFIG_DIR"] != ""  # the CLI's own, as sdk_options sets it
+    assert env.get("CLAUDE_CONFIG_DIR") != ""  # never blanked: unset (the user's login) or JARVIS's own login
 
 
 def test_a_big_message_doesnt_end_the_task(folder):
@@ -263,7 +263,8 @@ def test_host_run_gives_its_temp_folder_and_names_what_it_left_running(folder, u
 def test_what_host_run_leaves_running_the_task_may_stop_without_asking(folder, unwalled):
     run = tools(folder, unwalled)["host_run"]
     done = text(asyncio.run(run({"command": "sleep 30 >/dev/null 2>&1 &"})))
-    [pid] = [int(p) for p in re.findall(r"(\d+) \(sleep\)", done)]
+    # Named by whatever it is when listed: under load the forked shell may not have become sleep yet
+    [pid] = [int(p) for p in re.findall(r"still running from this command: (\d+) \(", done)]
     try:
         reporter = Asking()
         reporter.host_jobs = unwalled  # the runner's, which the command ran in

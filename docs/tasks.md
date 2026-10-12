@@ -4,7 +4,7 @@
 
 # 🛠️ Tasks and proactive work
 
-**Everything JARVIS does in the background: tasks you start by voice, shell jobs, approvals, the scheduler, the heartbeat and the learning review.**
+**Everything JARVIS does in the background: tasks you start by voice, shell jobs, approvals, the scheduler, monitoring, notices and the learning review.**
 
 [🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · **🛠️ Tasks** · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md)
 
@@ -20,7 +20,7 @@ flowchart TB
     Runner --> T["🛠️ Tasks<br/>code · research"]
     Runner --> C["💻 Commands<br/>long shell jobs"]
     Runner --> S["⏰ Scheduler<br/>reminders · watches"]
-    Runner --> H["💓 Heartbeat<br/>every 15 min"]
+    Runner --> H["🔔 Notices<br/>stuck tasks · usage"]
     Runner --> L["🧠 Learning<br/>after each chat"]
     T & C & S & H & L --> Tell(["🔔 Said aloud · desktop notification · phone push"])
 
@@ -42,7 +42,8 @@ flowchart TB
 - [Shell commands and long jobs](#-shell-commands-and-long-jobs)
 - [Approvals](#-approvals)
 - [Scheduler](#-scheduler)
-- [Heartbeat](#-heartbeat)
+- [Monitoring](#-monitoring)
+- [Notices](#-notices)
 - [Learning review](#-learning-review)
 
 </details>
@@ -173,6 +174,7 @@ flowchart LR
     linkStyle default stroke:#64748b
 ```
 
+- The fix task **only fixes the code**: its walls hide the keys the command needs, so it never runs the command itself. When it finishes, **JARVIS reruns the command once**, as it always runs it (same folder, outside the walls, with its keys), and says how that went, unless the fix says the cause remains (an expired login, say).
 - A rerun that fails again is **only reported**, so it can't loop.
 - Jobs outside a project, or started with "don't fix it if it fails", are only explained.
 
@@ -260,7 +262,7 @@ Only some kinds can be remembered: **installing software, stopping processes, ch
 
 ## ⏰ Scheduler
 
-Beside the heartbeat, the runner runs what you schedule by voice, once or on a repeat. Jobs live in `data/tasks.db` and **survive restarts**.
+The runner runs what you schedule by voice, once or on a repeat. Jobs live in `data/tasks.db` and **survive restarts**.
 
 | | Kind | Say | What happens |
 |:-:|---|---|---|
@@ -291,7 +293,7 @@ A missed **daily** job runs once if missed by under 2 hours, else waits.
 <td width="50%" valign="top">
 
 **🔕 Do not disturb**<br>
-"Hold alerts till three", "pause everything for an hour", "I'm back", or the switch in **Settings → Do not disturb**. While on, nothing scheduled runs, the heartbeat checks nothing and finished tasks send no notifications. When it ends, held reminders are said and each held job runs once.
+"Hold alerts till three", "pause everything for an hour", "I'm back", or the switch in **Settings → Do not disturb**. While on, nothing scheduled runs, notices wait and finished tasks send no notifications. When it ends, held reminders are said and each held job runs once.
 
 </td>
 <td width="50%" valign="top">
@@ -303,24 +305,29 @@ A missed **daily** job runs once if missed by under 2 hours, else waits.
 </tr>
 </table>
 
-## 💓 Heartbeat
+## 👀 Monitoring
 
-Every 15 minutes the runner checks for what's new, **read-only**:
+JARVIS watches **nothing on its own**: no mail, calendar, Chat or GitHub polling is built in. Ask for what you want kept an eye on ("let me know about new issues on my repo", "keep an eye on that price") and JARVIS offers the ways that fit, then sets up the one you pick:
 
-| | Source | Flags |
+| | Way | Costs | Good for |
+|:-:|---|---|---|
+| 📜 | **A small script, run as a command** | No model until the script prints something; then one short summary | Anything a script can read: a page, an API, a feed, a file |
+| 🛠️ | **A scheduled task, "only if something's new"** | A model run each time | What needs judgement, or your mail, calendar and other accounts |
+| 👀 | **A watch** | Cheap for a page, Gmail or Chat; a task otherwise | One thing you're waiting for: said once, then it stops |
+
+The script prints only what's new, keeping its own note of what it has seen; a run that prints nothing stays silent and out of the task list. Every monitor is an ordinary scheduled job, listed on the app's **Tasks** page, and changed or cancelled like any other.
+
+## 🔔 Notices
+
+Every 15 minutes the runner checks on **JARVIS itself** and speaks up unasked:
+
+| | Notice | When |
 |:-:|---|---|
-| 📅 | **Calendar** | Meetings starting in the next 30 minutes |
-| 📬 | **Gmail** | New unread mail Gmail marks important (or your own search) |
-| 🐙 | **GitHub** | PRs waiting for your review; mentions, assignments, security alerts (via `gh`) |
-| 💬 | **Google Chat** | Unread DMs and @mentions. Notifications say only who wrote, never what |
-| 🛠️ | **Tasks** | Waiting for an answer, cut off by a restart, or stalled |
+| 🛠️ | **Tasks** | Waiting for your answer for 15 minutes, cut off by a restart, or stalled |
 | 📊 | **Claude usage** | Nearing or out of a plan limit, once per window |
-| 🔑 | **Sign-ins** | A Google account, `gh`, or a GitHub/GitLab token signed out or expiring within a week |
 
-- **Choose sources** in **Settings → Heartbeat** (on/off, meeting lead time, Gmail searches, extra titled searches) or by voice ("stop flagging GitHub", "flag mail from my bank too").
 - **You hear about it** as a desktop notification, a phone push if enabled, and **spoken at the next pause** if you're in a session.
-- **Rules:** nothing flagged twice; nothing checked in quiet hours (23:00–08:00) or do not disturb; the first check only records what's already there.
-- **`make heartbeat`** dry-runs one check. Each check writes a line to `logs/tasks.log`.
+- **Rules:** nothing said twice (a stall again only once it has cleared and come back); nothing checked in quiet hours (23:00–08:00) or do not disturb.
 
 ## 🧠 Learning review
 

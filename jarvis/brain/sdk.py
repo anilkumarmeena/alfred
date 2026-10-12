@@ -24,7 +24,7 @@ from jarvis.brain import retry, usage
 from jarvis.core.config import (
     ASSISTANT_NAME,
     CLAUDE_CLI,
-    CLAUDE_CONFIG_DIR,
+    CLAUDE_OWN_CONFIG_DIR,
     DATA_DIR,
     INJECTION_TASK_SECONDS,
     TOOL_SEARCH,
@@ -97,13 +97,15 @@ def on_demand(options: dict) -> dict:
 
 def sdk_options(env: dict[str, str] | None = None, screen_seconds: float = INJECTION_TASK_SECONDS,
                 **options) -> ClaudeAgentOptions:
-    """CLI options on JARVIS's own login: no user/project settings, no other MCP servers, no skills unless named.
+    """CLI options on the user's Claude login (or JARVIS's own): no user/project settings, no other MCP servers, no
+    skills unless named.
 
     Settings are excluded because their allow rules would bypass permission_mode and can_use_tool. With tools and
     the injection check on, tool results are screened, `screen_seconds` per check. `settings` (JSON) gains
     ATTRIBUTION, which the CLI reads from flag settings.
     """
-    env = {"CLAUDE_CONFIG_DIR": CLAUDE_CONFIG_DIR} | gpu.env(options.get("sandbox")) | (env or {})
+    login = {"CLAUDE_CONFIG_DIR": CLAUDE_OWN_CONFIG_DIR} if CLAUDE_OWN_CONFIG_DIR else {}
+    env = login | gpu.env(options.get("sandbox")) | (env or {})
     settings = {"attribution": ATTRIBUTION} | json.loads(options.get("settings") or "{}")
     options = on_demand(options | {"env": env, "settings": json.dumps(settings)})
     if (options.get("tools") or options.get("mcp_servers")) and injection_check_on():

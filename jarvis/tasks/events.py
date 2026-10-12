@@ -38,7 +38,7 @@ def bell_entry(event: dict) -> tuple[str, str, int | None] | None:
             else:
                 said = f"Task {a['task']}'s request to run {_commands(a)}: {word}"
             return said, light, a["task"]
-        case "heartbeat":
+        case "alert":
             return event["text"], "warn", None
     return None
 
@@ -55,6 +55,8 @@ class Events(RunnerBase):
         fields.setdefault("seen", 0 if status in PUSH_TITLES else 1)
         if status != "waiting":  # orders apply only to the work just finished
             fields["orders"] = None
+            if node := (self.store.get(task_id) or {}).get("node"):  # always say where it ran
+                spoken = f"{spoken} It ran on {self.offload.name(node)}."
         task = self.store.update(task_id, status=status, spoken=spoken, activity=None, **fields)
         self.store.log(task_id, status, spoken)
         if status != "waiting":  # only an answered question resumes from the same snapshot

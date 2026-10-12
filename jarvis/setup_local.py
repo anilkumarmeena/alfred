@@ -8,6 +8,7 @@
   stop       unload services (they stay installed)
   status     print each service's state
   labels     print the service labels
+  node-install / node-stop   on a second machine: its one service, which runs python -m jarvis.node serve
 
 Services this checkout installed under old labels (e.g. a changed JARVIS_SERVICE_PREFIX) are stale: stop unloads them;
 start and --install remove them before loading the current ones.
@@ -323,6 +324,29 @@ def stop_services() -> None:
             print(f"stopped {path.stem}")
 
 
+NODE = "node"  # a second machine's one service (deploy/node.plist, deploy/systemd/node.service), apart from SERVICES
+
+
+def install_node() -> None:
+    """On a second machine: (re)write and start its one service. Exits 1 if it fails to start."""
+    if _systemd():
+        _require_systemd()
+        _write(NODE)
+        _systemctl("daemon-reload")
+        started = _start(NODE, restart=True)
+    else:
+        _launchctl("bootout", installed(NODE))
+        _write(NODE)
+        started = _start(NODE)
+    if not started:
+        sys.exit(1)
+
+
+def stop_node() -> None:
+    if (path := installed(NODE)).exists() and not _unload(path):
+        print(f"stopped {path.stem}")
+
+
 def properties(text: str) -> dict[str, str]:
     """systemctl show output (Key=Value lines) as a dict."""
     return {key: value for key, found, value in (line.partition("=") for line in text.splitlines()) if found}
@@ -362,7 +386,8 @@ def print_status() -> None:
 
 def main() -> None:
     services = {"start": start_services, "stop": stop_services, "status": print_status,
-                "labels": lambda: print(" ".join(config.service_label(name) for name in SERVICES))}
+                "labels": lambda: print(" ".join(config.service_label(name) for name in SERVICES)),
+                "node-install": install_node, "node-stop": stop_node}
     arg = sys.argv[1] if len(sys.argv) > 1 else ""
     if arg in ("-h", "--help", "help"):
         return print(__doc__.strip())

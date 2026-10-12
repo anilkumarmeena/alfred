@@ -318,7 +318,7 @@ class Site:
 def test_a_stop_signal_shuts_the_service_down_cleanly(env, monkeypatch, tmp_path, sig):
     monkeypatch.setattr(runner, "RUNNER_SOCKET", tmp_path / "runner.sock")
     monkeypatch.setattr(runner.web, "UnixSite", Site)
-    for flag in ("HEARTBEAT_ENABLED", "SCHEDULER_ENABLED", "LEARNING_ENABLED"):
+    for flag in ("NOTICES_ENABLED", "SCHEDULER_ENABLED", "LEARNING_ENABLED"):
         monkeypatch.setattr(runner, flag, False)
     real, made = runner.Runner, []
 

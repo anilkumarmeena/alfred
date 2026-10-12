@@ -5,15 +5,14 @@ from datetime import datetime
 
 from jarvis.brain import usage
 from jarvis.core import profile
-from jarvis.core.config import HEARTBEAT_QUIET_HOURS
+from jarvis.core.config import QUIET_HOURS
 from jarvis.tasks import command_jobs, hold, schedules
-from jarvis.tasks.heartbeat import parse_quiet_hours
 from jarvis.tasks.scheduler import RETRY_MINUTES
 
 from . import tool
 from .tasks import _clip
 
-_quiet = parse_quiet_hours(HEARTBEAT_QUIET_HOURS)
+_quiet = hold.parse_quiet_hours(QUIET_HOURS)
 QUIET_NOTE = (f"Watches aren't checked in quiet hours ({_quiet[0]:%H:%M} to {_quiet[1]:%H:%M}); the first check after "
               "catches up.") if _quiet else ""
 
@@ -98,9 +97,9 @@ _COMMAND = {
                                                    "model call (default true); false says it finished, with its last "
                                                    "lines."},
     "auto_fix": {"type": "boolean", "description": "command: when a run fails, let JARVIS fix it as it decides from "
-                                                  "the output: a task in its project fixes the cause and runs it once "
-                                                  "more, at once or, for a risky fix, after the user's yes (default "
-                                                  "true when it has a project)."},
+                                                  "the output: a task in its project fixes the cause, then JARVIS runs "
+                                                  "it once more, at once or, for a risky fix, after the user's yes "
+                                                  "(default true when it has a project)."},
     "log_file": {"type": "string", "description": "command: the log file the command writes itself, if its output "
                                                   "goes there rather than to the screen: a path inside its folder, a "
                                                   "pattern like logs/*-produce.log picking the newest."},
@@ -128,11 +127,19 @@ _COMMAND = {
     "eight\"), in folder (or its project's folder) at the times given, on its own outside the sandbox like start_job, "
     "with no model while it runs, however many hours it takes; each run is a command task in the task list, as a "
     "start_job is, and a run still going holds back the next. When it ends, a success is summed up in a sentence "
-    "(summarize), and a failure is read and, as JARVIS decides, fixed by a task in its project that runs it once more, "
+    "(summarize), and a failure is read and, as JARVIS decides, fixed by a task in its project, then run once more, "
     "or put to the user first when the fix would be risky (auto_fix). Set timeout_minutes only if the user gives a limit, and log_file if the command writes "
-    "its output to a log of its own. It meets the same checks as your shell, so a risky one needs their yes. Times "
-    "are local; work them out from the date and time at the start of the user's message. Then say in one sentence "
-    "what will happen and when.",
+    "its output to a log of its own. It meets the same checks as your shell, so a risky one needs their yes. "
+    "JARVIS watches nothing on its own: when the user wants something kept an eye on (\"keep an eye on the price\", "
+    "\"let me know about new issues on my repo\"), don't choose for them. In a sentence or two, offer the ways that "
+    "fit, with what each costs, and set up the one they pick: a small script, written by you or, if it's more than "
+    "a few lines, by a background task, that checks it and prints only what's new, keeping its own note of what it "
+    "has seen in a file beside it, run as a command with only_changes, so no model runs until it prints something "
+    "and then JARVIS sums that up and says it (the cheapest, for anything a script can read: a page, an API, a feed, "
+    "a file); a task with only_changes, a background task that looks with its tools each run and speaks only when "
+    "there's something new (for what needs judgement or the user's accounts; costs a model run each time); or, for "
+    "one thing they're waiting for, a watch, which stops once it has happened. Times are local; work them out from "
+    "the date and time at the start of the user's message. Then say in one sentence what will happen and when.",
     {
         "kind": {"type": "string", "enum": list(schedules.KINDS)},
         "title": {"type": "string", "description": "Three to six words, as you'd say it aloud, e.g. 'morning brief'."},
@@ -155,7 +162,9 @@ _COMMAND = {
         "only_changes": {"type": "boolean", "description": "task: stay silent unless there's something new to "
                                                           "tell since the last run (\"only tell me if a build failed\", "
                                                           "\"only if there's something new\"). Off: every run is "
-                                                          "delivered, a quiet one too."},
+                                                          "delivered, a quiet one too. command: a run that succeeds "
+                                                          "and prints nothing stays silent, with no model call; one "
+                                                          "that prints something is summed up and said."},
     },
     ["kind", "title", "text"],
     said="Scheduled {title}",
@@ -207,7 +216,8 @@ def schedule_list(finished: bool = False) -> list[dict] | dict:
         "expect": {"type": "string", "description": "url watches: the text the page must show."},
         "paused": {"type": "boolean"},
         "only_changes": {"type": "boolean", "description": "task: true stays silent unless there's something new "
-                                                          "to tell since the last run; false delivers every run "
+                                                          "to tell since the last run; command: true stays silent "
+                                                          "when a run prints nothing. false delivers every run "
                                                           "again."},
         **_COMMAND,
     },
@@ -228,9 +238,10 @@ def schedule_change(id: int, title: str = "", text: str = "", when: str = "", in
 @tool(
     "schedule_hold",
     "Do not disturb: pause everything, or resume it all (\"hold alerts till three, I'm presenting\", \"pause all\", "
-    "\"I'm back\"). While it's on, no reminder, scheduled task or watch runs, the heartbeat flags nothing, and "
-    "finished tasks send no notifications (requests for a yes still come through). When it ends, at until or on "
-    "resume, held reminders are said, each held job runs once, and what turned up is flagged. It's separate from the "
+    "\"I'm back\"). While it's on, no reminder, scheduled task, watch or command runs, JARVIS keeps its own notices "
+    "(a stuck task, a usage limit) to itself, and finished tasks send no notifications (requests for a yes still "
+    "come through). When it ends, at until or on resume, held reminders are said, each held job runs once, and "
+    "notices that still hold are given. It's separate from the "
     "nightly quiet hours, which stay as they are. With neither until nor minutes it lasts until resumed. With no "
     "arguments it says whether it's on. Once it's on, say when it ends, and that held reminders and jobs run then.",
     {

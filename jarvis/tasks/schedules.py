@@ -3,7 +3,8 @@
   reminder  say `text` (desktop notification, phone push, aloud in a live session)
   task      start a background task with `text` as instruction (`task_kind`, default research)
   watch     every `every` minutes until `text` happens or `until`: probe task (model), or cheap url/gmail/chat probes
-  command   run shell `text` in `folder` as a model-free command task; a model only summarises or (auto_fix) fixes it
+  command   run shell `text` in `folder` as a model-free command task; a model only summarises or (auto_fix) fixes it.
+            With only_changes, a successful run that prints nothing stays silent (how a monitor script reports)
 Timing: one-off at `next_run`, or `at` on `days`, or every `every` minutes; local profile time zone.
 Task jobs keep a `notepad` for the next run. Command jobs are only made or changed through voice tools whose calls
 pass the shell gate (risky needs a yes, secrets refused).
@@ -367,10 +368,12 @@ def place(folder: str, project: str = "") -> tuple[str, str | None]:
     else:
         raise ValueError("A command job needs folder, where it runs, or its project.")
     path = path.resolve()
-    if not path.is_dir():
-        raise ValueError(f"{path} isn't a folder.")
     if secret_path(path):
         raise ValueError("That folder holds secrets, which stay out of reach.")
+    if there := (named if named and named.node else projects.living_at(path)):
+        return str(path), there.name  # its folder is on that machine, which runs the job
+    if not path.is_dir():
+        raise ValueError(f"{path} isn't a folder.")
     return str(path), project_of(path, named)
 
 
@@ -452,9 +455,9 @@ def run_of(job: dict) -> dict | None:
 
 
 def _only_changes(kind: str, only_changes: bool | None) -> None:
-    if only_changes and kind != "task":
-        raise ValueError("only_changes is for scheduled tasks: a watch speaks only once what it waits for happens, "
-                         "and a reminder always speaks.")
+    if only_changes and kind not in ("task", "command"):
+        raise ValueError("only_changes is for scheduled tasks and commands: a watch speaks only once what it waits for "
+                         "happens, and a reminder always speaks.")
 
 
 def _command_only(kind: str, *given) -> None:

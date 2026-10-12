@@ -1,0 +1,20 @@
+# JARVIS on a second machine (node mode), a systemd user unit: dials the main computer and runs the work it sends.
+# Restart=always brings it back after a self-update or a crash. Nice=10 and the idle I/O class as for the task runner.
+# PATH includes the toolchains jobs build with, and uv for updates. Label and folders are filled in by jarvis.setup_local.
+[Unit]
+Description=JARVIS second machine (${LABEL})
+
+[Service]
+Type=exec
+WorkingDirectory=${ROOT}
+Environment="PATH=${HOME}/.local/bin:${HOME}/.venv/bin:/usr/local/go/bin:${NODE}/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+ExecStart="${ROOT}/.venv/bin/python" -m jarvis.node serve
+Restart=always
+RestartSec=10
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=append:${ROOT}/logs/node.log
+StandardError=append:${ROOT}/logs/node.log
+
+[Install]
+WantedBy=default.target

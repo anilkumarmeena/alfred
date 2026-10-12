@@ -26,11 +26,12 @@ Concepts:
               may be remembered as rules; user `orders` from this turn's speech pre-approve what they name
   access      extra grants at start, on reply, or via request_access (task waits)
   shutdown    SIGTERM marks queued/running tasks `interrupted`; next start resumes up to RESUME_TASKS (_after_restart)
-Also runs the heartbeat, scheduler and learning review. API: Unix socket in data/ (mode 600), unreachable from
+Also runs notices, the scheduler and the learning review. API: Unix socket in data/ (mode 600), unreachable from
 browsers and from tasks' host commands. Mixins: approvals, command_tasks, git_ops, task_edits, events; HTTP in api.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -48,10 +49,9 @@ from jarvis.brain import retry
 from jarvis.core import profile
 from jarvis.core.config import (
     GOAL_DAILY_CHECKS,
-    HEARTBEAT_ENABLED,
-    HEARTBEAT_MINUTES,
     LEARNING_ENABLED,
     MAX_TASKS,
+    NOTICES_ENABLED,
     PUSH_ENABLED,
     RESUME_TASKS,
     RUNNER_SOCKET,
@@ -68,6 +68,9 @@ from jarvis.core.database import (
     minutes_since_update,
     nudges,
 )
+from jarvis.node import machines, placement
+from jarvis.node.hub import Hub
+from jarvis.node.offload import Offline, Offload
 from jarvis.safety import host
 from jarvis.state import activity as bell, todo as todos
 from jarvis.tasks import (
@@ -78,8 +81,8 @@ from jarvis.tasks import (
     command_jobs,
     data_edits,
     goal,
-    heartbeat,
     learning,
+    notices,
     projects,
     scheduler,
     stall,
@@ -136,8 +139,12 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         self.host_jobs.on_end = self._job_ended
         self.checks = goal.Budget(GOAL_DAILY_CHECKS)  # goal checks per rolling 24 h, all tasks
         self.prompts: dict[int, str] = {}  # launch prompt per queued/running task
-        self.services: list[asyncio.Task] = []  # heartbeat/scheduler/learning loops
+        self.services: list[asyncio.Task] = []  # notices/scheduler/learning loops
         self.closing = False  # shutdown begun: no new work
+        self.hub = Hub()  # links to the user's other machines (jarvis.node)
+        self.offload = Offload(self, self.hub)  # sending them work
+        self.placing: dict[int, asyncio.Task] = {}  # tasks and commands whose machine is being chosen
+        self.placed: dict[int, str] = {}  # what to say about where each new one runs, for its start reply
         self.resuming = self._after_restart()
 
     def _after_restart(self) -> list[tuple[int, str]]:
@@ -153,6 +160,9 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
                 cut.append(t)
         for t in sorted(cut, key=lambda t: t["status"] != "running"):
             why, prompt = self._resumable(t)
+            if not why and t["node"] and t["status"] == "running":  # still going on its machine: taken up again
+                resuming.append((t["id"], prompt))
+                continue
             if not why and len(resuming) >= RESUME_TASKS:
                 why = f"no more than {RESUME_TASKS} resume at once (JARVIS_RESUME_TASKS)"
             if not why:
@@ -173,6 +183,8 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             return "a watch's check, made again when it's next due", ""
         if not cut and [e["text"] for e in self.store.history(task["id"], limit=1)] == [RESUMED_LOG]:
             return "it was resumed after the last restart, and the runner stopped again without a clean shutdown", ""
+        if task["node"] and task["status"] == "running":  # its run went on there: take it up again
+            return "", RESUMED
         if cut.get("on_mac"):
             return f"it was cut off running {few(cut['on_mac'])} on the computer", ""
         if self.store.approvals(task["id"]):
@@ -254,6 +266,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         self._background(self._expire_approvals())
         self._background(self._watch_commands())
         self._background(self._write_steps())
+        self.offload.resume_following()
         for approval in self.store.approvals():
             if not approval["announced"]:
                 self._background(self._announce_approval(approval["id"]))
@@ -264,7 +277,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         self.resuming = []
 
     def service(self, coro) -> None:
-        """Run a self-starting loop (heartbeat, scheduler, learning); cancelled first on shutdown."""
+        """Run a self-starting loop (notices, scheduler, learning); cancelled first on shutdown."""
         self.services.append(self._background(coro))
 
     async def shutdown(self, wait: float = SHUTDOWN_SECONDS) -> None:
@@ -284,13 +297,14 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             job.cancel()
         if cut:
             await asyncio.wait(cut.values(), timeout=wait)
+        await self.hub.close()
         self.store.write_steps()
 
     # ── Task control ────────────────────────────────────────────
 
     def start(self, kind: str, title: str, instruction: str, project: str | None = None, job: int | None = None,
               hidden: bool = False, grants: list[str] | None = None, order: str | None = None,
-              fixes: int | None = None, todo: str | None = None) -> dict:
+              fixes: int | None = None, todo: str | None = None, machine: str = "") -> dict:
         """Create and launch a task (command tasks use start_command).
 
           job      scheduled job id; `hidden` keeps watch checks out of lists and the bell until relevant
@@ -298,6 +312,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
           order    the user's own words, which may pre-approve risky commands (_order)
           fixes    failed command task this task fixes
           todo     open to-do item it works on (text or unique substring), settled at the end
+          machine  where the user said it should run ("here" or a machine's name); else Settings › Machines decides
         """
         self._open()
         if kind not in KINDS:
@@ -306,19 +321,33 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         if not instruction.strip():
             raise ValueError("instruction is empty")
         grants = [n for n in access.check(grants) if n not in access.defaults(kind)]
-        name, in_place = None, False
+        name, in_place, lives = None, False, None
         if kind != "research":
             if not project:
                 raise ValueError(f"A {kind} task needs a project.")
             found = projects.find(project)
-            name, in_place = found.name, found.in_place and kind == "code_change"
-            if kind == "code_change" and not in_place and (problem := projects.worktree_problem(found)):
+            name, in_place, lives = found.name, found.in_place and kind == "code_change", found.node
+            if kind == "code_change" and not in_place and not lives and (problem := projects.worktree_problem(found)):
                 raise ValueError(problem)
         item = todos.find(todo) if todo else None
         title = " ".join(title.split())[:80] or instruction[:60]
+        placeable = kind != "research" and not access.has({"kind": kind, "grants": json.dumps(grants)}) & access.LOCAL
+        if lives and not placeable:
+            raise ValueError(f"{name} lives on {self.offload.name(lives)}, where accounts and other projects aren't: "
+                             "start a task here for what needs them.")
+        if machine and machine.strip().lower() != machines.HERE and not lives:
+            if not placeable:
+                raise ValueError(f"A {kind} task that reads accounts or other projects runs on this computer, where they are.")
+            machines.find(machine)  # an unknown name is said now, before anything starts
         task = self.store.create(kind, title, instruction, name, in_place, job, hidden, grants, fixes=fixes,
                                  todo=item and item["id"])
         self.store.log(task["id"], "start", instruction)
+        if lives:  # it runs where its project lives, whatever the setting
+            self._placed(task["id"], placement.Place(lives, self.offload.name(lives),
+                                                     f"It's running on {self.offload.name(lives)}, where {name} lives."))
+        elif placeable and (machine or machines.paired()):
+            self.placing[task["id"]] = placing = asyncio.create_task(self._place_task(task, machine))
+            placing.add_done_callback(lambda _: self.placing.pop(task["id"], None))
         if item:
             self.store.log(task["id"], "todo", f"works on the to-do: {item['text']}")
         if grants:
@@ -347,11 +376,14 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             raise ValueError(f"Task {task_id} is a {learning.TITLE}, which has nothing to carry on; apply or dismiss "
                              "its suggested edits with task_edits.")
         running = task["status"] in ("queued", "running")
-        if not running and task["worktree"] and not Path(task["worktree"]).exists():
+        if not running and task["worktree"] and not self._lives_on(task) and not Path(task["worktree"]).exists():
             folder = "project folder" if task["in_place"] else "worktree"
             raise ValueError(f"Task {task_id}'s {folder} has been removed, so it can't carry on.")
         note = ""
         if gained := access.new(task, grants):
+            if task["node"] and set(gained) & access.LOCAL:
+                raise ValueError(f"Task {task_id} runs on {self.offload.name(task['node'])}, where accounts and other "
+                                 "projects aren't: start a task here for what needs them.")
             self.store.set(task_id, grants=access.add(task, gained))
             self.store.log(task_id, "access", f"granted {', '.join(gained)}")
             note = f"\n\nYou now also have {access.listing(gained)}."
@@ -407,21 +439,57 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
     # ── Stalls ──────────────────────────────────────────────────
 
     def view(self, task: dict, now: float | None = None) -> dict:
-        """Task as the API shows it, with `stalled` set if it seems stuck; command tasks add their `command` view."""
+        """Task as the API shows it, with `stalled` set if it seems stuck; command tasks add their `command` view.
+        One on another machine names it (`machine`)."""
+        if task.get("node"):
+            task = task | {"machine": self.offload.name(task["node"])}
         if task["kind"] == COMMAND:
             return task | command_jobs.view(task, self.commands, now) | {"stalled": None}
         if task["kind"] == CONNECTION:  # no pulse kept here
             return task | {"stalled": None}
-        return task | {"stalled": stall.check(task, self.store, self.pulse, self.host_jobs, now)}
+        return task | {"stalled": stall.check(task, self.store, self.pulse, self.host_jobs, now, remote=self.offload.excuse)}
 
     def stalls(self, now: float | None = None) -> list[dict]:
         """Running tasks that seem stuck, oldest first."""
         return [t for t in (self.view(t, now) for t in self.store.active()) if t["stalled"]]
 
+    # ── Where it runs ───────────────────────────────────────────
+
+    async def _place_task(self, task: dict, machine: str) -> None:
+        """Choose the new task's machine (jarvis.node.placement), before its first run starts."""
+        job = {"kind": task["kind"], "title": task["title"], "instruction": task["instruction"][:800],
+               "project": task["project"]}
+        try:
+            place = await self.offload.place(placement.TASKS, job, machine)
+        except Exception as e:  # never stops the task: it runs here
+            log.warning("task %s: choosing its machine failed: %s", task["id"], e)
+            place = placement.HERE
+        self._placed(task["id"], place)
+
+    def _placed(self, task_id: int, place: placement.Place) -> None:
+        """Record where a new task or command runs, and what to say about it."""
+        said = place.said or (f"It's running on {place.name}." if place.node else "")
+        if place.node:
+            self.store.set(task_id, node=place.node)
+        if said:
+            self.placed[task_id] = said
+            self.store.log(task_id, "machine", said)
+            bell.add(f"Task {task_id}: {said}", "run", task_id)
+
+    async def where(self, task_id: int, seconds: float = 30) -> dict:
+        """The task once its machine is chosen (waiting up to `seconds`), with `where` saying where it runs."""
+        if placing := self.placing.get(task_id):
+            with contextlib.suppress(TimeoutError, asyncio.CancelledError):
+                await asyncio.wait_for(asyncio.shield(placing), seconds)
+        task = self.view(self.store.get(task_id))
+        return task | ({"where": said} if (said := self.placed.pop(task_id, "")) else {})
+
     # ── Running ─────────────────────────────────────────────────
 
     def _launch(self, task_id: int, prompt: str) -> dict:
-        """Start or queue a run (activity says what it waits on), clearing stale question/error/spoken fields."""
+        """Start or queue a run (activity says what it waits on), clearing stale question/error/spoken fields.
+
+        A task on another machine takes no slot here: it runs at once (as far as this computer's concerned)."""
         self._open()
         task = self.store.get(task_id)
         if ahead := self._ahead_in_folder(task):
@@ -430,6 +498,8 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
                                           "they run one at a time")
         elif task["in_place"] and self._folder_lock(task["project"]).locked():
             status, activity = "queued", "waiting for its project's folder, which a merge or git setup is using"
+        elif task["node"]:
+            status, activity = "running", STARTING
         else:
             status, activity = ("running", STARTING) if self._slot_free(task_id) else ("queued", self._slot_wait())
             self.in_line.add(task_id)
@@ -469,19 +539,36 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         """Per-folder lock for in-place tasks; no-op otherwise."""
         return self._folder_lock(task["project"]) if task["in_place"] else nullcontext()
 
+    async def _still_there(self, task: dict) -> dict:
+        """A task for a machine that has gone away since it was placed: one that never ran there runs here instead
+        (and says so); one whose session or project is there waits for it (Offload.run_task)."""
+        if self.hub.connected(task["node"]) is not None or task["session_id"] or self._lives_on(task):
+            return task
+        said = f"{self.offload.name(task['node'])} isn't online now, so it's running on this computer instead."
+        self.store.log(task["id"], "machine", said)
+        bell.add(f"Task {task['id']}: {said}", "warn", task["id"])
+        return self.store.update(task["id"], node=None)
+
     async def _job(self, task_id: int, prompt: str) -> None:
         outcome = None  # None means stopped
         had: set[str] | None = None  # access at run start
         try:
+            if placing := self.placing.get(task_id):
+                await asyncio.shield(placing)
             task = self.store.get(task_id)
+            if remote := bool(task["node"]):
+                task = await self._still_there(task)
+                remote = bool(task["node"])
+            if remote and self._lives_on(task):  # its git steps run there too
+                await self.offload.reachable(task)
             if task["kind"] == "code_change" and not task["in_place"] and not task["worktree"]:
                 await self._make_worktree(task)
             async with self._folder(task):
-                if task_id not in self.in_line:  # waited for the folder; now queue for a slot
+                if not remote and task_id not in self.in_line:  # waited for the folder; now queue for a slot
                     if not self._slot_free(task_id):
                         self.store.set(task_id, activity=self._slot_wait())
                     self.in_line.add(task_id)
-                async with self.slots:
+                async with nullcontext() if remote else self.slots:  # one on another machine takes no slot here
                     if task["in_place"]:
                         await self._enter_folder(task)
                     task = self.store.update(task_id, status="running", activity=STARTING)
@@ -494,11 +581,16 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
                                                                                       started=False))
                     began = time.time()
                     try:
-                        outcome = await run(task, prompt, self)
+                        if remote:
+                            outcome = await self.offload.run_task(task, prompt, reattach=prompt == RESUMED)
+                        else:
+                            outcome = await run(task, prompt, self)
                     finally:
                         self._spend_approvals(task_id, before=began)
         except asyncio.CancelledError:
             pass
+        except Offline as e:
+            outcome = Outcome("", str(e), 0, retry.PASSING)
         except Exception as e:
             log.exception("task %s failed", task_id)
             outcome = Outcome("", f"{type(e).__name__}: {e}"[:200], 0, retry.classify(e))
@@ -557,7 +649,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
 
         if task["fixes"] and outcome and not outcome.error and not task["question"] \
                 and not self.store.approvals(task_id):
-            # Fix task for a failed command: if it says the command should now pass, rerun it and let that announce
+            # Fix task for a failed command: unless it says the cause remains, rerun it and let that announce
             again = await command_jobs.wants_rerun(outcome.result)
             spoken, quiet = self._fixed(task, outcome.result, again)
             if quiet:
@@ -641,10 +733,10 @@ async def serve() -> None:
     if runner.resuming:
         log.info("resuming tasks %s, cut off by the last shutdown", ", ".join(str(i) for i, _ in runner.resuming))
     runner.start_background()
-    if HEARTBEAT_ENABLED:
-        runner.service(heartbeat.make(runner.store, runner._notify, runner.broadcast, push=runner._push,
-                                      stalls=runner.stalls).run())
-        log.info("heartbeat every %d minutes", HEARTBEAT_MINUTES)
+    if NOTICES_ENABLED:
+        runner.service(notices.make(runner.store, runner._notify, runner.broadcast, push=runner._push,
+                                    stalls=runner.stalls, lost=runner.offload.lost).run())
+        log.info("notices every %d minutes", notices.MINUTES)
     if SCHEDULER_ENABLED:
         runner.scheduler = scheduler.Scheduler(runner, runner._notify, runner.broadcast, push=runner._push)
         runner.service(runner.scheduler.run())
