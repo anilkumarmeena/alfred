@@ -85,6 +85,7 @@ def vocabulary_add(word: str, heard_as: list[str] | None = None) -> str:
     "and stop. stop: true ends one under way. Only in a voice conversation. The Settings panel can also enroll, "
     "remove the voiceprint, or switch the check off.",
     {"stop": {"type": "boolean", "description": "true: stop an enrollment under way, keeping the voiceprint as it was."}},
+    stays=True,
 )
 async def voice_enroll(stop: bool = False) -> str:
     if (check := conversation.current().speaker) is None:  # this conversation's speaker check

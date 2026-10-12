@@ -70,6 +70,8 @@ class VoiceSession:
             self.stt.speaker.announce = lambda text: self.announcements.add(Announcement(text))
             self.talk.speaker = self.stt.speaker
         self.talk.lookups = self.lookups
+        # slow tool calls that left their turn come back as follow-ups the brain speaks itself
+        self.brain.on_background(self._background)
         for quick in self._quick_models:
             quick.warm()
 
@@ -228,6 +230,10 @@ class VoiceSession:
             self.brain.note(spoken)
             greeting += " " + spoken
         return greeting
+
+    def _background(self, summary: str, prompt: str, words: str) -> None:
+        """A slow tool call's result: the brain follows up on it when the floor allows."""
+        self.announcements.add(Announcement(summary, speak=lambda brain: brain.follow_up(prompt, words)))
 
     async def ask_approvals(self, session) -> None:
         """Ask pending task requests one at a time when the floor is free; never while the brain's question is open."""

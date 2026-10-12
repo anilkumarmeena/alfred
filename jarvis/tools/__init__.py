@@ -39,6 +39,8 @@ class Tool:
     # Read-only (MCP readOnlyHint): the CLI may run it in parallel with other calls in the same step
     reads: bool = False
     before: Callable[[], None] | None = None  # AI Armory: refresh tool-set settings before each call
+    # Answers at once or starts its own background work: never carried on outside the voice turn (jarvis.brain.kept)
+    stays: bool = False
 
     def on(self) -> bool:
         return self.enabled is None or self.enabled()
@@ -56,10 +58,11 @@ _REGISTRY: dict[str, Tool] = {}
 
 def tool(name: str, description: str, properties: dict[str, dict] | None = None, required: list[str] | None = None,
          gated: bool = False, changes: bool = False, said: str = "", enabled: Callable[[], bool] | None = None,
-         shell: bool = False, reads: bool = False):
+         shell: bool = False, reads: bool = False, stays: bool = False):
     def register(fn: Callable[..., Any]) -> Callable[..., Any]:
         _REGISTRY[name] = Tool(name, description, properties or {}, required or [], fn, gated,
-                               changes=changes or bool(said), said=said, enabled=enabled, shell=shell, reads=reads)
+                               changes=changes or bool(said), said=said, enabled=enabled, shell=shell, reads=reads,
+                               stays=stays)
         return fn
 
     return register

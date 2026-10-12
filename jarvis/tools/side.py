@@ -19,6 +19,7 @@ from jarvis.tools import tool
                                                    "Lisbon\", \"the Kokoro release notes\"."},
     },
     ["brief", "about"],
+    stays=True,
 )
 async def background_lookup(brief: str, about: str) -> str:
     if (lookups := conversation.current().lookups) is None:

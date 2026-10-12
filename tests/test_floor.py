@@ -36,10 +36,10 @@ class Session:
         self.said: list[str] = []
         self.fail = False
 
-    async def say(self, text: str, add_to_chat_ctx: bool = True) -> None:
+    async def say(self, text, add_to_chat_ctx: bool = True) -> None:
         if self.fail:
             raise RuntimeError("session closed")
-        self.said.append(text)
+        self.said.append(text if isinstance(text, str) else "".join([c async for c in text]))
 
 
 class Brain:
@@ -51,6 +51,11 @@ class Brain:
         self.notes.append(f"{text} {unsaid}".strip())
 
     async def respond(self, text: str):
+        for chunk in self.reply:
+            yield chunk
+
+    async def follow_up(self, prompt: str, words: str = ""):
+        self.notes.append(f"follow-up: {prompt} {words}".strip())
         for chunk in self.reply:
             yield chunk
 
@@ -351,3 +356,30 @@ def test_an_approval_waits_for_the_answer_to_the_brains_question():
         assert floor.question  # the brain's question holds announcements until the yes or no
 
     asyncio.run(main())
+
+
+def test_a_brain_turn_of_its_own_is_spoken_and_never_merged_with_another():
+    async def main():
+        floor, session, brain = Floor(), Session(), Brain("Merged", " into master.")
+        queue = Announcements(floor)
+        for _ in range(2):
+            assert queue.add(Announcement("The task merge has finished.",
+                                          speak=lambda b: b.follow_up("[merged]", "merge it")))
+        while queue.queue:
+            await queue._take_turn(session, brain, None)
+        return session.said, brain, floor
+
+    said, brain, floor = asyncio.run(main())
+    assert said == ["Merged into master.", "Merged into master."]
+    assert brain.notes == ["follow-up: [merged] merge it"] * 2  # nothing else noted: the brain spoke it itself
+    assert floor.recent[-1] == ("JARVIS", "Merged into master.")
+
+
+def test_a_brain_turn_with_nothing_to_say_stays_quiet():
+    async def main():
+        session = Session()
+        queue = Announcements(Floor())
+        queue.add(Announcement("The gmail search has finished.", speak=lambda b: b.follow_up("[found]")))
+        return await queue._take_turn(session, Brain(), None), session.said
+
+    assert asyncio.run(main()) == (None, [])
