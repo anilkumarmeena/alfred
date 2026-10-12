@@ -153,6 +153,9 @@ TOOL_SEARCH = (os.environ.get("JARVIS_TOOL_SEARCH", "") or "true").strip().lower
 # Seconds an MCP call may block a spoken reply before continuing in the background (jarvis.integrations.mcp_relay).
 # 0 = always wait. Tasks always wait.
 CONNECTION_WAIT = _number(os.environ.get("JARVIS_CONNECTION_WAIT", ""), 20.0, 0.0, 600.0)
+# Seconds one of JARVIS's own tools (a merge, a long read) may block a spoken reply before carrying on in the
+# background, its result coming back in a brain turn of its own (jarvis.brain.kept). 0 = always wait. Tasks always wait.
+TOOL_WAIT = _number(os.environ.get("JARVIS_TOOL_WAIT", ""), 8.0, 0.0, 600.0)
 MAX_TOOL_ROUNDS = int(os.environ.get("JARVIS_MAX_TOOL_ROUNDS", "") or "8")
 # How long a risky command awaits a spoken yes, and how long that yes stays valid
 APPROVAL_MINUTES = max(1, int(os.environ.get("JARVIS_APPROVAL_MINUTES", "") or "5"))

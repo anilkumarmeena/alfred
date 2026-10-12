@@ -11,5 +11,5 @@ export const storage = {
 export const PASSCODE_KEY = "jarvis.passcode";
 export const SPEAKER_KEY = "jarvis.speaker";  // "off": text-only replies
 export const PUSH_KEY = "jarvis.push";  // "later": user deferred notifications; pill hidden
-export const SIDE_KEY = "jarvis.side";  // "off": desktop panel column hidden
+export const SIDE_KEY = "jarvis.side";  // "on": desktop opens on a section page, not Home
 export const ACTIVITY_KEY = "jarvis.activity";  // newest bell entry seen on this device

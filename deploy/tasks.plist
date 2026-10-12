@@ -18,7 +18,7 @@
     <key>ThrottleInterval</key><integer>10</integer>
     <key>Nice</key><integer>10</integer>
     <key>LowPriorityIO</key><true/>
-    <key>StandardOutPath</key><string>${ROOT}/logs/tasks.log</string>
-    <key>StandardErrorPath</key><string>${ROOT}/logs/tasks.log</string>
+    <key>StandardOutPath</key><string>${LOGS}/tasks.log</string>
+    <key>StandardErrorPath</key><string>${LOGS}/tasks.log</string>
 </dict>
 </plist>

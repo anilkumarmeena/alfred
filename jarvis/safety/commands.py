@@ -957,6 +957,20 @@ def program(argv: list[str]) -> str:
     return " ".join(words)
 
 
+# Programs that wait on the network or a build, often for minutes: run as jobs, never in a spoken turn. (Installs
+# keep their in-turn yes; the shell prompt sends long ones to start_job.)
+_SLOW = dict.fromkeys(["git pull", "git fetch", "git clone", "git submodule", "docker pull"],
+                     "fetches over the network") | {"docker build": "builds an image"}
+
+
+def slow(command: str) -> str:
+    """Why a command may well take minutes (network git, docker pulls and builds), or ''."""
+    for argv in _simple_commands(command) or []:
+        if argv and (why := _SLOW.get(program(argv))):
+            return why
+    return ""
+
+
 def risky(command: str, own: "Own | None" = None) -> str:
     """Why a command needs a yes ('deletes files', ...), or ''. Errs toward asking: unreadable means risky.
 

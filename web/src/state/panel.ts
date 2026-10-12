@@ -56,6 +56,21 @@ export interface Project {
   machine?: string;  // the other machine it lives on; its folder is there
 }
 export interface Account { label: string; email: string; note: string; chat: boolean; default: boolean; signed_in: boolean }
+// The Google OAuth client, for the accounts page: kind "installed" (Desktop app) or "web"; `paste`: a sign-in started
+// here ends on a page that doesn't load, whose address is pasted back; `missing`: redirect URIs a Web client lacks.
+// `kind` is "" until a client is set.
+export interface GoogleSetup {
+  kind: "" | "installed" | "web"; apis: { name: string; url: string; chat: boolean }[]; redirects: string[]; missing: string[];
+  paste: boolean;
+}
+// `next`: the narrower scope step a refused Chat sign-in can try instead ("" when there's none)
+export interface SignIn { url: string; state: string; paste: boolean; next: string }
+// One Google API after a sign-in: "off" means not enabled in the client's Cloud project (`fix` turns it on)
+export interface ApiCheck { name: string; state: "ok" | "off" | "denied" | "error"; fix: string; why: string }
+export interface SignInResult {
+  state: "waiting" | "done" | "refused" | "failed" | "old"; label?: string; said?: string; email?: string;
+  checks?: ApiCheck[]; notes?: string[]; accounts?: Account[];
+}
 // Long-term memory lines by section, with per-section usage
 export type MemorySection = "user" | "environment";
 export interface Memory extends Record<MemorySection, string[]> {
@@ -129,23 +144,24 @@ const WIDE = matchMedia("(min-width: 900px)");
 export const wide = signal(WIDE.matches);  // desktop: panel is a column beside the voice screen
 WIDE.addEventListener("change", () => { wide.value = WIDE.matches; });
 export const roomy = signal(false);  // desktop panel fits list and open item side by side
-export const sideOff = signal(storage.get(SIDE_KEY) === "off");  // desktop: panel column hidden
+export const home = signal(storage.get(SIDE_KEY) !== "on");  // desktop: the call (Home) rather than a section page
 export const sheet = signal<"closed" | "full" | "half">("closed");  // phone: slide-up sheet
 export const section = signal<Section>("tasks");
 export const item = signal<string | null>(null);  // open task id, job item or settings page
 export const shown = computed(() => !!passcode.value && !loginShown.value);
-export const visible = computed(() => shown.value && (wide.value ? !sideOff.value : sheet.value !== "closed"));
+export const visible = computed(() => shown.value && (wide.value ? !home.value : sheet.value !== "closed"));
 
-export function setSideOff(off: boolean) {
-  sideOff.value = off;
-  storage.set(SIDE_KEY, off ? "off" : null);
+// Desktop: Home (the call) or the open section's page. Kept across reloads.
+export function setHome(on: boolean) {
+  home.value = on;
+  storage.set(SIDE_KEY, on ? null : "on");
 }
 
-// Open a section (and optionally an item), revealing the sheet or column.
+// Open a section (and optionally an item), revealing the sheet or the page.
 export function go(sec: Section, open: string | null = null) {
   section.value = sec;
   item.value = open;
-  if (wide.peek()) setSideOff(false);
+  if (wide.peek()) setHome(false);
   else if (sheet.peek() === "closed") sheet.value = "full";
   load(sec);
 }
@@ -176,6 +192,11 @@ export const vocabulary = signal<Vocabulary | null>(null);
 export const skills = signal<Skill[] | null>(null);
 export const about = signal<string | null>(null);
 export const accounts = signal<Account[] | null>(null);
+export const googleSetup = signal<GoogleSetup | null>(null);
+export async function loadGoogleSetup() {
+  const r = await act<GoogleSetup>("google_setup", { origin: location.origin });
+  if (r) googleSetup.value = r;
+}
 export const devices = signal<Device[] | null>(null);
 export const servers = signal<Server[] | null>(null);
 export const system = signal<System | null>(null);
@@ -292,7 +313,9 @@ export async function setHold(to: { minutes?: number; until?: string } | null): 
 
 const SETTINGS: Record<SettingsItem, () => Promise<void>> = {
   conn: async () => { servers.value = await act("servers") ?? servers.peek(); },
-  accounts: async () => { accounts.value = await act("accounts") ?? accounts.peek(); },
+  accounts: async () => {
+    await Promise.all([act<Account[]>("accounts").then((r) => { if (r) accounts.value = r; }), loadGoogleSetup()]);
+  },
   memory: async () => { memory.value = await act("memory") ?? memory.peek(); },
   vocabulary: async () => { vocabulary.value = await act("vocabulary") ?? vocabulary.peek(); },
   skills: async () => { skills.value = await act("skills") ?? skills.peek(); },

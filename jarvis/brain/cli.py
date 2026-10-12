@@ -7,6 +7,9 @@ lookup subagent on a cheap model, and enabled skills as a per-session plugin.
 
 Photos sent from the page ride along with the next turn as image blocks. Talking over JARVIS stops the reply,
 except while a shell command runs: then the reply finishes unheard and the next turn waits for it.
+
+Slow JARVIS tool calls carry on outside the turn (jarvis.brain.kept); their results come back as follow-up turns the
+brain starts itself, spoken through the floor. The user's own turn always comes first: it stops a follow-up under way.
 """
 
 import asyncio
@@ -14,6 +17,7 @@ import json
 import logging
 import warnings
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 
 from claude_agent_sdk import (
     AgentDefinition,
@@ -33,6 +37,7 @@ from claude_agent_sdk import (
 
 from jarvis import prompts, tools
 from jarvis.brain import usage
+from jarvis.brain.kept import Kept
 from jarvis.brain.persona import Notes, system_prompt
 from jarvis.brain.sdk import BUILTIN_AGENTS_DENIED, LimitWatch, jarvis_server, sdk_options
 from jarvis.core import profile
@@ -113,8 +118,8 @@ def _bell_hook(gate: mcp_gate.Gate) -> list[HookMatcher]:
     return [HookMatcher(hooks=[noted])]
 
 
-def _options(gate: mcp_gate.Gate, jobs: shell.Jobs) -> ClaudeAgentOptions:
-    server, allowed = jarvis_server()
+def _options(gate: mcp_gate.Gate, jobs: shell.Jobs, kept: Kept | None = None) -> ClaudeAgentOptions:
+    server, allowed = jarvis_server(kept=kept)
     # Read per session; a slow server goes to the background after CONNECTION_WAIT seconds
     mcp = mcp_servers.session(mcp_servers.for_voice(), wait=CONNECTION_WAIT)
     gate.use(mcp.servers)
@@ -158,26 +163,36 @@ def _photos(n: int) -> str:
     return "a photo" if n == 1 else f"{n} photos"
 
 
+def _listed(names: list[str]) -> str:
+    """'a', 'a and b', 'a, b and c'."""
+    names = list(dict.fromkeys(names))
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
 class CliBrain(Notes):
     def __init__(self) -> None:
         super().__init__()
         self.client: ClaudeSDKClient | None = None
         self._lock = asyncio.Lock()
+        self._turns = asyncio.Lock()  # one turn at a time: the user's, or a follow-up
         self._drain: asyncio.Task | None = None  # drains a talked-over reply
         self._holding = False  # that reply is running a command, left to finish
         self._running: dict[str, str] = {}  # tool_use id -> tool name, current reply
         self._unheard: list[str] = []  # text of a talked-over reply
         self._cut: str = ""  # request whose work was cut off, for the next turn
+        self._carried: list[str] = []  # JARVIS tools that carried on when a reply was talked over, for the next turn
+        self._following = self._preempted = False  # a follow-up is under way; the user's turn stopped it
         self.limits = LimitWatch("voice")
         self.shell = mcp_gate.Gate(agents=AGENTS)
         self.jobs = shell.Jobs()  # command tasks; announced on end like any task update
+        self.kept = Kept()  # slow JARVIS tool calls, carried on outside the turn
         self.next_model: str | None = None  # lighter model for the next turn only (jarvis.brain.route)
         self._main = self._model = ""  # session model, current model
 
     async def start(self) -> None:
         async with self._lock:
             if self.client is None:
-                options = _options(self.shell, self.jobs)
+                options = _options(self.shell, self.jobs, self.kept)
                 client = ClaudeSDKClient(options)
                 await client.connect()
                 self.client = client
@@ -186,11 +201,14 @@ class CliBrain(Notes):
     async def _use_model(self) -> None:
         """Switch to next_model for this turn if set, else the session model; same session keeps history."""
         wanted, self.next_model = (usage.available(self.next_model) if self.next_model else self._main), None
+        await self._set_model(wanted)
+        if wanted != self._main:
+            timing.note("model", wanted)
+
+    async def _set_model(self, wanted: str) -> None:
         if wanted != self._model:
             await self.client.set_model(wanted)
             self._model = wanted
-        if wanted != self._main:
-            timing.note("model", wanted)
 
     async def close(self) -> None:
         if self.client is not None:
@@ -198,7 +216,8 @@ class CliBrain(Notes):
             await client.disconnect()
 
     async def end(self) -> None:
-        """Stop the CLI and browser (logins kept) and drop "for this session" approvals."""
+        """Stop background tool calls, the CLI and browser (logins kept) and drop "for this session" approvals."""
+        await self.kept.close()
         await self.close()
         await browser.browser_close()
         await consent.close()  # a yes/no-check session that was never used
@@ -206,6 +225,9 @@ class CliBrain(Notes):
 
     def question_open(self) -> bool:
         return self.shell.question_open()
+
+    def on_background(self, finished) -> None:
+        self.kept.finished = finished
 
     async def _interrupt(self) -> None:
         """Stop the in-flight reply and read up to its result so the next turn starts clean."""
@@ -242,6 +264,43 @@ class CliBrain(Notes):
                 if isinstance(b, ToolResultBlock):
                     self._running.pop(b.tool_use_id, None)
 
+    async def _drained(self) -> None:
+        """Wait for a talked-over reply to end. Shielded: a talked-over turn must not stop its command."""
+        if self._drain is not None:
+            await asyncio.shield(self._drain)
+            self._drain = None
+        self._running.clear()
+
+    def _talked_over(self, request: str) -> None:
+        """A reply stopped before its end. A running command finishes unheard; else the reply is interrupted. JARVIS
+        tools still running carry on in the background; other work cut off is offered to the next turn."""
+        self._holding = "Bash" in self._running.values()
+        if self._holding:
+            log.info("spoken over while a command runs; letting it finish")
+        else:
+            carried = self.kept.keep_all()
+            self._carried += carried
+            if request and [n for n in self._running.values() if n.removeprefix(JARVIS_TOOLS) not in carried]:
+                self._cut = " ".join(request.split())[:300]  # stopped mid-work; next turn may background it
+        self._drain = asyncio.create_task(self._finish() if self._holding else self._interrupt())
+
+    def _chunk(self, msg, spoken: list[str], timed: bool = True) -> str:
+        """Spoken text in `msg`, also added to `spoken`, or ''. Tracks tool calls and usage limits on the way."""
+        self._track(msg)
+        if isinstance(msg, StreamEvent) and msg.parent_tool_use_id is None:
+            event = msg.event
+            if event.get("type") == "content_block_delta" and event["delta"].get("type") == "text_delta":
+                spoken.append(event["delta"]["text"])
+                return spoken[-1]
+            if event.get("type") == "message_start" and spoken and not spoken[-1].endswith((" ", "\n")):
+                spoken.append(" ")  # new model turn after a tool call
+                return " "
+            if timed and event.get("type") == "content_block_start" and event["content_block"].get("type") == "tool_use":
+                timing.tool("".join(spoken), event["content_block"].get("name", ""))
+        elif isinstance(msg, RateLimitEvent):
+            self.limits.saw(msg)
+        return ""
+
     def _prompt(self, text: str, agreed: list[str], photos: int = 0) -> str:
         prompt = self.turn(text)
         if photos:
@@ -255,6 +314,10 @@ class CliBrain(Notes):
                        f"still wanted and will take more than a moment, hand it to background_lookup now, so you can "
                        f"answer them meanwhile.]")
             self._cut = ""
+        if self._carried:
+            prompt += (f"\n[They spoke while {_listed(self._carried)} was still running, so it carries on in the "
+                       f"background: its result comes back to you in a turn of your own. Don't start it again.]")
+            self._carried = []
         if agreed:
             prompt += "\n" + self.shell.agreed_hint(agreed)
         return prompt
@@ -272,14 +335,23 @@ class CliBrain(Notes):
         return message()
 
     async def respond(self, text: str) -> AsyncIterator[str]:
-        """Stream the spoken reply to one user utterance."""
-        if self._drain is not None:
-            if self._holding and not self._drain.done():
-                yield shell.HOLD + " "
-            # Shielded: a talked-over turn must not stop the command
-            await asyncio.shield(self._drain)
-            self._drain = None
-        self._running.clear()
+        """Stream the spoken reply to one user utterance. A follow-up under way is stopped first."""
+        if self._following and self.client is not None:
+            self._preempted = True
+            log.info("the user spoke during a follow-up; stopping it")
+            try:
+                await self.client.interrupt()
+            except Exception:
+                log.exception("stopping the follow-up failed; restarting the CLI")
+                await self.close()
+        async with self._turns, aclosing(self._respond(text)) as reply:
+            async for chunk in reply:
+                yield chunk
+
+    async def _respond(self, text: str) -> AsyncIterator[str]:
+        if self._drain is not None and self._holding and not self._drain.done():
+            yield shell.HOLD + " "
+        await self._drained()
         spoken: list[str] = []
         finished = interrupted = False
         # Answer to an open question: word lists first, else a short model call
@@ -296,19 +368,8 @@ class CliBrain(Notes):
             await self.client.query(self._message(self._prompt(text, agreed, len(photos)), photos))
             timing.mark("sent")
             async for msg in self.client.receive_response():
-                self._track(msg)
-                if isinstance(msg, StreamEvent) and msg.parent_tool_use_id is None:
-                    event = msg.event
-                    if event.get("type") == "content_block_delta" and event["delta"].get("type") == "text_delta":
-                        spoken.append(event["delta"]["text"])
-                        yield event["delta"]["text"]
-                    elif event.get("type") == "message_start" and spoken and not spoken[-1].endswith((" ", "\n")):
-                        spoken.append(" ")  # new model turn after a tool call
-                        yield " "
-                    elif event.get("type") == "content_block_start" and event["content_block"].get("type") == "tool_use":
-                        timing.tool("".join(spoken), event["content_block"].get("name", ""))
-                elif isinstance(msg, RateLimitEvent):
-                    self.limits.saw(msg)
+                if chunk := self._chunk(msg, spoken):
+                    yield chunk
                 elif isinstance(msg, ResultMessage):
                     finished = True
                     timing.mark("done")
@@ -323,12 +384,7 @@ class CliBrain(Notes):
         except (asyncio.CancelledError, GeneratorExit):
             interrupted = True  # logged as cut off, not blank
             if not finished and self.client is not None:
-                self._holding = "Bash" in self._running.values()
-                if self._holding:
-                    log.info("spoken over while a command runs; letting it finish")
-                elif self._running:  # stopped mid-work; next turn may background it
-                    self._cut = " ".join(text.split())[:300]
-                self._drain = asyncio.create_task(self._finish() if self._holding else self._interrupt())
+                self._talked_over(text)
             raise
         except ClaudeSDKError:
             log.exception("Claude CLI failed")
@@ -338,3 +394,51 @@ class CliBrain(Notes):
             conversation.current().heard.replied("".join(spoken))
             said = f"{text} [sent {_photos(len(photos))}]" if photos else text
             memory.log_exchange(said, "".join(spoken), approved, interrupted=interrupted)
+
+    async def follow_up(self, prompt: str, words: str = "") -> AsyncIterator[str]:
+        """A turn the brain starts itself on a kept call's result (`prompt`), spoken unprompted through the floor.
+
+        Nobody spoke, so nothing is recorded as the user's words. If they haven't spoken since `words` (the turn that
+        made the call), it carries that turn on: an order in it ("merge and push") counts as it would have there.
+        Otherwise their latest words are spent, so nothing here acts on them. The user's next turn stops it.
+        """
+        async with self._turns:
+            await self._drained()
+            self._following, self._preempted = True, False
+            spoken: list[str] = []
+            said: list[str] = []  # spoken aloud: nothing once the user's turn stops it
+            finished = False
+            heard = conversation.current().heard
+            self.shell.new_turn("")
+            if words and heard.said == words.strip():
+                self.shell.said = heard.said
+            else:
+                heard.spent = True
+            try:
+                await self.start()
+                await self._set_model(self._main)  # next_model is for the user's next turn
+                await self.client.query("\n".join([self.head(), prompt]))
+                async for msg in self.client.receive_response():
+                    chunk = self._chunk(msg, spoken, timed=False)
+                    if chunk and not self._preempted:
+                        said.append(chunk)
+                        yield chunk
+                    elif isinstance(msg, ResultMessage):
+                        finished = True
+                        if msg.is_error:
+                            log.warning("follow-up ended: %s %s", msg.subtype, msg.result)
+                        elif not self._preempted and (question := self.shell.question("".join(said))):
+                            said.append(question)
+                            yield question
+            except (asyncio.CancelledError, GeneratorExit):
+                if not finished and self.client is not None:
+                    self._talked_over("")
+                raise
+            except ClaudeSDKError:
+                log.exception("Claude CLI failed during a follow-up")
+                await self.close()
+            finally:
+                self._following = False
+                if text := "".join(said).strip():
+                    heard.replied(text)  # a "yes" next answers it
+                    memory.log_announcement(text)

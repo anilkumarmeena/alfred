@@ -21,7 +21,7 @@
     <key>KeepAlive</key><true/>
     <key>ThrottleInterval</key><integer>10</integer>
     <key>ProcessType</key><string>Interactive</string>
-    <key>StandardOutPath</key><string>${ROOT}/logs/agent.log</string>
-    <key>StandardErrorPath</key><string>${ROOT}/logs/agent.log</string>
+    <key>StandardOutPath</key><string>${LOGS}/agent.log</string>
+    <key>StandardErrorPath</key><string>${LOGS}/agent.log</string>
 </dict>
 </plist>

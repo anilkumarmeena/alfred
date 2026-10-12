@@ -4,10 +4,13 @@ Importing configures the tool sets (accounts, sign-ins in secrets/google-<label>
 them; nothing is registered without an account. Sends and deletes are drafted, then done by a gated tool taking only
 the draft id, approved by spoken yes (jarvis.safety.draft_gate).
 
-Add an account: uv run python -m jarvis.integrations.accounts add <label>
+Accounts are added and signed in from the control panel (jarvis.integrations.google_signin) or the accounts command.
+`fresh` follows those changes, so no restart is needed.
 """
 
-from ai_armory import load_many
+from collections.abc import Callable
+
+from ai_armory import all_tools, load_many
 from ai_armory.toolsets.google import Account, GoogleSettings, configure, current
 
 from jarvis.core import profile
@@ -15,9 +18,9 @@ from jarvis.core.config import APPROVAL_MINUTES, GOOGLE_CLIENT_SECRET
 from jarvis.integrations import accounts
 from jarvis.safety.commands import JARVIS_SECRETS
 
-from . import register_toolsets
+from . import register_toolsets, unregister
 
-SIGN_IN = "uv run python -m jarvis.integrations.accounts login {label}"
+SIGN_IN = "the Sign in button beside the {label} account on the control panel's Google accounts page"
 IMAGE_FOLDER = "JARVIS doc images"  # Drive staging folder for local images inserted into docs
 
 
@@ -38,18 +41,43 @@ def settings(found: accounts.Accounts) -> GoogleSettings:
     )
 
 
-# Read once: fixed account lists keep the prompt cache warm.
+# A conversation's tool list is fixed when it starts (prompt cache); fresh() takes changes for the next one.
 ACCOUNTS = accounts.load()
 LABELS = ACCOUNTS.labels
 CHAT_LABELS = ACCOUNTS.chat_labels  # accounts signed in with Google Chat scope
+_registered: set[str] = set()  # tool names from AI Armory's Google tool sets
+_followers: list[Callable[[], None]] = []  # rerun when the accounts change (jarvis.tools.files' Gmail attachments)
+
+
+def on_change(fn: Callable[[], None]) -> Callable[[], None]:
+    """Run `fn` now and again whenever the accounts change: tools whose schemas list the accounts register there."""
+    _followers.append(fn)
+    fn()
+    return fn
+
+
+def _register() -> None:
+    configure(settings(ACCOUNTS))
+    unregister(_registered)
+    _registered.clear()
+    if LABELS:
+        toolsets = load_many(["google"])  # built now, so their account fields list the current accounts
+        register_toolsets(toolsets, before=fresh)
+        _registered.update(t.name for t in all_tools(toolsets))
+    for fn in _followers:
+        fn()
 
 
 def fresh() -> None:
-    """Reconfigure if profile settings changed, so long-running processes follow Settings panel edits."""
-    if (now := settings(ACCOUNTS)) != current():
+    """Follow changes made elsewhere: reread the accounts (registering the tools again when they changed: added,
+    removed, renamed, a new note or email), and reconfigure when profile settings changed. Runs as each session, task
+    and heartbeat check starts (jarvis.brain.sdk.jarvis_server) and before each Google tool call."""
+    global ACCOUNTS, LABELS, CHAT_LABELS
+    if (found := accounts.load()) != ACCOUNTS:
+        ACCOUNTS, LABELS, CHAT_LABELS = found, found.labels, found.chat_labels
+        _register()
+    elif (now := settings(ACCOUNTS)) != current():
         configure(now)
 
 
-configure(settings(ACCOUNTS))
-if LABELS:
-    register_toolsets(load_many(["google"]), before=fresh)
+_register()

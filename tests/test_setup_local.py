@@ -27,7 +27,7 @@ def test_each_plist_gets_its_label_and_this_mac_s_folders(name, monkeypatch):
     text = setup_local.service_plist(name)
     plist = plistlib.loads(text.encode())
     assert "$" not in text and plist["Label"] == f"com.jarvis.{name}" and plist["WorkingDirectory"] == str(ROOT)
-    assert plist["StandardOutPath"].startswith(f"{ROOT}/logs/")
+    assert plist["StandardOutPath"] == f"{setup_local.SERVICE_LOGS}/{name}.log"
     assert "/Users/alex/.local/bin:" in plist["EnvironmentVariables"]["PATH"]
     if name in ("tasks", "agent"):  # tasks build with node; the agent runs the GitLab server with npx
         assert "/Users/alex/.nvm/versions/node/v22/bin:/usr/local/bin" in plist["EnvironmentVariables"]["PATH"]
@@ -37,6 +37,21 @@ def test_the_label_prefix_is_a_setting(monkeypatch):
     monkeypatch.setattr(config, "SERVICE_PREFIX", "org.example.jarvis")
     assert plistlib.loads(setup_local.service_plist("agent").encode())["Label"] == "org.example.jarvis.agent"
     assert setup_local.installed("web").name == "org.example.jarvis.web.plist"
+
+
+def test_a_service_log_moves_out_of_the_checkout_and_is_linked_back(tmp_path, monkeypatch):
+    """launchd can't open a log under ~/Desktop, so it writes in ~/Library/Logs and logs/ links there."""
+    root, logs = tmp_path / "jarvis", tmp_path / "Library/Logs/com.jarvis"
+    (root / "logs").mkdir(parents=True)
+    (root / "logs/agent.log").write_text("history\n")
+    monkeypatch.setattr(setup_local, "ROOT", root)
+    monkeypatch.setattr(setup_local, "SERVICE_LOGS", logs)
+    setup_local._link_log("agent")
+    setup_local._link_log("agent")  # again: already linked
+    setup_local._link_log("web")  # nothing yet: just the link
+    assert (root / "logs/agent.log").is_symlink() and (root / "logs/agent.log").read_text() == "history\n"
+    assert (logs / "agent.log").read_text() == "history\n"
+    assert (root / "logs/web.log").resolve() == logs / "web.log" and not (logs / "web.log").exists()
 
 
 def test_the_voice_comes_before_background_tasks():
@@ -69,6 +84,7 @@ def agents(tmp_path, monkeypatch):
     folder = tmp_path / "LaunchAgents"
     folder.mkdir()
     monkeypatch.setattr(setup_local, "LAUNCH_AGENTS", folder)
+    monkeypatch.setattr(setup_local, "_link_log", lambda name: None)  # leaves this checkout's logs/ alone
     calls = []
 
     def run(cmd, **kwargs):

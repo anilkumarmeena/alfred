@@ -9,14 +9,10 @@ import json
 import logging
 import os
 import re
-import secrets
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from jarvis.core import config, vault
-from jarvis.core.files import write_atomic
 
 log = logging.getLogger("jarvis.core.credentials")
 
@@ -44,8 +40,8 @@ LIVEKIT_SECRET = Credential("livekit.api_secret", "LIVEKIT_API_SECRET", "LiveKit
 APNS_KEY_ID = Credential("apns.key_id", "JARVIS_APNS_KEY_ID", "APNs key ID", r"[A-Z0-9]{10}",
                          "The 10-character ID of the APNs auth key in secrets/apns_key.p8, from developer.apple.com.")
 GOOGLE_CLIENT = Credential("google.client", "GOOGLE_CLIENT_SECRET", "Google OAuth client", "",
-                           "The Desktop app client's JSON from Google Cloud (APIs & Services → Credentials), pasted "
-                           "whole. Used when a Google account signs in on this computer.")
+                           "The OAuth client's JSON from Google Cloud (Desktop app or Web application), pasted whole. "
+                           "Used when a Google account signs in: JARVIS → Google accounts.")
 ALL = {c.name: c for c in (LIVEKIT_KEY, LIVEKIT_SECRET, APNS_KEY_ID, GOOGLE_CLIENT)}
 VARS = [c.var for c in ALL.values()]  # stripped from every session/command env
 
@@ -146,16 +142,8 @@ def adopt() -> list[str]:
     return [c.label for c in moved]
 
 
-@contextmanager
-def google_client_file() -> Iterator[str]:
-    """Yield a path to the Google client JSON: a temporary 0600 copy of the vault value (deleted on exit), else the
-    fallback file, else ""."""
-    if not (kept := _kept(GOOGLE_CLIENT)):
-        yield config.GOOGLE_CLIENT_SECRET
-        return
-    path = config.SECRETS_DIR / f".google-client-{secrets.token_hex(4)}.json"
-    write_atomic(path, kept, mode=0o600)
-    try:
-        yield str(path)
-    finally:
-        path.unlink(missing_ok=True)
+def google_client() -> dict:
+    """The Google OAuth client's JSON (vault, else the fallback file), checked; {} when none is set. Raises
+    ValueError, without the value, when it isn't a client."""
+    value = get(GOOGLE_CLIENT)
+    return json.loads(_checked(GOOGLE_CLIENT, value)) if value else {}

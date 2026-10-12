@@ -75,7 +75,7 @@ flowchart LR
 </table>
 
 > [!IMPORTANT]
-> Everywhere you need [uv](https://docs.astral.sh/uv/), **Node.js 22** or later and the **Claude Code CLI** with a Claude account. Optional extras are listed in the [README](../README.md#-quickstart).
+> Everywhere you need [uv](https://docs.astral.sh/uv/) (`make install` fetches it into `~/.local/bin` if it's missing), **Node.js 22** or later and the **Claude Code CLI** with a Claude account. Optional extras are listed in the [README](../README.md#-quickstart).
 
 - **Intel Macs** get faster-whisper instead of MLX (which needs Apple silicon); they're untested.
 - **Beyond install and services**, Linux differs in two places: tasks are walled in by **bubblewrap** instead of Seatbelt, and the Mac's tools (Shortcuts, opening apps by name) give way to Linux desktop tools where their programs exist. See **[🔌 Integrations](integrations.md)** and **[🏗️ Architecture](architecture.md)**.
@@ -89,6 +89,31 @@ flowchart LR
 ```sh
 brew install uv node   # plus the Claude Code CLI
 ```
+
+<details>
+<summary><b>🔒 No Homebrew or admin rights</b></summary>
+
+<br>
+
+Install everything into your home folder instead, with **no sudo**:
+
+```sh
+mkdir -p ~/.local/bin
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash   # nvm, then in a new terminal:
+nvm install 22                                                                     # Node.js
+curl -fsSL https://claude.ai/install.sh | bash                                     # Claude Code CLI
+```
+
+Without `brew`, `make install` **builds the LiveKit server from source** into `~/.local/bin` (`make livekit-bin`), because LiveKit publishes no macOS binaries. That takes about a minute and needs no Go install.
+
+> [!TIP]
+> **uv needs nothing from you here:** `make` finds it in `~/.local/bin` or where `pip install uv` put it (`~/Library/Python/3.x/bin`), even off your `PATH`, and otherwise installs the pinned version into `~/.local/bin`. A wrapper such as **PMG** (`~/.pmg/bin/uv`) keeps working: make adds those folders to the end of `PATH`, so the wrapper finds the real uv.
+
+</details>
+
+> [!NOTE]
+> **Behind a company proxy?** If the browser downloads fine but the terminal times out, `make install` uses the proxy macOS is set to for GitHub (a fixed proxy, a PAC file or WPAD) whenever `HTTPS_PROXY` isn't set, and says so. It passes that proxy to uv, curl, Go and npm, and has uv trust the macOS certificate store. To use a different proxy, set `HTTPS_PROXY` yourself.
 
 ### 🐧 Linux
 
@@ -169,14 +194,15 @@ then run `wsl --shutdown` from Windows and open Ubuntu again.
 ### ✅ Then, everywhere
 
 ```sh
-git clone <repo-url> jarvis && cd jarvis
+git clone https://github.com/anilkumarmeena/jarvis.git && cd jarvis
 make install
 ```
 
 | | It runs | What for |
 |:-:|---|---|
 | 🍺 | `brew install livekit` | **macOS:** the local LiveKit server, only if it's missing |
-| 📡 | `make livekit-bin` | **Linux:** the same, as the pinned **1.13.7** release (amd64 or arm64), **sha256-checked**, into `~/.local/bin`; no sudo |
+| 📡 | `make livekit-bin` | **Linux:** the same, as the pinned **1.13.7** release (amd64 or arm64), **sha256-checked**, into `~/.local/bin`; no sudo. **macOS without Homebrew:** built from the pinned 1.13.7 source with a pinned Go, both **sha256-checked** |
+| ⚡ | `make uv-bin` | **uv**, pinned, into `~/.local/bin`; only if none is found, no sudo |
 | 🐍 | `uv sync` | Python 3.12+ and every dependency, into `.venv` |
 | 🧠 | `make models` | Speech, VAD, turn, noise and speaker models for this machine (below) |
 | 🌐 | `make web-build` | `npm install` (once) and a build into `web/dist` |
@@ -267,10 +293,14 @@ open http://localhost:8787    # macOS; xdg-open on Linux
 
 ## 📬 5. Google
 
-**1. Create an OAuth client** — in a Google Cloud project, under **APIs & Services → Credentials**, then enable these APIs under **APIs & Services → Library**:
+**Everything is in the control panel:** open **JARVIS → Google accounts**. Until JARVIS has an OAuth client, the page walks you through making one, with links to each Google Cloud page.
 
-> [!IMPORTANT]
-> The client must be a **Desktop app** OAuth client, and every API JARVIS uses must be **enabled** in that project.
+**1. Create an OAuth client** — in a Google Cloud project of your own: set up the **Google Auth Platform** (External, with yourself as a test user), enable the APIs below, then create a client of either type:
+
+| Client type | Signing in from the computer | Signing in from a phone | Extra set-up |
+|---|---|---|---|
+| **Desktop app** | Comes back by itself | Google's last page doesn't load: copy its address and paste it into the panel | None |
+| **Web application** | Comes back by itself | Comes back by itself | Add the panel's callback addresses as **Authorised redirect URIs**; the page lists them, e.g. `https://<computer>.<tailnet>.ts.net/api/google/callback` and `http://localhost:8787/api/google/callback` |
 
 | | API | Used for |
 |:-:|---|---|
@@ -281,15 +311,26 @@ open http://localhost:8787    # macOS; xdg-open on Linux
 
 - **Drive:** JARVIS finds files by name or content and reads Slides through it, but **only changes Drive files it made itself**.
 
-**2. Give JARVIS the client** — paste its JSON in **Settings → Logins and keys**, which keeps it in the vault. Or drop Google's `client_secret_….json` into `secrets/`: JARVIS moves it into the vault on its next start, and you can then delete the file.
+> [!IMPORTANT]
+> While the app is in **Testing**, Google ends sign-ins after **7 days**. Publish it (Audience → Publish app) to keep them. A Workspace admin may also have to allow the app.
 
-**3. Add each account** — under a label of your choosing, which signs it in:
+**2. Give JARVIS the client** — paste its JSON on the Google accounts page (or in **Settings → Logins and keys**); it's kept in the vault. Or drop Google's `client_secret_….json` into `secrets/`: JARVIS moves it into the vault on its next start, and you can then delete the file.
+
+**3. Add each account** — **+ Add a Google account**, give it a label (`work`, `personal`…), say what it's for, switch on **Google Chat** for a Workspace account that uses it, then **Add and sign in**. Google opens in a new tab: pick the account and allow every permission. JARVIS uses it from the next conversation, **no restart needed**.
+
+<details>
+<summary><b>⌨️ Adding accounts from the terminal</b></summary>
+
+<br>
+
+On JARVIS's computer; then sign each one in from the Google accounts page:
 
 ```sh
 uv run python -m jarvis.integrations.accounts add work --note "for work"
 uv run python -m jarvis.integrations.accounts add personal --note "my own"
-make services-restart
 ```
+
+</details>
 
 Managing accounts, permissions and Chat set-up: **[🔌 Integrations](integrations.md#-google-accounts)**.
 

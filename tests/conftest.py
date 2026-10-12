@@ -53,6 +53,17 @@ def use_task_cache(monkeypatch: pytest.MonkeyPatch, folder: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
+def google_tools_follow_the_shared_accounts(monkeypatch):
+    """A test that switches profile can make the Google tools follow its accounts (google.fresh): put the profile
+    back first, then follow the shared accounts again."""
+    yield
+    from jarvis.tools import google
+
+    monkeypatch.undo()
+    google.fresh()
+
+
+@pytest.fixture(autouse=True)
 def fresh_conversation(monkeypatch) -> conversation.Conversation:
     """Fresh conversation per test, so no state leaks between tests."""
     monkeypatch.setattr(conversation, "_process", fresh := conversation.Conversation())

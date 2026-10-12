@@ -11,6 +11,7 @@ import inspect
 import json
 import logging
 from dataclasses import dataclass
+from collections.abc import Iterable
 from typing import Any, Callable
 
 import ai_armory
@@ -38,6 +39,8 @@ class Tool:
     # Read-only (MCP readOnlyHint): the CLI may run it in parallel with other calls in the same step
     reads: bool = False
     before: Callable[[], None] | None = None  # AI Armory: refresh tool-set settings before each call
+    # Answers at once or starts its own background work: never carried on outside the voice turn (jarvis.brain.kept)
+    stays: bool = False
 
     def on(self) -> bool:
         return self.enabled is None or self.enabled()
@@ -55,10 +58,11 @@ _REGISTRY: dict[str, Tool] = {}
 
 def tool(name: str, description: str, properties: dict[str, dict] | None = None, required: list[str] | None = None,
          gated: bool = False, changes: bool = False, said: str = "", enabled: Callable[[], bool] | None = None,
-         shell: bool = False, reads: bool = False):
+         shell: bool = False, reads: bool = False, stays: bool = False):
     def register(fn: Callable[..., Any]) -> Callable[..., Any]:
         _REGISTRY[name] = Tool(name, description, properties or {}, required or [], fn, gated,
-                               changes=changes or bool(said), said=said, enabled=enabled, shell=shell, reads=reads)
+                               changes=changes or bool(said), said=said, enabled=enabled, shell=shell, reads=reads,
+                               stays=stays)
         return fn
 
     return register
@@ -76,6 +80,12 @@ def register_toolsets(toolsets: list[ai_armory.ToolSet], notes: dict[str, str] |
         _REGISTRY[t.name] = Tool(t.name, description, schema.get("properties", {}), schema.get("required", []),
                                  t.handler, t.needs_confirmation, t, changes=not t.read_only,
                                  reads=t.read_only and not t.needs_confirmation, before=before)
+
+
+def unregister(names: Iterable[str]) -> None:
+    """Drop tools, e.g. a tool set's before registering it again for changed accounts."""
+    for name in list(names):
+        _REGISTRY.pop(name, None)
 
 
 def get(name: str) -> Tool | None:

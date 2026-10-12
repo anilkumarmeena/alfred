@@ -21,7 +21,7 @@ build with, and uv for updates. Label and folders are filled in by jarvis.setup_
     <key>ThrottleInterval</key><integer>10</integer>
     <key>Nice</key><integer>10</integer>
     <key>LowPriorityIO</key><true/>
-    <key>StandardOutPath</key><string>${ROOT}/logs/node.log</string>
-    <key>StandardErrorPath</key><string>${ROOT}/logs/node.log</string>
+    <key>StandardOutPath</key><string>${LOGS}/node.log</string>
+    <key>StandardErrorPath</key><string>${LOGS}/node.log</string>
 </dict>
 </plist>
