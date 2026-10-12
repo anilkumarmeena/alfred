@@ -189,7 +189,7 @@ async def each_account(read: Callable[[str], list[dict]]) -> list[dict]:
 
     from jarvis.tools import google  # configures AI Armory's Google toolsets with JARVIS's accounts
 
-    google.fresh()  # pick up the current profile name and time zone
+    google.fresh()  # accounts added or removed, and the current profile name and time zone
     labels = connected()
     results = await asyncio.gather(*(asyncio.to_thread(read, label) for label in labels), return_exceptions=True)
     found, failed = [], []

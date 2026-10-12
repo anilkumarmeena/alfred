@@ -45,12 +45,16 @@ class Notes:
         Also recorded in the conversation's `heard`, the only words task_approve may act on.
         """
         conversation.current().heard.turn(text)
+        framing, self.framing = self.framing, []
+        return "\n".join([self.head(), text, *framing])
+
+    def head(self) -> str:
+        """Timestamp and announcements since the last turn, which start every message to the brain."""
         head = f"[{datetime.now(profile.tz()):%A %d %B %Y, %I:%M %p}]"
         if self.notes:
             head += "\n[You announced since the last turn: " + " ".join(self.notes) + "]"
             self.notes.clear()
-        framing, self.framing = self.framing, []
-        return "\n".join([head, text, *framing])
+        return head
 
 
 def system_prompt(extra: str = "") -> str:

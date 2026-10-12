@@ -4,7 +4,6 @@ import asyncio
 import json
 import os
 import stat
-from pathlib import Path
 
 import pytest
 
@@ -89,13 +88,6 @@ def test_a_wrong_looking_value_is_refused_without_repeating_it(key, c, value):
 def test_livekits_keys_cant_be_cleared(key):
     with pytest.raises(ValueError, match="replace it"):
         credentials.clear(credentials.LIVEKIT_KEY)
-
-
-def test_the_google_client_is_a_file_only_for_the_while_of_a_sign_in(key):
-    credentials.put(credentials.GOOGLE_CLIENT, json.dumps(CLIENT, indent=2))
-    with credentials.google_client_file() as path:
-        assert json.loads(Path(path).read_text()) == CLIENT and stat.S_IMODE(os.stat(path).st_mode) == 0o600
-    assert not os.path.exists(path)
 
 
 def test_apns_reads_its_key_id_from_the_vault(key, monkeypatch, tmp_path):

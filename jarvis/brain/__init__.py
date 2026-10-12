@@ -1,6 +1,6 @@
 """The brain: Claude with tools and memory, streaming its reply as text (cli.py, persona in persona.py)."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Protocol
 
 
@@ -16,6 +16,14 @@ class VoiceBrain(Protocol):
 
     def respond(self, text: str) -> AsyncIterator[str]:
         """Stream the spoken reply to one user utterance."""
+
+    def on_background(self, finished: Callable[[str, str, str], object]) -> None:
+        """Take results of slow tool calls that left their turn: `finished(summary, prompt, words)`, where `prompt`
+        is for follow_up (jarvis.brain.kept)."""
+
+    def follow_up(self, prompt: str, words: str = "") -> AsyncIterator[str]:
+        """Stream a turn the brain starts itself, on a kept call's result; `words` are the user's of the turn that
+        made the call."""
 
     def note(self, text: str, unsaid: str = "") -> None:
         """`text` was said outside a turn; `unsaid` is for the brain alone."""

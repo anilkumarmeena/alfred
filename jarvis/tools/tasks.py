@@ -329,7 +329,8 @@ async def task_stop(id: int) -> dict:
     "task_merge",
     "Merge a finished code_change task's own branch into the branch checked out in the project's folder, then "
     "delete the task's branch and remove its worktree. A branch that's already merged is just cleaned up. JARVIS's "
-    "own branches run its tests first, which takes a few minutes, and aren't merged if tests fail on them. Only "
+    "own branches run its tests first, which takes a few minutes (the merge then carries on in the background and its "
+    "result comes back to you), and aren't merged if tests fail on them. Only "
     "for tasks with a branch (in_place false); only when the user asks for it, and then without asking again. Use "
     "this, never git in the shell. Then say in one sentence which task went into which project.",
     {"id": {"type": "integer"}},

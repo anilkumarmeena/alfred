@@ -99,16 +99,18 @@ uv run python -m jarvis.state.settings prefs voice bm_lewis  # change one
 | `JARVIS_EFFORT` | `low` | Its effort; low keeps spoken turns quick |
 | `JARVIS_MAX_TOOL_ROUNDS` | `8` | Most model turns in one reply |
 | `JARVIS_VOICE_QUICK_MODEL` | *(off)* | A lighter model (e.g. `claude-sonnet-5`) for simple turns |
-| `JARVIS_LOOKUP_MODEL`<br>`JARVIS_LOOKUP_WAIT` | Haiku<br>`8` | The voice brain's read-only file lookups: model, and seconds a spoken turn waits on them before they carry on in the background |
+| `JARVIS_LOOKUP_MODEL` | Haiku | The voice brain's read-only lookup subagent |
 | `JARVIS_SIDE_MODEL`<br>`JARVIS_SIDE_MINUTES` | Sonnet<br>`3` | Background lookups that let the conversation carry on: model and time limit |
 | `JARVIS_PROACTIVE_JUDGE` | `on` | A fast model picks the moment to bring up task updates and alerts |
 | `JARVIS_TOOL_SEARCH` | `true` | Connections' tools load on demand via tool search |
 | `JARVIS_CONNECTION_WAIT` | `20` | Seconds a connection's call may hold up a spoken reply |
+| `JARVIS_TOOL_WAIT` | `8` | Seconds one of JARVIS's own tools (a merge, a long read) may hold up a spoken reply |
 
 - **`JARVIS_VOICE_QUICK_MODEL`** is used for turns judged to need no tools and little thought.
 - **`JARVIS_PROACTIVE_JUDGE=off`** says each update once nobody is talking.
 - **`JARVIS_TOOL_SEARCH`**: `auto:N` loads tools on demand once they'd fill N% of context; `false` loads all up front.
 - **`JARVIS_CONNECTION_WAIT`**: past it, the call carries on as a background task; `0` always waits.
+- **`JARVIS_TOOL_WAIT`**: past it, the call carries on in the background and JARVIS follows up on its result by itself; `0` always waits.
 
 > [!WARNING]
 > **Keep `.env` and `data/tasks.db` apart.** `JARVIS_MASTER_KEY` in `.env` decrypts the vault inside `data/tasks.db`; anyone holding both holds your secrets.

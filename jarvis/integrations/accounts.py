@@ -1,11 +1,11 @@
 """Google accounts JARVIS uses, stored in the accounts table of data/tasks.db.
 
 Each has a label, email, optional note, a Google Chat flag, and one is the default for anything made without naming an
-account. Services read them at start-up (tool account lists are fixed then), so restart after a change.
+account. Accounts are signed in from the control panel (jarvis.integrations.google_signin). Running services pick up a
+change at their next conversation, task or scheduled check (jarvis.tools.google.fresh), so no restart is needed.
 
     uv run python -m jarvis.integrations.accounts                  list
-    uv run python -m jarvis.integrations.accounts add LABEL [--email E] [--note N] [--chat] [--default] [--no-login]
-    uv run python -m jarvis.integrations.accounts login LABEL      sign in (again)
+    uv run python -m jarvis.integrations.accounts add LABEL [--email E] [--note N] [--chat] [--default]
     uv run python -m jarvis.integrations.accounts rename OLD NEW
     uv run python -m jarvis.integrations.accounts remove LABEL [--yes]
     uv run python -m jarvis.integrations.accounts default LABEL
@@ -27,7 +27,6 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from jarvis.core import database, profile
-from jarvis.state.settings import RESTART
 
 log = logging.getLogger("jarvis.integrations.accounts")
 
@@ -223,7 +222,8 @@ def remove_files(label: str) -> list[str]:
 
 def show(accounts: Accounts) -> str:
     if not accounts.accounts:
-        return "No Google accounts yet. Add one with: uv run python -m jarvis.integrations.accounts add LABEL"
+        return ("No Google accounts yet. Add one in the control panel (JARVIS → Google accounts), or with: "
+                "uv run python -m jarvis.integrations.accounts add LABEL")
     width = max(len(l) for l in accounts.labels)
     lines = []
     for a in accounts.accounts:
@@ -235,21 +235,13 @@ def show(accounts: Accounts) -> str:
     return "\n".join(lines)
 
 
-def _google(found: Accounts) -> None:
+def configure_google(found: Accounts) -> None:
     """Configure AI Armory's Google toolset with these accounts, as jarvis.tools.google does."""
     from ai_armory.toolsets.google import configure
 
     from jarvis.tools import google
 
     configure(google.settings(found))
-
-
-def _connect(label: str, client_secret: str) -> int:
-    """Browser sign-in (with Chat scope if enabled); returns 0 on success."""
-    from ai_armory.toolsets.google import auth
-
-    _google(load())
-    return auth.connect(label, client_secret)
 
 
 def _check_chat(label: str) -> int:
@@ -259,67 +251,34 @@ def _check_chat(label: str) -> int:
     if label not in found.chat_labels:
         sys.exit(f"Google Chat isn't set up for the {label} account. Turn it on with: "
                  f"uv run python -m jarvis.integrations.accounts set {label} --chat")
-    _google(found)
+    configure_google(found)
     return auth.check_chat(label)
 
 
-def _signed_in_email(label: str) -> str:
-    from ai_armory.toolsets.google.common import account_email
-
-    _google(load())
-    return account_email(label)
-
-
-def _keep_email(label: str) -> str:
-    """Store the signed-in email unless another account has it; returns a message. Looks it up before taking the
-    DB lock."""
-    try:
-        email = _signed_in_email(label)
-    except Exception as e:
-        return f"Couldn't look up the {label} account's email: {e}"
+def take_email(label: str, email: str) -> str:
+    """Store the email a sign-in chose; it replaces a different stored one. Returns a note when there's something to
+    say (what it replaced, or that another account has it), else "". Writes only when it changes."""
+    if load().need(label).email.lower() == email.lower():
+        return ""
     with change() as accounts:
         known = accounts.need(label).email
-        if known.lower() == email.lower():
-            return ""
-        if known:
-            return (f"The {label} account signed in as {email}, but its email says {known}. If that's right, change "
-                    f"it with: uv run python -m jarvis.integrations.accounts set {label} --email {email}")
         try:
             accounts.update(label, email=email)
         except ValueError as e:
             return f"Signed in as {email}, but {e} Remove one of them."
-    return f"The {label} account is {email}."
-
-
-def _login(label: str) -> int:
-    from jarvis.core import credentials
-
-    load().need(label)
-    with credentials.google_client_file() as client:
-        if not client:
-            print("Paste the Google OAuth client's JSON in the control panel (Settings → Logins and keys), or put it in "
-                  "secrets/ as client_secret….json (or set GOOGLE_CLIENT_SECRET in .env to its path), then sign the "
-                  f"account in with: uv run python -m jarvis.integrations.accounts login {label}")
-            return 1
-        if code := _connect(label, client):
-            return code
-    if said := _keep_email(label):
-        print(said)
-    return 0
+    return f"The {label} account is {email} now, not {known}." if known else ""
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m jarvis.integrations.accounts", description="JARVIS's Google accounts.")
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("list", help="list the accounts (the default)")
-    add = commands.add_parser("add", help="add an account and sign it in")
+    add = commands.add_parser("add", help="add an account (sign it in from the control panel)")
     add.add_argument("label")
     add.add_argument("--email", default="")
     add.add_argument("--note", default="", help="what it's for, e.g. 'for work'")
     add.add_argument("--chat", action="store_true", help="a Workspace account with Google Chat")
     add.add_argument("--default", action="store_true", help="make it the default")
-    add.add_argument("--no-login", action="store_true", help="sign it in later, with login")
-    commands.add_parser("login", help="sign an account in, or in again").add_argument("label")
     rename = commands.add_parser("rename", help="rename an account, with its sign-in and history")
     rename.add_argument("old")
     rename.add_argument("new")
@@ -344,15 +303,12 @@ def main(argv: list[str] | None = None) -> int:
             sys.exit("No account has Google Chat. Mark one with: uv run python -m jarvis.integrations.accounts set LABEL --chat")
         return _check_chat(label)
     try:
-        if command == "login":
-            return _login(args.label)
         if command == "add":
             with change() as accounts:
                 accounts.add(Account(args.label, args.email.strip(), args.note.strip(), args.chat),
                              default=args.default)
-            print(f"Added the {args.label} account.")
-            if not args.no_login:
-                _login(args.label)
+            print(f"Added the {args.label} account. Sign it in with the Sign in button beside it on the control "
+                  "panel's Google accounts page.")
         elif command == "rename":
             with change() as accounts:
                 accounts.rename(args.old, args.new)
@@ -383,7 +339,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Changed the {args.label} account.")
     except ValueError as e:
         sys.exit(str(e))
-    print(RESTART)
+    print("JARVIS uses the change from its next conversation.")
     return 0
 
 

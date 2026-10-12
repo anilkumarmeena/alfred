@@ -28,6 +28,7 @@ class Brain:
         self.models: list[str | None] = []  # the model each turn was answered on
         self.asking = False  # its shell's own question about a command
         self.ended = False
+        self.background = None
 
     async def start(self) -> None:
         pass
@@ -43,6 +44,9 @@ class Brain:
 
     def note(self, text: str, unsaid: str = "") -> None:
         self.notes.append(text)
+
+    def on_background(self, finished) -> None:
+        self.background = finished
 
     def frame(self, lines: list[str]) -> None:
         self.framed.append(lines)
@@ -321,6 +325,9 @@ def test_the_call_lends_its_speaker_check_and_lookups_to_the_tools_through_its_c
         assert conversation.current() is talk
         assert talk.speaker is voice.stt.speaker and talk.lookups is voice.lookups
         voice.stt.speaker.announce("Your voiceprint is saved.")
+        voice.brain.background("Merged.", "[the merge ended]", "merge it")
+        [*_, merged] = voice.announcements.queue
+        assert merged.text == "Merged." and merged.speak is not None
         voice.start(session)
         await settle()
         await voice.close()

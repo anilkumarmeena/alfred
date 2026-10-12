@@ -16,8 +16,9 @@ import asyncio
 import logging
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from jarvis.brain.quick import Quick, found, untagged
 from jarvis.core import profile
@@ -112,15 +113,38 @@ class Floor:
             log.debug("announcement held: %s", reason)
             await asyncio.sleep(POLL_SECONDS)
 
-    async def say(self, session, text: str) -> bool:
-        """Say `text` unprompted; caller holds `lock` and has waited. False on failure."""
-        self.said(text)
+    async def say(self, session, text: str | AsyncIterator[str], lead: str = "") -> bool:
+        """Say `text` unprompted, after `lead`; caller holds `lock` and has waited. False on failure, or when a stream
+        (a brain turn of its own) has nothing to say."""
+        if isinstance(text, str):
+            first, rest = lead + text, None
+        else:
+            try:
+                first = await anext(text, None)  # nothing to say: stay quiet
+            except Exception:
+                log.exception("a brain turn failed before speaking")
+                return False
+            if not first:
+                return False
+            first, rest = lead + first, text
+        said = [first]
+
+        async def spoken() -> AsyncIterator[str]:
+            yield first
+            async for chunk in rest:
+                said.append(chunk)
+                yield chunk
+
+        self.said(first)  # a question opens before the user can answer it
         try:
-            await session.say(text, add_to_chat_ctx=False)
+            await session.say(first if rest is None else spoken(), add_to_chat_ctx=False)
         except Exception:
-            log.exception("saying %r failed", text)
+            log.exception("saying %r failed", first)
             self.question = False  # nothing was asked
             return False
+        finally:
+            if rest is not None:
+                self.said("".join(said))
         return True
 
 
@@ -137,6 +161,9 @@ class Announcement:
     held_at: float | None = None  # first "pause" time
     cleared: bool = False  # cleared to speak, in queue order
     cuts_in: bool = False  # prefix with CUT_IN
+    # Speaks a brain turn of its own instead of `text` (a follow-up on a background result, jarvis.brain.kept); `text`
+    # stays the line for the moment check and the phone. Never merged with or held back as a repeat of another item.
+    speak: Callable[[Any], AsyncIterator[str]] | None = None
 
     def urgent(self, now: float) -> bool:
         return self.urgency == "urgent" or (self.at is not None and self.at - now <= URGENT_MINUTES * 60)
@@ -205,12 +232,13 @@ class Announcements:
         """Queue an item; False if already queued (ids merged) or said within REPEAT_MINUTES."""
         now = self.clock()
         self.said_at = {text: at for text, at in self.said_at.items() if now - at < REPEAT_MINUTES * 60}
-        if same := next((queued for queued in self.queue if queued.text == item.text), None):
-            same.seen += [i for i in item.seen if i not in same.seen]
-            return False
-        if item.text in self.said_at:
-            log.info("not repeating an announcement: %s", item.text)
-            return False
+        if item.speak is None:
+            if same := next((queued for queued in self.queue if queued.text == item.text), None):
+                same.seen += [i for i in item.seen if i not in same.seen]
+                return False
+            if item.text in self.said_at:
+                log.info("not repeating an announcement: %s", item.text)
+                return False
         item.came = now
         self.queue.append(item)
         self._ready.set()
@@ -279,15 +307,21 @@ class Announcements:
         self.queue.remove(item)
         if not self.queue:
             self._ready.clear()
+        if item.cuts_in:
+            log.info("announcement cuts in, urgent: %s", item.text)  # log every cut-in, for tuning
+        lead = CUT_IN if item.cuts_in else ""
+        if asks is not None:
+            asks.close()
+        if item.speak is not None:
+            said = await self.floor.say(session, item.speak(brain), lead)
+            if asks is not None:
+                asks.changed.set()  # the brain's question, if it asked one, may hold task requests
+            return said
         text = item.text
         if (waited := self.clock() - item.came) >= OLD_MINUTES * 60:
             text = f"From {_minutes(waited)} ago: {text}"
-        if item.cuts_in:
-            log.info("announcement cuts in, urgent: %s", item.text)  # log every cut-in, for tuning
-            text = CUT_IN + text
+        text = lead + text
         self.said_at[item.text] = self.clock()
-        if asks is not None:
-            asks.close()
         brain.note(text, item.note)
         if not await self.floor.say(session, text):
             self.said_at.pop(item.text, None)

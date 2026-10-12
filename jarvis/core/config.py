@@ -137,14 +137,12 @@ DEFAULT_MODEL = "claude-opus-5-5"
 CLI_MODEL = os.environ.get("JARVIS_CLI_MODEL", "") or DEFAULT_MODEL
 FAST_MODEL = "claude-haiku-4-5-20251001"  # subagents that only look things up
 HELPER_MODEL = "claude-sonnet-5"  # subagents that need more judgment: test runs, web research
-# Read-only file lookups (file_lookup, jarvis.brain.side); keeps file contents out of the spoken turn
+# Read-only lookup subagent; keeps file contents out of the spoken turn
 LOOKUP_MODEL = os.environ.get("JARVIS_LOOKUP_MODEL", "") or FAST_MODEL
-# Seconds one spoken turn may wait on file lookups in all; past that they carry on in the background, announced
-LOOKUP_WAIT = _number(os.environ.get("JARVIS_LOOKUP_WAIT", ""), 8.0, 0.0, 60.0)
 EFFORT = os.environ.get("JARVIS_EFFORT", "") or "low"  # low keeps spoken replies fast
 # Lighter model for voice turns judged to need no tools (jarvis.brain.route); empty = always CLI_MODEL
 VOICE_QUICK_MODEL = os.environ.get("JARVIS_VOICE_QUICK_MODEL", "")
-# Background lookups handed off by the voice brain (jarvis.brain.side): model and time limit (file lookups too)
+# Background lookups handed off by the voice brain (jarvis.brain.side): model and time limit
 SIDE_MODEL = os.environ.get("JARVIS_SIDE_MODEL", "") or HELPER_MODEL
 SIDE_MINUTES = _number(os.environ.get("JARVIS_SIDE_MINUTES", ""), 3.0, 0.5, 30.0)
 # A fast model picks when to speak updates and reminders (jarvis.voice.floor); off = as soon as nobody is talking
@@ -155,6 +153,9 @@ TOOL_SEARCH = (os.environ.get("JARVIS_TOOL_SEARCH", "") or "true").strip().lower
 # Seconds an MCP call may block a spoken reply before continuing in the background (jarvis.integrations.mcp_relay).
 # 0 = always wait. Tasks always wait.
 CONNECTION_WAIT = _number(os.environ.get("JARVIS_CONNECTION_WAIT", ""), 20.0, 0.0, 600.0)
+# Seconds one of JARVIS's own tools (a merge, a long read) may block a spoken reply before carrying on in the
+# background, its result coming back in a brain turn of its own (jarvis.brain.kept). 0 = always wait. Tasks always wait.
+TOOL_WAIT = _number(os.environ.get("JARVIS_TOOL_WAIT", ""), 8.0, 0.0, 600.0)
 MAX_TOOL_ROUNDS = int(os.environ.get("JARVIS_MAX_TOOL_ROUNDS", "") or "8")
 # How long a risky command awaits a spoken yes, and how long that yes stays valid
 APPROVAL_MINUTES = max(1, int(os.environ.get("JARVIS_APPROVAL_MINUTES", "") or "5"))
