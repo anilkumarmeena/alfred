@@ -326,11 +326,37 @@ def test_usage_warnings_are_said_once_per_window(tmp_path, monkeypatch):
     assert notify.sent == [("JARVIS · usage", "JARVIS has used 90% of Claude's five-hour limit; it resets at 4 PM.")]
 
 
+def test_a_connection_whose_sign_in_check_fails_is_said_and_checked_again_hourly(tmp_path, monkeypatch):
+    from jarvis.integrations import mcp_servers
+    from jarvis.integrations.mcp_servers import Server, Tool
+
+    notes = Server("notes", "Notes", command="x", check_tool="whoami", tools={"whoami": Tool("read")})
+    monkeypatch.setattr(mcp_servers, "for_voice", lambda: [notes, Server("wiki", "Wiki", command="x")])
+    monkeypatch.setattr(mcp_servers, "missing", lambda server: "")
+    answers, called = ["bad credentials"], []
+
+    def call(server):
+        called.append(server.name)
+        return answers[-1]
+
+    check = notices.connection_notices(call=call)
+    found = asyncio.run(check(AFTERNOON))
+    assert [n.key for n in found] == ["connection:notes:check"] and found[0].ongoing
+    assert found[0].text.startswith("Notes's sign-in check failed") and "credentials" not in found[0].text
+    answers.append("")
+    assert asyncio.run(check(AFTERNOON.replace(minute=30))) == found and called == ["notes"]  # not again this hour
+    assert asyncio.run(check(AFTERNOON.replace(hour=16, minute=1))) == [] and called == ["notes", "notes"]
+    answers.append("bad credentials")
+    assert asyncio.run(check(AFTERNOON.replace(hour=17, minute=2))) == found
+    answers.append(None)  # never answered: it keeps its last result
+    assert asyncio.run(check(AFTERNOON.replace(hour=18, minute=3))) == found
+
+
 def test_the_runner_gets_only_jarvis_s_own_checks():
     class Store:
         def recent(self):
             return []
 
     n = notices.make(Store(), Notifier(), state_file=None)
-    assert list(n.checks) == ["tasks", "usage"]
+    assert list(n.checks) == ["tasks", "usage", "connections"]
     assert notices.make(Store(), Notifier(), push=Pusher()).push is not None

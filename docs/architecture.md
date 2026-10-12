@@ -413,6 +413,8 @@ flowchart TB
 
 The voice brain gets every enabled, reviewed server. Research tasks get only servers marked `for_research`, started read-only, with only reads allowed. **Code tasks get none.**
 
+A server's row may name a **sign-in check** (`check_tool`): a reading tool, chosen by the model during review, that [notices](#notices) call read-only with no arguments at most hourly, warning once when it's refused.
+
 ### Web browser
 
 Chrome (else Playwright's Chromium) on `data/browser/profile`, one page at a time, voice brain only.
@@ -591,12 +593,13 @@ All three run **inside the task runner**, which is always on and already reaches
 
 ### Notices
 
-`jarvis/tasks/notices.py`, every 15 minutes: JARVIS's news **about itself**, said unasked. It never reads the user's mail, calendar, Chat or repositories: watching those is each user's choice, made with [scheduled jobs](#scheduler) (see [Monitoring](#monitoring)).
+`jarvis/tasks/notices.py`, every 15 minutes: JARVIS's news **about itself**, said unasked. Beyond each connection's sign-in check, it never reads the user's mail, calendar, Chat or other services: watching those is each user's choice, made with [scheduled jobs](#scheduler) (see [Monitoring](#monitoring)).
 
 | | Check | Says |
 |:-:|---|---|
 | 🛠️ | `tasks` | Questions unanswered for 15 minutes, runs cut off by a restart, stalled tasks |
 | 📊 | `usage` | A Claude usage window nearly or fully used |
+| 🩺 | `connections` | A connection whose sign-in check refused: the reading tool named in its row (`check_tool`), called with no arguments at most hourly (`mcp_servers.check`). One that never answers keeps its last result |
 
 - **Quiet hours** (`JARVIS_QUIET_HOURS`) and **do not disturb** skip the round; what still holds is said after.
 - Checks run in parallel with a 60 s limit each. Notices have **stable keys**, kept for 30 days in `data/notices.json`, so each is said once; an ongoing one (a stall) is forgotten when it clears, so it can come back. At most 5 per round.

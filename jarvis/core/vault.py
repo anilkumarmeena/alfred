@@ -42,7 +42,7 @@ VAR = "JARVIS_MASTER_KEY"
 ENV_FILE = ROOT / ".env"  # overridden by tests
 CHECK = "vault_check"  # settings row used to detect a wrong key
 _CHECK_TEXT = b"JARVIS vault check"
-NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")  # e.g. github.token
+NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")  # <server>.<secret>, e.g. notes.api_key
 
 _SCHEMA = """
 create table secrets (

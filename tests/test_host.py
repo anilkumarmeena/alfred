@@ -290,6 +290,30 @@ def test_linux_checks_cover_what_the_mac_ones_do():
     assert any("environments" in what for what in linux) and any("session bus" in what for what in linux)
 
 
+def test_ssh_remotes_name_where_they_sign_in_and_other_remotes_nothing():
+    assert host._ssh_remote("git@git.example.com:team/app.git") == "git@git.example.com"
+    assert host._ssh_remote("ssh://git@git.example.com:2222/team/app.git") == "ssh://git@git.example.com:2222"
+    for other in ("https://git.example.com/team/app.git", "/srv/repos/app.git", "../app", "file:///srv/app.git"):
+        assert host._ssh_remote(other) == ""
+
+
+def test_the_ssh_check_signs_in_to_the_users_own_git_hosts_or_is_left_out(monkeypatch, tmp_path):
+    from jarvis.tasks import projects
+
+    repo = tmp_path / "app"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    for name, url in (("origin", "git@git.example.com:team/app.git"), ("mirror", "https://git.example.com/app.git"),
+                      ("fork", "git@git.example.com:me/app.git")):
+        subprocess.run(["git", "-C", str(repo), "remote", "add", name, url], check=True)
+    monkeypatch.setattr(projects, "load", lambda: [])
+    monkeypatch.setattr(host, "ROOT", repo)
+    (what, command, should), = host._ssh_checks()
+    assert what == "signs in to git@git.example.com over SSH, through the agent" and should
+    assert "git@git.example.com" in command and "255" in command
+    monkeypatch.setattr(host, "ROOT", tmp_path / "elsewhere")  # no repo, so no remotes
+    assert host._ssh_checks() == []
+
+
 # ── The environment ─────────────────────────────────────────────
 
 

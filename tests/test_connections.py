@@ -391,6 +391,24 @@ def test_the_users_choices_are_said_back_and_unknown_tools_refused(gate):
     assert error and "no tool nope" in said
 
 
+def test_a_reading_tool_becomes_its_sign_in_check_and_is_kept_when_sorted_again(gate):
+    mcp_servers.save(Server("notes", "Notes", command="npx", args=["-y", "n@1.0.0"], reviewed=False), new=True)
+    said, error = run("connection_review", {"name": "notes", "check": "create_page"})
+    assert error and "can't be the sign-in check" in said
+    review, _ = run("connection_review", {"name": "notes", "check": "search"})
+    assert "Every hour I'll call search to make sure its sign-in still works." in review["summary"]
+    confirm(gate, review["draft_id"])
+    assert mcp_servers.get("notes").check_tool == "search"
+    listed, _ = run("connections_list", {})
+    assert listed[0]["sign_in_check"] == "search"
+    again, _ = run("connection_review", {"name": "notes"})
+    assert again["same"] and again["check"] == "search"
+    moved, _ = run("connection_review", {"name": "notes", "changing": ["search"]})
+    assert "Every hour" not in moved["summary"]  # no longer a reading tool, so no longer the check
+    confirm(gate, moved["draft_id"])
+    assert mcp_servers.get("notes").check_tool == ""
+
+
 def test_keys_are_never_taken_by_voice(gate):
     said, error = run("connection_add", {"registry_name": "com.example/notes-mcp",
                                          "settings": {"NOTES_REGION": "eu", "NOTES_TOKEN": "n-1"}})

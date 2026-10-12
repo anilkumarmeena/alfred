@@ -39,7 +39,7 @@ KINDS = {
              "pushing code, installing software, stopping a process, restarting services and the like).",
     GOOGLE: "JARVIS read out an email, message or calendar invite or change it drafted, or something it would delete "
             "(a calendar event, part of a Google Doc, a Sheet's tab), and asked whether to send it, or go ahead.",
-    SERVICE: "JARVIS asked whether it may make a change on a connected service such as GitHub or GitLab.",
+    SERVICE: "JARVIS asked whether it may make a change on a service the user connected.",
     ACTION: "JARVIS asked whether it may go ahead with what it just described: running a command, sending a message "
             "or changing something online.",
     TASK: "JARVIS asked whether a background task may go ahead with the commands it asked to run.",
