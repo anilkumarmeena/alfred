@@ -8,10 +8,10 @@ import pytest
 
 from conftest import use_profile
 from jarvis import tools
-from jarvis.brain import cli, persona
+from jarvis.brain import cli, persona, side
 from jarvis.core import profile
 from jarvis.core.config import DATA_DIR, ROOT
-from jarvis.safety import commands, shell
+from jarvis.safety import commands
 from jarvis.state import memory
 
 
@@ -148,8 +148,8 @@ def test_the_logs_stay_out_of_git_and_within_reach_of_the_shell_and_lookup():
     assert not any(path.startswith(str(p)) for p in commands.JARVIS_SECRETS) and not commands.names_secret(path)
 
 
-def test_the_lookup_subagent_knows_the_layout_and_starts_from_the_repo():
-    prompt = cli.lookup().prompt
+def test_the_file_lookup_knows_the_layout_and_starts_from_the_repo():
+    prompt = side.lookup_system()
     assert f"JARVIS's folder, {ROOT}" in prompt
     for where in ("memory.md", "conversations/YYYY-MM-DD.md", "tasks.db", "secrets/"):
         assert where in prompt
@@ -159,7 +159,7 @@ def test_the_lookup_subagent_knows_the_layout_and_starts_from_the_repo():
     for path in ("jarvis/", "server.py", "web/", "tests/", "docs/architecture.md", "deploy/", "README.md", "Makefile"):
         assert path in prompt, path
         assert (ROOT / path).exists() or (ROOT / "jarvis" / path).exists(), path  # the map names only what exists
-    assert cli.lookup().maxTurns == 15 and cli.lookup().tools == shell.FILE_READS
+    assert side.FILE_READS == ["Read", "Glob", "Grep"] and side.LOOKUP_READS < side.LOOKUP_TURNS
 
 
 # ── Long-term memory: its two sections and their limits ─────────

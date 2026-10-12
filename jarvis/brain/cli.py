@@ -1,9 +1,11 @@
 """Voice brain on the local `claude` CLI via the Claude Agent SDK.
 
-Own login under CLAUDE_CONFIG_DIR; one CLI process per voice session. Claude Code's own abilities (file edits,
+The user's own Claude login (or JARVIS's, see CLAUDE_OWN_CONFIG_DIR); one CLI process per voice session. Claude Code's own abilities (file edits,
 settings, its skills, other MCP servers) are off. Available: JARVIS tools, web search/fetch, sandboxed shell and jobs
-(jarvis.safety.shell), the browser when on, enabled MCP servers (writes gated by jarvis.safety.mcp_gate), a read-only
-lookup subagent on a cheap model, and enabled skills as a per-session plugin.
+(jarvis.safety.shell), the browser when on, enabled MCP servers (writes gated by jarvis.safety.mcp_gate), side jobs
+for slow reading and file lookups (jarvis.brain.side), and enabled skills as a per-session plugin. The brain has no
+file reads or subagents of its own: a file lookup holds a turn at most LOOKUP_WAIT seconds in all, then carries on in
+the background.
 
 Photos sent from the page ride along with the next turn as image blocks. Talking over JARVIS stops the reply,
 except while a shell command runs: then the reply finishes unheard and the next turn waits for it.
@@ -20,7 +22,6 @@ from collections.abc import AsyncIterator
 from contextlib import aclosing
 
 from claude_agent_sdk import (
-    AgentDefinition,
     AssistantMessage,
     CanUseToolShadowedWarning,
     ClaudeAgentOptions,
@@ -46,10 +47,7 @@ from jarvis.core.config import (
     CONNECTION_WAIT,
     EFFORT,
     INJECTION_VOICE_SECONDS,
-    LOOKUP_MODEL,
     MAX_TOOL_ROUNDS,
-    NEW_PROJECTS_DIR,
-    ROOT,
     browser_on,
 )
 from jarvis.integrations import mcp_servers
@@ -62,32 +60,11 @@ from jarvis.voice import timing
 log = logging.getLogger("jarvis.brain.cli")
 JARVIS_TOOLS = "mcp__jarvis__"  # CLI prefix for JARVIS's own tools
 # Allowed outright: web, JARVIS tools, job_status/stop_job, MCP reads. The gate sees unsandboxed Bash, start_job,
-# Google sends/deletes, MCP writes, subagents and their file reads.
+# Google sends/deletes and MCP writes.
 warnings.filterwarnings("ignore", category=CanUseToolShadowedWarning)
 
 ALLOWED_BUILTINS = ["WebSearch", "WebFetch"]
 INTERRUPT_SECONDS = 15  # wait for an interrupted reply to end, then restart the CLI
-
-
-
-def lookup() -> AgentDefinition:
-    """Read-only lookup subagent on a cheap model, so file lookups don't slow the spoken reply."""
-    data = profile.current().data
-    return AgentDefinition(
-        description="Fast read-only lookup in files on the computer: finds a file, a setting, a version, a function "
-                    "or a line and answers in a sentence or two. Tell it which folder to look in; with none it searches "
-                    "JARVIS's own folder, and it knows where JARVIS keeps its data. It can't run commands or change "
-                    "anything.",
-        prompt=prompts.load("lookup_agent", user_name=profile.name(), root=ROOT,
-                            data_dir=data.relative_to(ROOT) if data.is_relative_to(ROOT) else data,
-                            new_projects_dir=NEW_PROJECTS_DIR),
-        tools=shell.FILE_READS,
-        model=LOOKUP_MODEL,
-        maxTurns=15,
-    )
-
-
-AGENTS = ("lookup",)  # voice brain subagents
 
 LOOKUP_PROMPT = "\n\n" + prompts.load("voice_lookups")
 
@@ -136,18 +113,16 @@ def _options(gate: mcp_gate.Gate, jobs: shell.Jobs, kept: Kept | None = None) ->
                                     + skill_tools.prompt(found)),
         model=usage.available(CLI_MODEL),  # lighter model while Opus's weekly limit is used up
         effort=EFFORT,
-        # the file reads are for the lookup subagent
-        tools=ALLOWED_BUILTINS + ["Bash", "Agent"] + shell.FILE_READS + (["Skill"] if found else []),
+        tools=ALLOWED_BUILTINS + ["Bash"] + (["Skill"] if found else []),
         skills=[skills.qualified(s) for s in found],  # only these, as Skill(name)
         plugins=[{"type": "local", "path": str(plugin)}] if found else [],
         mcp_servers={"jarvis": server, "shell": shell.job_server(jobs)} | mcp.configs,
         # sandboxed Bash is allowed by the sandbox
         allowed_tools=ALLOWED_BUILTINS + allowed + [shell.JOB_STATUS, shell.STOP_JOB] + mcp.allowed,
         disallowed_tools=BUILTIN_AGENTS_DENIED + mcp.blocked,
-        agents={"lookup": lookup()},
         permission_mode="default",
         # Everything else: unsandboxed Bash and start_job (risky ones need a yes), Google sends/deletes and MCP
-        # writes (always need a yes), subagents and their reads
+        # writes (always need a yes)
         can_use_tool=gate,
         hooks={"PostToolUse": _bell_hook(gate)},
         screen_seconds=INJECTION_VOICE_SECONDS,  # the reply waits on each tool-result injection check
@@ -183,7 +158,7 @@ class CliBrain(Notes):
         self._carried: list[str] = []  # JARVIS tools that carried on when a reply was talked over, for the next turn
         self._following = self._preempted = False  # a follow-up is under way; the user's turn stopped it
         self.limits = LimitWatch("voice")
-        self.shell = mcp_gate.Gate(agents=AGENTS)
+        self.shell = mcp_gate.Gate()
         self.jobs = shell.Jobs()  # command tasks; announced on end like any task update
         self.kept = Kept()  # slow JARVIS tool calls, carried on outside the turn
         self.next_model: str | None = None  # lighter model for the next turn only (jarvis.brain.route)
@@ -352,6 +327,8 @@ class CliBrain(Notes):
         if self._drain is not None and self._holding and not self._drain.done():
             yield shell.HOLD + " "
         await self._drained()
+        if lookups := conversation.current().lookups:
+            lookups.new_turn()  # a fresh LOOKUP_WAIT for this turn
         spoken: list[str] = []
         finished = interrupted = False
         # Answer to an open question: word lists first, else a short model call

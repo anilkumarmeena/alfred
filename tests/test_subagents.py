@@ -22,7 +22,7 @@ from test_nudges import FakeClient, Pending, result, said, worker_run
 from conftest import use_profile, use_task_cache
 from jarvis.brain import cli
 from jarvis.brain.sdk import BUILTIN_AGENTS_DENIED
-from jarvis.core.config import FAST_MODEL, SECRETS_DIR
+from jarvis.core.config import FAST_MODEL
 from jarvis.safety import mcp_gate, shell
 from jarvis.state import memory
 from jarvis.tasks import runner, worker
@@ -338,21 +338,17 @@ def voice_options(tmp_path, monkeypatch):
     use_profile(monkeypatch, tmp_path)
     monkeypatch.setattr(memory, "read_memory", lambda: "")
     monkeypatch.setattr(memory, "read_recent", lambda: "")
-    return cli._options(mcp_gate.Gate(agents=cli.AGENTS), shell.Jobs())
+    return cli._options(mcp_gate.Gate(), shell.Jobs())
 
 
-def test_the_voice_brain_s_gate_knows_its_subagents():
-    assert cli.CliBrain().shell.agents == {"lookup"}
-
-
-def test_voice_brain_has_one_fast_read_only_lookup_subagent(voice_options):
+def test_voice_brain_has_no_subagent_or_file_read_that_could_hold_a_turn(voice_options):
+    """File lookups go through file_lookup (jarvis.brain.side), which can't keep the turn waiting."""
     opts = voice_options
-    assert set(opts.agents) == {"lookup"}
-    lookup = opts.agents["lookup"]
-    assert lookup.tools == ["Read", "Glob", "Grep"] and lookup.model == FAST_MODEL and lookup.maxTurns <= 15
-    assert {"Agent", "Read", "Glob", "Grep"} <= set(opts.tools) and not EDITS & set(opts.tools)
+    assert not opts.agents and not {"Agent", "Task", "Read", "Glob", "Grep"} & set(opts.tools)
+    assert not EDITS & set(opts.tools)
     assert opts.disallowed_tools == BUILTIN_AGENTS_DENIED  # no MCP server is on in the tests' database
-    assert "lookup subagent" in opts.system_prompt and "code_question background task" in opts.system_prompt
+    assert "mcp__jarvis__file_lookup" in opts.allowed_tools
+    assert "file_lookup" in opts.system_prompt and "code_question background task" in opts.system_prompt
     assert {"jarvis", "shell"} <= set(opts.mcp_servers) and shell.JOB_STATUS in opts.allowed_tools  # long jobs kept
 
 
@@ -366,15 +362,8 @@ def test_voice_prompt_hands_multi_step_work_to_background_tasks(voice_options):
     assert "Keep to one or two commands per request" in shell.prompt() and "start_job" in shell.prompt()
 
 
-def test_voice_gate_lets_only_the_lookup_subagent_read_files():
-    g = shell.ShellGate(agents=("lookup",))
-    run = lambda name, args, ctx: asyncio.run(g(name, args, ctx))  # noqa: E731
-    assert isinstance(run("Agent", {"subagent_type": "lookup"}, MAIN), PermissionResultAllow)
-    assert isinstance(run("Agent", {"subagent_type": "general-purpose"}, MAIN), PermissionResultDeny)
-    assert isinstance(run("Read", {"file_path": "/Users/x/code/app/pyproject.toml"}, HELPER), PermissionResultAllow)
-    assert isinstance(run("Grep", {"pattern": "version", "path": "/Users/x/code/app"}, HELPER), PermissionResultAllow)
-    denied = run("Read", {"file_path": "/Users/x/code/app/pyproject.toml"}, MAIN)
-    assert isinstance(denied, PermissionResultDeny) and "lookup subagent" in denied.message
-    for args in ({"file_path": f"{SECRETS_DIR}/google.json"}, {"file_path": "/Users/x/app/.env"}, {"pattern": "*", "path": "~/.ssh"}):
-        assert isinstance(run("Glob" if "pattern" in args else "Read", args, HELPER), PermissionResultDeny)
-    assert isinstance(run("Edit", {"file_path": "/tmp/x"}, HELPER), PermissionResultDeny)
+def test_voice_gate_refuses_subagents_and_file_reads():
+    g = shell.ShellGate()
+    for name, args in (("Agent", {"subagent_type": "lookup"}), ("Read", {"file_path": "/Users/x/app/pyproject.toml"}),
+                       ("Edit", {"file_path": "/tmp/x"})):
+        assert isinstance(asyncio.run(g(name, args, MAIN)), PermissionResultDeny)

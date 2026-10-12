@@ -132,17 +132,26 @@ ASSISTANT_NAME = "JARVIS"
 
 # Empty = CLI bundled with claude-agent-sdk, so its version tracks the SDK
 CLAUDE_CLI = os.environ.get("JARVIS_CLAUDE_CLI", "")
-CLAUDE_CONFIG_DIR = os.environ.get("JARVIS_CLAUDE_CONFIG_DIR", "") or str(SECRETS_DIR / "claude")
+# Claude login: the user's own Claude Code sign-in, unless JARVIS_CLAUDE_CONFIG_DIR gives JARVIS one of its own
+# (relative to ROOT, e.g. secrets/claude). Only that one is passed to the CLI: setting CLAUDE_CONFIG_DIR at all, even to
+# ~/.claude, makes the CLI look for a different macOS Keychain entry, so the user's own login wouldn't be found.
+CLAUDE_OWN_CONFIG_DIR = (os.environ.get("JARVIS_CLAUDE_CONFIG_DIR", "")
+                         and str(ROOT / Path(os.environ["JARVIS_CLAUDE_CONFIG_DIR"]).expanduser()))
+# The CLI's folder either way: its session transcripts, and on Linux the login
+CLAUDE_CONFIG_DIR = (CLAUDE_OWN_CONFIG_DIR or os.environ.get("CLAUDE_CONFIG_DIR", "")
+                     or str(Path.home() / ".claude"))
 DEFAULT_MODEL = "claude-opus-5-5"
 CLI_MODEL = os.environ.get("JARVIS_CLI_MODEL", "") or DEFAULT_MODEL
 FAST_MODEL = "claude-haiku-4-5-20251001"  # subagents that only look things up
 HELPER_MODEL = "claude-sonnet-5"  # subagents that need more judgment: test runs, web research
-# Read-only lookup subagent; keeps file contents out of the spoken turn
+# Read-only file lookups (file_lookup, jarvis.brain.side); keeps file contents out of the spoken turn
 LOOKUP_MODEL = os.environ.get("JARVIS_LOOKUP_MODEL", "") or FAST_MODEL
+# Seconds one spoken turn may wait on file lookups in all; past that they carry on in the background, announced
+LOOKUP_WAIT = _number(os.environ.get("JARVIS_LOOKUP_WAIT", ""), 8.0, 0.0, 60.0)
 EFFORT = os.environ.get("JARVIS_EFFORT", "") or "low"  # low keeps spoken replies fast
 # Lighter model for voice turns judged to need no tools (jarvis.brain.route); empty = always CLI_MODEL
 VOICE_QUICK_MODEL = os.environ.get("JARVIS_VOICE_QUICK_MODEL", "")
-# Background lookups handed off by the voice brain (jarvis.brain.side): model and time limit
+# Background lookups handed off by the voice brain (jarvis.brain.side): model and time limit (file lookups too)
 SIDE_MODEL = os.environ.get("JARVIS_SIDE_MODEL", "") or HELPER_MODEL
 SIDE_MINUTES = _number(os.environ.get("JARVIS_SIDE_MINUTES", ""), 3.0, 0.5, 30.0)
 # A fast model picks when to speak updates and reminders (jarvis.voice.floor); off = as soon as nobody is talking

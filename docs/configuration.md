@@ -93,13 +93,13 @@ uv run python -m jarvis.state.settings prefs voice bm_lewis  # change one
 | Setting | Default | What it does |
 |---|---|---|
 | `JARVIS_CLAUDE_CLI` | Bundled with `claude-agent-sdk` | Path to a `claude` binary |
-| `JARVIS_CLAUDE_CONFIG_DIR` | `secrets/claude` | JARVIS's own Claude login |
+| `JARVIS_CLAUDE_CONFIG_DIR` | Empty: your Claude Code login | A Claude login of JARVIS's own, e.g. `secrets/claude` (then `make claude-login`) |
 | `JARVIS_MASTER_KEY` | Made by setup | Encrypts the vault; `make vault ARGS=init` makes one |
 | `JARVIS_CLI_MODEL` | Opus | The voice brain's model |
 | `JARVIS_EFFORT` | `low` | Its effort; low keeps spoken turns quick |
 | `JARVIS_MAX_TOOL_ROUNDS` | `8` | Most model turns in one reply |
 | `JARVIS_VOICE_QUICK_MODEL` | *(off)* | A lighter model (e.g. `claude-sonnet-5`) for simple turns |
-| `JARVIS_LOOKUP_MODEL` | Haiku | The voice brain's read-only lookup subagent |
+| `JARVIS_LOOKUP_MODEL`<br>`JARVIS_LOOKUP_WAIT` | Haiku<br>`8` | The voice brain's read-only file lookups: model, and seconds a spoken turn waits on them before they carry on in the background |
 | `JARVIS_SIDE_MODEL`<br>`JARVIS_SIDE_MINUTES` | Sonnet<br>`3` | Background lookups that let the conversation carry on: model and time limit |
 | `JARVIS_PROACTIVE_JUDGE` | `on` | A fast model picks the moment to bring up task updates and alerts |
 | `JARVIS_TOOL_SEARCH` | `true` | Connections' tools load on demand via tool search |

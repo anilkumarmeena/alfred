@@ -649,7 +649,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
 
         if task["fixes"] and outcome and not outcome.error and not task["question"] \
                 and not self.store.approvals(task_id):
-            # Fix task for a failed command: if it says the command should now pass, rerun it and let that announce
+            # Fix task for a failed command: unless it says the cause remains, rerun it and let that announce
             again = await command_jobs.wants_rerun(outcome.result)
             spoken, quiet = self._fixed(task, outcome.result, again)
             if quiet:
