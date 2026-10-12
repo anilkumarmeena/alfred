@@ -52,6 +52,8 @@ class Events(RunnerBase):
 
         `title` replaces the task number in the push (e.g. a scheduled job). `alert=False` or do-not-disturb skips the
         desktop notification and push; it's still spoken in a live session or at the next greeting."""
+        if self.offload.while_away(task_id, status, spoken, quiet):  # said in the machine's one summary instead
+            quiet, fields["seen"] = True, 1
         fields.setdefault("seen", 0 if status in PUSH_TITLES else 1)
         if status != "waiting":  # orders apply only to the work just finished
             fields["orders"] = None

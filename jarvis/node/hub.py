@@ -137,21 +137,22 @@ class Hub:
 
     # ── Online check ─────────────────────────────────────────────
 
-    async def check(self, node: int, timeout: float = PING_SECONDS) -> dict | None:
-        """The machine's answer to a ping, plus "online": True; None if it doesn't answer in time."""
+    async def check(self, node: int, timeout: float = PING_SECONDS, needs: list[str] = ()) -> dict | None:
+        """The machine's answer to a ping, plus "online": True; None if it doesn't answer in time. With `needs`
+        (programs a command runs), the answer says which of them it has ("has")."""
         if (up := self.connected(node)) is None:
             return None
         try:
-            got = await up.call("ping", {}, timeout)
+            got = await up.call("ping", {"programs": list(needs)} if needs else {}, timeout)
         except (LinkDown, Refused, TimeoutError):
             return None
         await asyncio.to_thread(machines.saw, node, got)
         return got | {"online": True, "same_protocol": got.get("protocol") == link.PROTOCOL}
 
-    async def check_all(self, timeout: float = PING_SECONDS) -> dict[int, dict | None]:
+    async def check_all(self, timeout: float = PING_SECONDS, needs: list[str] = ()) -> dict[int, dict | None]:
         """Every paired machine's online check, at once."""
         found = await asyncio.to_thread(machines.paired)
-        answers = await asyncio.gather(*(self.check(m.id, timeout) for m in found))
+        answers = await asyncio.gather(*(self.check(m.id, timeout, needs) for m in found))
         return {m.id: a for m, a in zip(found, answers)}
 
     # ── What the panel and the brain see ─────────────────────────

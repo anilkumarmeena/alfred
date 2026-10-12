@@ -290,10 +290,11 @@ class Skill:
     created: float
     updated: float
     problems: list[str] = field(default_factory=list)
+    where: Path | None = None  # its folder, when not in the profile's skills folder (one sent to a machine)
 
     @property
     def folder(self) -> Path:
-        return folder(self.name)
+        return self.where or folder(self.name)
 
     @property
     def needs_approval(self) -> bool:
@@ -493,10 +494,31 @@ def _clear(where: Path) -> None:
         shutil.rmtree(where)
 
 
-def plugin(where: Path) -> list[Skill]:
-    """Build the session plugin at `where`: plugin.json plus links to usable skills, nothing else (no hooks, agents,
-    commands or MCP servers). Returns the skills; no plugin is made if there are none. Use `qualified` for SDK names."""
-    found = usable()
+def whole_digest(where: Path) -> str:
+    """SHA-256 over every file, SKILL.md included: one version of the skill, as sent to another machine."""
+    return hashlib.sha256(f"{skill_md(where)}\0{digest(where)}".encode()).hexdigest()
+
+
+def shipped(folders: list[str]) -> list[Skill]:
+    """Skills sent from the main computer for a run on a machine (jarvis.node.work): switched on, and their scripts
+    approved, there. Their files are checked again here; a broken one is left out."""
+    found = []
+    for path in map(Path, folders):
+        name = str(_meta(path).get("name") or "")
+        if broken := problems(path, name or None):
+            log.warning("sent skill %s left out: %s", path.name, "; ".join(broken))
+            continue
+        approved, now = digest(path), time.time()  # approved on the main computer
+        found.append(Skill(name, description_of(path), INSTALLED, "", True, scripts(path), approved, approved, None, now,
+                           now, [], path))
+    return found
+
+
+def plugin(where: Path, found: list[Skill] | None = None) -> list[Skill]:
+    """Build the session plugin at `where`: plugin.json plus links to usable skills (or `found`, e.g. skills sent from
+    the main computer), nothing else (no hooks, agents, commands or MCP servers). Returns the skills; no plugin is made
+    if there are none. Use `qualified` for SDK names."""
+    found = usable() if found is None else found
     _clear(where)
     if not found:
         return []

@@ -3,7 +3,7 @@
 Each action takes the JSON body and returns what the page shows. Tasks, approvals and the machines' live state go
 through the task runner (tasks.client); everything else (schedules, to-dos, projects, memory, vocabulary, skills,
 accounts, devices, voiceprints, history, pairing codes) is changed directly. Machines are paired only here, never by
-voice: a code made here, run on the machine, and its fingerprint confirmed here. Keys for connections and JARVIS
+voice, and only by the owner's login: a code made here, run on the machine, and its fingerprint confirmed here. Keys for connections and JARVIS
 itself are entered only here, write-only, so they're never spoken or typed to the brain.
 
 Deliberately not possible here, since anyone with a login can reach the page: showing secrets, adding MCP servers or
@@ -730,18 +730,32 @@ async def device_remove(body: dict) -> list[dict]:
 
 
 # ── Machines (jarvis.node): pairing, confirming, where jobs run ─
-# Pairing itself is finished on the machine (make node-pair), with a code made here
+# Pairing itself is finished on the machine (make node-pair), with a code made here. Only the owner's login pairs,
+# confirms or forgets a machine, since a machine runs the owner's work.
+
+PAIRING = "pair, confirm or forget machines"
+
+
+async def _machines(body: dict) -> dict:
+    """The machines as the page shows them, and whether this login may pair them."""
+    return await client.machines() | {"owner": await asyncio.to_thread(logins.owner),
+                                      "can_pair": await asyncio.to_thread(logins.is_owner, str(body.get("login", "")))}
+
+
+def _owner_only(body: dict) -> None:
+    logins.owner_only(str(body.get("login", "")), PAIRING)
 
 
 @action
-async def machines_(_: dict) -> dict:
+async def machines_(body: dict) -> dict:
     """Paired machines, each checked online just now, and where each kind of job runs."""
-    return await client.machines()
+    return await _machines(body)
 
 
 @action
-async def machine_code(_: dict) -> dict:
+async def machine_code(body: dict) -> dict:
     """A one-time pairing code, with this computer's fingerprint for the machine's screen to match."""
+    await asyncio.to_thread(_owner_only, body)
     made = await asyncio.to_thread(machines.new_code)
     return made | {"main_fingerprint": keys.fingerprint(await asyncio.to_thread(machines.main_public))}
 
@@ -749,31 +763,33 @@ async def machine_code(_: dict) -> dict:
 @action
 async def machine_confirm(body: dict) -> dict:
     """The user checked a pending machine's fingerprint: it may connect."""
+    await asyncio.to_thread(_owner_only, body)
     found = await asyncio.to_thread(machines.confirm, _id(body))
     await asyncio.to_thread(activity.add, f"Paired {found.name} in the control panel.", "ok")
-    return await client.machines()
+    return await _machines(body)
 
 
 @action
 async def machine_save(body: dict) -> dict:
     """Rename a machine: {"id", "name", "aliases"}."""
     await asyncio.to_thread(machines.rename, _id(body), _text(body, "name", machines.NAME_MOST), _aliases(body))
-    return await client.machines()
+    return await _machines(body)
 
 
 @action
 async def machine_remove(body: dict) -> dict:
     """Forget a machine (the page confirms first); it must pair again to come back."""
+    await asyncio.to_thread(_owner_only, body)
     gone = await client.machine_remove(_id(body))
     await asyncio.to_thread(activity.add, f"Removed {gone['removed']} in the control panel.", "warn")
-    return await client.machines()
+    return await _machines(body)
 
 
 @action
 async def placement_save(body: dict) -> dict:
     """Where a kind of job runs: {"kind": "commands" | "tasks", "value": "here" | "auto" | machine id}."""
     await asyncio.to_thread(machines.set_placement, _text(body, "kind", 20), _text(body, "value", 20))
-    return await client.machines()
+    return await _machines(body)
 
 
 # ── Bell ───────────────────────────────────────────────────────
@@ -841,7 +857,7 @@ async def login_add(body: dict) -> dict:
 @action
 async def login_passcode(body: dict) -> dict:
     """Change a login's passcode: {"name", "passcode_new"}."""
-    await asyncio.to_thread(logins.set_passcode, _text(body, "name", 40), _passcode(body))
+    await asyncio.to_thread(logins.set_passcode, _text(body, "name", 40), _passcode(body), str(body.get("login", "")))
     return await access(body)
 
 
@@ -849,7 +865,7 @@ async def login_passcode(body: dict) -> dict:
 async def login_remove(body: dict) -> dict:
     """Remove a login (never the last): {"name"}. Its devices must log in again."""
     name = _text(body, "name", 40)
-    await asyncio.to_thread(logins.remove, name)
+    await asyncio.to_thread(logins.remove, name, str(body.get("login", "")))
     await asyncio.to_thread(activity.add, f"Removed the login {name} in the control panel.")
     return await access(body)
 

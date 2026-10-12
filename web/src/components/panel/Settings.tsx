@@ -755,7 +755,7 @@ function LoginRow({ l }: { l: Login }) {
   return (
     <li class="row">
       <div class="grow">
-        <div><b>{l.name}</b> {l.this && <Pill kind="running">this device</Pill>}</div>
+        <div><b>{l.name}</b> {l.owner && <Pill kind="done">owner</Pill>} {l.this && <Pill kind="running">this device</Pill>}</div>
         <div class="sub">Added {ago(l.created, now.value)} · {l.used ? `last call ${ago(l.used, now.value)}` : "no call yet"}</div>
         {editing.value && <PasscodeForm name={l.name} done={() => { editing.value = false; }} />}
       </div>

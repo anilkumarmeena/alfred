@@ -43,10 +43,10 @@ function MachineRow({ x }: { x: Machine }) {
         <div><b>{x.name}</b> {x.status === "pending" && <Pill kind="waiting">confirm</Pill>}</div>
         {x.status === "pending" ? <>
           <div class="sub">Fingerprint <code>{x.fingerprint}</code>: confirm only if the machine shows the same.</div>
-          <div class="acts">
+          {machines.value?.can_pair && <div class="acts">
             <button class="btn sm primary" onClick={async () => set(await act<Machines>("machine_confirm", { id: x.id }, `Paired ${x.name}`))}>Confirm</button>
             <button class="btn sm" onClick={remove}>Turn away</button>
-          </div>
+          </div>}
         </> : <>
           <div class="sub">{standing(x)}</div>
           <div class="sub">{[x.os, x.cores && `${x.cores} cores`, x.ram_gb && `${x.ram_gb} GB`].filter(Boolean).join(" · ")}
@@ -65,7 +65,7 @@ function MachineRow({ x }: { x: Machine }) {
       </div>
       {x.status === "paired" && <span class="rt">
         <button class="ico" title="Rename" aria-label="Rename" onClick={() => { editing.value = !editing.value; }}><EditIcon /></button>
-        <button class="ico" title="Forget" aria-label="Forget" onClick={remove}><TrashIcon /></button>
+        {machines.value?.can_pair && <button class="ico" title="Forget" aria-label="Forget" onClick={remove}><TrashIcon /></button>}
       </span>}
     </li>
   );
@@ -123,7 +123,8 @@ export function MachinesPage() {
     <>
       <ul class="list">{m.machines.map((x) => <MachineRow key={x.id} x={x} />)}</ul>
       {!m.machines.length && <Empty>No machines yet. Pair one to send it renders, builds and Claude tasks.</Empty>}
-      <AddMachine fingerprint={m.fingerprint} />
+      {m.can_pair ? <AddMachine fingerprint={m.fingerprint} />
+        : <p class="hint">Only {m.owner}'s login, the owner's, pairs, confirms or forgets machines.</p>}
       <p class="hint">A machine runs JARVIS in node mode, signed in to its own Claude account. Work sent there runs behind
         the same walls as here: risky commands wait for your yes, asked from this computer, and keys and accounts never
         leave it. It updates itself to this computer's code when it's idle.</p>

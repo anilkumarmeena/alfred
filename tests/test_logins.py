@@ -41,7 +41,7 @@ def test_a_passcode_is_kept_only_as_a_salted_hash_in_a_file_only_the_user_can_re
     assert stat.S_IMODE(logins.FILE.stat().st_mode) == 0o600
     assert logins.hashed("123456") != logins.hashed("123456")  # salted
     assert logins.listed() == [{"name": "Alex", "created": pytest.approx(json.loads(text)["logins"][0]["created"]),
-                                "used": None}]
+                                "used": None, "owner": True}]
 
 
 def test_the_passcode_says_whose_login_it_is(home):
@@ -88,6 +88,30 @@ def test_the_last_login_cant_be_removed(home):
     assert [x["name"] for x in logins.listed()] == ["Alex"] and logins.check("999999") is None
     with pytest.raises(ValueError, match="no login called Sam"):
         logins.remove("Sam")
+
+
+def test_the_first_login_is_the_owners_and_only_its_owner_changes_it(home):
+    logins.add("Alex", "123456")
+    logins.add("Sam", "999999")
+    assert logins.owner() == "Alex" and [x["owner"] for x in logins.listed()] == [True, False]
+    with pytest.raises(PermissionError, match="Only Alex"):
+        logins.set_passcode("Alex", "taken-over", by="Sam")
+    with pytest.raises(PermissionError, match="Only Alex"):
+        logins.remove("Alex", by="Sam")
+    logins.set_passcode("Sam", "sam-new-1", by="Alex")  # the owner may change anyone's
+    logins.set_passcode("Alex", "alex-new-1", by="alex")
+    logins.remove("Alex", by="Alex")  # the owner leaving hands it on to the oldest login left
+    assert logins.owner() == "Sam" and logins.check("sam-new-1") == "Sam"
+    with pytest.raises(PermissionError, match="Only Sam's login"):
+        logins.owner_only("Alex", "pair machines")
+
+
+def test_logins_from_before_the_owner_mark_take_the_oldest_as_the_owners(home):
+    logins.add("Alex", "123456")
+    logins.add("Sam", "999999")
+    rows = json.loads(logins.FILE.read_text())["logins"]
+    logins._write([{k: v for k, v in r.items() if k != "owner"} for r in reversed(rows)])
+    assert logins.owner() == "Alex"
 
 
 def test_with_no_login_the_first_setup_passcode_is_checked_as_the_users(home, monkeypatch):
@@ -156,6 +180,9 @@ def test_the_panel_manages_logins_and_never_shows_a_passcode(home):
         asyncio.run(panel.call("login_passcode", me | {"name": "Sam", "passcode_new": "123456"}))
     got = asyncio.run(panel.call("login_remove", me | {"name": "Sam"}))
     assert [x["name"] for x in got["logins"]] == ["Alex"]
+    asyncio.run(panel.call("login_add", me | {"name": "Sam", "passcode_new": "sam-secret"}))
+    with pytest.raises(PermissionError, match="Only Alex"):  # another login can't take the owner's over
+        asyncio.run(panel.call("login_passcode", {"login": "Sam", "name": "Alex", "passcode_new": "mine-now"}))
 
 
 # ── make passcode ───────────────────────────────────────────────
