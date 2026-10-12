@@ -133,7 +133,7 @@ def test_code_questions_and_the_voice_shell_keep_the_network_closed(mac, monkeyp
 
 def test_research_tasks_still_read_no_files(mac):
     opts = worker._options(worker_task(kind="research", project=None), NullReporter())
-    assert opts.settings is None
+    assert "permissions" not in json.loads(opts.settings)
     assert isinstance(call(opts, "Read", file_path=str(mac["code"])), PermissionResultDeny)
 
 

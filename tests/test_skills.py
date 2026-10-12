@@ -21,6 +21,7 @@ from test_task_host import Asking
 from conftest import use_profile, use_task_cache
 from jarvis import panel, tools
 from jarvis.brain import cli
+from jarvis.brain.sdk import ATTRIBUTION
 from jarvis.core import profile
 from jarvis.safety import draft_gate
 from jarvis.skills import home, install, review
@@ -560,6 +561,7 @@ def test_the_voice_brain_gets_the_usable_skills_as_its_own_plugin(skills_home, m
     assert Path(plugin["path"]) == skills_home / ".sessions" / f"voice-{os.getpid()}"
     settings = json.loads(opts.settings)
     assert settings["disableAllHooks"] is True and settings["permissions"]["deny"]  # the secrets stay hidden
+    assert settings["attribution"] == ATTRIBUTION  # its commits credit JARVIS
     assert "jarvis-skills:standup-notes: Writes the standup." in opts.system_prompt
     assert "skill_draft" in opts.system_prompt and "mcp__jarvis__skill_confirm" not in opts.allowed_tools
 
@@ -593,6 +595,7 @@ def test_tasks_get_the_usable_skills_too(skills_home, tmp_path, monkeypatch, kin
     assert opts.plugins == [{"type": "local", "path": str(tmp_path / "data" / "tasks" / "9" / "jarvis-skills")}]
     flags = json.loads(opts.settings)
     assert flags["disableAllHooks"] is True and flags["disableSkillShellExecution"] is True
+    assert flags["attribution"] == ATTRIBUTION
     prompt = opts.system_prompt if isinstance(opts.system_prompt, str) else opts.system_prompt["append"]
     assert "jarvis-skills:standup-notes: Writes the standup." in prompt
 
