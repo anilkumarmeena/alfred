@@ -3,8 +3,9 @@
 Serves web/dist and, for a valid login passcode (jarvis.core.logins), issues LiveKit tokens, stores Web Push and APNs
 registrations, accepts photos (/api/picture), phone debug logs (/api/log) and control panel actions
 (/api/panel/ACTION). /api/events streams runner events and activity as JSON lines. Exceptions to passcode auth:
-/api/approvals/ID uses the push's one-time nonce; /api/files/TOKEN is a capability link. Reached via Tailscale Serve
-(tailnet-only HTTPS) or http://localhost:8787. Wrong passcodes and nonces share one rate limit.
+/api/approvals/ID uses the push's one-time nonce; /api/files/TOKEN is a capability link; /api/google/callback is where
+Google returns a panel sign-in, checked by its one-time state (jarvis.integrations.google_signin). Reached via
+Tailscale Serve (tailnet-only HTTPS) or http://localhost:8787. Wrong passcodes and nonces share one rate limit.
 """
 
 import asyncio
@@ -26,6 +27,7 @@ from livekit import api
 from jarvis import panel
 from jarvis.core import credentials, logins
 from jarvis.core.config import LIVEKIT_URL, PUSH_ENABLED, ROOT, WEB_PORT
+from jarvis.integrations import google_signin
 from jarvis.notify import apns, fcm, push
 from jarvis.state import activity, pictures, shared_files, todo
 from jarvis.tasks import client
@@ -301,6 +303,12 @@ async def shared_file(request: web.Request) -> web.StreamResponse:
                                            "Content-Disposition": f"inline; filename*=UTF-8''{quote(path.name)}"})
 
 
+async def google_callback(request: web.Request) -> web.Response:
+    """Where Google sends a panel sign-in back (public: the one-time state is the credential)."""
+    return web.Response(text=await google_signin.signins.callback(request.query), content_type="text/html",
+                        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+
 def _built(name: str, headers: dict[str, str]) -> web.StreamResponse:
     """File from the web build, or 503 asking to build it."""
     if not (WEB_DIR / name).is_file():
@@ -333,6 +341,7 @@ def app() -> web.Application:
     a.router.add_post("/api/panel/{action:[a-z_]+}", panel_action)
     a.router.add_post("/api/events", events)
     a.router.add_get(f"/api/files/{{token:{shared_files.TOKEN}}}", shared_file)
+    a.router.add_get(google_signin.CALLBACK, google_callback)
     if WEB_DIR.is_dir():  # aiohttp rejects a missing folder
         a.router.add_static("/static/", WEB_DIR)
     else:

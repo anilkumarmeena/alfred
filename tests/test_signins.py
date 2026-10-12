@@ -197,4 +197,4 @@ def test_a_google_sign_in_that_no_longer_refreshes(tmp_path, monkeypatch):
     found = asyncio.run(signins.google_accounts(AFTERNOON))
     assert {p.key for p in found} == {"signin:google:work:out", "signin:google:personal:out"}  # personal: never in
     assert all("invalid_grant" not in p.text for p in found)
-    assert "Sign it in again on the computer JARVIS runs on" in found[0].text
+    assert "Sign it in again with the Sign in button beside the work account" in found[0].text

@@ -94,7 +94,7 @@ def test_the_tool_works_only_in_a_voice_conversation(monkeypatch):
 
 
 def test_side_jobs_only_read():
-    reads = side.read_only()
+    reads = {t.name for t in tools.all_tools() if side.reads(t)}
     assert "conversation_search" in reads and "background_lookup" not in reads
     for name in ("task_start", "task_approve", "todo_add", "schedule_add", "memory_save", "connection_add"):
         assert name not in reads
@@ -113,7 +113,7 @@ def test_a_side_job_runs_on_its_model_with_reads_only(monkeypatch):
     assert asyncio.run(side.look("Weather in Lisbon tomorrow?")) == "It's sunny."
     options = seen["options"]
     assert options.permission_mode == "dontAsk" and options.tools == side.WEB
-    assert set(options.allowed_tools) <= set(side.WEB) | {f"mcp__jarvis__{n}" for n in side.read_only()}
+    assert set(options.allowed_tools) <= set(side.WEB) | {f"mcp__jarvis__{t.name}" for t in tools.all_tools() if side.reads(t)}
     assert "Bash" not in options.allowed_tools and options.model
 
 

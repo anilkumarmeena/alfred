@@ -293,10 +293,14 @@ open http://localhost:8787    # macOS; xdg-open on Linux
 
 ## 📬 5. Google
 
-**1. Create an OAuth client** — in a Google Cloud project, under **APIs & Services → Credentials**, then enable these APIs under **APIs & Services → Library**:
+**Everything is in the control panel:** open **JARVIS → Google accounts**. Until JARVIS has an OAuth client, the page walks you through making one, with links to each Google Cloud page.
 
-> [!IMPORTANT]
-> The client must be a **Desktop app** OAuth client, and every API JARVIS uses must be **enabled** in that project.
+**1. Create an OAuth client** — in a Google Cloud project of your own: set up the **Google Auth Platform** (External, with yourself as a test user), enable the APIs below, then create a client of either type:
+
+| Client type | Signing in from the computer | Signing in from a phone | Extra set-up |
+|---|---|---|---|
+| **Desktop app** | Comes back by itself | Google's last page doesn't load: copy its address and paste it into the panel | None |
+| **Web application** | Comes back by itself | Comes back by itself | Add the panel's callback addresses as **Authorised redirect URIs**; the page lists them, e.g. `https://<computer>.<tailnet>.ts.net/api/google/callback` and `http://localhost:8787/api/google/callback` |
 
 | | API | Used for |
 |:-:|---|---|
@@ -307,15 +311,26 @@ open http://localhost:8787    # macOS; xdg-open on Linux
 
 - **Drive:** JARVIS finds files by name or content and reads Slides through it, but **only changes Drive files it made itself**.
 
-**2. Give JARVIS the client** — paste its JSON in **Settings → Logins and keys**, which keeps it in the vault. Or drop Google's `client_secret_….json` into `secrets/`: JARVIS moves it into the vault on its next start, and you can then delete the file.
+> [!IMPORTANT]
+> While the app is in **Testing**, Google ends sign-ins after **7 days**. Publish it (Audience → Publish app) to keep them. A Workspace admin may also have to allow the app.
 
-**3. Add each account** — under a label of your choosing, which signs it in:
+**2. Give JARVIS the client** — paste its JSON on the Google accounts page (or in **Settings → Logins and keys**); it's kept in the vault. Or drop Google's `client_secret_….json` into `secrets/`: JARVIS moves it into the vault on its next start, and you can then delete the file.
+
+**3. Add each account** — **+ Add a Google account**, give it a label (`work`, `personal`…), say what it's for, switch on **Google Chat** for a Workspace account that uses it, then **Add and sign in**. Google opens in a new tab: pick the account and allow every permission. JARVIS uses it from the next conversation, **no restart needed**.
+
+<details>
+<summary><b>⌨️ Adding accounts from the terminal</b></summary>
+
+<br>
+
+On JARVIS's computer; then sign each one in from the Google accounts page:
 
 ```sh
 uv run python -m jarvis.integrations.accounts add work --note "for work"
 uv run python -m jarvis.integrations.accounts add personal --note "my own"
-make services-restart
 ```
+
+</details>
 
 Managing accounts, permissions and Chat set-up: **[🔌 Integrations](integrations.md#-google-accounts)**.
 

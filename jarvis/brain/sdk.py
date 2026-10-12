@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Callable
 from contextlib import aclosing
 
 from claude_agent_sdk import (
@@ -53,12 +54,17 @@ def _sdk_tool(t: tools.Tool):
     return sdk_tool(t.name, t.description, tools.input_schema(t), READS if t.reads else None)(handler)
 
 
-def jarvis_server(names: list[str] | None = None) -> tuple[dict, list[str]]:
-    """JARVIS's enabled tools (or just `names`) as an MCP server, plus their allowed_tools entries.
+def jarvis_server(names: list[str] | Callable[[tools.Tool], bool] | None = None) -> tuple[dict, list[str]]:
+    """JARVIS's enabled tools (or just `names`, or those `names` picks) as an MCP server, plus their allowed_tools
+    entries. Google accounts changed since the last session are taken first, so the choice sees their tools.
 
     Gated and shell-carrying tools are not in allowed_tools, so each call goes through can_use_tool.
     """
-    chosen = [t for t in tools.all_tools() if (names is None or t.name in names) and t.on()]
+    from jarvis.tools import google
+
+    google.fresh()
+    picks = names if callable(names) else (lambda t: names is None or t.name in names)
+    chosen = [t for t in tools.all_tools() if picks(t) and t.on()]
     server = create_sdk_mcp_server("jarvis", tools=[_sdk_tool(t) for t in chosen])
     return server, [f"mcp__jarvis__{t.name}" for t in chosen if not (t.gated or t.shell)]
 

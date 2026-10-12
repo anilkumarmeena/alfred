@@ -28,7 +28,7 @@ dependencies = [
 
 # Google and Mac tools come from AI Armory, pinned to a commit (docs/development.md)
 [tool.uv.sources]
-ai-armory = { git = "https://github.com/anilkumarmeena/ai-armory.git", rev = "266fca4e96813212c897ea9b23cbf6397dad1c65" }
+ai-armory = { git = "https://github.com/anilkumarmeena/ai-armory.git", rev = "99a8184b00597cf26ff8401690e70f4ef4d62614" }
 
 [tool.ruff]
 line-length = 120

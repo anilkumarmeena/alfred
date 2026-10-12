@@ -129,18 +129,21 @@ Accounts live in the `accounts` table of `data/tasks.db`. Each one has:
 
 A failing account is skipped during a search, and named.
 
+**From the control panel** — **JARVIS → Google accounts**: add an account, sign it in (or in again), set its note and the default, or remove it. Sign-in opens Google in a new tab and comes back by itself, except on a phone with a Desktop app client, where you paste the address Google's last page ends on (see [setup](setup.md#-5-google)).
+
+**From the terminal** — on JARVIS's computer, for what the panel doesn't do (rename, email, Chat on an existing account). Signing in is only in the panel:
+
 ```sh
 make accounts                                  # list
-make accounts ARGS='add home --note "my own"'  # also --chat, --default, --no-login
-make google-login LABEL=home                   # sign in again
+make accounts ARGS='add home --note "my own"'  # also --chat, --default; then sign it in from the panel
 make accounts ARGS="rename home family"        # moves its sign-in and heartbeat history
 make accounts ARGS="remove family"             # and deletes its sign-in
 make accounts ARGS="default work"
 make accounts ARGS='set work --email me@example.com --note "for work" --chat'
 ```
 
-> [!IMPORTANT]
-> Run `make services-restart` after changing accounts. With no accounts, JARVIS runs without the Google tools.
+> [!NOTE]
+> **No restart:** each conversation, background task and heartbeat check starts by rereading the accounts, so a change applies from the next one. With no accounts, JARVIS runs without the Google tools.
 
 ### Permissions
 
@@ -155,7 +158,7 @@ make accounts ARGS='set work --email me@example.com --note "for work" --chat'
 | Chat (Chat accounts only) | Reading, replying, marking read, starting DMs |
 
 > [!TIP]
-> When an account was signed in before a permission it now needs, JARVIS says so. Run `make google-login LABEL=work`, allow every permission listed, and you're done: **no restart**. If the consent screen doesn't show the new permissions, remove JARVIS's access at https://myaccount.google.com/permissions and try again.
+> When an account was signed in before a permission it now needs, JARVIS says so. Press **Sign in again** beside it in the control panel, allow every permission listed, and you're done: **no restart**. If the consent screen doesn't show the new permissions, remove JARVIS's access at https://myaccount.google.com/permissions and try again.
 
 ## 💬 Google Chat
 
@@ -181,17 +184,12 @@ In the Google Cloud project that owns JARVIS's OAuth client:
 
 **2. Configure the Chat app** — on the Chat API's Configuration page: a name, an avatar URL and a description. Leave "Build this Chat app as a Workspace add-on" **unticked** (it can't be undone); interactive features can stay off.
 
-**3. Sign the account in for Chat** — mark it, then sign in and allow the Chat permissions:
-
-```sh
-make accounts ARGS="set work --chat"
-make google-login LABEL=work
-```
+**3. Sign the account in for Chat** — add it in the control panel with **Google Chat** switched on (or mark an existing one with `make accounts ARGS="set work --chat"`), then sign in from the panel and allow the Chat permissions.
 
 The sign-in then checks Chat and says what to fix. `make chat-check` reruns that check.
 
 > [!WARNING]
-> **If your Workspace blocks Chat** ("Access blocked", `admin_policy_enforced`), close the tab: the script offers to retry without reading messages, then without Chat. With Chat blocked, "anything on Chat?" reads Chat's notification emails through Gmail instead, so turn those on in Chat's settings.
+> **If your Workspace blocks Chat** ("Access blocked", `admin_policy_enforced`), close the tab: the control panel offers to retry without reading messages, then without Chat. With Chat blocked, "anything on Chat?" reads Chat's notification emails through Gmail instead, so turn those on in Chat's settings.
 
 ## 🔌 Connections (MCP servers)
 

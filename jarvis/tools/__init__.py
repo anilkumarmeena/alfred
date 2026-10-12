@@ -11,6 +11,7 @@ import inspect
 import json
 import logging
 from dataclasses import dataclass
+from collections.abc import Iterable
 from typing import Any, Callable
 
 import ai_armory
@@ -76,6 +77,12 @@ def register_toolsets(toolsets: list[ai_armory.ToolSet], notes: dict[str, str] |
         _REGISTRY[t.name] = Tool(t.name, description, schema.get("properties", {}), schema.get("required", []),
                                  t.handler, t.needs_confirmation, t, changes=not t.read_only,
                                  reads=t.read_only and not t.needs_confirmation, before=before)
+
+
+def unregister(names: Iterable[str]) -> None:
+    """Drop tools, e.g. a tool set's before registering it again for changed accounts."""
+    for name in list(names):
+        _REGISTRY.pop(name, None)
 
 
 def get(name: str) -> Tool | None:

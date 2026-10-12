@@ -22,6 +22,7 @@ from jarvis.state import settings
 from jarvis.tools import google
 
 ROOT = config.ROOT
+PANEL = "the Sign in button beside the {} account on the control panel's Google accounts page"
 
 
 @pytest.fixture
@@ -115,7 +116,7 @@ def test_two_processes_starting_at_once_make_the_table_once(home):
 def test_a_fresh_install_has_no_accounts_and_stays_that_way(home):
     (home.secrets / "google-work.json").write_text("{}")  # a sign-in alone adds no account; only the command does
     assert accounts.load() == Accounts()
-    assert accounts.show(Accounts()).startswith("No Google accounts yet. Add one with")
+    assert accounts.show(Accounts()).startswith("No Google accounts yet. Add one in the control panel")
 
 
 def test_a_fresh_install_starts_without_google_tools_or_a_crash(home):
@@ -197,8 +198,8 @@ def test_adding_checks_the_label_and_email_and_the_first_is_the_default():
 
 
 def test_the_command_adds_lists_changes_and_removes(home, capsys, monkeypatch):
-    assert run("add", "home", "--email", "me@mail.example", "--note", "their own", "--no-login") == 0
-    assert run("add", "job", "--chat", "--default", "--no-login") == 0
+    assert run("add", "home", "--email", "me@mail.example", "--note", "their own") == 0
+    assert run("add", "job", "--chat", "--default") == 0
     (home.secrets / "google-job.json").write_text("{}")
     capsys.readouterr()
     run("list")
@@ -210,7 +211,7 @@ def test_the_command_adds_lists_changes_and_removes(home, capsys, monkeypatch):
     assert run("default", "home") == 0
     assert accounts.load() == Accounts([Account("home", "me@mail.example", "their own"),
                                         Account("job", "me@acme.example", "for work")], "home")
-    assert "make services-restart" in capsys.readouterr().out
+    assert "JARVIS uses the change from its next conversation." in capsys.readouterr().out
 
     monkeypatch.setattr("builtins.input", lambda question: "n")
     assert run("remove", "job") == 1 and (home.secrets / "google-job.json").exists()
@@ -219,7 +220,7 @@ def test_the_command_adds_lists_changes_and_removes(home, capsys, monkeypatch):
     assert run("remove", "job", "--yes") == 0
     assert not (home.secrets / "google-job.json").exists() and accounts.load() == Accounts()
     for argv in (("remove", "nobody", "--yes"), ("set", "nobody", "--note", "x"), ("set", "nobody"),
-                 ("add", "Bad Label", "--no-login")):
+                 ("add", "Bad Label")):
         with pytest.raises(SystemExit):
             run(*argv)
     assert rows(home) == []
@@ -265,36 +266,13 @@ def test_rename_changes_nothing_if_the_new_label_has_files_already(home):
             run("rename", "work", new)
 
 
-def test_signing_in_fills_in_the_email_or_says_if_it_differs(home, monkeypatch, capsys):
-    store(Accounts([Account("home"), Account("job", "me@acme.example")], "home"))
-    monkeypatch.setattr(config, "GOOGLE_CLIENT_SECRET", "client.json")
-    signed_in = []
-    monkeypatch.setattr(accounts, "_connect", lambda label, secret: signed_in.append((label, secret)) or 0)
-    monkeypatch.setattr(accounts, "_signed_in_email", lambda label: "me@mail.example")
-    assert run("login", "home") == 0
-    assert accounts.load().get("home").email == "me@mail.example"
-    assert run("login", "job") == 0
-    assert "signed in as me@mail.example, but its email says me@acme.example" in capsys.readouterr().out
-    assert accounts.load().get("job").email == "me@acme.example"
-    assert signed_in == [("home", "client.json"), ("job", "client.json")]
-
-    monkeypatch.setattr(accounts, "_connect", lambda label, secret: 1)  # sign-in refused: nothing changes
-    assert run("login", "job") == 1
-    monkeypatch.setattr(config, "GOOGLE_CLIENT_SECRET", "")
-    assert run("login", "job") == 1 and "set GOOGLE_CLIENT_SECRET" in capsys.readouterr().out
-
-
-def test_the_database_isnt_locked_while_google_answers(home, monkeypatch):
-    store(Accounts([Account("home")], "home"))
-
-    def lookup(label):  # another process changes accounts during the email lookup
-        with accounts.change() as found:
-            found.add(Account("other"))
-        return "me@mail.example"
-
-    monkeypatch.setattr(accounts, "_signed_in_email", lookup)
-    assert accounts._keep_email("home") == "The home account is me@mail.example."
-    assert accounts.load() == Accounts([Account("home", "me@mail.example"), Account("other")], "home")
+def test_a_sign_in_keeps_the_email_it_chose_and_says_what_it_replaced(home):
+    store(Accounts([Account("home"), Account("job", "me@acme.example"), Account("other", "you@mail.example")], "home"))
+    assert accounts.take_email("home", "me@mail.example") == ""  # filled in: nothing to say
+    assert accounts.take_email("job", "ME@acme.example") == ""  # the same address
+    assert accounts.take_email("job", "new@acme.example") == "The job account is new@acme.example now, not me@acme.example."
+    assert "you@mail.example is already the other account" in accounts.take_email("home", "you@mail.example")
+    assert [a.email for a in accounts.load().accounts] == ["me@mail.example", "new@acme.example", "you@mail.example"]
 
 
 # ── The tools ───────────────────────────────────────────────────
@@ -362,18 +340,18 @@ def test_all_covers_every_account_and_a_broken_one_is_noted(monkeypatch):
         "events": [{"account": "work", "id": "e1", "title": "work sync", "start": "2026-10-04T14:00:00+05:30",
                     "end": "2026-10-04T14:00:00+05:30", "location": None, "meet": None, "attendees": 0}],
         "notes": ["Left out the personal account: The personal Google account is not signed in yet. Sign it in "
-                  "with: uv run python -m jarvis.integrations.accounts login personal"]}), False)
+                  "with: " + PANEL.format("personal")]}), False)
     content, is_error = asyncio.run(tools.run("calendar_events", {"account": "me@mail.example"}))
-    assert is_error and content.endswith("Sign it in with: uv run python -m jarvis.integrations.accounts login personal")
+    assert is_error and content.endswith("Sign it in with: " + PANEL.format("personal"))
 
 
-def test_the_tools_use_jarvis_sign_ins_and_its_command_to_sign_in_again():
+def test_the_tools_use_jarvis_sign_ins_and_send_you_to_the_panel_to_sign_in_again():
     secrets = profile.current().secrets
     assert common.token_path("work") == secrets / "google-work.json"
     assert chat.state_path("work") == secrets / "google-work-chat.json"  # where the accounts command keeps it
     assert common.sign_in_again("work", common.GMAIL_MODIFY) == (
         "The work Google account's sign-in doesn't let these tools change mail. Sign it in again with: "
-        "uv run python -m jarvis.integrations.accounts login work")
+        + PANEL.format("work"))
 
 
 def test_the_heartbeat_reads_only_signed_in_accounts(monkeypatch):

@@ -86,7 +86,7 @@ WEB_STAMP := web/node_modules/.install-stamp
 
 .PHONY: help install uv-bin livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks heartbeat speech-gate voice-timing voiceprint test host-check artifact-check \
         services-install services-start services-stop services-restart status logs awake sleep-normal \
-        claude-login claude-status accounts about servers passcode vault google-login chat-check tailscale-serve check clean
+        claude-login claude-status accounts about servers passcode vault chat-check tailscale-serve check clean
 
 help: ## Show this list
 	@grep -hE '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -177,9 +177,6 @@ passcode: ## Show the logins' passcodes (this computer only; never over the web)
 
 vault: ## Vault status (ARGS=init|rotate|reencrypt|"reset --yes")
 	@$(UV) python -m jarvis.core.vault $(or $(ARGS),status)
-
-google-login: ## Log in a Google account (LABEL=work)
-	$(UV) python -m jarvis.integrations.accounts login $(LABEL)
 
 chat-check: ## Check Google Chat access (LABEL=...)
 	$(UV) python -m jarvis.integrations.accounts check-chat $(LABEL)

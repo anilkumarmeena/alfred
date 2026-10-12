@@ -80,6 +80,7 @@ async def google_accounts(now: datetime) -> list[Problem]:
 
     from jarvis.tools import google  # configures AI Armory with JARVIS's accounts
 
+    google.fresh()  # accounts added or removed since the last check
     out = []
     for label in google.LABELS:
         try:
@@ -90,8 +91,7 @@ async def google_accounts(now: datetime) -> list[Problem]:
         if state == "out":
             out.append(Problem(f"signin:google:{label}:out",
                                f"The {label} Google account is signed out, so JARVIS can't reach its mail, calendar "
-                               f"or files. Sign it in again on the computer JARVIS runs on: "
-                               f"{settings().sign_in(label)}"))
+                               f"or files. Sign it in again with {settings().sign_in(label)}."))
     return out
 
 

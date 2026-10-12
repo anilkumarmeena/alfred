@@ -22,6 +22,7 @@ import {
 import { cap, Empty, InlineForm, Led, Pill } from "./bits";
 import { Markdown, MarkdownEditor } from "./Markdown";
 import { ConnectionsPage } from "./Connections";
+import { GoogleAccountsPage } from "./GoogleAccounts";
 import { HeartbeatPage, heartbeatSummary } from "./Heartbeat";
 import { SkillsPage } from "./Skills";
 
@@ -75,6 +76,14 @@ function Row({ to, icon, title, sub, led, sec = "settings" }: {
 // The JARVIS tab: what it can do and what it knows, most visited first
 export const JARVIS_PAGES: SettingsItem[] = ["skills", "conn", "accounts", "memory", "vocabulary", "about"];
 
+function accountsSummary(acc: Account[] | null): { sub: string; led: "ok" | "warn" | null } {
+  if (!acc) return { sub: "Mail, calendar and Chat", led: null };
+  if (!acc.length) return { sub: "None yet: add one to use mail and calendar", led: null };
+  const out = acc.filter((a) => !a.signed_in).map((a) => a.label);
+  if (out.length) return { sub: `${out.join(", ")} ${out.length > 1 ? "aren't" : "isn't"} signed in`, led: "warn" };
+  return { sub: acc.map((a) => a.label + (a.default ? " (default)" : "")).join(" · "), led: "ok" };
+}
+
 export function JarvisList() {
   const [conn, connLed] = connSummary(), acc = accounts.value;
   return (
@@ -82,8 +91,7 @@ export function JarvisList() {
       <div class="grp">Can do</div>
       <Row sec="jarvis" to="skills" icon={<SkillIcon />} title="Skills" sub={skillsSummary()} />
       <Row sec="jarvis" to="conn" icon={<PlugIcon />} title="Connections" sub={conn} led={connLed} />
-      <Row sec="jarvis" to="accounts" icon={<UserIcon />} title="Google accounts"
-        sub={acc ? acc.map((a) => a.label + (a.default ? " (default)" : "")).join(" · ") || "None yet" : "Mail, calendar and Chat"} />
+      <Row sec="jarvis" to="accounts" icon={<UserIcon />} title="Google accounts" {...accountsSummary(acc)} />
       <div class="grp">Knows</div>
       <Row sec="jarvis" to="memory" icon={<BrainIcon />} title="Memory" sub="What JARVIS remembers about you" />
       <Row sec="jarvis" to="vocabulary" icon={<WordsIcon />} title="Vocabulary" sub={vocabularySummary()} />
@@ -114,40 +122,6 @@ export function SettingsList() {
         <LockIcon /><div class="grow"><div>Lock</div><div class="sub">Forget the passcode on this device</div></div>
       </button>
     </div>
-  );
-}
-
-function AccountRow({ a }: { a: Account }) {
-  const editing = useSignal(false);
-  return (
-    <li class="row">
-      <div class="grow">
-        <div><b>{a.label}</b> {a.default && <Pill kind="running">default</Pill>} {a.chat && <Pill kind="muted">Chat</Pill>}</div>
-        <div class="sub">{a.email || "no email yet"}{a.note ? ` · ${a.note}` : ""}</div>
-        {!a.signed_in && <div class="sub warn">Not signed in: make google-login LABEL={a.label}</div>}
-        {editing.value && <InlineForm placeholder="What it's for" label="Save" initial={a.note} send={async (note) => {
-          const r = await act<Account[]>("account_note", { label: a.label, note }, "Saved");
-          if (r) { accounts.value = r; editing.value = false; }
-          return !!r;
-        }} />}
-      </div>
-      <span class="rt">
-        <button class="ico" title="Edit what it's for" aria-label="Edit note" onClick={() => { editing.value = !editing.value; }}><EditIcon /></button>
-        {!a.default && <button class="btn sm" onClick={async () => { const r = await act<Account[]>("account_default", { label: a.label }, `${a.label} is the default`); if (r) accounts.value = r; }}>Make default</button>}
-      </span>
-    </li>
-  );
-}
-
-function Accounts() {
-  const all = accounts.value;
-  if (!all) return <Empty>Loading…</Empty>;
-  return (
-    <>
-      <ul class="list">{all.map((a) => <AccountRow key={a.label} a={a} />)}</ul>
-      {!all.length && <Empty>No Google accounts yet.</Empty>}
-      <p class="hint">Adding an account or signing in again opens Google in the browser on JARVIS's computer, so it's done there: make google-login LABEL=…</p>
-    </>
   );
 }
 
@@ -870,7 +844,7 @@ function Keys() {
 }
 
 const PAGES: Record<SettingsItem, () => preact.JSX.Element> = {
-  conn: ConnectionsPage, accounts: Accounts, memory: Memory, vocabulary: VocabularyPage, skills: SkillsPage, approvals: Approvals, about: About, prefs: BehaviourPage, dnd: DoNotDisturb, safety: SafetyPage,
+  conn: ConnectionsPage, accounts: GoogleAccountsPage, memory: Memory, vocabulary: VocabularyPage, skills: SkillsPage, approvals: Approvals, about: About, prefs: BehaviourPage, dnd: DoNotDisturb, safety: SafetyPage,
   heartbeat: HeartbeatPage, notify: Notifications, system: SystemPage, access: AccessPage, keys: Keys,
 };
 

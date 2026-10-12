@@ -3,7 +3,7 @@
 import asyncio
 
 import pytest
-from ai_armory.toolsets.google import GoogleSettings, auth, current
+from ai_armory.toolsets.google import GoogleSettings, current
 
 from conftest import use_profile
 from jarvis import tools
@@ -62,7 +62,7 @@ def test_the_settings_are_jarvis_accounts_sign_ins_and_wording():
         ("work", "me@acme.example", "for work", True), ("personal", "me@mail.example", "their own", False)]
     assert s.default_label == "work" and s.chat_labels == google.CHAT_LABELS == ["work"]
     assert s.token_dir == profile.current().secrets and s.timezone == profile.current().timezone and s.user_name == profile.name()
-    assert s.sign_in("work") == "uv run python -m jarvis.integrations.accounts login work"
+    assert s.sign_in("work") == "the Sign in button beside the work account on the control panel's Google accounts page"
     assert s.image_folder == "JARVIS doc images" and s.draft_minutes == 2 * config.APPROVAL_MINUTES
     assert s.host_approval  # a send or delete goes through only for a draft the gate approved
     assert {str(p) for p in JARVIS_SECRETS} <= set(s.blocked_paths)
@@ -101,20 +101,6 @@ def test_bad_input_is_refused_before_anything_runs():
 
 
 # ── Signing in ──────────────────────────────────────────────────
-
-def test_signing_in_hands_ai_armory_the_accounts_as_they_are_now(monkeypatch, tmp_path):
-    use_profile(monkeypatch, tmp_path)
-    with accounts.change() as found:
-        found.add(accounts.Account("home", note="my own", chat=True))
-    asked = []
-    monkeypatch.setattr(auth, "connect", lambda label, secret: asked.append((label, secret, current().labels)) or 0)
-    try:
-        assert accounts._connect("home", "client.json") == 0
-        assert asked == [("home", "client.json", ["home"])]
-        assert auth.attempts("home")[0][0] == "with Google Chat"
-    finally:
-        accounts._google(google.ACCOUNTS)  # back to the accounts the tools were set up with
-
 
 def test_checking_chat_on_an_account_without_it_says_how_to_turn_it_on():
     with pytest.raises(SystemExit, match="uv run python -m jarvis.integrations.accounts set personal --chat"):
