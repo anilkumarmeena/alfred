@@ -82,8 +82,8 @@ class Profile:
         return self.data / "shared_files.json"  # files sent from the phone
 
     @property
-    def heartbeat_file(self) -> Path:
-        return self.data / "heartbeat.json"  # items the heartbeat already flagged
+    def notices_file(self) -> Path:
+        return self.data / "notices.json"  # notices already given (jarvis.tasks.notices)
 
     @property
     def learning_file(self) -> Path:

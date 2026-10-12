@@ -1,4 +1,4 @@
-"""Web Push: heartbeat alerts and task updates reach the phone even when JARVIS isn't open.
+"""Web Push: alerts and task updates reach the phone even when JARVIS isn't open.
 
 The home-screen web app subscribes with JARVIS's VAPID public key; subscriptions live in data/push_subscriptions.json.
 Pushes are encrypted per device and signed with the VAPID private key (generated on first use into secrets/, mode
