@@ -59,7 +59,7 @@ Ask for anything that takes a while and JARVIS starts a task. Keep talking, star
 | "find out what changed in LiveKit 1.9" | Starts a **research** task |
 | "What is task 12 doing?" | Its latest steps: commands, files, subagents, progress |
 | "merge task 12" | After your yes: merges its branch, deletes the branch and worktree |
-| "throw away task 12" | After your yes: discards it |
+| "throw away task 12" | After your plain yes (checked in code, like a command's): discards it |
 | "start a new project called weather app" | A folder in `JARVIS_NEW_PROJECTS_DIR`, added as an in-place project, no git |
 | "set up git for weather app" | Puts it under git once the first version has settled |
 
@@ -131,7 +131,7 @@ It asks **"Okay to go ahead?"**; answer within **five minutes**, even after talk
 | ❌ | "no", "don't", "cancel", "never mind", "I'd rather not"... | **No**: dropped |
 | ➖ | A lone "thank you" or "bye" | **Neither** |
 
-A reply the word lists can't read goes to a short model call that sees only your words and what's waiting (`JARVIS_CONSENT`).
+A reply the word lists can't read goes to a short model call that sees only your words and what's waiting (`JARVIS_CONSENT`). A remark or apology alone ("JARVIS, good", "sorry") isn't a yes: JARVIS checks back instead of acting.
 
 These voice commands run in Claude Code's own sandbox, which on Linux needs **bubblewrap** and **socat** installed.
 

@@ -134,6 +134,8 @@ _AFFIRMATIVE = sorted(
     key=len,
     reverse=True,
 )
+# Remarks that react rather than answer: a yes beside an answer ("great, go ahead"), never alone ("JARVIS, good")
+_REACTIONS = {(w,) for w in "good great cool perfect lovely brilliant excellent".split()}
 _ACTION = re.compile(  # "yes, merge it" counts as "go"
     r"\b(let's |let it |you can )?(run|merge|do|install|execute|apply|start|restart|launch|open|try|send|fetch|pull|push"
     r"|update|upgrade|kill|commit|deploy|build|delete|remove|stop|allow|render|close|quit|clean|clear|end|wipe|trash|shut)"
@@ -176,7 +178,8 @@ def _words(said: str) -> list[str]:
 def approves(said: str) -> bool:
     """Whether a transcribed reply is a clear yes ("mm-hmm", "yeah, let's close the hidden Chrome").
 
-    Tolerates punctuation, filler and "O.K."; anything less than a clear yes, or a lone "thank you", is not one.
+    Tolerates punctuation, filler and "O.K."; anything less than a clear yes, a lone "thank you" or a remark alone
+    ("good", "perfect, thanks") is not one.
     """
     if "?" in said:
         return False
@@ -187,7 +190,7 @@ def approves(said: str) -> bool:
     agreed, i = False, 0
     while i < len(words):
         if phrase := next((p for p in _AFFIRMATIVE if tuple(words[i : i + len(p)]) == p), None):
-            agreed, i = True, i + len(phrase)
+            agreed, i = agreed or phrase not in _REACTIONS, i + len(phrase)
         elif words[i] in _FILLER:
             i += 1
         else:

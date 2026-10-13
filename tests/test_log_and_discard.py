@@ -19,6 +19,8 @@ from test_nudges import until
 
 from jarvis import tools
 from jarvis.brain import persona
+from jarvis.safety import consent
+from jarvis.state import conversation
 from jarvis.tasks import api, client, runner
 from jarvis.tasks.worker import READ_ONLY_TOOLS
 from jarvis.tools import tasks as task_tools
@@ -227,6 +229,59 @@ def test_discarding_asks_first_and_task_log_says_the_latest_steps():
     assert "can't be undone" in discard and "wait for a yes" in discard
     assert "discarding a task's work" in persona.persona()  # one of the persona's few confirmations
     assert "latest steps" in tools.get("task_log").description
+
+
+def discarding(monkeypatch, said: str, model_says: str = "unclear") -> tuple[list[int], list[str]]:
+    """task_discard on the user's reply `said`: (tasks discarded, prompts the yes/no model saw)."""
+    gone, prompts = [], []
+
+    async def fake_discard(task_id: int) -> dict:
+        gone.append(task_id)
+        return {"id": task_id, "title": "the Chrome fix", "kind": "code_change", "status": "discarded",
+                "updated": time.time()}
+
+    async def model(prompt: str) -> str:
+        prompts.append(prompt)
+        return json.dumps({"answer": model_says, "scope": "once"})
+
+    monkeypatch.setattr(client, "discard", fake_discard)
+    monkeypatch.setattr(consent, "CONSENT_ENABLED", True)
+    monkeypatch.setattr(consent, "ask_model", model)
+    monkeypatch.setattr(consent, "_kept", {})
+    conversation.current().heard.turn(said)
+    try:
+        asyncio.run(task_tools.task_discard(7))
+    except ValueError as e:
+        assert "Not discarded" in str(e) and "Check back" in str(e)
+    return gone, prompts
+
+
+@pytest.mark.parametrize("said", ["Yes.", "Go ahead.", "Okay, sure.", "Yes, delete them.", "Yeah, all three."])
+def test_a_plain_yes_discards_at_once_without_the_model(monkeypatch, said):
+    assert discarding(monkeypatch, said) == ([7], [])
+
+
+# Heard in a real call: "JARVIS, good." to "Shall I go ahead?" threw away two branches of unmerged work
+@pytest.mark.parametrize("said", ["JARVIS, good.", "Sorry.", "Sure. Sorry.", "Headshot.", "Wait, which one?", ""])
+def test_a_reply_that_doesnt_plainly_say_yes_discards_nothing(monkeypatch, said):
+    gone, prompts = discarding(monkeypatch, said)
+    assert gone == []
+    assert all(consent.KINDS[consent.DISCARD] in p for p in prompts)
+
+
+def test_a_yes_in_other_words_is_the_models_to_judge(monkeypatch):
+    gone, [prompt] = discarding(monkeypatch, "Haan, hata do.", "yes")
+    assert gone == [7] and "Haan, hata do." in prompt
+
+
+def test_the_voice_prompt_checks_back_on_a_reply_that_doesnt_fit_but_never_asks_twice():
+    prompt = persona.persona()
+    rule = next(l for l in prompt.splitlines() if "When you've asked for a yes" in l)
+    assert "counts at once" in rule and "never ask again" in rule
+    for unclear in ('"JARVIS, good"', '"sorry"', "a fragment", "takes it back", "talk about something else"):
+        assert unclear in rule, unclear
+    assert "nor on your guess" in rule and "check back in a few words" in rule
+    assert '"good", "great", "sorry"' in consent.PROMPT  # the yes/no model reads them the same way
 
 
 def test_the_voice_prompt_takes_a_request_as_the_yes_and_confirms_only_the_exceptions():
