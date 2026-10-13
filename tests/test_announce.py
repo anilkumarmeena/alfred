@@ -152,7 +152,7 @@ def test_a_finished_task_is_announced_in_the_models_words_and_its_edits_stay_for
     assert "- add a to-do: Try the new push self-test (why: It needs a real phone.)" in model.asked[0]
     assert [(e["n"], e["status"]) for e in edits(task)] == [(1, "pending"), (2, "pending")]  # nothing applied unasked
     context = announce.context(task)
-    assert context.startswith('[That was task 1, "a thing". Its suggested edits, pending: 1. add a to-do: Try the new')
+    assert context.startswith('The update on "a thing" was task 1. Its suggested edits, pending: 1. add a to-do: Try the new')
     assert "; 2. save to memory" in context and "Task 1" not in task["spoken"]
 
 
@@ -160,7 +160,19 @@ def test_the_brain_hears_what_was_said_and_the_rest_but_only_the_words_are_logge
     logged = []
     monkeypatch.setattr(persona.memory, "log_announcement", logged.append)
     notes = persona.Notes()
-    notes.note("The build is done.", '[That was task 5, "the build". Its suggested edits, pending: 1. add a to-do: X.]')
+    notes.note("The build is done.", 'The update on "the build" was task 5. Its suggested edits, pending: 1. add a to-do: X.')
     assert logged == ["The build is done."]
     turn = notes.turn("what were they?")
-    assert "The build is done. [That was task 5" in turn and "1. add a to-do: X." in turn
+    assert "[You announced since the last turn: The build is done.]" in turn
+    assert '<private>The update on "the build" was task 5. Its suggested edits, pending: 1. add a to-do: X.</private>' in turn
+    assert "<private>" not in notes.turn("and then?")  # each note goes once
+
+
+def test_a_note_for_the_brain_alone_is_neither_announced_nor_logged(monkeypatch):
+    logged = []
+    monkeypatch.setattr(persona.memory, "log_announcement", logged.append)
+    notes = persona.Notes()
+    notes.note("", "Sam approved task 5's request 3 to run a command that pushes.")
+    turn = notes.turn("thanks")
+    assert logged == [] and "You announced" not in turn
+    assert "<private>Sam approved task 5's request 3 to run a command that pushes.</private>" in turn

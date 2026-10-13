@@ -21,7 +21,7 @@ from jarvis.brain.route import Router
 from jarvis.core import config, credentials, platform
 from jarvis.notify import push
 from jarvis.state import conversation, vocabulary, voiceprints
-from jarvis.voice import denoise, quiet, ram, speech, timing, turn
+from jarvis.voice import denoise, quiet, ram, speech, timing, turn, unspoken
 from jarvis.voice.barge_in import BargeIn, BargeInVAD
 from jarvis.voice.floor import Moment
 from jarvis.voice.session import VoiceSession
@@ -54,6 +54,13 @@ class JarvisAgent(Agent):
         )
         async for chunk in self.voice.respond(text):
             yield chunk
+
+    # Everything said (replies and session.say alike) passes these two, so private notes are neither heard nor shown
+    def tts_node(self, text, model_settings):
+        return Agent.default.tts_node(self, unspoken.scrubbed(text), model_settings)
+
+    def transcription_node(self, text, model_settings):
+        return Agent.default.transcription_node(self, unspoken.scrubbed(text), model_settings)
 
 
 def prewarm(proc: JobProcess) -> None:

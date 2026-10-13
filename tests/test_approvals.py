@@ -89,7 +89,7 @@ def test_what_a_task_asks_at_once_is_one_request_announced_once(env, pushes):
     approval = r.store.approval(first["id"])
     assert [c["command"] for c in approval["commands"]] == [BREW, "rm -rf build"] and approval["announced"] == 1
     [event] = [e for e in sent if e["type"] == "approval"]
-    assert event["text"] == (f"Task {task['id']}, the iPhone build, wants to run 2 commands: one that installs software "
+    assert event["text"] == ("Your task, the iPhone build, wants to run 2 commands: one that installs software "
                              "(brew install), one that deletes files (rm). Okay to go ahead?")
     assert "nonce_hash" not in event["approval"]
     [push] = pushes
@@ -460,7 +460,7 @@ def test_a_tasks_requests_waiting_are_asked_in_one_question():
     asks.add(request(3) | {"title": "the iPhone build"})
     asks.add(request(7, task=6))
     asks.add(request(4) | {"title": "the iPhone build", "summary": "a command that stops a process (kill)"})
-    assert asks.ask(asks.due()) == ("Task 5, the iPhone build, wants to run a command that installs software (brew "
+    assert asks.ask(asks.due()) == ("Your task, the iPhone build, wants to run a command that installs software (brew "
                                     "install) and a command that stops a process (kill). One yes covers them all. Okay "
                                     "to go ahead?")
     approval, decision, scope = asks.hear("Yeah, all three accepted. We can proceed.")
@@ -540,8 +540,8 @@ def test_a_task_request_waits_while_the_voice_shell_asks():
 
 
 def test_what_jarvis_says_once_answered():
-    assert answered(request(3), "approve", {"answered": True, "outcome": "Request 3 approved."}) == "Okay, task 5 carries on."
-    assert answered(request(3), "deny", {"answered": True, "outcome": "Request 3 denied."}) == "Okay, task 5 won't run it."
+    assert answered(request(3), "approve", {"answered": True, "outcome": "Request 3 approved."}) == "Okay, the task carries on."
+    assert answered(request(3), "deny", {"answered": True, "outcome": "Request 3 denied."}) == "Okay, the task won't run it."
     assert "already dealt with" in answered(request(3), "approve", {"answered": False, "outcome": "Request 3 was already answered."})
 
 
@@ -626,7 +626,7 @@ def test_the_assistant_passes_on_an_explicit_yes_for_that_one_request(through):
         return task, first, done, second
 
     task, first, done, second = asyncio.run(main())
-    assert done["answered"] and done["request"] == first["id"] and done["say"] == f"Okay, task {task['id']} carries on."
+    assert done["answered"] and done["request"] == first["id"] and done["say"] == f"Okay, the task carries on."
     assert done["commands"] == [{"does": describe(CHROME), "command": CHROME, "folder": "/repo"}]
     approval = r.store.approval(first["id"])
     assert approval["state"] == APPROVED and approval["via"] == "assistant"
@@ -656,7 +656,7 @@ def test_the_assistant_cant_answer_on_words_that_dont_say_so(through):
 
     task, approval, still, denied = asyncio.run(main())
     assert still == PENDING
-    assert denied["say"] == f"Okay, task {task['id']} won't run it."
+    assert denied["say"] == f"Okay, the task won't run it."
     assert r.store.approval(approval["id"])["state"] == DENIED and r.store.approval(approval["id"])["via"] == "assistant"
 
 

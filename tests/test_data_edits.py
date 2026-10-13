@@ -152,7 +152,7 @@ def test_suggested_edits_are_kept_numbered_and_announced(data, monkeypatch):
     assert todo.read().count("- [ ]") == 1  # nothing applied yet
 
     note = announce.context(task)  # for the brain alone, by number
-    assert note.startswith('[That was task 1, "a thing". Its suggested edits, pending: 1. add a to-do: Try the new push '
+    assert note.startswith('The update on "a thing" was task 1. Its suggested edits, pending: 1. add a to-do: Try the new push '
                            "self-test; 2. save to memory")
     assert "3. delete the memory lines containing 'short answers' (needs a yes: it deletes lines" in note
 
@@ -161,7 +161,7 @@ def test_one_edit_is_announced_as_such_and_none_adds_nothing(data, monkeypatch):
     _, task = run_task(monkeypatch, "code_change", "video-agent", TODO)
     assert task["spoken"].endswith("Did it. It'd also like to add a to-do: Try the new push self-test.")
     _, task = run_task(monkeypatch, "code_change", "video-agent")
-    assert task["spoken"] == "Your task, a thing, is done. Did it." and announce.context(task) == '[That was task 2, "a thing".]'
+    assert task["spoken"] == "Your task, a thing, is done. Did it." and announce.context(task) == 'The update on "a thing" was task 2.'
 
 
 def test_a_task_with_a_question_mentions_its_edits_only_once_finished(data, monkeypatch):

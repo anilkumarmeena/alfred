@@ -60,7 +60,7 @@ def test_a_yes_for_this_session_is_remembered_with_the_answer():
 
     voice, said = asyncio.run(main())
     assert voice.runner.answers == [(13, "approve", "voice", "session", True)] and voice.brain.asked == []
-    assert said.startswith("Okay, task 117 carries on.") and voice.talk.offer.open is None
+    assert said.startswith("Okay, the task carries on.") and voice.talk.offer.open is None
 
 
 def test_a_yes_always_offers_the_rule_and_the_next_yes_saves_it():
@@ -73,7 +73,7 @@ def test_a_yes_always_offers_the_rule_and_the_next_yes_saves_it():
 
     voice, first, offered, second = asyncio.run(main())
     assert voice.runner.answers == [(13, "approve", "voice", "once", True)]
-    assert first.startswith("Okay, task 117 carries on. From now on,") and first.endswith("Save that rule?")
+    assert first.startswith("Okay, the task carries on. From now on,") and first.endswith("Save that rule?")
     assert offered["approval"] == 13 and voice.brain.notes[-2].endswith("Save that rule?")
     assert second.startswith("Saved.") and voice.runner.kept == [(13, offered["breadth"], "voice")]
     assert voice.brain.asked == []
@@ -135,7 +135,7 @@ def test_words_the_lists_cant_read_go_to_the_consent_model_with_whats_waiting(mo
         return voice, await reply(voice, words)
 
     voice, said = asyncio.run(main())
-    assert said.startswith("Okay, task 117 carries on.") and voice.brain.asked == []
+    assert said.startswith("Okay, the task carries on.") and voice.brain.asked == []
     assert voice.runner.answers == [(13, "approve", "voice", "session", True)]
     assert len(model.prompts) == 1 and words in model.prompts[0] and REQUEST["summary"] in model.prompts[0]
 

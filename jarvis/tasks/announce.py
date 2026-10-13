@@ -124,9 +124,9 @@ def context(task: dict) -> str:
     """Unspoken note for the voice brain: task id and numbered pending edits (for task_edits).
 
     Edits are omitted while the task is waiting on a question."""
-    said = f"[That was task {task['id']}, \"{task['title']}\"."
+    said = f"The update on \"{task['title']}\" was task {task['id']}."
     if task["status"] != "waiting" and (waiting := data_edits.pending(task)):
         said += " Its suggested edits, pending: " + "; ".join(
             f"{e['n']}. {data_edits.describe(e)}" + (f" (needs a yes: {e['needs_yes']})" if e.get("needs_yes") else "")
             for e in waiting) + "."
-    return said + "]"
+    return said

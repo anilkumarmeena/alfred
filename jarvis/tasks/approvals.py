@@ -63,7 +63,7 @@ def approval_question(pending: list[dict]) -> str:
 
 def approval_spoken(approval: dict, task: dict) -> str:
     """What the voice agent asks. Wording comes from the gate's analysis, not the task's own text."""
-    return f"Task {task['id']}, {task['title']}, wants to run {approval_summary(approval['commands'])}. Okay to go ahead?"
+    return f"Your task, {task['title']}, wants to run {approval_summary(approval['commands'])}. Okay to go ahead?"
 
 
 def approval_result(approval: dict) -> str:

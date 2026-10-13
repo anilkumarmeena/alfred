@@ -179,7 +179,7 @@ class VoiceSession:
             remember = "session" if scope == "session" else "once"
             outcome = await self.runner.answer(approval["id"], decision, "voice", remember=remember, whole_task=True)
             reply = approvals.answered(approval, decision, outcome)
-            self.brain.note(approvals.note(approval, decision))
+            self.brain.note("", approvals.note(approval, decision))  # the reply says it; this is the detail
             if decision == "approve" and scope == "always" and outcome.get("answered"):
                 added, asked = approvals.offer_always(self.talk.offer, approval["id"], outcome["commands"], said)
                 reply += " " + added
@@ -206,8 +206,8 @@ class VoiceSession:
             except Exception as e:
                 log.warning("saving a remembered approval failed: %s", e)
                 reply = "Sorry, I couldn't save that rule."
-        self.brain.note(f"{profile.name()} {'agreed to' if yes else 'turned down'} remembering: "
-                        f"{remembered.covers(offer['rules'])}.")
+        self.brain.note("", f"{profile.name()} {'agreed to' if yes else 'turned down'} remembering: "
+                            f"{remembered.covers(offer['rules'])}.")
         memory.log_exchange(said, reply)
         return reply
 

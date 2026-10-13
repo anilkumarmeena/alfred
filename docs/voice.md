@@ -125,6 +125,7 @@ Whisper runs on whichever backend suits the machine, picked at start:
 - **CPU speed:** `small.en` takes **0.61 s per 5 s clip** on an M-series CPU; expect **~1–1.5 s** on a 4–8 core x86. Large models would take several seconds a clip on a CPU, hence the smaller default.
 - **Weak CPU?** `JARVIS_STT=base.en` trades a little accuracy for speed.
 - **GPU** needs CUDA 12's cuBLAS and cuDNN 9, from the system or pip (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`). If it fails to load, JARVIS falls back to the CPU and logs why; `JARVIS_STT_DEVICE=cpu` skips trying.
+- **Before Kokoro**, everything said (and shown as text) passes `jarvis/voice/unspoken.py`, which drops the brain's private notes and says internal details plainly; see [The Brain](brain.md#-one-turn-end-to-end).
 - **Recordings** use their own model, multilingual (`small` on a CPU): see [`JARVIS_TRANSCRIBE_MODEL`](configuration.md#-speech-in-and-out).
 - **`make models`** downloads the models this machine will use.
 - **Intel Macs** get faster-whisper too (MLX needs Apple silicon), but are **untested**.

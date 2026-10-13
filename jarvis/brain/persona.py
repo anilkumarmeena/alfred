@@ -23,17 +23,26 @@ def persona() -> str:
     return prompts.load("persona", user_name=profile.name(), about=_about())
 
 
+def private(text: str) -> str:
+    """`text` marked as the brain's alone: the persona says never to say it, and jarvis.voice.unspoken drops it."""
+    return f"<private>{text}</private>"
+
+
 class Notes:
-    """Things said outside a turn (task announcements), reported to the next turn."""
+    """Things said outside a turn (task announcements), reported to the next turn, and private notes about them."""
 
     def __init__(self) -> None:
         self.notes: list[str] = []
+        self.unsaid: list[str] = []
         self.framing: list[str] = []
 
     def note(self, text: str, unsaid: str = "") -> None:
-        """Record `text` as said; `unsaid` (e.g. which task) goes to the brain only and isn't logged."""
-        self.notes.append(f"{text} {unsaid}" if unsaid else text)
-        memory.log_announcement(text)
+        """Record `text` as said (if any); `unsaid` (e.g. which task) goes to the brain only and isn't logged."""
+        if text:
+            self.notes.append(text)
+            memory.log_announcement(text)
+        if unsaid:
+            self.unsaid.append(unsaid)
 
     def frame(self, lines: list[str]) -> None:
         """Bracketed lines about how the next turn was heard, for that turn only."""
@@ -49,11 +58,14 @@ class Notes:
         return "\n".join([self.head(), text, *framing])
 
     def head(self) -> str:
-        """Timestamp and announcements since the last turn, which start every message to the brain."""
+        """Timestamp, announcements since the last turn and private notes on them, which start every message to the
+        brain."""
         head = f"[{datetime.now(profile.tz()):%A %d %B %Y, %I:%M %p}]"
         if self.notes:
             head += "\n[You announced since the last turn: " + " ".join(self.notes) + "]"
-            self.notes.clear()
+        if self.unsaid:
+            head += "\n" + private(" ".join(self.unsaid))
+        self.notes, self.unsaid = [], []
         return head
 
 
