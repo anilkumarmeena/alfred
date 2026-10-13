@@ -2,6 +2,7 @@
 turn only briefly, cut-off work handed over."""
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 from claude_agent_sdk import (
@@ -43,7 +44,112 @@ def test_a_side_job_is_announced_when_its_answer_is_in():
     asyncio.run(main())
     [(text, note)] = said
     assert text == "On flights to Lisbon: Two flights leave Heathrow before nine, the cheaper at 7:40."
-    assert "background lookup on flights to Lisbon came back" in note and not j.running
+    assert note == "" and not j.running  # said once: nothing more for the brain
+
+
+# ── Announced answers: short plain speech, said once ──────────────
+
+MARKDOWN_ANSWER = """## Wake word
+
+The wake word is **hey jarvis**.
+
+It's set in `jarvis/core/config.py` at line 88.
+
+- It can be changed with a setting.
+- It's checked on the computer.
+
+## Check source
+
+- jarvis/core/config.py:88
+- docs/configuration.md"""
+
+
+def announced(answer: str) -> tuple[str, str]:
+    """What a background lookup answering `answer` announces: (said, note)."""
+    j, said = jobs(lambda brief: asyncio.sleep(0, answer))
+
+    async def main():
+        j.start("Find the wake word.", "the wake word")
+        while j.running:
+            await asyncio.sleep(0.01)
+
+    asyncio.run(main())
+    [(text, note)] = said
+    return text, note
+
+
+def unspeakable(text: str) -> bool:
+    return any(mark in text for mark in ("#", "*", "`", "/", "- ", ":88", "line 88", "Check source"))
+
+
+@pytest.fixture
+def wording(monkeypatch):
+    """The wording model, on and faked: replies with `wording.reply` (or raises it) and records each call."""
+    from jarvis.brain import sdk, usage
+
+    model = SimpleNamespace(reply="", calls=[])
+
+    async def ask(prompt, system_prompt, _model, **options):
+        model.calls.append((prompt, system_prompt))
+        if isinstance(model.reply, Exception):
+            raise model.reply
+        return model.reply, 0.0
+
+    monkeypatch.setattr(side, "ANNOUNCE_ENABLED", True)
+    monkeypatch.setattr(usage, "out", lambda now=None: None)
+    monkeypatch.setattr(sdk, "ask", ask)
+    return model
+
+
+def test_a_markdown_answer_is_announced_as_a_short_summary_once_with_the_detail_kept_for_the_brain(wording):
+    wording.reply = ("**The wake word is hey jarvis.** It's set in the config file, at `jarvis/core/config.py`. "
+                     "You can change it with a setting. Want me to?")
+    text, note = announced(MARKDOWN_ANSWER)
+    assert text == ("On the wake word: The wake word is hey jarvis. You can change it with a setting. "
+                    "Want me to?")  # the model's markdown and its sentence with a path are left out too
+    assert not unspeakable(text)
+    [(prompt, system)] = wording.calls
+    assert MARKDOWN_ANSWER in prompt and system == side.spoken_system()
+    assert note.count(MARKDOWN_ANSWER) == 1 and "hey jarvis" not in note.replace(MARKDOWN_ANSWER, "")
+
+
+@pytest.mark.parametrize("off", ["failed", "slow", "disabled"])
+def test_without_the_wording_model_a_markdown_answer_is_trimmed_to_a_few_plain_sentences(wording, monkeypatch, off):
+    if off == "disabled":
+        monkeypatch.setattr(side, "ANNOUNCE_ENABLED", False)
+    wording.reply = RuntimeError("no") if off == "failed" else TimeoutError()
+    text, note = announced(MARKDOWN_ANSWER + "\n\nOne more thing.")
+    assert text == ("On the wake word: The wake word is hey jarvis. It can be changed with a setting. "
+                    "It's checked on the computer.")  # three sentences at most, none with a path
+    assert not unspeakable(text) and MARKDOWN_ANSWER in note
+    assert wording.calls == [] if off == "disabled" else len(wording.calls) == 1
+
+
+def test_a_file_lookup_s_source_line_goes_to_the_brain_and_a_plain_answer_needs_no_model(wording):
+    text, note = announced("The web server listens on port 8080.\nSource: jarvis/core/config.py:42")
+    assert text == "On the wake word: The web server listens on port 8080."
+    assert note == "[Not said aloud, for follow-up questions: Source: jarvis/core/config.py:42]"
+    assert wording.calls == []
+
+
+def test_a_long_plain_answer_is_worded_down_too(wording):
+    wording.reply = "It's hey jarvis, and you can change it."
+    long = " ".join(f"Point {n} about the wake word." for n in range(6))
+    text, note = announced(long)
+    assert text == "On the wake word: It's hey jarvis, and you can change it."
+    assert note == f"[Not said aloud, for follow-up questions: {long}]"
+
+
+def test_an_answer_that_is_all_detail_still_says_it_is_back(wording):
+    wording.reply = "- jarvis/core/config.py:88"
+    assert announced("- jarvis/core/config.py:88")[0] == "The lookup on the wake word is back; ask me for the details."
+
+
+def test_a_quick_file_lookup_hands_its_turn_the_whole_answer_unworded(monkeypatch, wording):
+    monkeypatch.setattr(side, "LOOKUP_WAIT", 1.0)
+    j = side.Jobs(lambda text, note: None, find=lambda brief: asyncio.sleep(0, MARKDOWN_ANSWER))
+    assert asyncio.run(j.ask("x", "the wake word")) == f"On the wake word: {MARKDOWN_ANSWER}"
+    assert wording.calls == []
 
 
 def test_too_many_at_once_is_refused_and_failures_and_slow_ones_are_said(monkeypatch):
@@ -172,8 +278,7 @@ def test_a_slow_file_lookup_stops_holding_the_turn_and_is_announced_when_done(mo
     told, held, running = asyncio.run(main())
     assert held < 0.15 and list(running.values()) == ["the port"]
     assert told.startswith("Still looking into the port") and "announced when it's ready" in told
-    assert said == [("On the port: The port is in config.py.",
-                     "The background lookup on the port came back, and you said: The port is in config.py.")]
+    assert said == [("On the port: The port is in config.py.", "")]
 
 
 def test_a_turn_s_lookups_share_one_wait_so_a_second_cant_hold_it_again(monkeypatch):

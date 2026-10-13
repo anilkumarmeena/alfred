@@ -287,7 +287,7 @@ Answers only your enrolled voice. What each case means is in **[🗣️ Voice](v
 | `JARVIS_GOAL_MODEL`<br>`JARVIS_GOAL_ROUNDS` | Task model<br>`2` | The check's model, and send-backs per request (0–5) |
 | `JARVIS_GOAL_MAX_COST` | `0` (no limit) | Stop sending back past this many CLI-reported dollars |
 | `JARVIS_GOAL_DAILY_CHECKS` | `100` | Most goal checks per 24 hours |
-| `JARVIS_ANNOUNCE`<br>`JARVIS_ANNOUNCE_MODEL`<br>`JARVIS_ANNOUNCE_SECONDS` | `on`<br>Haiku<br>`30` | Word a task's end with a short model call; else fixed wording |
+| `JARVIS_ANNOUNCE`<br>`JARVIS_ANNOUNCE_MODEL`<br>`JARVIS_ANNOUNCE_SECONDS` | `on`<br>Haiku<br>`30` | Word a task's end, and a background lookup's answer that isn't already short plain speech, with a short model call; else fixed wording, or the answer trimmed to plain sentences |
 
 - **Projects folder:** if this checkout sits directly in your home folder, the default is `~/Projects`.
 - **Read-only folders:** secrets inside stay hidden; set but empty means none.

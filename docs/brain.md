@@ -49,7 +49,7 @@
 | [`usage.py`](../jarvis/brain/usage.py) | 176 | Usage-limit state in `data/usage.json`; model step-down; hold for scheduled runs |
 | [`retry.py`](../jarvis/brain/retry.py) | 96 | Failure kinds `LIMIT` / `PASSING` / `ERROR` and retry `Policy` |
 
-**Prompts it loads** (in [`jarvis/prompts/`](../jarvis/prompts/)): `persona.md`, `voice_lookups.md`, `lookup_agent.md`.
+**Prompts it loads** (in [`jarvis/prompts/`](../jarvis/prompts/)): `persona.md`, `voice_lookups.md`, `lookup_agent.md`, `lookup_spoken.md`.
 
 ---
 
@@ -346,7 +346,7 @@ sequenceDiagram
 - Started by the `background_lookup` tool, for reading that takes **longer than a few seconds** but is smaller than a task.
 - Own short session on Sonnet: **web + read-only JARVIS tools only**, `dontAsk`, ≤ 12 turns, capped at `JARVIS_SIDE_MINUTES` (3 min).
 - **Max 2 at once** per conversation; cancelled when the session ends.
-- The answer is spoken through the **floor** when there's a gap, then fed to the brain via `note()`.
+- The answer is spoken through the **floor** when there's a gap, as **at most three plain sentences**: said as it is when it already is that, else worded down by `JARVIS_ANNOUNCE_MODEL` (`prompts/lookup_spoken.md`), else trimmed by hand. Markdown, paths and line numbers are never read out; the whole answer goes to the brain unsaid via `note()`, for follow-up questions.
 
 </details>
 
