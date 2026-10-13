@@ -41,6 +41,9 @@ class Tool:
     before: Callable[[], None] | None = None  # AI Armory: refresh tool-set settings before each call
     # Answers at once or starts its own background work: never carried on outside the voice turn (jarvis.brain.kept)
     stays: bool = False
+    # What of its result the injection check screens: all of it (outside content, the default, so new tools are
+    # covered), none (False: JARVIS's own data), or just the result's JSON fields named (task-written text)
+    screened: bool | tuple[str, ...] = True
 
     def on(self) -> bool:
         return self.enabled is None or self.enabled()
@@ -58,11 +61,11 @@ _REGISTRY: dict[str, Tool] = {}
 
 def tool(name: str, description: str, properties: dict[str, dict] | None = None, required: list[str] | None = None,
          gated: bool = False, changes: bool = False, said: str = "", enabled: Callable[[], bool] | None = None,
-         shell: bool = False, reads: bool = False, stays: bool = False):
+         shell: bool = False, reads: bool = False, stays: bool = False, screened: bool | tuple[str, ...] = True):
     def register(fn: Callable[..., Any]) -> Callable[..., Any]:
         _REGISTRY[name] = Tool(name, description, properties or {}, required or [], fn, gated,
                                changes=changes or bool(said), said=said, enabled=enabled, shell=shell, reads=reads,
-                               stays=stays)
+                               stays=stays, screened=screened)
         return fn
 
     return register

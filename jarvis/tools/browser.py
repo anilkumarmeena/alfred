@@ -105,6 +105,7 @@ async def browser_links(contains: str = "", offset: int = 0) -> str:
     {"full_page": {"type": "boolean", "description": "The whole page, not just what fits the window.",
                    "default": False}},
     enabled=browser_on,
+    screened=False,
 )
 async def browser_screenshot(full_page: bool = False) -> dict:
     url, path = await _run(lambda: BROWSER.screenshot(full_page))
@@ -120,6 +121,7 @@ async def browser_back() -> str:
     return _shown(await _run(BROWSER.back), 0, OPEN_TEXT)
 
 
-@tool("browser_close", "Close JARVIS's browser window. The logins made in it stay for next time.", enabled=browser_on)
+@tool("browser_close", "Close JARVIS's browser window. The logins made in it stay for next time.", enabled=browser_on,
+      screened=False)
 async def browser_close() -> str:
     return "Closed the browser." if await _run(BROWSER.close) else "The browser wasn't open."

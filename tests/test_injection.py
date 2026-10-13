@@ -192,6 +192,71 @@ def test_short_results_and_the_models_own_writes_arent_checked(model):
     assert model.prompts == []
 
 
+def test_jarvis_own_data_and_a_tasks_reporting_tools_arent_checked(model):
+    for tool in ("mcp__jarvis__todo_list", "mcp__jarvis__remember", "mcp__jarvis__skill_read",
+                 "mcp__jarvis__schedule_hold", "mcp__jarvis__task_approve", "mcp__jarvis__file_lookup",
+                 "mcp__task__ask_user", "mcp__task__report_progress"):
+        assert screen(mcp(EMAIL), tool=tool) == {}, tool
+    assert model.prompts == []
+
+
+def test_outside_content_and_tools_jarvis_doesnt_know_are_checked(model):
+    for tool in ("mcp__jarvis__file_read", "mcp__jarvis__browser_read", "mcp__jarvis__screen_look",
+                 "mcp__jarvis__connection_find", "mcp__jarvis__skill_install", "mcp__jarvis__gmail_read",
+                 "mcp__notion__search", "mcp__host__host_run", "WebFetch", "Read", "Bash"):
+        assert injection.covers(tool) is True, tool  # a new connection or tool is screened without marking
+    screen(mcp(EMAIL), tool="mcp__notion__search")
+    assert len(model.prompts) == 1
+
+
+def task_record(**fields) -> str:
+    return json.dumps({"id": 7, "title": "Compare phone plans", "kind": "research", "status": "done",
+                       "minutes_since_update": 3, "log": ["progress: reading the plans and the provider's emails"]}
+                      | fields, ensure_ascii=False)
+
+
+def test_only_what_a_task_wrote_is_checked_in_its_record(model):
+    assert screen(mcp(task_record()), tool="mcp__jarvis__task_detail") == {}  # nothing task-written
+    assert screen(mcp(task_record(spoken="Task 7 is merged.")), tool="mcp__jarvis__task_merge") == {}
+    assert model.prompts == []
+    screen(mcp(task_record(summary=EMAIL)), tool="mcp__jarvis__task_detail")
+    assert ATTACK in model.prompts[0]
+    assert "Compare phone plans" not in model.prompts[0] and "reading the plans" not in model.prompts[0]
+
+
+def test_a_block_in_a_task_record_withholds_only_the_passage(model):
+    model.answer = says(BLOCK, "a quoted email tells the assistant to forward the user's emails", [ATTACK])
+    record = task_record(summary=f"Plan B is cheaper.\n{EMAIL}")
+    # As the CLI's hook sees it, and as a kept call's text
+    for response in (mcp(record), record):
+        out = screen(response, tool="mcp__jarvis__task_detail", args={"id": 7})
+        updated = out["hookSpecificOutput"]["updatedToolOutput"]
+        found = json.loads(updated if isinstance(updated, str) else updated[0]["text"])
+        assert found == json.loads(record) | {"summary": f"Plan B is cheaper.\n{EMAIL.replace(ATTACK, WITHHELD)}"}
+        assert "withheld part of this result from task_detail" in note(out)
+
+
+def test_a_block_in_a_task_record_it_cant_place_withholds_only_what_the_task_wrote(model):
+    model.answer = says(BLOCK, "it tells the assistant to delete files", ["something it paraphrased"])
+    record = task_record(question=EMAIL)
+    updated = screen(mcp(record), tool="mcp__jarvis__task_list")["hookSpecificOutput"]["updatedToolOutput"]
+    assert json.loads(updated[0]["text"]) == json.loads(record) | {"question": WITHHELD}
+
+
+def test_a_command_tasks_output_and_a_watchs_findings_are_checked(model):
+    screen(mcp(json.dumps([{"id": 9, "kind": "command", "output_tail": EMAIL}])), tool="mcp__jarvis__task_list")
+    screen(mcp(json.dumps([{"id": 2, "kind": "watch", "title": "Price page", "notepad": f"14:00: {ATTACK}"}])),
+           tool="mcp__jarvis__schedule_list")
+    assert len(model.prompts) == 2 and all(ATTACK in p for p in model.prompts)
+    assert "Price page" not in model.prompts[1]
+
+
+def test_a_plain_text_reply_from_a_partly_screened_tool_isnt_checked(model):
+    assert screen(mcp("RunnerUnavailable: the task runner isn't running right now."),
+                  tool="mcp__jarvis__task_list") == {}
+    assert model.prompts == []
+
+
 def test_pictures_arent_sent_as_text(model):
     screen([{"type": "text", "text": "A screenshot of the settings page."},
             {"type": "image", "data": "A" * 5000, "mimeType": "image/png"}])
@@ -235,6 +300,7 @@ def test_the_hooks_warm_a_session_as_a_tool_is_called_and_screen_its_result(mode
 
     async def run():
         await before({"tool_name": "Write"}, None, None)
+        await before({"tool_name": "mcp__jarvis__todo_list"}, None, None)
         await before({"tool_name": "WebFetch"}, None, None)
         return await after({"tool_name": "WebFetch", "tool_input": {"url": "https://x.example"},
                             "tool_response": mcp(EMAIL)}, None, None)

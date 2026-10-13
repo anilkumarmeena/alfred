@@ -32,6 +32,7 @@ def _jobs() -> Jobs:
     },
     ["brief", "about"],
     stays=True,
+    screened=False,
 )
 async def background_lookup(brief: str, about: str) -> str:
     return _jobs().start(brief, about)
@@ -55,6 +56,7 @@ async def background_lookup(brief: str, about: str) -> str:
     ["brief", "about"],
     reads=True,
     stays=True,
+    screened=False,
 )
 async def file_lookup(brief: str, about: str) -> str:
     return await _jobs().ask(brief, about)

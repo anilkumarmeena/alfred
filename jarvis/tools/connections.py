@@ -100,6 +100,7 @@ def _brief(s: Server) -> dict:
     "start), what it still needs, where it came from (the official MCP registry, unverified from the web, or set up "
     "by hand), how many tools it has of each kind, and its sign-in check if it has one.",
     reads=True,
+    screened=False,
 )
 def connections_list() -> list[dict] | str:
     found = mcp_servers.load()
@@ -228,6 +229,7 @@ def _load(data: dict) -> Server:
     "when it's done (connections_list then shows it). Only for one whose state says it needs signing in.",
     {"name": {"type": "string", "description": "The connection's name or label."}},
     ["name"],
+    screened=False,
 )
 async def connection_sign_in(name: str) -> str:
     server = _server(name)
@@ -329,6 +331,7 @@ async def connection_review(name: str, reading: list[str] | None = None, changin
     {"name": {"type": "string", "description": "The connection's name or label."}},
     ["name"],
     changes=True,
+    screened=False,
 )
 def connection_enable(name: str) -> str:
     server = _server(name)
@@ -349,6 +352,7 @@ def connection_enable(name: str) -> str:
     {"name": {"type": "string", "description": "The connection's name or label."}},
     ["name"],
     changes=True,
+    screened=False,
 )
 def connection_disable(name: str) -> str:
     server = _server(name)
@@ -431,6 +435,7 @@ def impact(server: Server) -> str:
     f"it); it's removed by {CONFIRM} after the user's yes. To stop using one for now, connection_disable is enough.",
     {"name": {"type": "string", "description": "The connection's name or label."}},
     ["name"],
+    screened=False,
 )
 def connection_remove(name: str) -> dict:
     server = _server(name)
@@ -445,6 +450,7 @@ def connection_remove(name: str) -> dict:
     ["draft_id"],
     gated=True,
     changes=True,
+    screened=False,
 )
 def connection_confirm(draft_id: str) -> str:
     draft = drafts.take(draft_id, CONFIRM, REMAKE)

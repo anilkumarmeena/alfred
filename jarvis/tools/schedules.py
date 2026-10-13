@@ -12,6 +12,8 @@ from jarvis.tasks.scheduler import RETRY_MINUTES
 from . import tool
 from .tasks import _clip
 
+# Screened in a scheduled job (Tool.screened): what its runs found or wrote down, and a command's output
+_JOB_TEXT = ("last_result", "notepad", "summary", "output_tail")
 _quiet = hold.parse_quiet_hours(QUIET_HOURS)
 QUIET_NOTE = (f"Watches aren't checked in quiet hours ({_quiet[0]:%H:%M} to {_quiet[1]:%H:%M}); the first check after "
               "catches up.") if _quiet else ""
@@ -169,6 +171,7 @@ _COMMAND = {
     ["kind", "title", "text"],
     said="Scheduled {title}",
     shell=True,
+    screened=_JOB_TEXT,
 )
 def schedule_add(kind: str, title: str, text: str, when: str = "", in_minutes: int = 0, repeat: str = "",
                  every_minutes: int = 0, until: str = "", task_kind: str = "", project: str = "", probe: str = "",
@@ -194,6 +197,7 @@ def schedule_add(kind: str, title: str, text: str, when: str = "", in_minutes: i
     "while Claude's usage limit is used up (usage_left): say so if asked why one hasn't run.",
     {"finished": {"type": "boolean", "description": "Also those finished, cancelled or expired lately."}},
     reads=True,
+    screened=_JOB_TEXT,
 )
 def schedule_list(finished: bool = False) -> list[dict] | dict:
     jobs = [_brief(j) for j in schedules.items(7 if finished else 0)]
@@ -224,6 +228,7 @@ def schedule_list(finished: bool = False) -> list[dict] | dict:
     ["id"],
     said="Changed scheduled job {id}",
     shell=True,
+    screened=_JOB_TEXT,
 )
 def schedule_change(id: int, title: str = "", text: str = "", when: str = "", in_minutes: int = 0, repeat: str = "",
                     every_minutes: int = 0, until: str = "", target: str = "", expect: str = "",
@@ -250,6 +255,7 @@ def schedule_change(id: int, title: str = "", text: str = "", when: str = "", in
         "until": {"type": "string", "description": "When it ends: HH:MM (its next occurrence) or a local date and time."},
         "minutes": {"type": "integer", "description": "Instead of until: how many minutes from now it ends."},
     },
+    screened=False,
 )
 def schedule_hold(on: bool | None = None, until: str = "", minutes: int = 0) -> dict:
     if on is None and (until or minutes):
@@ -274,6 +280,7 @@ def schedule_hold(on: bool | None = None, until: str = "", minutes: int = 0) -> 
     "windows, how much of each is used when Claude says, when each resets, and whether scheduled runs are waiting "
     "for a reset. For \"how much usage do I have left?\".",
     reads=True,
+    screened=False,
 )
 def usage_left() -> dict:
     out = {"usage": usage.said()}
@@ -285,7 +292,7 @@ def usage_left() -> dict:
 @tool("schedule_cancel", "Cancel a scheduled reminder, task, watch or command, by its id from schedule_list. A run "
       "already under way carries on: task_stop stops a task, and stop_job a command's run.", {"id": {"type": "integer"}},
       ["id"],
-      said="Cancelled scheduled job {id}")
+      said="Cancelled scheduled job {id}", screened=_JOB_TEXT)
 def schedule_cancel(id: int) -> dict:
     job = schedules.cancel(id)
     return _brief(job) | {"outcome": f"Cancelled {job['title']}."}

@@ -26,6 +26,10 @@ _NOW = ("The result's now says how the task stands: started, queued (not started
         "started.\", \"It's queued and will start shortly.\"), never that it started when it's queued, and what it "
         "waits on only when asked. When the result has where, say that too: it names the machine the task runs on, or "
         "why it runs on this computer instead.")
+# Screened in a task's record (Tool.screened): its summary and question, which can quote what it read (a research
+# summary quoting an email), and a command's raw output, which no model has seen. The rest is JARVIS's own, and its
+# log lines are short step notes from a session whose reads were screened.
+_TASK_TEXT = ("summary", "question", "output_tail")
 _MACHINE = {"type": "string", "description": "Only when the user says where this one should run: \"here\" for this "
                                              "computer, or the name of one of their machines (see machines). Leave it "
                                              "out to follow their setting."}
@@ -150,6 +154,7 @@ async def _mark_seen(tasks: list[dict]) -> None:
         "machine": _MACHINE,
     },
     ["kind", "title", "instruction"],
+    screened=_TASK_TEXT,
 )
 async def task_start(kind: str, title: str, instruction: str, project: str = "", access: list[str] | None = None,
                      todo: str = "", machine: str = "") -> dict:
@@ -162,7 +167,7 @@ async def task_start(kind: str, title: str, instruction: str, project: str = "",
       "it (fix_task), and a rerun after a fix says so. waiting_for_approval lists a task's requests to run risky commands that wait for the user's answer, with their "
       "exact commands: when asked what one will do, say it in a sentence from those commands, without reading them "
       "out character by character. stalled marks a running task that has shown no progress for a while and may be "
-      "stuck.", reads=True)
+      "stuck.", reads=True, screened=_TASK_TEXT)
 async def task_list() -> list[dict]:
     tasks = await client.tasks()
     await _mark_seen(tasks)
@@ -177,6 +182,7 @@ async def task_list() -> list[dict]:
     {"id": {"type": "integer"}},
     ["id"],
     reads=True,
+    screened=_TASK_TEXT,
 )
 async def task_detail(id: int) -> dict:
     t = await client.task(id)
@@ -213,6 +219,7 @@ def _clip(text: str, most: int = 160) -> str:
      "lines": {"type": "integer", "description": "How many of the latest lines (default 12, at most 40)."}},
     ["id"],
     reads=True,
+    screened=_TASK_TEXT,
 )
 async def task_log(id: int, lines: int = 0) -> dict:
     t = await client.log(id, lines or None)
@@ -235,6 +242,7 @@ async def task_log(id: int, lines: int = 0) -> dict:
     + _NOW,
     {"id": {"type": "integer"}, "message": {"type": "string"}, "access": _ACCESS},
     ["id", "message"],
+    screened=_TASK_TEXT,
 )
 async def task_reply(id: int, message: str, access: list[str] | None = None) -> dict:
     return _launched(await client.reply(id, message, access, _order()))
@@ -260,6 +268,7 @@ async def task_reply(id: int, message: str, access: list[str] | None = None) -> 
                                                       "to turn one down when the task has several waiting."},
     },
     ["id", "approve"],
+    screened=False,
 )
 async def task_approve(id: int, approve: bool, request: int = 0) -> dict:
     mine = [a for a in await _waiting() if a["task"] == id]
@@ -311,7 +320,7 @@ def _rule(r: dict) -> dict:
 
 @tool("approval_rules", "The remembered approvals: kinds of risky command the user said to allow for a session or "
       "always, which then run without asking (for background tasks and your own shell). Each with what it covers, "
-      "whose and for how long, and the command it was made from.", reads=True)
+      "whose and for how long, and the command it was made from.", reads=True, screened=False)
 def approval_rules() -> list[dict] | str:
     return [_rule(r) for r in remembered.listed()] or "No remembered approvals: every risky command asks."
 
@@ -323,6 +332,7 @@ def approval_rules() -> list[dict] | str:
     {"rule": {"type": "integer", "description": "The rule's number, from approval_rules."}},
     ["rule"],
     said="Withdrew a remembered approval",
+    screened=False,
 )
 def approval_rule_forget(rule: int) -> dict:
     return _rule(remembered.forget(rule)) | {"withdrawn": True}
@@ -330,7 +340,8 @@ def approval_rule_forget(rule: int) -> dict:
 
 @tool("task_stop", "Stop a running, queued or waiting task. Code changes so far stay uncommitted in the "
       "project's folder, or on its branch for worktree tasks. A command task's command stops, all of it, as stop_job "
-      "stops it; one waiting for a yes to fix it is left as it failed.", {"id": {"type": "integer"}}, ["id"])
+      "stops it; one waiting for a yes to fix it is left as it failed.", {"id": {"type": "integer"}}, ["id"],
+      screened=_TASK_TEXT)
 async def task_stop(id: int) -> dict:
     return _brief(await client.stop(id))
 
@@ -345,6 +356,7 @@ async def task_stop(id: int) -> dict:
     "this, never git in the shell. Then say in one sentence which task went into which project.",
     {"id": {"type": "integer"}},
     ["id"],
+    screened=_TASK_TEXT,
 )
 async def task_merge(id: int) -> dict:
     return _brief(await client.merge(id))
@@ -360,6 +372,7 @@ async def task_merge(id: int) -> dict:
     "in place, nothing: its changes stay in the folder for them to undo), wait for a yes, then call this.",
     {"id": {"type": "integer"}},
     ["id"],
+    screened=_TASK_TEXT,
 )
 async def task_discard(id: int) -> dict:
     return _brief(await client.discard(id))
@@ -384,6 +397,7 @@ async def task_discard(id: int) -> dict:
         "edits": {"type": "array", "items": {"type": "integer"}, "description": "The edits' numbers."},
     },
     ["id", "action", "edits"],
+    screened=False,
 )
 async def task_edits(id: int, action: str, edits: list[int]) -> dict:
     t = await client.edits(id, action, edits)
@@ -395,7 +409,7 @@ async def task_edits(id: int, action: str, edits: list[int]) -> dict:
       "is. in_place true (the default) means code changes happen directly in the project's folder, uncommitted, "
       "one task at a time; in_place false means each task gets its own git branch in a separate worktree. "
       "JARVIS's own project is always in_place false. lives_on names the other machine a project lives on: its "
-      "folder is there, and its tasks and jobs run there.", reads=True)
+      "folder is there, and its tasks and jobs run there.", reads=True, screened=False)
 def projects_list() -> list[dict]:
     return [{"name": p.name, "path": str(p.path) if p.node else projects.shown(p.path), "aliases": p.aliases,
              "about": p.about, "in_place": p.in_place} | ({"lives_on": machines.where(str(p.node))} if p.node else {})
@@ -421,6 +435,7 @@ def projects_list() -> list[dict]:
     },
     ["name"],
     said="Added the project {name}",
+    screened=False,
 )
 async def project_register(name: str, path: str = "", aliases: list[str] | None = None, about: str = "",
                            in_place: bool = projects.IN_PLACE_DEFAULT, machine: str = "") -> dict:
@@ -436,6 +451,7 @@ async def project_register(name: str, path: str = "", aliases: list[str] | None 
     {"name": {"type": "string", "description": "Project name from projects_list."}},
     ["name"],
     said="Set up git for {name}",
+    screened=False,
 )
 async def project_git_init(name: str) -> dict:
     return await client.git_init(name)

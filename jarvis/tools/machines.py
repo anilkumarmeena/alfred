@@ -39,6 +39,7 @@ def _brief(m: dict, placement: dict, kinds: dict) -> dict:
     "job runs here instead, and JARVIS says so. Pairing a machine happens only in Settings › Machines, never by "
     "voice.",
     reads=True,
+    screened=False,
 )
 async def machines_list() -> dict:
     found = await client.machines()

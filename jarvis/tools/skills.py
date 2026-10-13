@@ -67,6 +67,7 @@ def _draft(action: str, summary: str, short: str, **payload) -> dict:
     "by hand), its state (on, off, needs approval: scripts not yet approved, changed since approved, broken) and when "
     "it was added.",
     reads=True,
+    screened=False,
 )
 def skills_list() -> str:
     found = home.all_skills()
@@ -81,6 +82,7 @@ def skills_list() -> str:
     {"name": {"type": "string", "description": "The skill's name, or as spoken."}},
     ["name"],
     reads=True,
+    screened=False,
 )
 def skill_read(name: str) -> dict:
     skill = home.get(name)
@@ -106,6 +108,7 @@ def skill_read(name: str) -> dict:
                                                       "for their standup.\")."},
      "instructions": {"type": "string", "description": "The instructions, in markdown, without frontmatter."}},
     ["name", "description", "instructions"],
+    screened=False,
 )
 def skill_draft(name: str, description: str, instructions: str) -> dict:
     name = home.as_name(name)
@@ -185,6 +188,7 @@ async def skill_install(source: str, name: str = "") -> dict:
     {"name": {"type": "string", "description": "The skill's name, or as spoken."}},
     ["name"],
     changes=True,
+    screened=False,
 )
 async def skill_enable(name: str) -> dict | str:
     skill = home.refuse_broken(home.get(name))
@@ -204,6 +208,7 @@ async def skill_enable(name: str) -> dict | str:
     {"name": {"type": "string", "description": "The skill's name, or as spoken."}},
     ["name"],
     changes=True,
+    screened=False,
 )
 def skill_disable(name: str) -> str:
     skill = home.get(name)
@@ -218,6 +223,7 @@ def skill_disable(name: str) -> str:
     f"Draft deleting a skill, folder, scripts and all; it's deleted by {CONFIRM} after the user's yes.",
     {"name": {"type": "string", "description": "The skill's name, or as spoken."}},
     ["name"],
+    screened=False,
 )
 def skill_delete(name: str) -> dict:
     skill = home.get(name)
@@ -234,6 +240,7 @@ def skill_delete(name: str) -> dict:
     ["draft_id"],
     gated=True,
     changes=True,
+    screened=False,
 )
 def skill_confirm(draft_id: str) -> str:
     draft = drafts.take(draft_id, CONFIRM, REMAKE)
