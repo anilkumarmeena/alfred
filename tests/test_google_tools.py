@@ -79,6 +79,23 @@ def test_the_cli_brain_gets_every_google_tool_but_sends_and_deletes_only_through
     assert isinstance(brain.shell, draft_gate.DraftGate) and opts.can_use_tool is brain.shell
 
 
+def test_an_account_signed_in_mid_conversation_restarts_the_voice_cli_to_take_it(voice, own_profile):
+    v = voice()
+
+    async def main():
+        await v.say("any new mail?")
+        await v.say("and now?")
+        with accounts.change() as found:
+            found.add(accounts.Account("work", "me@acme.example"))
+        await v.say("I've connected it, check again")
+        await v.say("anything from Priya?")
+
+    asyncio.run(main())
+    assert len(v.clis) == 2 and v.clis[0].closed and not v.clis[1].closed
+    assert len(v.clis[0].prompts) == 2 and len(v.clis[1].prompts) == 2
+    assert google.LABELS == ["work"]
+
+
 def test_the_brain_gets_ai_armorys_own_schemas():
     assert tools.input_schema(google_tools()["gmail_search"]) == google_tools()["gmail_search"].armory.input_schema
 

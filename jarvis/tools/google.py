@@ -41,7 +41,8 @@ def settings(found: accounts.Accounts) -> GoogleSettings:
     )
 
 
-# A conversation's tool list is fixed when it starts (prompt cache); fresh() takes changes for the next one.
+# A conversation's tool list is fixed when it starts (prompt cache); fresh() takes changes for the next one, and the
+# voice brain restarts its CLI on a change (jarvis.brain.cli.CliBrain.start).
 ACCOUNTS = accounts.load()
 LABELS = ACCOUNTS.labels
 CHAT_LABELS = ACCOUNTS.chat_labels  # accounts signed in with Google Chat scope
@@ -70,8 +71,9 @@ def _register() -> None:
 
 def fresh() -> None:
     """Follow changes made elsewhere: reread the accounts (registering the tools again when they changed: added,
-    removed, renamed, a new note or email), and reconfigure when profile settings changed. Runs as each session, task
-    and watch check starts (jarvis.brain.sdk.jarvis_server, jarvis.tasks.scheduler) and before each Google tool call."""
+    removed, renamed, a new note or email), and reconfigure when profile settings changed. Runs as each session, voice
+    turn, task and watch check starts (jarvis.brain.sdk.jarvis_server, jarvis.brain.cli, jarvis.tasks.scheduler) and
+    before each Google tool call."""
     global ACCOUNTS, LABELS, CHAT_LABELS
     if (found := accounts.load()) != ACCOUNTS:
         ACCOUNTS, LABELS, CHAT_LABELS = found, found.labels, found.chat_labels

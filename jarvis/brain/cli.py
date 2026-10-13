@@ -50,11 +50,11 @@ from jarvis.core.config import (
     MAX_TOOL_ROUNDS,
     browser_on,
 )
-from jarvis.integrations import mcp_servers
+from jarvis.integrations import accounts, mcp_servers
 from jarvis.safety import consent, mcp_gate, remembered, shell
 from jarvis.skills import home as skills
 from jarvis.state import activity, conversation, memory, pictures
-from jarvis.tools import browser, connections, screen, skills as skill_tools
+from jarvis.tools import browser, connections, google, screen, skills as skill_tools
 from jarvis.voice import timing
 
 log = logging.getLogger("jarvis.brain.cli")
@@ -163,10 +163,18 @@ class CliBrain(Notes):
         self.kept = Kept()  # slow JARVIS tool calls, carried on outside the turn
         self.next_model: str | None = None  # lighter model for the next turn only (jarvis.brain.route)
         self._main = self._model = ""  # session model, current model
+        self._accounts = accounts.load()  # Google accounts the CLI started with
 
     async def start(self) -> None:
+        """Start the CLI, or restart it when the Google accounts changed since it started: its prompt and tool list
+        are fixed then, so an account signed in mid-conversation is only taken by a new one."""
         async with self._lock:
+            google.fresh()
+            if self.client is not None and google.ACCOUNTS != self._accounts:
+                log.info("Google accounts changed; restarting the CLI to take them")
+                await self.close()
             if self.client is None:
+                self._accounts = google.ACCOUNTS
                 options = _options(self.shell, self.jobs, self.kept)
                 client = ClaudeSDKClient(options)
                 await client.connect()

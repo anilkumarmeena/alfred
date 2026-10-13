@@ -2,7 +2,7 @@
 
 Each has a label, email, optional note, a Google Chat flag, and one is the default for anything made without naming an
 account. Accounts are signed in from the control panel (jarvis.integrations.google_signin). Running services pick up a
-change at their next conversation, task or watch check (jarvis.tools.google.fresh), so no restart is needed.
+change at their next conversation turn, task or watch check (jarvis.tools.google.fresh), so no restart is needed.
 
     uv run python -m jarvis.integrations.accounts                  list
     uv run python -m jarvis.integrations.accounts add LABEL [--email E] [--note N] [--chat] [--default]
