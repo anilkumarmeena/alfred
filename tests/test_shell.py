@@ -32,10 +32,11 @@ COMMAND = "rm -rf ~/Desktop/renders/old"  # risky: deletes files
     "said",
     [
         "Yes.", "yes", " Yeah.", "Yep!", "Yup", "Okay.", "OK", "Ok.", "O.K.", "okay!", "Sure.", "Sure thing.",
-        "Go ahead.", "Yes, go ahead.", "Do it.", "Please do.", "Great.", "Sounds good.", "Fine.", "That's fine.",
+        "Go ahead.", "Yes, go ahead.", "Do it.", "Please do.", "Great, go ahead.", "Sounds good.", "Fine.",
+        "That's fine.",
         "All of them.", "All three.", "All 3.", "Both.", "Yes please.", "Yeah, go for it.", "Um, okay.",
         "Uh, yes sir.", "Okay Jarvis, go ahead.", "Yes, merge it.", "Yeah, run it.", "Alright.", "All right, go on.",
-        "Absolutely.", "Of course.", "Perfect, thanks.", "Okay, thank you.", "Yes. Yes.", "Let's do it.",
+        "Absolutely.", "Of course.", "Okay, perfect, thanks.", "Okay, thank you.", "Yes. Yes.", "Let's do it.",
         "Okay, go ahead and do it.", "Yeah that works.", "Affirmative.", "Okay…",
         # less common phrasings
         "Keep going.", "Yes, keep going.", "It is allowed.", "It's allowed.", "That's allowed, go ahead.",
@@ -66,6 +67,8 @@ def test_clear_affirmatives_approve(said):
         "Thank you.", "Thank you!", "Thanks, bye.", "Bye.", "Okay, bye.", "Goodbye.", "Uh-uh.", "Mm-mm.", "Hmm, mm.",
         "I'm not sure.", "Uh-uh, go ahead.", "Sure, open the calendar for tomorrow.", "Yeah, delete the email from John.",
         "Okay, close the laptop lid then tell me the weather.", "Sure, start the timer.",
+        # remarks that react rather than answer: the model or the brain checks back
+        "Great.", "Perfect, thanks.", "JARVIS, good.", "Cool.", "Sorry.", "Sure. Sorry.", "Headshot.",
     ],
 )
 def test_anything_else_is_not_a_yes(said):

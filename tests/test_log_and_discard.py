@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import pytest
+from test_consent import model, says  # noqa: F401  (model is a fixture)
 from test_in_place import (  # noqa: F401  (env is a fixture)
     add_new_file,
     branches,
@@ -19,6 +20,8 @@ from test_nudges import until
 
 from jarvis import tools
 from jarvis.brain import persona
+from jarvis.safety import consent
+from jarvis.state import conversation
 from jarvis.tasks import api, client, runner
 from jarvis.tasks.worker import READ_ONLY_TOOLS
 from jarvis.tools import tasks as task_tools
@@ -227,6 +230,57 @@ def test_discarding_asks_first_and_task_log_says_the_latest_steps():
     assert "can't be undone" in discard and "wait for a yes" in discard
     assert "discarding a task's work" in persona.persona()  # one of the persona's few confirmations
     assert "latest steps" in tools.get("task_log").description
+
+
+@pytest.fixture
+def gone(monkeypatch) -> list[int]:
+    """Tasks task_discard went on to discard."""
+    gone = []
+
+    async def fake_discard(task_id: int) -> dict:
+        gone.append(task_id)
+        return {"id": task_id, "title": "the Chrome fix", "kind": "code_change", "status": "discarded",
+                "updated": time.time()}
+
+    monkeypatch.setattr(client, "discard", fake_discard)
+    return gone
+
+
+def discard_on(said: str) -> dict:
+    """task_discard after the user's reply `said`."""
+    conversation.current().heard.turn(said)
+    return asyncio.run(task_tools.task_discard(7))
+
+
+@pytest.mark.parametrize("said", ["Yes.", "Go ahead.", "Okay, sure.", "Yes, delete them.", "Yeah, all three."])
+def test_a_plain_yes_discards_at_once_without_the_model(model, gone, said):  # noqa: F811
+    discard_on(said)
+    assert gone == [7] and model.prompts == []
+
+
+# Heard in a real call: "JARVIS, good." to "Shall I go ahead?" threw away two branches of unmerged work
+@pytest.mark.parametrize("said", ["JARVIS, good.", "Sorry.", "Sure. Sorry.", "Headshot.", "Wait, which one?", ""])
+def test_a_reply_that_doesnt_plainly_say_yes_discards_nothing(model, gone, said):  # noqa: F811
+    with pytest.raises(ValueError, match="Not discarded.*Check back"):
+        discard_on(said)
+    assert gone == []
+    assert all(consent.KINDS[consent.DISCARD] in p for p in model.prompts)
+
+
+def test_a_yes_in_other_words_is_the_models_to_judge(model, gone):  # noqa: F811
+    model.answer = says("yes")
+    discard_on("Haan, hata do.")
+    assert gone == [7] and "Haan, hata do." in model.prompts[0]
+
+
+def test_the_voice_prompt_checks_back_on_a_reply_that_doesnt_fit_but_never_asks_twice():
+    prompt = persona.persona()
+    rule = next(l for l in prompt.splitlines() if "When you've asked for a yes" in l)
+    assert "counts at once" in rule and "never ask again" in rule
+    for unclear in ('"JARVIS, good"', '"sorry"', "a fragment", "takes it back", "talk about something else"):
+        assert unclear in rule, unclear
+    assert "nor on your guess" in rule and "check back in a few words" in rule
+    assert '"good", "great", "sorry"' in consent.PROMPT  # the yes/no model reads them the same way
 
 
 def test_the_voice_prompt_takes_a_request_as_the_yes_and_confirms_only_the_exceptions():

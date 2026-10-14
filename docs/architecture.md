@@ -497,7 +497,7 @@ Each run resumes the task's own Claude session, so follow-ups keep everything it
 
 - **In place:** uncommitted work is saved first with `git stash create` under `refs/jarvis/task-<id>-<time>`. Folders without git are diffed by snapshot.
 - **Worktrees:** JARVIS's own repo always uses worktrees, and its branches must pass the test suite before merging (`merge_check.py`).
-- **Merge / discard:** refused while the task is active or with uncommitted changes.
+- **Merge / discard:** refused while the task is active or with uncommitted changes. `task_discard` also needs the user's own words this turn (`heard`) to be a plain yes, read by `consent.reply`.
 - **Nudges:** messages to a running task are queued in `nudges`.
 - **Goal loop:** evidence means the diff and test steps. `incomplete` resumes the session, up to `JARVIS_GOAL_ROUNDS` (2). It also settles the to-do the task was started for.
 - **Subagents:** `code-searcher` (Haiku), `test-runner` and `web-researcher` (Sonnet). The run waits for background subagents before finishing (`WAKE_GRACE`, `SUBAGENT_WAIT`).

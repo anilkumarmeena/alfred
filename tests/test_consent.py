@@ -144,6 +144,27 @@ def test_a_mixed_or_unclear_reply_isnt_a_yes_and_is_asked_again(model, said):
     assert len(model.prompts) == 1
 
 
+# Heard in real calls before a delete or merge: "JARVIS, good." and "Sorry." (once taken as "sure")
+@pytest.mark.parametrize("said", ["JARVIS, good.", "Great.", "Perfect, thanks.", "Sorry.", "Sure. Sorry.", "Headshot."])
+def test_a_reply_that_doesnt_plainly_fit_is_the_models_to_judge_and_unclear_asks_again(model, said):
+    model.answer = says("unclear")
+    gate = ShellGate(Clock())
+    asked(gate)
+    assert turn(gate, said) == []
+    assert gate.question_open()
+    assert len(model.prompts) == 1  # the word lists couldn't tell
+
+
+@pytest.mark.parametrize("said", ["Yes.", "Go ahead.", "Okay, sure.", "Okay, sure, merge it.", "Great, go ahead.",
+                                  "Okay, perfect.", "Okay."])
+def test_a_clear_answer_counts_at_once_and_is_never_asked_twice(model, said):
+    model.error = AssertionError("not called")
+    gate = ShellGate(Clock())
+    asked(gate)
+    assert turn(gate, said) == [COMMAND]
+    assert isinstance(ask(gate, COMMAND), PermissionResultAllow)
+
+
 def test_a_model_no_drops_the_question(model):
     model.answer = says("no")
     gate = ShellGate(Clock())

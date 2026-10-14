@@ -32,8 +32,8 @@ log = logging.getLogger("jarvis.safety.consent")
 _IDLE_SECONDS = 600  # close an unused warmed session after this
 
 # Question kinds as told to the model; fixed here so no tool output reaches the call
-COMMAND, GOOGLE, SERVICE, ACTION, TASK, RULE, SCREEN, TELL = (
-    "command", "google", "service", "action", "task", "rule", "screen", "tell")
+COMMAND, GOOGLE, SERVICE, ACTION, TASK, RULE, SCREEN, TELL, DISCARD = (
+    "command", "google", "service", "action", "task", "rule", "screen", "tell", "discard")
 KINDS = {
     COMMAND: "JARVIS asked whether it may run a command on the computer that needs their go-ahead (deleting files, "
              "pushing code, installing software, stopping a process, restarting services and the like).",
@@ -48,6 +48,7 @@ KINDS = {
     SCREEN: "JARVIS asked whether it may look at the computer's screen.",
     TELL: "No question was just asked: a background task is waiting for their go-ahead to run a command. yes means "
           "their words tell JARVIS to approve it, no that they tell it to turn it down.",
+    DISCARD: "JARVIS asked whether it may throw away a background task's work for good, without merging it.",
 }
 MAX_CHARS = 300  # longer means a change of subject; never sent
 _KEEP_SECONDS = 120  # verdict cache lifetime (one turn may check the same words more than once)
@@ -57,7 +58,7 @@ PROMPT = """JARVIS, a voice assistant, needs to know whether the person it works
 Their words come from speech recognition: they may have filler, misheard words or no punctuation, and they may be in any language.
 - yes: they plainly agree to what was asked, in whatever words or language. Telling JARVIS to do just what's waiting is a yes too, even when what's waiting is itself stopping, ending or closing something: "you can stop them" or "end it" to a command that stops a process.
 - no: they plainly decline, or tell JARVIS not to do it, to cancel it or to wait.
-- unclear: anything else: a question, a condition or a "but" ("only after the tests pass", "if it's safe"), a doubt, a mix of yes and no, a change of subject, words that trail off unfinished, words that don't answer what was asked, or anything you're unsure of. When in doubt, unclear.
+- unclear: anything else: a question, a condition or a "but" ("only after the tests pass", "if it's safe"), a doubt, a mix of yes and no, a change of subject, words that trail off unfinished, words that don't answer what was asked, a remark or apology with nothing that answers it ("good", "great", "sorry"), or anything you're unsure of. When in doubt, unclear.
 
 scope, for a yes (otherwise once):
 - once: the default, unless they say more.

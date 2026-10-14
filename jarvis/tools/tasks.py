@@ -357,11 +357,17 @@ async def task_merge(id: int) -> dict:
     "that worked in place leaves its changes uncommitted in the project's folder, untouched, for the user to undo by "
     "hand. A running, queued or waiting task must be stopped first. It can't be undone: when the user wants a task "
     "thrown away, first say in one sentence which task and what goes (its branch and worktree; for a task that worked "
-    "in place, nothing: its changes stay in the folder for them to undo), wait for a yes, then call this.",
+    "in place, nothing: its changes stay in the folder for them to undo), wait for a yes, then call this. JARVIS "
+    "checks their reply itself and refuses when it isn't a plain yes.",
     {"id": {"type": "integer"}},
     ["id"],
 )
 async def task_discard(id: int) -> dict:
+    # Only the user's own reply this turn, never the brain's reading of it ("JARVIS, good" isn't a yes)
+    if not (await consent.reply(conversation.current().heard.said, consent.DISCARD)).yes:
+        raise ValueError(f"Not discarded: what {profile.name()} just said isn't a plain yes to throwing task {id}'s "
+                         "work away. Check back in a few words, naming the task, and call this again once they say "
+                         "yes.")
     return _brief(await client.discard(id))
 
 
