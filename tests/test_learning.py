@@ -242,8 +242,9 @@ def test_suggestions_become_data_edits_with_memory_lines_by_their_exact_text(dat
     lines = learning.numbered()
     found = learning.to_edits([
         {"action": "remember", "section": "user", "fact": "Alex uses Zed for editing", "reason": "Said so."},
-        {"action": "remember", "section": "user", "fact": "alex prefers short answers.", "reason": "Dupe."},
-        {"action": "update", "line": 2, "fact": "Alex's laptop is a 2022 MacBook Air", "reason": "More detail."},
+        {"action": "remember", "section": "user", "fact": "alex prefers short answers. (2026-09-01)", "reason": "Dupe."},
+        {"action": "update", "line": 2, "fact": "Alex's laptop is a 2022 MacBook Air (2026-09-02)",  # old date copied
+         "reason": "More detail."},
         {"action": "update", "line": "1", "fact": "Alex prefers short answers", "reason": "Same."},
         {"action": "forget", "line": 1, "reason": "Said it's wrong."},
         {"action": "forget", "line": 9, "reason": "No such line."},

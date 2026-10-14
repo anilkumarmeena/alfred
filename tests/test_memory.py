@@ -260,6 +260,19 @@ def test_replace_needs_exactly_one_line_and_keeps_to_the_limits(mem):
     assert memory.replace("0000", "Merged").startswith("Replaced in About Alex")  # shorter is fine
 
 
+def test_a_rewritten_fact_keeps_one_date_today_s(mem):
+    memory.remember("Eclipse is the web app (2026-10-10)", "environment")
+    assert memory.facts()["environment"] == [dated("Eclipse is the web app")]
+    memory.replace("eclipse", "Eclipse is the web and phone app (2026-10-10) (2026-10-10) ")
+    assert memory.facts()["environment"] == [dated("Eclipse is the web and phone app")]
+    memory.replace_fact(dated("Eclipse is the web and phone app"), f"Eclipse is the app ({datetime.now():%Y-%m-%d})")
+    assert memory.facts()["environment"] == [dated("Eclipse is the app")]
+    memory.remember("Born (1990-01-01) in Delhi", "user")  # only trailing dates go
+    assert memory.facts()["user"] == [dated("Born (1990-01-01) in Delhi")]
+    with pytest.raises(ValueError, match="empty"):
+        memory.remember("(2026-10-10)", "user")
+
+
 def test_a_file_over_its_limit_by_hand_can_still_be_brought_down(mem):
     lines = fill("user", 2400, 6)
     memory.replace(lines[1][2:20], "Shorter")  # still over, but less so

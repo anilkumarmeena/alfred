@@ -28,6 +28,7 @@ LIMITS = {"user": 2000, "environment": 3000}
 FACT_MAX = 400  # max chars per line, date included
 NEAR_FULL = 0.9  # fill ratio that triggers a "consolidate soon" hint
 _HEADING = re.compile(r"#+\s*(.*?)[\s#]*")
+_DATES = re.compile(r"(?:\s*\(\d{4}-\d{2}-\d{2}\))+$")  # trailing "(YYYY-MM-DD)" stamps
 
 
 def title(section: str) -> str:
@@ -120,9 +121,14 @@ def _saved(lead: str, section: str, lines: list[str]) -> str:
     return out
 
 
+def undated(fact: str) -> str:
+    """`fact` without the date(s) it ends with, as when a line is rewritten from the prompt, so it gets just one."""
+    return _DATES.sub("", fact)
+
+
 def _line(fact: str) -> str:
-    """Format a fact as a dated line, stripping invisible characters. ValueError if empty."""
-    if not (fact := " ".join(scan.clean(fact).split())):
+    """Format a fact as a line dated today, stripping invisible characters and any old date. ValueError if empty."""
+    if not (fact := undated(" ".join(scan.clean(fact).split()))):
         raise ValueError("The fact is empty.")
     return f"- {fact} ({datetime.now():%Y-%m-%d})"
 
