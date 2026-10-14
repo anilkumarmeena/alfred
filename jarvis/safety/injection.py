@@ -205,7 +205,12 @@ def _in_json(text: str, fields: tuple[str, ...], fn: Callable[[str], str]) -> st
 def _texts(value, fields: tuple[str, ...] | None = None) -> list[str]:
     """A result's screened strings, in order."""
     found: list[str] = []
-    _map(value, fields, lambda s: found.append(s) or s)
+
+    def keep(text: str) -> str:
+        found.append(text)
+        return text
+
+    _map(value, fields, keep)
     return found
 
 

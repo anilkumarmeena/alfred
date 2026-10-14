@@ -128,7 +128,7 @@ def test_without_the_wording_model_a_markdown_answer_is_trimmed_to_a_few_plain_s
 def test_a_file_lookup_s_source_line_goes_to_the_brain_and_a_plain_answer_needs_no_model(wording):
     text, note = announced("The web server listens on port 8080.\nSource: jarvis/core/config.py:42")
     assert text == "On the wake word: The web server listens on port 8080."
-    assert note == "[Not said aloud, for follow-up questions: Source: jarvis/core/config.py:42]"
+    assert note == "Not said aloud, for follow-up questions: Source: jarvis/core/config.py:42"
     assert wording.calls == []
 
 
@@ -137,7 +137,7 @@ def test_a_long_plain_answer_is_worded_down_too(wording):
     long = " ".join(f"Point {n} about the wake word." for n in range(6))
     text, note = announced(long)
     assert text == "On the wake word: It's hey jarvis, and you can change it."
-    assert note == f"[Not said aloud, for follow-up questions: {long}]"
+    assert note == f"Not said aloud, for follow-up questions: {long}"
 
 
 @pytest.mark.parametrize("answer, said", [

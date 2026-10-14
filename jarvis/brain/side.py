@@ -47,10 +47,10 @@ SAID_MOST = 400  # chars of an announced answer
 ANSWER_MOST = 4000  # chars of an answer the wording model reads
 _SOURCE = re.compile(r"^\W*sources?\W*:.*$", re.IGNORECASE | re.MULTILINE)  # a file lookup's last line
 # incl. a line that's all bold, unless it's a sentence ("**Port 8080.**")
-_HEADING = re.compile(r"^\s*(#{1,6}\s.*|\*\*[^*]*[^*.!?…\s]\*\*:?)\s*$", re.MULTILINE)
-# paths and line numbers, not "and/or", "24/7", dates like 10/14/2026 or ratios like 3.5:1
-_DETAIL = re.compile(r"(?:^|\s)~?\.?/\w|\b(?!\d+/\d+/\d)\w+/\w+/\w|\w/[\w.-]+\.[a-z]\w{0,4}\b|\.[a-z]\w{0,4}:\d"
-                     r"|\blines? \d", re.IGNORECASE)
+_HEADING = re.compile(r"^[ \t]*(#{1,6}[ \t].*|\*\*[^*\n]*[^*.!?…\s]\*\*:?)[ \t]*$", re.MULTILINE)
+# paths and line numbers, not "and/or", "24/7", "Mon/Wed/Fri", dates like 10/14/2026, ratios like 3.5:1 or "Line 4"
+_DETAIL = re.compile(r"(?:^|\s)~?\.?/\w|\w/[\w.-]+\.[a-z]\w{0,4}\b|\.[a-z]\w{0,4}:\d"
+                     r"|(?-i:\b(?:on|at|in|see|from) lines? \d)", re.IGNORECASE)
 _SENTENCE = re.compile(r"(?<=[.!?…])\s+")
 
 def system() -> str:
@@ -89,8 +89,9 @@ async def spoken(found: str) -> tuple[str, str]:
     from jarvis.brain.sdk import ask
 
     answer = _SOURCE.sub("", found).strip()
-    if (trimmed := _trimmed(answer)) == " ".join(answer.split()):
+    if answer and (trimmed := _trimmed(answer)) == " ".join(answer.split()):
         return trimmed, "\n".join(_SOURCE.findall(found))
+    trimmed = _trimmed(answer)  # nothing but a "Source:" line: the model words it, if it's on
     said = ""
     if ANNOUNCE_ENABLED and not usage.out():
         try:
@@ -246,7 +247,7 @@ class Jobs:
             return self._tell(f"On {about}: {found}" if found else f"I found nothing on {about}.")
         said, detail = await spoken(found)
         return self._tell(f"On {about}: {said}" if said else f"The lookup on {about} is back; ask me for the details.",
-                          f"[Not said aloud, for follow-up questions: {detail}]" if detail else "")
+                          f"Not said aloud, for follow-up questions: {detail}" if detail else "")  # sent as <private>
 
     async def close(self) -> None:
         """Cancel all jobs."""

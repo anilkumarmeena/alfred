@@ -43,6 +43,10 @@ def test_internal_details_are_said_in_plain_words(said, heard):
     "Two tasks finished, and a third one is on its way.",
     "Your 3 tasks are done: the Chat fix, the merge and the review.",
     "The task 2 weeks ago was bigger than this one, by a task 3 times over.",
+    "The interval [0, 1) is half-open, so zero is in it. Want more?",
+    "Item array[0] holds the id.",
+    "The class runs Mon/Wed/Fri, in red/green/blue rooms, ships w/2-3 days delay, see pages/10-12.",
+    "Press <Enter> to submit; it returns List<String>, and if count<limit and size>0 it retries.",
 ])
 def test_normal_speech_is_left_as_it_is(said):
     assert scrub(said) == said
@@ -54,6 +58,7 @@ LEAKY = [
     "In /Users/sam/projects/app/voice/turn.py, the Judge decides; see [the doc](https://example.com/doc) too.",
     "The <private>task 5, branch x</private> build passed, at example.com/docs/page on 13/10/2026.",
     "Done. [Note: nested [inner] thing] Next, I called task_start.",
+    "The interval [0, 1) is half-open, x <y and z>1, and [That was task 5.] that's all.",
 ]
 
 
