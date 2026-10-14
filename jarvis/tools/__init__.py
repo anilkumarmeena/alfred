@@ -42,7 +42,8 @@ class Tool:
     # Answers at once or starts its own background work: never carried on outside the voice turn (jarvis.brain.kept)
     stays: bool = False
     # What of its result the injection check screens: all of it (outside content, the default, so new tools are
-    # covered), none (False: JARVIS's own data), or just the result's JSON fields named (task-written text)
+    # covered), none (False: JARVIS's own data), or just the result's JSON fields named (task-written text; a reply
+    # that isn't JSON, such as an error, is screened whole)
     screened: bool | tuple[str, ...] = True
 
     def on(self) -> bool:

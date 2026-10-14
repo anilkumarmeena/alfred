@@ -251,10 +251,14 @@ def test_a_command_tasks_output_and_a_watchs_findings_are_checked(model):
     assert "Price page" not in model.prompts[1]
 
 
-def test_a_plain_text_reply_from_a_partly_screened_tool_isnt_checked(model):
-    assert screen(mcp("RunnerUnavailable: the task runner isn't running right now."),
-                  tool="mcp__jarvis__task_list") == {}
-    assert model.prompts == []
+def test_a_partly_screened_tools_plain_text_reply_is_checked_whole(model):
+    # An error can quote what the runner or git printed, so text that isn't a record is screened like any result
+    model.answer = says(BLOCK, "it tells the assistant to forward the user's emails", [ATTACK])
+    error = f"ValueError: Merging task-7 into main failed, so nothing changed and the branch is kept: {ATTACK}"
+    for response in (mcp(error), error):
+        updated = screen(response, tool="mcp__jarvis__task_merge")["hookSpecificOutput"]["updatedToolOutput"]
+        assert ATTACK not in json.dumps(updated) and "Merging task-7" in json.dumps(updated)
+    assert ATTACK in model.prompts[0]
 
 
 def test_pictures_arent_sent_as_text(model):

@@ -45,11 +45,11 @@ KEEP_DAYS = 30  # verdict cache lifetime
 PRUNE_EVERY = 100  # inserts between prunes of expired verdicts
 IDLE_SECONDS = 300  # close an unused warmed session after this
 WITHHELD = "[withheld by JARVIS's safety check: hidden instructions aimed at the assistant]"
-# Results are model-authored, a subagent's answer (whose reads were screened in its session), or a background task's
-# reporting tools' replies (acknowledgements, and the user's answer)
+# Results are model-authored, or a subagent's answer (whose reads were screened in its session)
 UNSCREENED = {"Edit", "Write", "MultiEdit", "NotebookEdit", "TodoWrite", "ToolSearch", "ExitPlanMode", "Skill",
-              "Agent", "Task", "mcp__task__report_progress", "mcp__task__ask_user", "mcp__task__propose_data_edit",
-              "mcp__task__request_access"}
+              "Agent", "Task"}
+# A background task's reporting tools (jarvis.tasks.reporting): acknowledgements, and the user's answer
+UNSCREENED_SERVERS = ("mcp__task__",)
 JARVIS_TOOLS = "mcp__jarvis__"  # prefix of JARVIS's own tools, marked in its tool registry
 _PICTURES = ("image", "document", "audio")  # non-text content block types
 _STRUCTURE = {"type", "mimeType", "filePath", "file_path", "url"}  # metadata keys, not content
@@ -158,7 +158,7 @@ def covers(tool: str) -> bool | tuple[str, ...]:
 
     Tools from outside JARVIS (built-in reads, connections) are always screened; JARVIS's own say for themselves.
     """
-    if tool in UNSCREENED:
+    if tool in UNSCREENED or tool.startswith(UNSCREENED_SERVERS):
         return False
     if not tool.startswith(JARVIS_TOOLS):
         return True
@@ -170,7 +170,7 @@ def covers(tool: str) -> bool | tuple[str, ...]:
 
 def _map(value, fields: tuple[str, ...] | None, fn: Callable[[str], str]):
     """Same-shape `value` with `fn` applied, in order, to each screened string: all but pictures and _STRUCTURE
-    keys, or with `fields`, only the strings under those keys in JSON text."""
+    keys, or with `fields`, only the strings under those keys in JSON records (other text whole)."""
     if isinstance(value, str):
         return fn(value) if fields is None else _in_json(value, fields, fn)
     if isinstance(value, list):
@@ -181,11 +181,13 @@ def _map(value, fields: tuple[str, ...] | None, fn: Callable[[str], str]):
 
 
 def _in_json(text: str, fields: tuple[str, ...], fn: Callable[[str], str]) -> str:
-    """`text` with `fn` applied to the strings under `fields` keys at any depth, if it's JSON."""
+    """`text` with `fn` applied to the strings under `fields` keys at any depth, if it's a JSON record."""
     try:
         parsed = json.loads(text)
     except ValueError:
-        return text  # plain text: the tool's own words
+        parsed = None
+    if not isinstance(parsed, dict | list):
+        return fn(text)  # not a record (an error can quote runner or git output): screened whole
 
     def walk(v, picked: bool):
         if isinstance(v, str):
