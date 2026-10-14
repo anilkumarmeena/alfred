@@ -268,3 +268,20 @@ def test_with_no_open_items_a_todo_run_stays_silent(env, planner):
     job = schedules.add("todo", "next to-do", "", in_minutes=1)
     assert run_job(runner.Runner(), job) == [] and planner.asked == []
     assert schedules.get(job["id"])["last_result"] == "No open to-do items to start tasks for."
+
+
+def test_a_to_do_code_task_always_names_the_finish_skill(listed, monkeypatch, planner):
+    fake_run(monkeypatch, *[finishes()] * 5)
+    r = runner.Runner()
+    skill = f"jarvis-skills:{unattended.FINISH_SKILL}"
+    planner.reply = {"tasks": [
+        {"n": 1, "kind": "code_change", "project": "video-agent", "title": "lazy MCP tools",
+         "instruction": "Load MCP tools only when needed."},
+        {"n": 3, "kind": "research", "title": "weekly report", "instruction": "Write the weekly report."},
+    ]}
+    run_job(r, schedules.add("todo", "to-dos overnight", "", in_minutes=1, count=2))  # no note naming the skill
+    code, research = r.store.get(1), r.store.get(2)
+    assert code["kind"] == "code_change" and code["instruction"].count(skill) == 1
+    assert code["instruction"].startswith("Load MCP tools only when needed.") and skill not in research["instruction"]
+    named = {"kind": "code_change", "instruction": f"Fix it, then run the {skill} skill."}
+    assert unattended.instruction(named, {"text": ""}).count(skill) == 1  # a plan that names it isn't told twice

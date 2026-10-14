@@ -276,7 +276,7 @@ The runner runs what you schedule by voice, once or on a repeat. Jobs live in `d
 
 - **Resume and to-dos** do unattended, at your time, what you'd otherwise start by voice. One notification says what was resumed or started; a run with nothing to do stays silent.
   - **Resume** takes the tasks you name, or every task stopped in the last week ("and failed ones" adds those that failed, say on the usage limit). Scheduled runs and fixes for commands are left out: they retry by themselves.
-  - **To-dos** takes the items you name, or the next open ones no task has taken on yet. One short model call writes each task's instruction from the item, your projects and memory, and passes over items that need you ("call the dentist"); what you add when scheduling (a skill code tasks must use, say) ends every instruction as you said it. Each item is ticked off once its task is checked finished.
+  - **To-dos** takes the items you name, or the next open ones no task has taken on yet. One short model call writes each task's instruction from the item, your projects and memory, and passes over items that need you ("call the dentist"); what you add when scheduling (a skill code tasks must use, say) ends every instruction as you said it, and a code change's always names the `finish-code-change` skill. Each item is ticked off once its task is checked finished.
   - Both wait for a used-up usage limit to reset, keep to how many tasks run at once (the rest queue), and leave risky commands waiting for your yes.
 
 - **Notepad:** each run keeps one for the next, so "only tell me if something's new" stays silent otherwise.

@@ -5,7 +5,7 @@
   todo    starts tasks for to-do items, named ones or the next `count` open ones no task has taken. One PLAN_MODEL
           call turns the items into tasks (kind, project, instruction), passing over those that need the user; each
           task is linked to its item, so the runner settles the item as the task finishes. The job's text, the user's
-          standing instructions, ends every instruction as given
+          standing instructions, ends every instruction as given; a code_change task's also names FINISH_SKILL
 Both go through the runner like any task: its slots and queueing, and risky commands still wait for the user's yes.
 Each returns a Done, which the scheduler says as one notification.
 """
@@ -26,6 +26,7 @@ RESUME_HOURS = 7 * 24  # "every stopped task": those stopped in the last week
 OPEN_ITEMS = 30  # open items the planner sees when picking the next few
 PLAN_MODEL = SCHEDULE_MODEL
 PLAN_SECONDS = 180
+FINISH_SKILL = "finish-code-change"  # the JARVIS skill every code_change task ends with
 _NOT_RESUMED = {"queued": "is already queued", "running": "is already running",
                 "waiting": "is waiting for your answer", "done": "has finished", "discarded": "was discarded"}
 
@@ -149,8 +150,16 @@ async def plan(items: list[dict], want: int, named: bool, job: dict) -> dict | N
 
 
 def instruction(planned: dict, job: dict) -> str:
-    """A planned task's instruction, ending with the user's standing instructions as they gave them."""
-    return planned["instruction"].strip() + (f"\n\n{job['text']}" if job["text"] else "")
+    """A planned task's instruction, ending with the user's standing instructions as they gave them; a code_change
+    task's always names the FINISH_SKILL pass, whatever the plan and the job's text say."""
+    from jarvis.skills.home import PLUGIN
+
+    said = planned["instruction"].strip() + (f"\n\n{job['text']}" if job["text"] else "")
+    skill = f"{PLUGIN}:{FINISH_SKILL}"
+    if planned["kind"] == "code_change" and skill not in said:
+        said += (f"\n\nOnce the change works and its tests pass, finish with the {skill} skill: its cleanup pass and "
+                 "the full test suite, before reporting the task done.")
+    return said
 
 
 async def start_todos(runner, job: dict) -> Done:
