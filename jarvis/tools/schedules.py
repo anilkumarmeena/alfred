@@ -5,7 +5,6 @@ from datetime import datetime
 
 from jarvis.brain import usage
 from jarvis.core import profile
-from jarvis.core.config import QUIET_HOURS
 from jarvis.tasks import command_jobs, hold, schedules
 from jarvis.tasks.scheduler import RETRY_MINUTES
 
@@ -14,9 +13,14 @@ from .tasks import _TASK_TEXT, _clip
 
 # Screened in a scheduled job (Tool.screened): what its runs found or wrote down, and its task's own text
 _JOB_TEXT = (*_TASK_TEXT, "last_result", "notepad")
-_quiet = hold.parse_quiet_hours(QUIET_HOURS)
-QUIET_NOTE = (f"Watches aren't checked in quiet hours ({_quiet[0]:%H:%M} to {_quiet[1]:%H:%M}); the first check after "
-              "catches up.") if _quiet else ""
+
+
+def _quiet_note() -> str:
+    """What a new watch's maker is told about the user's quiet hours, or "" if they're off."""
+    if not (quiet := hold.quiet_hours()):
+        return ""
+    return (f"Watches aren't checked in quiet hours ({quiet[0]:%H:%M} to {quiet[1]:%H:%M}); the first check after "
+            "catches up.")
 
 
 def _brief(job: dict) -> dict:
@@ -181,8 +185,8 @@ def schedule_add(kind: str, title: str, text: str, when: str = "", in_minutes: i
     job = schedules.add(kind, title, text, when, in_minutes, repeat, every_minutes, until, task_kind, project, probe,
                         target, expect, only_changes, folder, timeout_minutes, summarize, auto_fix, log_file)
     out = _brief(job) | _held()
-    if kind == "watch" and QUIET_NOTE:
-        out["note"] = QUIET_NOTE
+    if kind == "watch" and (note := _quiet_note()):
+        out["note"] = note
     return out
 
 

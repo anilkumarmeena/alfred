@@ -602,7 +602,7 @@ All three run **inside the task runner**, which is always on and already reaches
 | 📊 | `usage` | A Claude usage window nearly or fully used |
 | 🩺 | `connections` | A connection whose sign-in check refused: the reading tool named in its row (`check_tool`), called with no arguments at most hourly (`mcp_servers.check`). One that never answers keeps its last result |
 
-- **Quiet hours** (`JARVIS_QUIET_HOURS`) and **do not disturb** skip the round; what still holds is said after.
+- **Quiet hours** (the user's `quiet_hours` preference, read each round) and **do not disturb** skip the round; what still holds is said after.
 - Checks run in parallel with a 60 s limit each. Notices have **stable keys**, kept for 30 days in `data/notices.json`, so each is said once; an ongoing one (a stall) is forgotten when it clears, so it can come back. At most 5 per round.
 - Each goes out as a desktop notification and a push (`text` only), and is spoken at the next pause. Logs hold counts only, **never notice text**.
 

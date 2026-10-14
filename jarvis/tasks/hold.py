@@ -1,4 +1,5 @@
-"""Do not disturb ("pause all"): hold unasked output until a time or until resumed. Also the nightly quiet hours.
+"""Do not disturb ("pause all"): hold unasked output until a time or until resumed. Also the nightly quiet hours, the
+user's quiet_hours preference (watches and notices skip them).
 
 While on: the scheduler runs nothing (items stay due), notices (jarvis.tasks.notices) wait, and task updates skip
 desktop notifications and phone pushes (still said in a live session). Approval requests still come through.
@@ -8,12 +9,13 @@ Stored in settings under "hold" as {"since", "until", "ended"}. The last hold is
 scheduler can tell a deliberately held run from one missed while JARVIS was off (`covered`).
 """
 
+import functools
 import json
 import logging
 import time
 from datetime import datetime, time as clock_time, timedelta
 
-from jarvis.core import profile
+from jarvis.core import config, profile
 from jarvis.state import settings
 from jarvis.tasks import schedules
 
@@ -95,16 +97,37 @@ def describe(h: dict | None, now: datetime | None = None) -> str:
 # ── Quiet hours ─────────────────────────────────────────────────
 
 
+def window(spec: str) -> tuple[clock_time, clock_time]:
+    """'23:00-08:00' -> (23:00, 08:00). ValueError unless it's two different HH:MM times."""
+    start, end = (datetime.strptime(p.strip(), "%H:%M").time() for p in spec.split("-"))
+    if start == end:
+        raise ValueError("quiet hours that start when they end")
+    return start, end
+
+
+@functools.cache  # read at every check: a bad value is warned about once
 def parse_quiet_hours(spec: str) -> tuple[clock_time, clock_time] | None:
-    """'23:00-08:00' -> (23:00, 08:00); None if empty, invalid, or start == end."""
-    if not spec.strip():
+    """'23:00-08:00' -> (23:00, 08:00); None if empty, "off" or invalid."""
+    if not (spec := spec.strip()) or spec.lower() in config.OFF:
         return None
     try:
-        start, end = (clock_time.fromisoformat(p.strip().zfill(5)) for p in spec.split("-"))
+        return window(spec)
     except ValueError:
-        log.warning("JARVIS_QUIET_HOURS should look like 23:00-08:00; ignoring it")
+        log.warning("quiet hours should be two different times like 23:00-08:00, not %r; ignoring them", spec)
         return None
-    return None if start == end else (start, end)
+
+
+def quiet_hours(spec: str | None = None) -> tuple[clock_time, clock_time] | None:
+    """The nightly quiet hours: `spec` if given, else the current user's quiet_hours preference (read now, so a change
+    applies at once); None if they're off."""
+    if spec is None:
+        spec = config.preference("quiet_hours") or config.DEFAULTS["quiet_hours"]
+    return parse_quiet_hours(spec)
+
+
+def is_quiet(now: datetime, spec: str | None = None) -> bool:
+    """Whether `now` falls in the quiet hours (`spec`, else the current user's)."""
+    return in_quiet_hours(now, quiet_hours(spec))
 
 
 def in_quiet_hours(now: datetime, quiet: tuple[clock_time, clock_time] | None) -> bool:

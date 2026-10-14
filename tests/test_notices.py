@@ -10,6 +10,7 @@ import pytest
 
 from conftest import use_profile
 from jarvis.core import config, profile
+from jarvis.state import settings
 from jarvis.tasks import hold, notices
 from jarvis.tasks.hold import in_quiet_hours, parse_quiet_hours
 from jarvis.tasks.notices import Notice, Notices
@@ -54,19 +55,29 @@ STUCK = Notice("task:7:stalled", "tasks", "Task 7 seems stuck.", task_id=7, ongo
 
 def test_config_defaults_and_overrides(monkeypatch):
     monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)  # the real .env mustn't leak in
-    for var in ("JARVIS_NOTICES", "JARVIS_QUIET_HOURS"):
-        monkeypatch.delenv(var, raising=False)
+    monkeypatch.delenv("JARVIS_NOTICES", raising=False)
     try:
         importlib.reload(config)
         assert config.NOTICES_ENABLED is True
-        assert config.QUIET_HOURS == "23:00-08:00"
         monkeypatch.setenv("JARVIS_NOTICES", "off")
-        monkeypatch.setenv("JARVIS_QUIET_HOURS", "")
         importlib.reload(config)
-        assert config.NOTICES_ENABLED is False and config.QUIET_HOURS == ""
+        assert config.NOTICES_ENABLED is False
     finally:
         monkeypatch.undo()
         importlib.reload(config)
+
+
+def test_quiet_hours_are_the_users_preference_read_when_checked(tmp_path, monkeypatch):
+    use_profile(monkeypatch, tmp_path)
+    monkeypatch.delenv("JARVIS_QUIET_HOURS", raising=False)
+    assert hold.quiet_hours() == (time(23), time(8))  # the default
+    settings.set_preference("quiet_hours", "22:30-07:00")
+    assert hold.quiet_hours() == (time(22, 30), time(7))
+    settings.set_preference("quiet_hours", "Off")
+    assert hold.quiet_hours() is None
+    monkeypatch.setenv("JARVIS_QUIET_HOURS", "01:00-05:00")  # .env wins
+    assert hold.quiet_hours() == (time(1), time(5))
+    assert hold.quiet_hours("") is None and hold.quiet_hours("13:00-14:00") == (time(13), time(14))  # given: as is
 
 
 class Stop(BaseException):
@@ -243,9 +254,19 @@ def test_a_failing_push_doesnt_stop_the_round_or_repeat(tmp_path):
 def test_parse_quiet_hours():
     assert parse_quiet_hours("23:00-08:00") == (time(23), time(8))
     assert parse_quiet_hours(" 8:30 - 9:00 ") == (time(8, 30), time(9))
-    assert parse_quiet_hours("") is None
+    assert parse_quiet_hours("") is None and parse_quiet_hours("off") is None
     assert parse_quiet_hours("10:00-10:00") is None
     assert parse_quiet_hours("late") is None
+    for loose in ("23:00Z-08:00", "08:00:30-09:00", "2300-0800", "8-22", "1:00-2:00-3:00"):  # only plain HH:MM
+        assert parse_quiet_hours(loose) is None, loose
+
+
+def test_a_bad_quiet_hours_value_is_warned_about_once(caplog):
+    hold.parse_quiet_hours.cache_clear()
+    with caplog.at_level(logging.WARNING, logger="jarvis.tasks.hold"):
+        for _ in range(3):
+            assert hold.quiet_hours("11pm-7am") is None
+    assert len(caplog.records) == 1
 
 
 @pytest.mark.parametrize("hour, minute, quiet", [(23, 0, True), (2, 0, True), (7, 59, True), (8, 0, False),
@@ -270,6 +291,17 @@ def test_quiet_hours_hold_notices_till_morning(tmp_path):
     asyncio.run(n.check())
     asyncio.run(n.check())
     assert notify.sent == [("JARVIS · tasks", WAITING.text)] and len(phone.sent) == 1
+
+
+def test_notices_follow_a_change_to_the_users_quiet_hours_at_once(tmp_path, monkeypatch):
+    use_profile(monkeypatch, tmp_path)
+    monkeypatch.delenv("JARVIS_QUIET_HOURS", raising=False)
+    tasks = check(WAITING)
+    n, notify = make(tmp_path, {"tasks": tasks}, quiet_hours=None)
+    settings.set_preference("quiet_hours", "14:00-16:00")
+    assert asyncio.run(n.check()) == [] and tasks.calls == []
+    settings.set_preference("quiet_hours", "off")
+    assert asyncio.run(n.check()) == [WAITING]
 
 
 def test_do_not_disturb_holds_notices_like_quiet_hours(tmp_path, monkeypatch):

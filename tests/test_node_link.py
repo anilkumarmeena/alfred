@@ -292,6 +292,7 @@ def test_the_welcome_brings_the_users_name_and_the_code_to_run(mine, monkeypatch
         h = hubs.Hub()
         welcome = await h.welcome(found)
         assert welcome["user"] == mine.name and welcome["protocol"] == link.PROTOCOL and "commit" in welcome
+        assert "quiet_hours" not in welcome  # a machine runs no watches or notices: those stay on the main computer
 
     asyncio.run(main())
 

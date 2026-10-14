@@ -19,7 +19,7 @@ from pathlib import Path
 
 from jarvis.brain import usage
 from jarvis.core import profile
-from jarvis.core.config import DATA_DIR, QUIET_HOURS, ROOT
+from jarvis.core.config import DATA_DIR, ROOT
 from jarvis.node import bundles, keys, link, machines
 from jarvis.node.link import Channel, Link, LinkDown, Refused
 from jarvis.node.transfer import Outbox
@@ -121,11 +121,10 @@ class Hub:
         return call
 
     async def welcome(self, found: machines.Machine) -> dict:
-        """What a machine is told on connecting: who it works for, their quiet hours, and the code to run."""
+        """What a machine is told on connecting: who it works for, their time zone, and the code to run."""
         mine = profile.current()
         return {"node": found.id, "name": found.name, "user": mine.name, "timezone": mine.timezone,
-                "quiet_hours": QUIET_HOURS, "commit": await bundles.head(self.root),
-                "protocol": link.PROTOCOL}
+                "commit": await bundles.head(self.root), "protocol": link.PROTOCOL}
 
     def connected(self, node: int) -> Link | None:
         conn = self.conns.get(node)

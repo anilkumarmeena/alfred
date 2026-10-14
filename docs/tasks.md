@@ -328,7 +328,7 @@ Every 15 minutes the runner checks on **JARVIS itself** and speaks up unasked:
 | 🩺 | **Connections** | A connection's [sign-in check](integrations.md#-sign-in-checks) fails (checked hourly) |
 
 - **You hear about it** as a desktop notification, a phone push if enabled, and **spoken at the next pause** if you're in a session.
-- **Rules:** nothing said twice (a stall again only once it has cleared and come back); nothing checked in quiet hours (23:00–08:00) or do not disturb.
+- **Rules:** nothing said twice (a stall again only once it has cleared and come back); nothing checked in your quiet hours (23:00–08:00 unless changed in Settings → Do not disturb) or do not disturb.
 
 ## 🧠 Learning review
 

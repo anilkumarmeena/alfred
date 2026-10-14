@@ -48,7 +48,7 @@
 
 ## 📱 Changed in the app
 
-A few settings live in the settings table of `data/tasks.db` and are changed in the control panel: **Settings → About you**, or **Settings → Behaviour** and **Settings → Safety check** for the rest.
+A few settings live in the settings table of `data/tasks.db` and are changed in the control panel: **Settings → About you**, **Settings → Do not disturb** for quiet hours, or **Settings → Behaviour** and **Settings → Safety check** for the rest.
 
 | | In the app | Variables | Applies |
 |:-:|---|---|---|
@@ -57,6 +57,7 @@ A few settings live in the settings table of `data/tasks.db` and are changed in 
 | 👂 | **Voice ID**: other voices, how sure it must be | `JARVIS_SPEAKER_CHECK`<br>`JARVIS_SPEAKER_THRESHOLD` | Next conversation |
 | 🧰 | **Background work**: tasks at once, web browser, browser window | `JARVIS_MAX_TASKS`<br>`JARVIS_BROWSER`<br>`JARVIS_BROWSER_WINDOW` | Task limit: runner restart<br>Browser: next conversation |
 | 🔒 | **Safety**: hidden instruction check, checked by | `JARVIS_INJECTION_CHECK`<br>`JARVIS_INJECTION_MODEL` | Next conversation or task |
+| 🌙 | **Do not disturb**: nightly quiet hours, local time (`23:00-08:00`; `off`: never quiet). Watches pause and notices wait | `JARVIS_QUIET_HOURS` | At once |
 
 On JARVIS's computer, the same preferences are shown and changed from a terminal:
 
@@ -307,7 +308,8 @@ Answers only your enrolled voice. What each case means is in **[🗣️ Voice](v
 | Setting | Default | What it does |
 |---|---|---|
 | `JARVIS_NOTICES` | `on` | JARVIS's [notices](tasks.md#-notices) about itself: stuck or waiting tasks, usage limits, failing connection sign-ins |
-| `JARVIS_QUIET_HOURS` | `23:00-08:00` | Local hours with no notices; watches pause too. Empty: never quiet |
+
+Quiet hours are a [preference](#-changed-in-the-app) (`JARVIS_QUIET_HOURS`, set in **Settings → Do not disturb**). To turn them off, set `off`: like any preference, an empty value means the default.
 
 ### Scheduler
 

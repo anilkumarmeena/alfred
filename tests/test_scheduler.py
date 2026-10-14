@@ -16,6 +16,7 @@ from jarvis import tools
 from jarvis.brain import retry
 from jarvis.core import profile
 from jarvis.core.database import Store
+from jarvis.state import settings
 from jarvis.tasks import runner, schedules, scheduler, worker
 from jarvis.tasks.scheduler import Found, Reading, Scheduler
 
@@ -78,7 +79,7 @@ class Clock:
         return self.now
 
 
-def make(probes: dict | None = None, quiet: str = "", now: datetime = NOW):
+def make(probes: dict | None = None, quiet: str | None = "", now: datetime = NOW):
     said: dict[str, list] = {"notified": [], "events": [], "pushed": []}
 
     async def notify(title, text):
@@ -378,6 +379,20 @@ def test_watches_wait_out_quiet_hours(db):
     tick(s)
     assert calls == [] and schedules.get(job["id"])["runs"] == 0
     clock.now = datetime(2026, 10, 7, 8, 0, tzinfo=profile.tz())
+    tick(s)
+    assert len(calls) == 1
+
+
+def test_watches_follow_the_users_quiet_hours_as_they_change(db, monkeypatch):
+    monkeypatch.delenv("JARVIS_QUIET_HOURS", raising=False)
+    evening = datetime(2026, 10, 6, 22, 0, tzinfo=profile.tz())
+    job = schedules.add("watch", "Deploy", "live", probe="url", target="https://a.example", now=evening)
+    probe, calls = probe_that(Found(False, "Not yet."))
+    s, _, _ = make({"url": probe}, quiet=None, now=evening)
+    settings.set_preference("quiet_hours", "21:00-07:00")
+    tick(s)
+    assert calls == [] and schedules.get(job["id"])["runs"] == 0
+    settings.set_preference("quiet_hours", "off")
     tick(s)
     assert len(calls) == 1
 
@@ -712,6 +727,17 @@ def test_schedule_tools(db):
     assert cancelled["status"] == "cancelled"
     refused, error = call("schedule_add", {"kind": "reminder", "title": "x", "text": "x"})
     assert error and "Say when" in refused
+
+
+def test_a_new_watch_is_told_the_users_quiet_hours(db, monkeypatch):
+    monkeypatch.delenv("JARVIS_QUIET_HOURS", raising=False)
+    watch = {"kind": "watch", "title": "Deploy", "text": "v2 live", "probe": "url", "target": "https://app.example"}
+    settings.set_preference("quiet_hours", "22:00-06:30")
+    added, _ = call("schedule_add", watch)
+    assert added["note"].startswith("Watches aren't checked in quiet hours (22:00 to 06:30)")
+    settings.set_preference("quiet_hours", "off")
+    added, _ = call("schedule_add", watch)
+    assert "note" not in added
 
 
 def test_schedule_tools_show_the_notepad_and_set_only_changes(db):

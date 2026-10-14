@@ -21,7 +21,6 @@ from datetime import datetime
 from pathlib import Path
 
 from jarvis.core import profile
-from jarvis.core.config import QUIET_HOURS
 from jarvis.core.files import write_atomic
 from jarvis.notify.push import Push, task_target
 from jarvis.tasks import hold
@@ -113,7 +112,7 @@ class Notices:
         announce: Callable[[dict], None] | None = None,
         state_file: Path | None = None,
         minutes: int = MINUTES,
-        quiet_hours: str = QUIET_HOURS,
+        quiet_hours: str | None = None,
         push: Push | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(profile.tz()),
         sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
@@ -124,7 +123,7 @@ class Notices:
         self.push = push
         self.seen = Seen(state_file or profile.current().notices_file)
         self.minutes = minutes
-        self.quiet = hold.parse_quiet_hours(quiet_hours)
+        self.quiet_hours = quiet_hours  # None: the user's quiet_hours preference, read at each round
         self.clock = clock
         self.sleep = sleep
 
@@ -140,7 +139,7 @@ class Notices:
     async def check(self) -> list[Notice]:
         """One round; returns the notices given."""
         now = self.clock()
-        if hold.in_quiet_hours(now, self.quiet) or hold.held(now.timestamp()):
+        if hold.is_quiet(now, self.quiet_hours) or hold.held(now.timestamp()):
             return []
         results = await asyncio.gather(*(self._gather(name, fn, now) for name, fn in self.checks.items()))
         stamp = now.timestamp()

@@ -467,6 +467,11 @@ function DoNotDisturb() {
       <p class="hint">While it's on, no reminder, scheduled task, watch or command runs, JARVIS keeps its own notices
         back and finished tasks don't notify; requests for a yes still come through. Held reminders and jobs run when it ends. The nightly quiet hours
         stay as they are.</p>
+      {prefs.value && <>
+        <PrefField k="quiet_hours" label="Nightly quiet hours" done="Saved. JARVIS uses it from now." />
+        <p class="hint">Every night, in your time zone: watches aren't checked and JARVIS keeps its own notices back.
+          Like 23:00-08:00, or off.</p>
+      </>}
     </>
   );
 }
