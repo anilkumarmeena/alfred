@@ -157,9 +157,10 @@ async def entrypoint(ctx: JobContext) -> None:
     quiet.follow(session, ctx.room)  # speaker off: text-only replies
     quiet.apply(session, (await ctx.wait_for_participant()).attributes)  # initial switch, before the greeting
     hello = await greeting
-    voice.floor.said(hello)  # it may end with a task's question
-    await session.say(hello)
-    voice.start(session)
+    voice.greeted(hello)  # it may hold a task's question
+    said = session.say(hello)
+    await said  # until played out, cut off or failed
+    voice.start(session, heard=not said.interrupted and said.exception() is None)
     await asyncio.gather(warmup, speaker_ready)
 
 

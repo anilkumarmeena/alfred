@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from jarvis.core import profile
 from jarvis.state import conversation
 from jarvis.tasks import client
 from jarvis.voice import floor as floor_module, session as voice_session
@@ -292,14 +293,163 @@ def test_the_runners_events_bring_requests_and_take_back_those_answered_elsewher
     assert [a.text for a in voice.announcements.queue] == ["Your 3 o'clock starts soon."]
 
 
-def test_the_greeting_mentions_updates_and_ends_with_the_oldest_request():
+def update(task_id: int, status: str, spoken: str, updated: float = 0, **fields) -> dict:
+    """An unseen task as the runner lists it."""
+    return {"id": task_id, "title": f"task {task_id}", "status": status, "spoken": spoken, "updated": updated,
+            "job": None, "edits": None} | fields
+
+
+RESTARTED = update(5, "done", "The restart worked, everything's back up.")
+
+
+def test_the_greeting_leads_with_an_update_then_ends_with_the_oldest_request():
     async def main():
-        voice = call(runner=Runner(pending=[OTHER, REQUEST], unseen=[{"id": 5}]))
+        voice = call(runner=Runner(pending=[OTHER, REQUEST], unseen=[RESTARTED]))
         return voice, await voice.greeting()
 
     voice, greeting = asyncio.run(main())
-    assert greeting.endswith(f"There is one task update waiting. {REQUEST['spoken']}")
+    assert greeting == f"Hello {profile.name()}. The restart worked, everything's back up. {REQUEST['spoken']}"
     assert voice.asks.open["id"] == 13 and list(voice.asks.waiting) == [14]
+    assert 'The update on "task 5" was task 5.' in voice.brain.notes[0]  # a reply about it reaches the task
+
+
+def test_the_greeting_leads_with_what_needs_the_user_then_failures_then_finished_work_then_routine():
+    async def main(*unseen):
+        return await call(runner=Runner(unseen=list(unseen))).greeting()
+
+    checked = update(1, "done", "Your inbox check found nothing new.", updated=9, job=4)
+    finished = update(2, "done", "The report is written.", updated=1)
+    failed = update(3, "failed", "The upgrade failed: the disk is full.", updated=2)
+    asking = update(4, "waiting", "The migration needs a decision. Shall I keep the old table?", updated=0)
+    hello = f"Hello {profile.name()}."
+    assert asyncio.run(main(checked, finished, failed, asking)) == (  # the question last, for the floor to hold
+        f"{hello} There are 4 task updates waiting. The migration needs a decision. Shall I keep the old table?")
+    assert asyncio.run(main(asking)) == f"{hello} The migration needs a decision. Shall I keep the old table?"
+    assert asyncio.run(main(checked, finished, failed)).startswith(f"{hello} The upgrade failed")
+    assert asyncio.run(main(checked, finished)) == (
+        f"{hello} The report is written. There is one more task update waiting.")
+    assert asyncio.run(main(checked)) == f"{hello} Your inbox check found nothing new."
+    fixed = update(5, "done", "The inbox check works again after a fix.", updated=0, job=4, fixes=1)
+    assert asyncio.run(main(checked, fixed)).startswith(f"{hello} The inbox check works again")  # asked for
+
+
+def test_among_equal_updates_the_greeting_leads_with_the_newest():
+    older = update(1, "done", "The backup finished.", updated=1)
+    newer = update(2, "done", "The deploy is live.", updated=2)
+    greeting = asyncio.run(call(runner=Runner(unseen=[older, newer])).greeting())
+    assert greeting.startswith(f"Hello {profile.name()}. The deploy is live.")
+
+
+def test_a_task_whose_request_is_asked_is_not_also_led_with():
+    async def main():
+        waiting = update(117, "waiting", "Task 117 is waiting for your go-ahead to delete files.", updated=9)
+        voice = call(runner=Runner(pending=[REQUEST], unseen=[waiting, RESTARTED]))
+        return await voice.greeting()
+
+    assert asyncio.run(main()) == (f"Hello {profile.name()}. The restart worked, everything's back up. "
+                                   f"{REQUEST['spoken']}")
+
+
+def test_with_nothing_waiting_or_the_runner_down_the_greeting_is_just_hello():
+    class Down(Runner):
+        async def tasks(self, unseen=False):
+            raise client.RunnerUnavailable("down")
+
+    voice = call()
+    assert asyncio.run(voice.greeting()) == f"Hello {profile.name()}. JARVIS online." and voice.brain.notes == []
+    assert asyncio.run(call(runner=Down()).greeting()) == f"Hello {profile.name()}. JARVIS online."
+
+
+def test_updates_with_nothing_to_say_are_only_counted():
+    greeting = asyncio.run(call(runner=Runner(unseen=[update(5, "done", "")])).greeting())
+    assert greeting == f"Hello {profile.name()}. JARVIS online. There is one task update waiting."
+
+
+class Marks(Runner):
+    """Records the tasks marked heard."""
+
+    def __init__(self, **lists) -> None:
+        super().__init__(**lists)
+        self.marked: list[list[int]] = []
+
+    async def mark_seen(self, ids) -> None:
+        self.marked.append(ids)
+
+
+def greeted(runner: Marks, heard: bool = True, meanwhile=None) -> list[list[int]]:
+    """Greet, let `meanwhile` change the runner's tasks, then start the call as the agent does once it's said."""
+
+    async def main():
+        voice = call(runner=runner)
+        await voice.greeting()
+        assert runner.marked == []
+        if meanwhile:
+            meanwhile(runner)
+        voice.start(Session(), heard=heard)
+        await settle()
+        await voice.close()
+        return runner.marked
+
+    return asyncio.run(main())
+
+
+def test_the_update_the_greeting_led_with_is_marked_heard_once_it_is_said():
+    newer = update(6, "done", "The tests pass.", updated=1)
+    assert greeted(Marks(unseen=[RESTARTED, newer])) == [[6]]  # the newer one led; the other waits for task_list
+
+
+def test_a_lead_is_not_marked_heard_when_the_greeting_was_cut_off_or_the_task_said_more_since():
+    assert greeted(Marks(unseen=[RESTARTED]), heard=False) == []
+
+    def finished_again(runner):
+        runner.unseen = [RESTARTED | {"spoken": "The restart failed this time."}]
+
+    assert greeted(Marks(unseen=[RESTARTED]), meanwhile=finished_again) == []
+
+
+def test_a_lead_cut_short_stays_unseen_and_the_brain_gets_it_whole():
+    long = update(5, "done", "The site is redesigned. " + "It has a new look. " * 12 + "It still needs you: set the key.")
+    runner = Marks(unseen=[long])
+    assert greeted(runner) == []
+
+    async def main():
+        voice = call(runner=runner)
+        return voice, await voice.greeting()
+
+    voice, greeting = asyncio.run(main())
+    assert "set the key" not in greeting and "Its whole update: The site is redesigned." in voice.brain.notes[0]
+    assert "It still needs you: set the key." in voice.brain.notes[0]
+
+
+def test_after_a_question_the_greeting_leaves_the_request_for_once_it_is_answered():
+    async def main():
+        asking = update(4, "waiting", "The migration needs a decision. Shall I keep the old table?")
+        voice = call(runner=Runner(pending=[REQUEST], unseen=[asking]))
+        return voice, await voice.greeting()
+
+    voice, greeting = asyncio.run(main())
+    assert greeting.endswith("Shall I keep the old table?")  # a yes now is for the question, not the request
+    assert voice.asks.open is None and list(voice.asks.waiting) == [13]  # ask_approvals asks it later
+
+
+def test_a_tasks_question_in_the_greeting_holds_the_floor_even_without_a_question_mark():
+    async def main(spoken):
+        voice = call(runner=Runner(pending=[REQUEST], unseen=[update(4, "waiting", spoken)]))
+        voice.greeted(await voice.greeting())
+        return voice.floor.question
+
+    assert asyncio.run(main("Can I have access to your calendar? To find a free slot."))
+    voice = call(runner=Runner(unseen=[update(5, "done", "The report is written.")]))
+    voice.greeted(asyncio.run(voice.greeting()))
+    assert not voice.floor.question
+
+
+def test_a_task_running_again_or_past_its_approval_has_nothing_to_lead_with():
+    resumed = update(7, "running", "Task 7, the deploy, is waiting for your go-ahead to run a push.", updated=9)
+    settled = update(8, "waiting", "Task 8, the cleanup, is waiting for your go-ahead to delete files.", updated=9,
+                     wait_kind="approval")
+    greeting = asyncio.run(call(runner=Runner(unseen=[resumed, settled, RESTARTED])).greeting())
+    assert greeting == f"Hello {profile.name()}. The restart worked, everything's back up."  # nor counted
 
 
 # ── What the call holds ───────────────────────────────────────

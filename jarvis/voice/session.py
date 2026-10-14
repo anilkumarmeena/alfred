@@ -13,6 +13,7 @@ from contextlib import suppress
 from jarvis.brain import VoiceBrain, retry, side
 from jarvis.brain.route import Router
 from jarvis.core import profile
+from jarvis.core.database import WAIT_APPROVAL
 from jarvis.safety import approvals, consent, remembered
 from jarvis.safety.approvals import VoiceApprovals
 from jarvis.state import conversation, memory
@@ -26,6 +27,15 @@ log = logging.getLogger("jarvis")
 QUESTION_RECHECK_SECONDS = 30
 # Follow runner events for the whole call; reconnect 30 s after any stop or failure
 RUNNER_EVENTS = retry.Policy(waits=(30,), retries=retry.KINDS, forever=True, passing=(client.RunnerUnavailable,))
+
+
+def _waiting(n: int, more: str = "") -> str:
+    """How many task updates wait, as a sentence with a leading space ("" for none); `more` is " more" after a lead."""
+    if not n:
+        return ""
+    if n == 1:
+        return f" There is one{more} task update waiting."
+    return f" There are {n}{more} task updates waiting."
 
 
 class VoiceSession:
@@ -56,6 +66,8 @@ class VoiceSession:
         self._hints: list[str] = []  # how the next turn was heard, for the brain
         self._last_words = ""
         self._loops: list[asyncio.Task] = []
+        self._greeted: dict | None = None  # the task whose whole update the greeting led with
+        self._asking = False  # the greeting leads with a task's question
 
     @property
     def _quick_models(self) -> list:
@@ -75,12 +87,31 @@ class VoiceSession:
         for quick in self._quick_models:
             quick.warm()
 
-    def start(self, session) -> None:
-        """After the greeting: start the task-update, announcement and approval loops on LiveKit's `session`."""
+    def greeted(self, hello: str) -> None:
+        """The greeting is about to be said. A task's question in it holds announcements and requests until answered,
+        even when its words don't end in a question mark."""
+        self.floor.said(hello)
+        self.floor.question = self.floor.question or self._asking
+
+    def start(self, session, heard: bool = True) -> None:
+        """After the greeting (`heard`: not cut off): mark the update it led with as heard; start the task-update,
+        announcement and approval loops on LiveKit's `session`."""
         self._loops = [asyncio.create_task(self.watch_tasks()),
                        asyncio.create_task(self.announcements.run(session, self.brain, self.stt, self.asks,
                                                                   self.runner.mark_seen)),
                        asyncio.create_task(self.ask_approvals(session))]
+        if heard and self._greeted is not None:
+            self._loops.append(asyncio.create_task(self._heard_greeting(self._greeted)))
+
+    async def _heard_greeting(self, lead: dict) -> None:
+        """Heard, the greeting's lead isn't led with again next time; unless the task said something new meanwhile,
+        which stays unseen (nothing heard it: the event stream starts only now)."""
+        try:
+            unseen = await self.runner.tasks(unseen=True)
+            if any(t["id"] == lead["id"] and t["spoken"] == lead["spoken"] for t in unseen):
+                await self.runner.mark_seen([lead["id"]])
+        except Exception as e:
+            log.warning("marking task %s as heard failed: %s", lead["id"], e)
 
     async def close(self) -> None:
         """Stop all loops, push pending announcements to the phone, and tell the runner (for the learning review)."""
@@ -214,18 +245,38 @@ class VoiceSession:
     # ── Unprompted ─────────────────────────────────────────────
 
     async def greeting(self) -> str:
-        greeting = f"Hello {profile.name()}. JARVIS online."
+        """Hello, led by the weightiest unseen task update in brief, then how many more wait, then the oldest pending
+        request. Fixed wording, no model call, so speech starts at once."""
+        greeting = f"Hello {profile.name()}."
         try:
             async with asyncio.timeout(2):
                 unseen, pending = await asyncio.gather(self.runner.tasks(unseen=True), self.runner.approvals())
         except Exception:  # a down runner mustn't delay the greeting
-            return greeting
-        if n := len(unseen):
-            greeting += f" There {'is one task update' if n == 1 else f'are {n} task updates'} waiting."
-            self.brain.note(greeting)  # so "what are they?" leads to task_list
+            return greeting + " JARVIS online."
+        asked = {approval["task"] for approval in pending}  # their requests are asked instead
+        # Nothing new from a task running again or waiting on a request (pending or settled): their words are old
+        unseen = [t for t in unseen if t["id"] not in asked and t["status"] not in ("queued", "running")
+                  and t.get("wait_kind") != WAIT_APPROVAL]
+        lead = announce.first(unseen)
+        said, whole = announce.brief(lead) if lead else ("", False)
+        asking = self._asking = lead is not None and lead["status"] == "waiting"
+        self._greeted = lead if whole else None  # a cut update stays unseen, for task_list to give in full
+        rest = len(unseen) - 1
+        if not lead:
+            greeting += " JARVIS online." + _waiting(len(unseen))
+        elif asking:  # its question goes last, so the floor holds for the answer
+            greeting += (_waiting(len(unseen)) if rest else "") + " " + said
+        else:
+            greeting += " " + said + _waiting(rest, " more")
+        if unseen:  # so "what are they?" leads to task_list, and a reply to the lead reaches its task
+            unsaid = announce.context(lead) if lead else ""
+            if lead and not whole:
+                unsaid += f" Its whole update: {lead['spoken']}"
+            self.brain.note(greeting, unsaid)
         for approval in pending:
             self.asks.add(approval)
-        if approval := self.asks.due():  # greeting ends with the oldest pending request
+        # The oldest pending request ends the greeting; after a question, ask_approvals asks it once that's answered
+        if not asking and (approval := self.asks.due()):
             spoken = self.asks.ask(approval)
             self.brain.note(spoken, approvals.asked(approval))
             greeting += " " + spoken
