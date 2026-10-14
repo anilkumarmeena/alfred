@@ -128,7 +128,7 @@ def test_without_the_wording_model_a_markdown_answer_is_trimmed_to_a_few_plain_s
 def test_a_file_lookup_s_source_line_goes_to_the_brain_and_a_plain_answer_needs_no_model(wording):
     text, note = announced("The web server listens on port 8080.\nSource: jarvis/core/config.py:42")
     assert text == "On the wake word: The web server listens on port 8080."
-    assert note == "[Not said aloud, for follow-up questions: Source: jarvis/core/config.py:42]"
+    assert note == "Not said aloud, for follow-up questions: Source: jarvis/core/config.py:42"
     assert wording.calls == []
 
 
@@ -137,7 +137,7 @@ def test_a_long_plain_answer_is_worded_down_too(wording):
     long = " ".join(f"Point {n} about the wake word." for n in range(6))
     text, note = announced(long)
     assert text == "On the wake word: It's hey jarvis, and you can change it."
-    assert note == f"[Not said aloud, for follow-up questions: {long}]"
+    assert note == f"Not said aloud, for follow-up questions: {long}"
 
 
 @pytest.mark.parametrize("answer, said", [
@@ -147,6 +147,37 @@ def test_a_long_plain_answer_is_worded_down_too(wording):
 def test_dates_ratios_and_a_bold_sentence_on_its_own_line_are_still_said(wording, answer, said):
     wording.reply = RuntimeError("no")
     assert announced(answer)[0] == f"On the wake word: {said}"
+
+
+@pytest.mark.parametrize("answer", [
+    "Your yoga class is Mon/Wed/Fri at 6, in the red/green room.",
+    "Take the Line 4 train, then walk five minutes.",
+])
+def test_slash_lists_and_a_train_line_are_plain_speech_not_detail(wording, answer):
+    assert announced(answer)[0] == f"On the wake word: {answer}" and wording.calls == []
+
+
+@pytest.mark.parametrize("answer", [
+    "On line 42 of the config, the port is set to 8080.",
+    "Line 42 of config.py sets the port to 8080.",
+    "The port is set in src/settings/ to 8080.",
+])
+def test_a_line_number_or_folder_isnt_said_as_it_is(wording, answer):
+    wording.reply = "The port is set to 8080."
+    assert announced(answer)[0] == "On the wake word: The port is set to 8080." and len(wording.calls) == 1
+
+
+def test_a_heading_line_never_takes_the_line_after_it(wording):
+    wording.reply = RuntimeError("no")
+    assert announced("#\nThe port is 8080.\n\n**Port**\nIt's set in the config.")[0] == (
+        "On the wake word: The port is 8080. It's set in the config.")
+
+
+def test_an_answer_all_on_its_source_line_is_worded_by_the_model(wording):
+    wording.reply = "The port is 8080."
+    text, note = announced("Source: the README says the port is 8080.")
+    assert text == "On the wake word: The port is 8080." and len(wording.calls) == 1
+    assert "the README says the port is 8080" in note
 
 
 def test_an_answer_that_is_all_detail_still_says_it_is_back(wording):

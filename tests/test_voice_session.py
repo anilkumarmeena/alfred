@@ -235,7 +235,9 @@ def test_a_request_is_put_to_the_user_as_soon_as_it_comes_not_on_a_timer():
 
     voice, session = asyncio.run(main())
     assert session.said == [REQUEST["spoken"]] and voice.asks.open["id"] == 13
-    assert voice.brain.notes == [REQUEST["spoken"]] and voice.floor.question
+    # The question names no task; which one it is goes to the brain alone, for a later "approve it"
+    assert voice.brain.notes == [f"{REQUEST['spoken']} That question was task 117's request 13."]
+    assert voice.floor.question
 
 
 def test_a_request_waits_for_the_brains_own_question_and_follows_the_turn_that_answers_it():

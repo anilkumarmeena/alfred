@@ -26,10 +26,11 @@ _NOW = ("The result's now says how the task stands: started, queued (not started
         "started.\", \"It's queued and will start shortly.\"), never that it started when it's queued, and what it "
         "waits on only when asked. When the result has where, say that too: it names the machine the task runs on, or "
         "why it runs on this computer instead.")
-# Screened in a task's record (Tool.screened): its summary and question, which can quote what it read (a research
-# summary quoting an email), and a command's raw output, which no model has seen. The rest is JARVIS's own, and its
-# log lines are short step notes from a session whose reads were screened.
-_TASK_TEXT = ("summary", "question", "output_tail")
+# Screened in a task's record (Tool.screened): what the task wrote, which can quote what it read (a research summary
+# quoting an email), and a command's raw output, which no model has seen, wherever they show: its summary and
+# question, its spoken update and log (which repeat them, or a command's last lines), its activity (a running
+# command's last line, or the task's own progress note) and its suggested edits. The rest is JARVIS's own.
+_TASK_TEXT = ("summary", "question", "output_tail", "spoken", "log", "activity", "suggested_edits", "still_pending")
 _MACHINE = {"type": "string", "description": "Only when the user says where this one should run: \"here\" for this "
                                              "computer, or the name of one of their machines (see machines). Leave it "
                                              "out to follow their setting."}
@@ -376,8 +377,10 @@ async def task_merge(id: int) -> dict:
     screened=_TASK_TEXT,
 )
 async def task_discard(id: int) -> dict:
-    # Only the user's own reply this turn, never the brain's reading of it ("JARVIS, good" isn't a yes)
-    if not (await consent.reply(conversation.current().heard.said, consent.DISCARD)).yes:
+    # Only the user's own reply this turn, never the brain's reading of it ("JARVIS, good" isn't a yes), nor words
+    # already spent: a turn the brain carries on by itself after they spoke again keeps their last words unused
+    heard = conversation.current().heard
+    if heard.spent or not (await consent.reply(heard.said, consent.DISCARD)).yes:
         raise ValueError(f"Not discarded: what {profile.name()} just said isn't a plain yes to throwing task {id}'s "
                          "work away. Check back in a few words, naming the task, and call this again once they say "
                          "yes.")
@@ -403,7 +406,7 @@ async def task_discard(id: int) -> dict:
         "edits": {"type": "array", "items": {"type": "integer"}, "description": "The edits' numbers."},
     },
     ["id", "action", "edits"],
-    screened=False,
+    screened=_TASK_TEXT,
 )
 async def task_edits(id: int, action: str, edits: list[int]) -> dict:
     t = await client.edits(id, action, edits)

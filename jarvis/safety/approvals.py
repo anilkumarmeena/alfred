@@ -188,6 +188,11 @@ def saved(kept: dict) -> str:
     return "Saved. You can withdraw it any time, in the control panel's settings or by asking me."
 
 
+def asked(approval: dict) -> str:
+    """Note for the brain alone: which task and request a spoken question (which names neither) is about."""
+    return f"That question was task {approval['task']}'s request {approval['id']}."
+
+
 def note(approval: dict, decision: str) -> str:
     """Context note for the brain: what the user just approved or declined."""
     word = "approved" if decision == "approve" else "declined"

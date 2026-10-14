@@ -134,8 +134,9 @@ _AFFIRMATIVE = sorted(
     key=len,
     reverse=True,
 )
-# Remarks that react rather than answer: a yes beside an answer ("great, go ahead"), never alone ("JARVIS, good")
-_REACTIONS = {(w,) for w in "good great cool perfect lovely brilliant excellent".split()}
+# Remarks that react rather than answer: a yes beside an answer ("great, go ahead"), never alone ("JARVIS, good",
+# "Right." as in "right, hmm"); "that's right" and "all right" are phrases of their own
+_REACTIONS = {(w,) for w in "good great cool perfect lovely brilliant excellent right".split()}
 _ACTION = re.compile(  # "yes, merge it" counts as "go"
     r"\b(let's |let it |you can )?(run|merge|do|install|execute|apply|start|restart|launch|open|try|send|fetch|pull|push"
     r"|update|upgrade|kill|commit|deploy|build|delete|remove|stop|allow|render|close|quit|clean|clear|end|wipe|trash|shut)"
