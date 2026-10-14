@@ -243,7 +243,7 @@ def test_suggestions_become_data_edits_with_memory_lines_by_their_exact_text(dat
     found = learning.to_edits([
         {"action": "remember", "section": "user", "fact": "Alex uses Zed for editing", "reason": "Said so."},
         {"action": "remember", "section": "user", "fact": "alex prefers short answers. (2026-09-01)", "reason": "Dupe."},
-        {"action": "update", "line": 2, "fact": "Alex's laptop is a 2022 MacBook Air (2026-09-02)",  # old date copied
+        {"action": "update", "line": 2, "fact": "Alex's laptop is a 2022 MacBook Air (2026-09-02)​",  # date copied
          "reason": "More detail."},
         {"action": "update", "line": "1", "fact": "Alex prefers short answers", "reason": "Same."},
         {"action": "forget", "line": 1, "reason": "Said it's wrong."},
@@ -261,6 +261,14 @@ def test_suggestions_become_data_edits_with_memory_lines_by_their_exact_text(dat
     ]
     for edit in found:
         data_edits.check(edit)  # each one the runner can take
+
+
+def test_an_update_to_a_future_date_in_a_fact_is_kept(data):
+    lines = [("user", "- Dentist on (2999-11-03) (2026-10-01)")]
+    found = learning.to_edits([{"action": "update", "line": 1, "fact": "Dentist on (2999-11-10)", "reason": "Moved."}],
+                              lines, TODAY)
+    assert found == [{"action": "edit", "file": "memory.md", "old": lines[0][1],
+                      "new": f"- Dentist on (2999-11-10) ({TODAY})", "reason": "Moved."}]
 
 
 def test_helpers_count_the_user_s_words_and_cut_a_long_conversation_at_an_entry(data):

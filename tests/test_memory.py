@@ -173,7 +173,7 @@ def mem(tmp_path, monkeypatch):
 
 
 def dated(fact: str) -> str:
-    return f"- {fact} ({datetime.now():%Y-%m-%d})"
+    return f"- {fact} ({datetime.now(profile.tz()):%Y-%m-%d})"
 
 
 def fill(section: str, size: int, n: int = 5) -> list[str]:
@@ -265,10 +265,13 @@ def test_a_rewritten_fact_keeps_one_date_today_s(mem):
     assert memory.facts()["environment"] == [dated("Eclipse is the web app")]
     memory.replace("eclipse", "Eclipse is the web and phone app (2026-10-10) (2026-10-10) ")
     assert memory.facts()["environment"] == [dated("Eclipse is the web and phone app")]
-    memory.replace_fact(dated("Eclipse is the web and phone app"), f"Eclipse is the app ({datetime.now():%Y-%m-%d})")
+    memory.replace_fact(dated("Eclipse is the web and phone app"), dated("Eclipse is the app"))
     assert memory.facts()["environment"] == [dated("Eclipse is the app")]
+    memory.replace("eclipse", "- Eclipse is the app. (2026-10-10).​")  # the whole line copied, full stop added
+    assert memory.facts()["environment"] == [dated("Eclipse is the app.")]
     memory.remember("Born (1990-01-01) in Delhi", "user")  # only trailing dates go
-    assert memory.facts()["user"] == [dated("Born (1990-01-01) in Delhi")]
+    memory.remember("Passport expires (2999-05-01) (2026-10-10)", "user")  # a future date is the fact's own
+    assert memory.facts()["user"] == [dated("Born (1990-01-01) in Delhi"), dated("Passport expires (2999-05-01)")]
     with pytest.raises(ValueError, match="empty"):
         memory.remember("(2026-10-10)", "user")
 
