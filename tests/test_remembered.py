@@ -312,8 +312,8 @@ def voice(through, monkeypatch):
         def __init__(self) -> None:
             self.notes: list[str] = []
 
-        def note(self, text: str) -> None:
-            self.notes.append(text)
+        def note(self, text: str, unsaid: str = "") -> None:
+            self.notes.append(f"{text} {unsaid}".strip())
 
     return r, voice_session.VoiceSession(Brain())
 
@@ -330,7 +330,7 @@ def test_an_always_by_voice_says_what_it_would_cover_and_saves_it_on_a_yes(voice
         return task, approval, said, kept
 
     task, approval, said, kept = asyncio.run(main())
-    assert said == (f"Okay, task {task['id']} carries on. From now on, “brew install xcodegen” exactly (installs software) "
+    assert said == (f"Okay, the task carries on. From now on, “brew install xcodegen” exactly (installs software) "
                     "would run without asking, for background tasks and my own shell, in any folder. Save that rule?")
     assert r.store.approval(approval["id"])["state"] == APPROVED
     assert kept.startswith("Saved.") and [k["covers"] for k in remembered.listed()] == [
@@ -353,7 +353,7 @@ def test_a_no_to_the_offer_keeps_nothing_and_a_session_yes_needs_no_offer(voice)
 
     task, offered, refused, session = asyncio.run(main())
     assert offered[0]["breadth"] == "kind" and refused == "Okay, I won't remember it."
-    assert session == (f"Okay, task {task['id']} carries on. For the rest of it, “npm install” exactly (installs "
+    assert session == (f"Okay, the task carries on. For the rest of it, “npm install” exactly (installs "
                        "software) won't need asking.")
     assert [k["scope"] for k in remembered.listed()] == ["session"] and conversation.current().offer.open is None
 
@@ -367,7 +367,7 @@ def test_an_always_for_what_always_asks_says_the_yes_was_once(voice):
         return task, await call.answer("Yes, always.", r.approvals()[0], "approve", "always")
 
     task, said = asyncio.run(main())
-    assert said == f"Okay, task {task['id']} carries on. That yes is just for this once: a command that pushes asks every time."
+    assert said == f"Okay, the task carries on. That yes is just for this once: a command that pushes asks every time."
     assert conversation.current().offer.open is None
 
 

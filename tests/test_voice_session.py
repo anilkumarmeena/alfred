@@ -43,7 +43,7 @@ class Brain:
             yield chunk
 
     def note(self, text: str, unsaid: str = "") -> None:
-        self.notes.append(text)
+        self.notes.append(f"{text} {unsaid}".strip())
 
     def on_background(self, finished) -> None:
         self.background = finished
@@ -150,7 +150,7 @@ def test_a_yes_to_a_tasks_request_goes_to_the_runner_not_the_brain():
         return voice, await reply(voice, "Yes, go ahead.")
 
     voice, said = asyncio.run(main())
-    assert said == "Okay, task 117 carries on."
+    assert said == "Okay, the task carries on."
     assert voice.runner.answers == [(13, "approve", "voice", "once", True)]
     assert voice.brain.asked == [] and voice.asks.open is None
     assert not voice.floor.question and voice.floor.recent[-1] == ("JARVIS", said)
@@ -165,7 +165,7 @@ def test_a_no_to_a_tasks_request_turns_it_down():
         return voice, await reply(voice, "No.")
 
     voice, said = asyncio.run(main())
-    assert said == "Okay, task 117 won't run it."
+    assert said == "Okay, the task won't run it."
     assert voice.runner.answers == [(13, "deny", "voice", "once", True)] and voice.brain.asked == []
 
 
@@ -269,7 +269,7 @@ def test_a_rule_offered_is_dropped_when_a_request_is_put():
         return voice, await reply(voice, "Yes.")
 
     voice, said = asyncio.run(main())
-    assert said == "Okay, task 117 carries on." and voice.runner.kept == []
+    assert said == "Okay, the task carries on." and voice.runner.kept == []
 
 
 def test_the_runners_events_bring_requests_and_take_back_those_answered_elsewhere():

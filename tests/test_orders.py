@@ -262,7 +262,7 @@ def test_a_spoken_yes_goes_for_every_request_the_task_has_waiting(through, monke
     monkeypatch.setattr(voice_session.memory, "log_exchange", lambda *a, **k: None)
 
     class Brain:
-        def note(self, text: str) -> None:
+        def note(self, text: str, unsaid: str = "") -> None:
             pass
 
     async def main():
@@ -280,11 +280,11 @@ def test_a_spoken_yes_goes_for_every_request_the_task_has_waiting(through, monke
         return task, first, second, elsewhere, spoken, said
 
     task, first, second, elsewhere, spoken, said = asyncio.run(main())
-    assert spoken == (f"Task {task['id']}, the mockup, wants to run a command that runs code it can't see (perl) and a "
+    assert spoken == ("Your task, the mockup, wants to run a command that runs code it can't see (perl) and a "
                       "command that stops a process (kill). One yes covers them all. Okay to go ahead?")
     assert r.store.approval(first["id"])["state"] == r.store.approval(second["id"])["state"] == APPROVED
     assert r.store.approval(elsewhere["id"])["state"] == PENDING
-    assert said == f"Okay, task {task['id']} carries on. That yes covers its other request waiting too."
+    assert said == "Okay, the task carries on. That yes covers its other request waiting too."
 
 
 def test_a_spoken_no_turns_the_tasks_requests_down_together(through):
@@ -298,7 +298,7 @@ def test_a_spoken_no_turns_the_tasks_requests_down_together(through):
 
     first, second, outcome = asyncio.run(main())
     assert outcome["also"] == [second["id"]] and r.store.approval(second["id"])["state"] == "denied"
-    assert approvals.answered(first, "deny", outcome) == f"Okay, task {first['task']} won't run them."
+    assert approvals.answered(first, "deny", outcome) == f"Okay, the task won't run them."
 
 
 def test_a_tap_answers_only_its_own_request(through):

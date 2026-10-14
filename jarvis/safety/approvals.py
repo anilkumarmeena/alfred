@@ -119,18 +119,17 @@ def spoken(group: list[dict]) -> str:
         return group[0]["spoken"]
     first = group[0]
     title = f", {first['title']}," if first.get("title") else ""
-    return (f"Task {first['task']}{title} wants to run {' and '.join(a['summary'] for a in group)}. One yes covers "
+    return (f"Your task{title} wants to run {' and '.join(a['summary'] for a in group)}. One yes covers "
             "them all. Okay to go ahead?")
 
 
 def answered(approval: dict, decision: str, outcome: dict) -> str:
     """Spoken confirmation of an answer, incl. other requests it covered and any session rule kept."""
-    task = f"task {approval['task']}"
     if not outcome.get("answered"):
-        return f"That request from {task} was already dealt with."
+        return "That request was already dealt with."
     if decision != "approve":
-        return f"Okay, {task} won't run {'them' if outcome.get('also') else 'it'}."
-    said = f"Okay, {task} carries on."
+        return f"Okay, the task won't run {'them' if outcome.get('also') else 'it'}."
+    said = "Okay, the task carries on."
     if n := len(outcome.get("also") or []):
         said += f" That yes covers its {'other request' if n == 1 else f'{n} other requests'} waiting too."
     if kept := outcome.get("remembered"):

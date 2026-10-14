@@ -152,6 +152,7 @@ sequenceDiagram
 ```text
 [Monday 12 October 2026, 03:41 PM]
 [You announced since the last turn: The Chat fix is done …]
+<private>The update on "Chat fix" was task 230. Its suggested edits, pending: …</private>
 <what the user said>
 [Anil sent a photo with this, attached.]
 [Anil spoke while your last command was running, so they didn't hear the rest of that reply: "…"]
@@ -159,6 +160,8 @@ sequenceDiagram
 <framing lines from voice: low confidence / continuation>
 <agreed hint: which held command the yes approved>
 ```
+
+**Private notes stay unspoken.** What's for the brain alone (which task an update was, its pending edits, what the user just approved) goes in `<private>` tags; bracketed notes, tool-result guidance and safety-check notes are private too, and the persona says never to read them out or say task numbers, paths, branches or tool names. Whatever slips through anyway is caught by the last check before speech, `jarvis/voice/unspoken.py`, on every reply and every line JARVIS says itself: notes in brackets or tags are dropped, "task 230" becomes "the task", a task branch "the branch", a file path its last part and `task_start` "task start".
 
 ---
 
