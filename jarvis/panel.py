@@ -205,6 +205,7 @@ RUNS = 10  # latest runs shown per job
 def _job(job: dict) -> dict:
     note = schedules.notepad(job)
     return {k: job[k] for k in JOB_FIELDS} | {"when": schedules.describe(job), "check": schedules.check_text(job),
+                                              "does": schedules.work_text(job),
                                               "notepad": note and {"at": note["at"], "text": note["text"]}}
 
 

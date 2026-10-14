@@ -2,11 +2,12 @@
 // resumes and cancels them.
 
 export interface Schedule {
-  id: number; kind: "reminder" | "task" | "watch" | "command"; title: string; text: string;
+  id: number; kind: "reminder" | "task" | "watch" | "command" | "resume" | "todo"; title: string; text: string;
   folder: string | null;  // command jobs: working folder
   status: string;  // active | paused | done | cancelled | expired
   next_run: number | null; last_run: number | null; until: number | null; runs: number; last_result: string | null;
   task_kind: string | null; project: string | null; when: string; check: string;
+  does: string;  // resume and todo jobs: what each run takes on
   only_changes: number;  // 1: silent unless something changed since the last run
   notepad: { at: number; text: string } | null;  // note from the latest run for the next (job memory)
 }
@@ -22,7 +23,7 @@ export interface ScheduleRun {
 export interface ScheduleDetail extends Schedule { recent: ScheduleRun[]; runs_problem: string }
 
 const KIND_LABEL: Record<string, string> = { reminder: "Reminder", task: "Scheduled task", watch: "Watch",
-  command: "Scheduled command" };
+  command: "Scheduled command", resume: "Scheduled resume", todo: "Scheduled to-dos" };
 export const kindLabel = (kind: string) => KIND_LABEL[kind] ?? kind;
 
 // Panel item id for a job ("job-3"); tasks use their bare number

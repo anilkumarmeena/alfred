@@ -8,6 +8,8 @@
             not yet: silent. Expiry unmet is announced once
   command   model-free command task with no slot; the runner announces, summarises and (auto_fix) fixes; with
             only_changes a successful run that prints nothing stays silent
+  resume    carry on stopped tasks; todo: start tasks for to-do items (jarvis.tasks.unattended). Run in the background
+            like probes, then one notification says what was resumed or started; nothing to do stays silent
 Missed runs never pile up: one-offs run once late; day-based jobs catch up only within CATCH_UP_HOURS; interval jobs
 and watches run once now. Overlapping runs are skipped. Watches skip quiet hours. Do-not-disturb holds everything;
 model runs also wait out Claude's usage limit (jarvis.brain.usage).
@@ -288,7 +290,7 @@ class Scheduler:
         self.probes = PROBES if probes is None else probes
         self.clock = clock
         self.sleep = sleep
-        self.probing: dict[int, asyncio.Task] = {}  # watch id -> in-flight model-free probe
+        self.going: dict[int, asyncio.Task] = {}  # job id -> its model-free probe, or resume or todo run, under way
         self.pruned = 0.0
 
     async def run(self) -> None:
@@ -326,16 +328,21 @@ class Scheduler:
         return ran
 
     async def drain(self) -> None:
-        """Wait for in-flight probes to finish (tests)."""
-        while self.probing:
-            await asyncio.gather(*self.probing.values(), return_exceptions=True)
+        """Wait for probes and resume or todo runs under way to finish (tests)."""
+        while self.going:
+            await asyncio.gather(*self.going.values(), return_exceptions=True)
+
+    def _aside(self, job: dict, work: Awaitable[None]) -> None:
+        """Run a job's probe or work in the background, counted as under way (_busy) until it ends."""
+        self.going[job["id"]] = going = asyncio.ensure_future(work)
+        going.add_done_callback(lambda _: self.going.pop(job["id"], None))
 
     def _busy(self, job: dict) -> bool:
         """Whether the previous run (task, command or fix task) is still active. A command awaiting a fix approval
         doesn't count."""
         task = self.runner.store.get(job["last_task"]) if job["last_task"] else None
         going = ("queued", "running") if task and task["kind"] == COMMAND else TASK_ACTIVE
-        return job["id"] in self.probing or bool(task and task["status"] in going)
+        return job["id"] in self.going or bool(task and task["status"] in going)
 
     def _following(self, job: dict, stamp: float) -> float | None:
         """Next run after `stamp`; a watch gets a final check at `until`, then lapses."""
@@ -344,7 +351,7 @@ class Scheduler:
 
     @staticmethod
     def _needs_model(job: dict) -> bool:
-        return job["kind"] == "task" or job["probe"] == "task"
+        return job["kind"] in ("task", *schedules.WORK) or job["probe"] == "task"
 
     async def _run(self, job: dict, now: datetime) -> bool:
         stamp = now.timestamp()
@@ -365,8 +372,7 @@ class Scheduler:
                                          job=job["id"], hidden=True)
                 schedules.update(job["id"], last_task=task["id"])
             else:
-                self.probing[job["id"]] = check = asyncio.create_task(self._probe(job))
-                check.add_done_callback(lambda _: self.probing.pop(job["id"], None))
+                self._aside(job, self._probe(job))
             return True
 
         due = job["next_run"]
@@ -379,7 +385,7 @@ class Scheduler:
             log.info("scheduled job %s missed its run at %s; next at %s", job["id"], missed, nxt)
             schedules.update(job["id"], **moved_on(nxt), last_result=f"Skipped its run due {missed}: JARVIS wasn't running then.")
             return False
-        if job["kind"] in ("task", "command") and self._busy(job):
+        if job["kind"] != "reminder" and self._busy(job):
             schedules.update(job["id"], **moved_on(nxt), last_result="Skipped a run: the previous one was still going.")
             return False
         fields = moved_on(nxt) | {"last_run": stamp, "runs": job["runs"] + 1, "fails": 0}
@@ -394,6 +400,9 @@ class Scheduler:
                                              auto_fix=bool(job["auto_fix"]))
             schedules.update(job["id"], **fields, last_task=task["id"],
                              run=json.dumps({"task": task["id"], "started": stamp, "attempt": 1}))
+        elif job["kind"] in schedules.WORK:  # its tasks are the user's own, not runs of the job
+            schedules.update(job["id"], **fields, last_result="Under way.")
+            self._aside(job, self._work(job))
         else:
             task = self.runner.start(job["task_kind"], job["title"], task_prompt(job), job["project"], job=job["id"])
             schedules.update(job["id"], **fields, last_task=task["id"])
@@ -434,6 +443,21 @@ class Scheduler:
         schedules.update(job["id"], **fields)
         if found.met:
             await self._alert(job, found.text, spoken=f"{job['title']}: {found.spoken or found.text}")
+
+    async def _work(self, job: dict) -> None:
+        """Resume tasks or start to-do tasks for a resume or todo job, then say what it did."""
+        from jarvis.tasks import unattended
+
+        try:
+            done = unattended.resume(self.runner, job) if job["kind"] == "resume" \
+                else await unattended.start_todos(self.runner, job)
+        except Exception as e:
+            log.exception("scheduled job %s failed", job["id"])
+            done = unattended.Done(sentence(f"JARVIS couldn't run it: {e}"[:300] if isinstance(e, ValueError)
+                                            else f"JARVIS couldn't run it ({type(e).__name__})"))
+        schedules.update(job["id"], last_result=done.said[:300])
+        if not done.quiet:
+            await self._alert(job, done.said, spoken=f"{job['title']}: {done.said}")
 
     async def _lapse(self, job: dict) -> None:
         """Finish a job past `until`; an expiring watch announces it never saw its condition."""
