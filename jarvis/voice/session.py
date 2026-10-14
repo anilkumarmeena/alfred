@@ -88,19 +88,19 @@ class VoiceSession:
     def start(self, session) -> None:
         """After the greeting: mark the update it led with as heard; start the task-update, announcement and approval
         loops on LiveKit's `session`."""
-        self._loops = [asyncio.create_task(self._heard_greeting()),
-                       asyncio.create_task(self.watch_tasks()),
+        self._loops = [asyncio.create_task(self.watch_tasks()),
                        asyncio.create_task(self.announcements.run(session, self.brain, self.stt, self.asks,
                                                                   self.runner.mark_seen)),
                        asyncio.create_task(self.ask_approvals(session))]
-
-    async def _heard_greeting(self) -> None:
-        """Heard, the greeting's lead isn't led with again next time."""
         if self._greeted is not None:
-            try:
-                await self.runner.mark_seen([self._greeted])
-            except Exception as e:
-                log.warning("marking task %s as heard failed: %s", self._greeted, e)
+            self._loops.append(asyncio.create_task(self._heard_greeting(self._greeted)))
+
+    async def _heard_greeting(self, task_id: int) -> None:
+        """Heard, the greeting's lead isn't led with again next time."""
+        try:
+            await self.runner.mark_seen([task_id])
+        except Exception as e:
+            log.warning("marking task %s as heard failed: %s", task_id, e)
 
     async def close(self) -> None:
         """Stop all loops, push pending announcements to the phone, and tell the runner (for the learning review)."""
@@ -244,14 +244,15 @@ class VoiceSession:
             return greeting + " JARVIS online."
         asked = {approval["task"] for approval in pending}  # their requests are asked instead
         unseen = [t for t in unseen if t["id"] not in asked]
-        if not (lead := announce.first(unseen)):
+        lead = announce.first(unseen)
+        self._greeted = lead["id"] if lead else None
+        rest = len(unseen) - 1
+        if not lead:
             greeting += " JARVIS online." + _waiting(len(unseen))
         elif lead["status"] == "waiting":  # its question goes last, so the floor holds for the answer
-            greeting += _waiting(len(unseen) if len(unseen) > 1 else 0) + " " + announce.brief(lead)
+            greeting += (_waiting(len(unseen)) if rest else "") + " " + announce.brief(lead)
         else:
-            greeting += " " + announce.brief(lead) + _waiting(len(unseen) - 1, " more")
-        if lead:
-            self._greeted = lead["id"]
+            greeting += " " + announce.brief(lead) + _waiting(rest, " more")
         if unseen:  # so "what are they?" leads to task_list, and a reply to the lead reaches its task
             self.brain.note(greeting, announce.context(lead) if lead else "")
         for approval in pending:

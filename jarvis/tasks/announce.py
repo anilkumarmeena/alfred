@@ -128,9 +128,9 @@ def _weight(task: dict) -> int:
     (scheduled runs, anything else)."""
     if task["status"] == "waiting":
         return 0
-    if task["status"] == "failed":
+    if task["status"] == FAILED:
         return 1
-    return 2 if task["status"] == "done" and not task.get("job") else 3
+    return 2 if task["status"] == DONE and not task.get("job") else 3
 
 
 def first(tasks: list[dict]) -> dict | None:

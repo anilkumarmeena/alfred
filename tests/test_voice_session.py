@@ -326,12 +326,14 @@ def test_the_greeting_leads_with_what_needs_the_user_then_failures_then_finished
         f"{hello} There are 4 task updates waiting. The migration needs a decision. Shall I keep the old table?")
     assert asyncio.run(main(asking)) == f"{hello} The migration needs a decision. Shall I keep the old table?"
     assert asyncio.run(main(checked, finished, failed)).startswith(f"{hello} The upgrade failed")
-    assert asyncio.run(main(checked, finished)) == f"{hello} The report is written. There is one more task update waiting."
+    assert asyncio.run(main(checked, finished)) == (
+        f"{hello} The report is written. There is one more task update waiting.")
     assert asyncio.run(main(checked)) == f"{hello} Your inbox check found nothing new."
 
 
 def test_among_equal_updates_the_greeting_leads_with_the_newest():
-    older, newer = update(1, "done", "The backup finished.", updated=1), update(2, "done", "The deploy is live.", updated=2)
+    older = update(1, "done", "The backup finished.", updated=1)
+    newer = update(2, "done", "The deploy is live.", updated=2)
     greeting = asyncio.run(call(runner=Runner(unseen=[older, newer])).greeting())
     assert greeting.startswith(f"Hello {profile.name()}. The deploy is live.")
 
