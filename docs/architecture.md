@@ -204,7 +204,7 @@ sequenceDiagram
 
     U->>LK: mic audio
     LK->>J: frames
-    Note over J: noise filter, VAD,<br/>turn detector
+    Note over J: noise filter, VAD,<br/>end of turn on silence
     J->>S: utterance to Whisper
     S-->>J: text + confidence
     Note over J: speech gate,<br/>speaker check
@@ -225,7 +225,7 @@ sequenceDiagram
 | | Stage | Code (`jarvis/voice/`) | What to know |
 |:-:|---|---|---|
 | 🔇 | **Noise filter** | `denoise.py` | DeepFilterNet 3 on ONNX Runtime, one CPU core, as a frame processor |
-| ⏸️ | **Turn end** | `turn.py` `JudgedTurns` | LiveKit's v1-mini turn detector, plus a fast-model judge when unsure |
+| ⏸️ | **Turn end** | `agent.py` `TURN_HANDLING` | Silence alone: `JARVIS_TURN_SILENCE` after the VAD hears speech stop. No model judges the words |
 | 📝 | **Transcribe** | `speech.py` `WhisperSTT`, `core/whisper.py` | Batch mode. **MLX Whisper** large-v3-turbo 4-bit on Apple silicon; **faster-whisper** elsewhere |
 | 🚪 | **Speech gate** | `speech_gate.py` | Drops Whisper's phantoms ("Thank you.") on near-silence. `enforce` or `shadow` |
 | 👤 | **Speaker check** | `speaker.py`, `state/voiceprints.py` | Drops utterances that aren't the user's, once a voiceprint is enrolled |
@@ -827,7 +827,6 @@ A task's `host_run` and `start_job` commands run inside `host.walled()`. On Linu
 | **LiveKit / Agents** | Open-source WebRTC media server, and its Python framework for voice agents |
 | **Tailscale Serve** | Exposes a local port over HTTPS to the user's own tailnet devices only |
 | **VAD** | Voice activity detection (Silero here) |
-| **Turn detector** | Model that judges whether a pause ends the user's turn |
 | **STT / TTS** | Speech-to-text (Whisper on MLX or faster-whisper) and text-to-speech (Kokoro on ONNX Runtime) |
 | **faster-whisper** | Whisper on CTranslate2, used off Apple silicon (CUDA or CPU) |
 | **MCP** | Model Context Protocol, the standard way to give Claude tools |

@@ -271,7 +271,8 @@ class WhisperSTT(stt.STT):
         self._executor = executor
         self._vocabulary, self._prompt = Vocabulary(), ""
         self._lock = asyncio.Lock()  # one clip at a time, in order
-        self.hearing = 0  # in-flight clips; holds announcements
+        self.hearing = 0  # in-flight clips; holds announcements and the turn's end
+        self.heard_at = 0.0  # monotonic time the last clip finished
         self.clips: list[dict] = []  # passed clips this turn (take_clips)
 
     @property
@@ -368,6 +369,7 @@ class WhisperSTT(stt.STT):
                 text = await self._hear(buffer)
         finally:
             self.hearing -= 1
+            self.heard_at = time.monotonic()
         return stt.SpeechEvent(
             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
             alternatives=[stt.SpeechData(language="en", text=text)],

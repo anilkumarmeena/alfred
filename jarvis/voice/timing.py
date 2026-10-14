@@ -4,13 +4,13 @@ One JSON line per turn in logs/voice-turns.jsonl (plus a readable agent-log line
 or cut off. Stages are seconds since the user stopped speaking (or a typed turn arrived):
 
   transcript   Whisper text ready          first_text   first reply words
-  turn_end     turn detector decided       first_tool   first tool call began
+  turn_end     silence ended the turn      first_tool   first tool call began
   brain        reply started (llm_node)    first_audio  JARVIS's voice started
   sent         prompt sent to claude CLI   done         model reply ended
 
 Other fields: speech, words, tts_first, ack (said before first tool), tools, tool_names, spoke, ended
-(spoken|interrupted|unspoken|closed), resumed (unspoken only), eot, judge, judge_s, wait (short|long), speaker,
-logprob, piece (words in first spoken piece), model (when not the voice brain's own).
+(spoken|interrupted|unspoken|closed), resumed (unspoken only), speaker, logprob, piece (words in first spoken piece),
+model (when not the voice brain's own).
 
 mark()/tool()/note() are no-ops outside a timed turn. `python -m jarvis.voice.timing [HOURS]` summarises recent turns.
 """
@@ -97,12 +97,12 @@ class Timings:
                  written: Callable[[dict], None] | None = None) -> None:
         self.path = path
         self.clock = clock
-        self.written = written  # gets each finished record (turn.Pacing)
+        self.written = written  # gets each finished record (turn.Pacing.learn)
         self.turn: Turn | None = None
         self.n = 0
 
     def heard(self, said: str, metrics: dict, how: dict | None = None) -> dict | None:
-        """Start timing a user turn; `how` holds end-of-turn and speaker fields.
+        """Start timing a user turn; `how` holds speaker fields.
 
         Returns the previous turn's record if it was still pending (written as "unspoken"), else None."""
         cut = None
@@ -171,11 +171,6 @@ def describe(r: dict) -> str:
             f"{tools} tool{'' if tools == 1 else 's'}; {r['ended']}")
     if "resumed" in r:
         line += f", resumed after {r['resumed']:.2f} s"
-    if "eot" in r:
-        line += f"; end: detector {r['eot']:.2f}"
-        if "judge" in r:
-            line += f", model {r['judge']} in {r.get('judge_s', 0):.2f} s"
-        line += f", {r.get('wait', 'short')} wait"
     if "ack" in r:
         line += f"; ack {r['ack']!r}"
     return line
@@ -221,15 +216,6 @@ def summary(path: Path = VOICE_TURNS_LOG, since: float = 0.0, slowest: int = 5) 
         for name, lighter in (("on the voice brain's model", False), ("on the lighter model", True)):
             if values := [r["first_audio"] for r in plain if bool(r.get("model")) == lighter]:
                 out.append(f"  {name:28} {_spread(values)}")
-    if judged := [r for r in records if "judge" in r]:
-        verdicts = Counter(r["judge"] for r in judged)
-        out += ["", f"The model judged {len(judged)} turn ends: "
-                + ", ".join(f"{n} {verdict}" for verdict, n in verdicts.most_common()) + ".",
-                f"  {'its time':28} {_spread([r.get('judge_s', 0.0) for r in judged])}"]
-    for wait in ("short", "long"):
-        if waited := [r for r in records if r.get("wait") == wait]:
-            went_on = sum(r["ended"] == "unspoken" for r in waited)
-            out.append(f"After the {wait} wait the user went on {went_on} of {len(waited)} times.")
     if acks := [r for r in records if "first_tool" in r]:
         out += ["", f"{sum('ack' in r for r in acks)} of {len(acks)} turns with tools said something first."]
         if work := [r["done"] - r["first_tool"] for r in acks if "done" in r]:

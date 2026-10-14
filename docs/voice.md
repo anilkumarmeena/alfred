@@ -19,7 +19,7 @@ flowchart TB
     subgraph Hear["👂 Hearing you"]
         direction LR
         Mic(["🎤 Your mic<br/>phone · browser"]) --> NF["🔉 Noise filter<br/>DeepFilterNet 3"]
-        NF --> VAD["⌛ VAD + turn detector<br/>Silero · LiveKit"]
+        NF --> VAD["⌛ VAD + end of turn<br/>Silero · LiveKit"]
         VAD --> STT["📝 Whisper<br/>MLX · faster-whisper"]
         VAD --> Spk["🔐 Speaker check<br/>alongside Whisper"]
     end
@@ -49,7 +49,7 @@ flowchart TB
 | | Stage | Code | Settings |
 |:-:|---|---|---|
 | 🔉 | [Noise filter](#-noise-filter) | `jarvis/voice/denoise.py` | [Speech in and out](configuration.md#-speech-in-and-out) |
-| ⌛ | [End of turn](#-when-youve-finished) | `jarvis/voice/turn.py` | `JARVIS_TURN_*`, `JARVIS_VAD_*` |
+| ⌛ | [End of turn](#-when-youve-finished) | `jarvis/voice/agent.py`, `jarvis/voice/turn.py` | `JARVIS_TURN_SILENCE`, `JARVIS_VAD_*` |
 | 📝 | [Whisper, Kokoro](#-whisper-in-kokoro-out) | `jarvis/voice/speech.py` | [Speech in and out](configuration.md#-speech-in-and-out) |
 | 🚫 | [Speech gate](#-speech-gate) | `jarvis/voice/speech_gate.py` | [Speech gate](configuration.md#-speech-gate) |
 | 🔐 | [Speaker check, barge-in](#-speaker-check) | `jarvis/voice/speaker.py`, `barge_in.py` | [Speaker check](configuration.md#-speaker-check) |
@@ -95,20 +95,20 @@ Your mic goes through **[DeepFilterNet 3](https://github.com/Rikorose/DeepFilter
 
 ## ⌛ When you've finished
 
-**Silero VAD** cuts your speech into utterances; the **turn detector** decides whether a pause means you're done.
+**Silero VAD** cuts your speech into utterances; **silence alone** decides you're done. Nothing reads your words to guess whether you've finished, so nothing waits on a model.
 
 | | Rule | Knob |
 |:-:|---|---|
-| ⏱️ | Sounds finished: the turn ends after **0.9 s** of silence | `JARVIS_TURN_MIN_DELAY` |
-| 💭 | Seems mid-thought: it waits up to **4 s** | `JARVIS_TURN_MAX_DELAY` |
-| ⚖️ | Detector unsure: a **fast model** reads what's been said and decides, giving up after 2 s | `JARVIS_TURN_JUDGE` |
-| 🏃 | **Your own pace:** each speaker's delays adapt to how they talk | `voice_pace:<speaker>` row |
+| ⏱️ | The turn ends **0.8 s** after you stop speaking, once Whisper's text is in | `JARVIS_TURN_SILENCE` |
+| 🔗 | **Went on?** If you carry on before hearing the reply, the two parts are answered together as one thought | |
 | ❓ | **Unsure words:** a turn Whisper heard with low confidence is marked, so JARVIS checks back with its best guess | `JARVIS_WHISPER_UNSURE_LOGPROB` |
+| 🏃 | **Your own pace:** if talking to JARVIS seems to take a speaker effort (unsure words, going on often, slow speech), replies get plainer | `voice_pace:<speaker>` row |
 
 - The pace is kept as `voice_pace:<speaker>` in the settings table; **delete the row to start again**.
 - The VAD needs **0.2 s of unbroken speech** to start an utterance (`JARVIS_VAD_MIN_SPEECH`), so a lone click never reaches Whisper.
+- If JARVIS cuts you off mid-thought too often, raise `JARVIS_TURN_SILENCE` a little; lower answers sooner.
 
-**Inspect:** `make voice-timing` shows how turn ends were judged (see [Voice timing](#-voice-timing)).
+**Inspect:** `make voice-timing` shows how long turn ends took and how often you went on (see [Voice timing](#-voice-timing)).
 
 ## 📝 Whisper in, Kokoro out
 
@@ -289,7 +289,7 @@ make voice-timing HOURS=2    # the last two
 | | Stage | Meaning |
 |:-:|---|---|
 | 📝 | `transcript` | Whisper's text ready |
-| ⏸️ | `turn_end` | The turn detector decided you'd finished |
+| ⏸️ | `turn_end` | Silence ended your turn |
 | 🧠 | `brain` | The reply started |
 | 📤 | `sent` | Your words went to the CLI (after any yes/no check, a running command, photos) |
 | 💬 | `first_text` | The reply's first words |

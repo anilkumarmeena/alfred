@@ -4,7 +4,7 @@
   uv run python -m jarvis.voice.agent dev       serve rooms on the local LiveKit server, with reload
   uv run python -m jarvis.voice.agent start     serve rooms on the local LiveKit server (launchd, 24/7)
 
-All local: LiveKit server, Whisper STT, LiveKit's turn detector, Kokoro TTS, claude CLI brain.
+All local: LiveKit server, Whisper STT, Silero VAD (a turn ends on silence), Kokoro TTS, claude CLI brain.
 """
 
 import asyncio
@@ -13,7 +13,7 @@ import logging
 import os
 from urllib.parse import urlparse
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobProcess, cli, inference, llm
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobProcess, TurnHandlingOptions, cli, llm
 from livekit.plugins import silero
 
 from jarvis.brain import make_brain
@@ -92,31 +92,31 @@ server = AgentServer(setup_fnc=prewarm, num_idle_processes=config.VOICE_IDLE_PRO
                      api_secret=credentials.get(credentials.LIVEKIT_SECRET),
                      **({"http_proxy": None} if LOCAL_LIVEKIT else {}))
 
+def turn_handling(stt: WhisperSTT) -> TurnHandlingOptions:
+    return {
+        # A turn ends on silence alone, once Whisper has all its words: no model reads them, so nothing waits on one
+        "turn_detection": turn.Transcribed(stt),
+        "endpointing": {"mode": "fixed", "min_delay": config.TURN_SILENCE},
+        # Local only: VAD barge-in (the "adaptive" interruption model needs LiveKit Cloud)
+        "interruption": {"mode": "vad"},
+        # Speculative replies would put half-heard turns into the brain's history.
+        "preemptive_generation": {"enabled": False},
+    }
+
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
     talk = conversation.begin()  # conversation state and profile
     stt = ctx.proc.userdata["stt"]
     barge = BargeIn(stt.speaker)  # while replying, only the user's voice interrupts
-    # Local mini turn detector; a fast model breaks ties when it's unsure
-    turns = turn.JudgedTurns(inference.TurnDetector(version="v1-mini", local_fallback=True),
-                             turn.Judge() if config.TURN_JUDGE else None)
-    pacing = turn.Pacing()  # per-user end-of-turn delays, owner's at start
+    pacing = turn.Pacing()  # each speaker's pace, for the brain's hints
     session = AgentSession(
         stt=stt,
         llm=BrainPlaceholder(),
         tts=ctx.proc.userdata["tts_stream"],
         vad=BargeInVAD(denoise.session_vad(ctx.proc.userdata["vad"], ctx.proc.userdata["denoise"]), barge),
-        turn_handling={
-            # Local only: VAD barge-in (the "adaptive" interruption model needs LiveKit Cloud)
-            "turn_detection": turns,
-            "endpointing": await asyncio.to_thread(pacing.options),
-            "interruption": {"mode": "vad"},
-            # Speculative replies would put half-heard turns into the brain's history.
-            "preemptive_generation": {"enabled": False},
-        },
+        turn_handling=turn_handling(stt),
     )
-    pacing.attach(session)
     # Read per call so Settings changes (or a new voiceprint) need no restart
     ctx.proc.userdata["tts"].use(config.tts_voice(), config.tts_speed())
     mode = config.speech_gate()
@@ -125,7 +125,7 @@ async def entrypoint(ctx: JobContext) -> None:
     stt.take_clips()  # drop the last conversation's clips
     stt.speaker.use(config.speaker_check(), await asyncio.to_thread(voiceprints.load), config.speaker_threshold())
     speaker_ready = asyncio.create_task(asyncio.to_thread(stt.speaker.warm_up))  # while the room connects
-    voice = VoiceSession(make_brain(), talk, stt=stt, turns=turns, pacing=pacing,
+    voice = VoiceSession(make_brain(), talk, stt=stt, pacing=pacing,
                          router=Router(config.VOICE_QUICK_MODEL) if config.VOICE_QUICK_MODEL else None,
                          moment=Moment() if config.PROACTIVE_JUDGE else None,  # when to raise things
                          timings=timing.Timings(written=pacing.learn),  # logs/voice-turns.jsonl
@@ -166,7 +166,7 @@ async def entrypoint(ctx: JobContext) -> None:
 def _item_added(voice: VoiceSession, item: llm.ChatItem) -> None:
     """Pass on what JARVIS said; other items (tool calls, agent handoffs, config updates) have no role."""
     if isinstance(item, llm.ChatMessage) and item.role == "assistant":
-        voice.spoke(item.text_content or "", item.metrics, item.interrupted)
+        voice.spoke(item.metrics, item.interrupted)
 
 
 async def _to_phone(text: str) -> None:

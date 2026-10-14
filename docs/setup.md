@@ -207,7 +207,7 @@ make install
 | 🧠 | `make models` | Speech, VAD, turn, noise and speaker models for this machine (below) |
 | 🌐 | `make web-build` | `npm install` (once) and a build into `web/dist` |
 
-`make models` fetches **Kokoro** (TTS), **Whisper**, **Silero VAD**, the **turn detector**, **DeepFilterNet 3** (noise filter) and **WeSpeaker ResNet34** (speaker check) into `models/` and the Hugging Face cache. The noise-filter and speaker models are pinned and **checked by hash**. Which Whisper depends on the machine:
+`make models` fetches **Kokoro** (TTS), **Whisper**, **Silero VAD**, **DeepFilterNet 3** (noise filter) and **WeSpeaker ResNet34** (speaker check) into `models/` and the Hugging Face cache. The noise-filter and speaker models are pinned and **checked by hash**. Which Whisper depends on the machine:
 
 | | Whisper on | Live voice | Recordings |
 |:-:|---|---|---|

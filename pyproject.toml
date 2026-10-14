@@ -13,7 +13,7 @@ dependencies = [
     "kokoro-onnx>=0.6.1",
     # Speech recognition: MLX Whisper on Apple silicon, faster-whisper (CTranslate2) everywhere else
     "faster-whisper>=1.1; sys_platform != 'darwin' or platform_machine != 'arm64'",
-    "livekit-agents[silero,turn-detector]~=1.8",
+    "livekit-agents[silero]~=1.8",
     "mlx-whisper>=0.4.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "onnxruntime>=1.20",
     "openpyxl>=3.1",
