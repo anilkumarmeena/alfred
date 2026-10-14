@@ -181,12 +181,12 @@ def test_a_note_for_the_brain_alone_is_neither_announced_nor_logged(monkeypatch)
 def test_a_greeting_says_an_update_in_whole_sentences_and_a_question_whole():
     long = "The site is redesigned. " + "It has a new look. " * 20 + "Have a look?"
     done = {"status": DONE, "spoken": "The restart worked,\neverything's back up"}
-    assert announce.brief(done) == "The restart worked, everything's back up."
-    cut = announce.brief({"status": DONE, "spoken": long})
-    assert cut.startswith("The site is redesigned. It has a new look.") and cut.endswith("look.")
+    assert announce.brief(done) == ("The restart worked, everything's back up.", True)
+    cut, whole = announce.brief({"status": DONE, "spoken": long})
+    assert cut.startswith("The site is redesigned. It has a new look.") and cut.endswith("look.") and not whole
     assert len(cut) <= announce.BRIEF_MOST
-    assert announce.brief({"status": DONE, "spoken": "x" * 300 + ". Then more."}) == "x" * 300 + "."  # one at least
-    assert announce.brief({"status": "waiting", "spoken": long}) == long.strip()
+    assert announce.brief({"status": DONE, "spoken": "x" * 300 + ". Then more."}) == ("x" * 300 + ".", False)
+    assert announce.brief({"status": "waiting", "spoken": long}) == (long.strip(), True)
 
 
 def test_the_update_a_greeting_leads_with_is_the_weightiest_with_words():

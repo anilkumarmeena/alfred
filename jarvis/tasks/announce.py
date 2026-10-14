@@ -125,12 +125,12 @@ async def spoken(e: Ending) -> str:
 
 def _weight(task: dict) -> int:
     """How much a waiting update matters, most first: it needs the user, it failed, work finished, then routine
-    (scheduled runs, anything else)."""
+    (scheduled runs, anything else). A fix of a scheduled run inherits its job but isn't routine."""
     if task["status"] == "waiting":
         return 0
     if task["status"] == FAILED:
         return 1
-    return 2 if task["status"] == DONE and not task.get("job") else 3
+    return 2 if task["status"] == DONE and (not task.get("job") or task.get("fixes")) else 3
 
 
 def first(tasks: list[dict]) -> dict | None:
@@ -139,19 +139,19 @@ def first(tasks: list[dict]) -> dict | None:
                key=lambda t: (_weight(t), -t.get("updated", 0)), default=None)
 
 
-def brief(task: dict) -> str:
-    """The task's latest update, cut to whole sentences within BRIEF_MOST chars (at least one). A question is kept
-    whole: it ends with what's asked."""
+def brief(task: dict) -> tuple[str, bool]:
+    """The task's latest update, cut to whole sentences within BRIEF_MOST chars (at least one), and whether nothing was
+    cut. A question is kept whole: it ends with what's asked."""
     said = " ".join(task["spoken"].split())
     if task["status"] == "waiting":
-        return said
+        return said, True
     sentences = _SENTENCE.split(said)
-    kept = sentences[0]
+    kept, n = sentences[0], 1
     for s in sentences[1:]:
         if len(kept) + 1 + len(s) > BRIEF_MOST:
             break
-        kept += " " + s
-    return sentence(kept)
+        kept, n = kept + " " + s, n + 1
+    return sentence(kept), n == len(sentences)
 
 
 def context(task: dict) -> str:

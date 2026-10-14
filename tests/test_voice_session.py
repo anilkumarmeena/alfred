@@ -329,6 +329,8 @@ def test_the_greeting_leads_with_what_needs_the_user_then_failures_then_finished
     assert asyncio.run(main(checked, finished)) == (
         f"{hello} The report is written. There is one more task update waiting.")
     assert asyncio.run(main(checked)) == f"{hello} Your inbox check found nothing new."
+    fixed = update(5, "done", "The inbox check works again after a fix.", updated=0, job=4, fixes=1)
+    assert asyncio.run(main(checked, fixed)).startswith(f"{hello} The inbox check works again")  # asked for
 
 
 def test_among_equal_updates_the_greeting_leads_with_the_newest():
@@ -363,26 +365,91 @@ def test_updates_with_nothing_to_say_are_only_counted():
     assert greeting == f"Hello {profile.name()}. JARVIS online. There is one task update waiting."
 
 
-def test_the_update_the_greeting_led_with_is_marked_heard_once_it_is_said():
-    class Marks(Runner):
-        def __init__(self, **lists) -> None:
-            super().__init__(**lists)
-            self.marked: list[list[int]] = []
+class Marks(Runner):
+    """Records the tasks marked heard."""
 
-        async def mark_seen(self, ids) -> None:
-            self.marked.append(ids)
+    def __init__(self, **lists) -> None:
+        super().__init__(**lists)
+        self.marked: list[list[int]] = []
+
+    async def mark_seen(self, ids) -> None:
+        self.marked.append(ids)
+
+
+def greeted(runner: Marks, heard: bool = True, meanwhile=None) -> list[list[int]]:
+    """Greet, let `meanwhile` change the runner's tasks, then start the call as the agent does once it's said."""
 
     async def main():
-        runner = Marks(unseen=[RESTARTED, update(6, "done", "The tests pass.", updated=1)])
         voice = call(runner=runner)
         await voice.greeting()
         assert runner.marked == []
-        voice.start(Session())
+        if meanwhile:
+            meanwhile(runner)
+        voice.start(Session(), heard=heard)
         await settle()
         await voice.close()
         return runner.marked
 
-    assert asyncio.run(main()) == [[6]]  # the newer one led; the other waits for task_list
+    return asyncio.run(main())
+
+
+def test_the_update_the_greeting_led_with_is_marked_heard_once_it_is_said():
+    newer = update(6, "done", "The tests pass.", updated=1)
+    assert greeted(Marks(unseen=[RESTARTED, newer])) == [[6]]  # the newer one led; the other waits for task_list
+
+
+def test_a_lead_is_not_marked_heard_when_the_greeting_was_cut_off_or_the_task_said_more_since():
+    assert greeted(Marks(unseen=[RESTARTED]), heard=False) == []
+
+    def finished_again(runner):
+        runner.unseen = [RESTARTED | {"spoken": "The restart failed this time."}]
+
+    assert greeted(Marks(unseen=[RESTARTED]), meanwhile=finished_again) == []
+
+
+def test_a_lead_cut_short_stays_unseen_and_the_brain_gets_it_whole():
+    long = update(5, "done", "The site is redesigned. " + "It has a new look. " * 12 + "It still needs you: set the key.")
+    runner = Marks(unseen=[long])
+    assert greeted(runner) == []
+
+    async def main():
+        voice = call(runner=runner)
+        return voice, await voice.greeting()
+
+    voice, greeting = asyncio.run(main())
+    assert "set the key" not in greeting and "Its whole update: The site is redesigned." in voice.brain.notes[0]
+    assert "It still needs you: set the key." in voice.brain.notes[0]
+
+
+def test_after_a_question_the_greeting_leaves_the_request_for_once_it_is_answered():
+    async def main():
+        asking = update(4, "waiting", "The migration needs a decision. Shall I keep the old table?")
+        voice = call(runner=Runner(pending=[REQUEST], unseen=[asking]))
+        return voice, await voice.greeting()
+
+    voice, greeting = asyncio.run(main())
+    assert greeting.endswith("Shall I keep the old table?")  # a yes now is for the question, not the request
+    assert voice.asks.open is None and list(voice.asks.waiting) == [13]  # ask_approvals asks it later
+
+
+def test_a_tasks_question_in_the_greeting_holds_the_floor_even_without_a_question_mark():
+    async def main(spoken):
+        voice = call(runner=Runner(pending=[REQUEST], unseen=[update(4, "waiting", spoken)]))
+        voice.greeted(await voice.greeting())
+        return voice.floor.question
+
+    assert asyncio.run(main("Can I have access to your calendar? To find a free slot."))
+    voice = call(runner=Runner(unseen=[update(5, "done", "The report is written.")]))
+    voice.greeted(asyncio.run(voice.greeting()))
+    assert not voice.floor.question
+
+
+def test_a_task_running_again_or_past_its_approval_has_nothing_to_lead_with():
+    resumed = update(7, "running", "Task 7, the deploy, is waiting for your go-ahead to run a push.", updated=9)
+    settled = update(8, "waiting", "Task 8, the cleanup, is waiting for your go-ahead to delete files.", updated=9,
+                     wait_kind="approval")
+    greeting = asyncio.run(call(runner=Runner(unseen=[resumed, settled, RESTARTED])).greeting())
+    assert greeting == f"Hello {profile.name()}. The restart worked, everything's back up."  # nor counted
 
 
 # ── What the call holds ───────────────────────────────────────
