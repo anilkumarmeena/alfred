@@ -84,6 +84,7 @@ def run_task(monkeypatch, kind: str, project: str | None, *proposals: dict) -> t
     ({"action": "remember", "fact": "Likes tea", "reason": "x"}, "remember needs section"),
     ({"action": "remember", "fact": "Likes tea", "section": "home", "reason": "x"}, "user or environment"),
     ({"action": "remember", "fact": "x" * 390, "section": "user", "reason": "x"}, "at most 400 characters"),
+    ({"action": "remember", "fact": "(2026-10-10)", "section": "user", "reason": "x"}, "fact is empty"),
     ({"action": "edit", "file": "memory.md", "old": "short answers", "new": "x" * 400, "reason": "x"},
      "at most 400 characters"),
 ])

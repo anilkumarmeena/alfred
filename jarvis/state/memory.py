@@ -28,6 +28,7 @@ LIMITS = {"user": 2000, "environment": 3000}
 FACT_MAX = 400  # max chars per line, date included
 NEAR_FULL = 0.9  # fill ratio that triggers a "consolidate soon" hint
 _HEADING = re.compile(r"#+\s*(.*?)[\s#]*")
+_DATE = re.compile(r"\s*\((\d{4}-\d{2}-\d{2})\)\.?$")  # a trailing "(YYYY-MM-DD)", maybe with a full stop
 
 
 def title(section: str) -> str:
@@ -120,11 +121,26 @@ def _saved(lead: str, section: str, lines: list[str]) -> str:
     return out
 
 
+def _today() -> str:
+    """The date lines are stamped with, in the user's time zone (as the learning review stamps them)."""
+    return f"{datetime.now(profile.tz()):%Y-%m-%d}"
+
+
+def plain(fact: str) -> str:
+    """`fact` as saved, before its date: invisible characters stripped, whitespace collapsed, and without the dash and
+    stamps of a line copied from the prompt to be rewritten, so it gets just one date. A date at the end that isn't in
+    the future reads as a stamp and goes; a future one can't be, so it stays, as the fact's own."""
+    fact, today = " ".join(scan.clean(fact).split()).removeprefix("- "), _today()
+    while (stamp := _DATE.search(fact)) and stamp[1] <= today:
+        fact = fact[: stamp.start()]
+    return fact
+
+
 def _line(fact: str) -> str:
-    """Format a fact as a dated line, stripping invisible characters. ValueError if empty."""
-    if not (fact := " ".join(scan.clean(fact).split())):
+    """Format a fact as a line dated today (see plain). ValueError if empty."""
+    if not (fact := plain(fact)):
         raise ValueError("The fact is empty.")
-    return f"- {fact} ({datetime.now():%Y-%m-%d})"
+    return f"- {fact} ({_today()})"
 
 
 def remember(fact: str, section: str) -> str:

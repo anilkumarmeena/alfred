@@ -166,7 +166,7 @@ def _same(a: str, b: str) -> bool:
 
 def _fact(line: str) -> str:
     """Memory line without its leading dash and trailing date."""
-    return re.sub(r"\s*\(\d{4}-\d{2}-\d{2}\)$", "", line.removeprefix("- ")).strip()
+    return memory.plain(line)
 
 
 def to_edits(suggestions: list[dict], lines: list[tuple[str, str]], today: str, said: str = "") -> list[dict]:
@@ -178,7 +178,7 @@ def to_edits(suggestions: list[dict], lines: list[tuple[str, str]], today: str, 
     out = []
     for s in suggestions:
         action, reason = s.get("action"), " ".join(str(s.get("reason") or "").split()) or "From the conversation."
-        fact, item = str(s.get("fact") or "").strip(), str(s.get("item") or "").strip()
+        fact, item = memory.plain(str(s.get("fact") or "")), str(s.get("item") or "").strip()
         if action == "vocabulary":
             word, heard = " ".join(str(s.get("word") or "").split()), s.get("heard_as")
             heard = [" ".join(h.split()) for h in heard if isinstance(h, str)] if isinstance(heard, list) else []
@@ -203,7 +203,7 @@ def to_edits(suggestions: list[dict], lines: list[tuple[str, str]], today: str, 
                 continue
             out.append({"action": "remember", "section": str(s.get("section") or ""), "fact": fact, "reason": reason})
         elif action == "update" and fact and line and not _same(_fact(line), fact):
-            new = f"- {' '.join(fact.split())} ({today})"
+            new = f"- {fact} ({today})"
             out.append({"action": "edit", "file": "memory.md", "old": line, "new": new, "reason": reason})
         elif action == "forget" and line:
             out.append({"action": "forget", "text": line.removeprefix("- "), "reason": reason})

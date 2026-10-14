@@ -92,9 +92,12 @@ def check(args: dict, kind: str = "") -> dict:
         if edit["file"] not in FILES:
             raise ValueError(f"file must be one of {', '.join(FILES)}; projects change with project_update.")
         _replaced(edit["file"], edit["old"], edit["new"])
-    elif action == "remember" and len(line := f"- {' '.join(edit['fact'].split())} (YYYY-MM-DD)") > memory.FACT_MAX:
-        raise ValueError(f"A memory fact may be at most {memory.FACT_MAX} characters, its date included, and this "
-                         f"one is {len(line)}; say it more briefly or split it.")
+    elif action == "remember":
+        if not (fact := memory.plain(edit["fact"])):
+            raise ValueError("The fact is empty.")
+        if len(line := f"- {fact} (YYYY-MM-DD)") > memory.FACT_MAX:
+            raise ValueError(f"A memory fact may be at most {memory.FACT_MAX} characters, its date included, and this "
+                             f"one is {len(line)}; say it more briefly or split it.")
     elif action == "project_register":
         try:
             known = projects.find(edit["name"])
