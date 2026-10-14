@@ -5,6 +5,9 @@
   watch     every `every` minutes until `text` happens or `until`: probe task (model), or cheap url/gmail/chat probes
   command   run shell `text` in `folder` as a model-free command task; a model only summarises or (auto_fix) fixes it.
             With only_changes, a successful run that prints nothing stays silent (how a monitor script reports)
+  resume    carry on stopped (or failed) tasks, named ones or all, with `text` as an optional message to each
+  todo      start tasks for to-do items, named ones or the next `count` open, each linked to its item; `text` is
+            added to every instruction. Both run in jarvis.tasks.unattended; `picks` holds what they take on
 Timing: one-off at `next_run`, or `at` on `days`, or every `every` minutes; local profile time zone.
 Task jobs keep a `notepad` for the next run. Command jobs are only made or changed through voice tools whose calls
 pass the shell gate (risky needs a yes, secrets refused).
@@ -15,13 +18,14 @@ import re
 import shlex
 import sqlite3
 import time
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, closing
 from datetime import datetime, time as clock_time, timedelta
 from pathlib import Path
 
 from jarvis.core import database, profile
 
-KINDS = ("reminder", "task", "watch", "command")
+KINDS = ("reminder", "task", "watch", "command", "resume", "todo")
+WORK = ("resume", "todo")  # kinds that resume or start the user's own tasks
 PROBES = ("task", "url", "gmail", "chat")
 ACTIVE, PAUSED, DONE, CANCELLED, EXPIRED = "active", "paused", "done", "cancelled", "expired"
 LIVE = (ACTIVE, PAUSED)
@@ -30,13 +34,14 @@ REPEATS = {"daily": DAYS, "weekdays": DAYS[:5], "weekends": DAYS[5:]}
 # Watch check interval in minutes: minimum and default per probe. Task probes start a Claude session, so are sparser.
 MIN_EVERY = {"task": 10, "url": 1, "gmail": 5, "chat": 5}
 EVERY = {"task": 15, "url": 5, "gmail": 10, "chat": 10}
-MIN_TASK_EVERY = 30  # for task jobs repeating by interval
+MIN_TASK_EVERY = 30  # for task, resume and todo jobs repeating by interval
 MIN_REMINDER_EVERY = 5
 MIN_COMMAND_EVERY = 10
 WATCH_HOURS, WATCH_MAX_DAYS = 24, 7  # default and max watch lifetime
 MAX_LIVE, MAX_TASK_WATCHES = 30, 5  # live jobs; of those, task-probe watches
 TASK_KINDS = ("research", "code_question", "code_change")
 WATCH_TASK_KINDS = ("research", "code_question")  # read-only
+MAX_PICKS = 10  # tasks one resume or todo run takes on
 
 _SCHEMA = """
 create table schedules (
@@ -74,10 +79,13 @@ create table schedules (
     log_file text,              -- command: own log path/pattern in folder
     run text                    -- command: JSON of the latest run (see run_of)
 )"""
+_MIGRATIONS = (
+    "alter table schedules add column picks text",  # 2: resume and todo: JSON of what a run takes on (see picks)
+)
 
 
 def _db() -> AbstractContextManager[sqlite3.Connection]:
-    return database.table("schedules", _SCHEMA)
+    return database.table("schedules", _SCHEMA, migrations=_MIGRATIONS)
 
 
 def _now(now: datetime | None) -> datetime:
@@ -281,8 +289,8 @@ def _timing(job: dict, when: str, in_minutes: int, repeat: str, every_minutes: i
         first = next_on_days(out["at"], out["days"], from_)
     elif every_minutes or kind == "watch":
         every = every_minutes or EVERY[probe]
-        least = {"watch": MIN_EVERY[probe], "task": MIN_TASK_EVERY, "command": MIN_COMMAND_EVERY}.get(kind,
-                                                                                                  MIN_REMINDER_EVERY)
+        least = {"watch": MIN_EVERY[probe], "task": MIN_TASK_EVERY, "resume": MIN_TASK_EVERY, "todo": MIN_TASK_EVERY,
+                 "command": MIN_COMMAND_EVERY}.get(kind, MIN_REMINDER_EVERY)
         if every < least:
             raise ValueError(f"Every {least} minutes at most often for this kind of job.")
         out["every"] = every
@@ -454,6 +462,82 @@ def run_of(job: dict) -> dict | None:
     return found if isinstance(found, dict) else None
 
 
+def picks(job: dict) -> dict:
+    """What a resume or todo job takes on each run: {"tasks": [ids]} or {"failed": bool} (every stopped task, failed
+    ones too if true); {"todos": [item ids]} or {"count": n} (the next n open items). {} for other kinds."""
+    try:
+        found = json.loads(job.get("picks") or "null")
+    except ValueError:
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+def _tasks_named(ids: list[int]) -> dict[int, dict]:
+    """Tasks by id, from the task store; {} before any task exists."""
+    with closing(database.connect()) as db:
+        try:
+            rows = db.execute(f"select id, kind, title from tasks where id in ({', '.join('?' * len(ids))})", ids)
+            return {r["id"]: dict(r) for r in rows}
+        except sqlite3.OperationalError:  # no tasks table yet
+            return {}
+
+
+def _picks(kind: str, tasks: list[int] | None, failed: bool, todos: list[str] | None, count: int) -> str | None:
+    """Validated picks (JSON) for a resume or todo job; None for other kinds, which mustn't be given any."""
+    if kind not in WORK:
+        if tasks or failed or todos or count:
+            raise ValueError("tasks and failed are for resume jobs, todos and count for todo jobs.")
+        return None
+    if kind == "resume":
+        if todos or count:
+            raise ValueError("todos and count are for todo jobs; a resume job takes tasks, or none for every stopped "
+                             "task.")
+        if not tasks:
+            return json.dumps({"failed": bool(failed)})
+        ids = list(dict.fromkeys(tasks))
+        if len(ids) > MAX_PICKS:
+            raise ValueError(f"A resume job takes at most {MAX_PICKS} tasks.")
+        found = _tasks_named(ids)
+        if missing := [i for i in ids if i not in found]:
+            raise ValueError(f"There's no task {', '.join(map(str, missing))}.")
+        if odd := [found[i] for i in ids if found[i]["kind"] not in database.KINDS]:
+            raise ValueError(f"Task {odd[0]['id']}, {odd[0]['title']}, is a {odd[0]['kind']} task, which can't be "
+                             "resumed: only code and research tasks carry on.")
+        return json.dumps({"tasks": ids})
+    if tasks or failed:
+        raise ValueError("tasks and failed are for resume jobs; a todo job takes todos or count.")
+    if todos and count:
+        raise ValueError("Give todos (the items) or count (the next so many open items), not both.")
+    if todos:
+        from jarvis.state import todo
+
+        ids = list(dict.fromkeys(todo.find(t)["id"] for t in todos))
+        if len(ids) > MAX_PICKS:
+            raise ValueError(f"A todo job starts at most {MAX_PICKS} tasks.")
+        return json.dumps({"todos": ids})
+    if not 0 <= count <= MAX_PICKS:
+        raise ValueError(f"count is how many open items to start tasks for, 1 to {MAX_PICKS}.")
+    return json.dumps({"count": count or 1})
+
+
+def work_text(job: dict) -> str:
+    """What a resume or todo job does, in words; "" for other kinds."""
+    found = picks(job)
+    if job["kind"] == "resume":
+        if ids := found.get("tasks"):
+            return f"resumes task{'s' if len(ids) > 1 else ''} {', '.join(map(str, ids))}"
+        return "resumes every stopped " + ("or failed task" if found.get("failed") else "task")
+    if job["kind"] != "todo":
+        return ""
+    if ids := found.get("todos"):
+        from jarvis.state import todo
+
+        items = [item["text"] for i in ids if (item := todo.get(i))]
+        return f"starts a task for each of these to-do items: {'; '.join(items) or '(all removed)'}"
+    n = found.get("count") or 1
+    return f"starts tasks for the next {n} open to-do items" if n > 1 else "starts a task for the next open to-do item"
+
+
 def _only_changes(kind: str, only_changes: bool | None) -> None:
     if only_changes and kind not in ("task", "command"):
         raise ValueError("only_changes is for scheduled tasks and commands: a watch speaks only once what it waits for "
@@ -469,17 +553,23 @@ def add(kind: str, title: str, text: str, when: str = "", in_minutes: int = 0, r
         every_minutes: int = 0, until: str = "", task_kind: str = "", project: str = "", probe: str = "",
         target: str = "", expect: str = "", only_changes: bool = False, folder: str = "", timeout_minutes: int = 0,
         summarize: bool | None = None, auto_fix: bool | None = None, log_file: str = "",
+        tasks: list[int] | None = None, failed: bool = False, todos: list[str] | None = None, count: int = 0,
         now: datetime | None = None) -> dict:
-    """Validate and save a new job; returns it."""
+    """Validate and save a new job; returns it. `tasks` and `failed` are for resume jobs, `todos` and `count` for
+    todo jobs (see picks)."""
     now = _now(now)
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {', '.join(KINDS)}.")
     _only_changes(kind, only_changes)
     _command_only(kind, folder, timeout_minutes, summarize, auto_fix, log_file)
     text = (text or "").strip()
-    if not text:
+    if not text and kind not in WORK:
         raise ValueError("text is empty: say what to remind, the task's instruction, what to watch for, or the command.")
-    job = {"kind": kind} | _what(kind, task_kind, project, probe, target, expect)
+    if kind in WORK and (task_kind or project):
+        raise ValueError(f"A {kind} job takes no task_kind or project: "
+                         + ("each task carries on as it was." if kind == "resume" else "each item's task gets its own."))
+    job = {"kind": kind, "picks": _picks(kind, tasks, failed, todos, count)}
+    job |= _what(kind, task_kind, project, probe, target, expect)
     if kind == "command":
         job |= _command({}, folder, project, timeout_minutes, summarize, auto_fix, log_file)
     job |= _timing(job, when, in_minutes, repeat, every_minutes, until, now)
@@ -489,7 +579,8 @@ def add(kind: str, title: str, text: str, when: str = "", in_minutes: int = 0, r
     if job["probe"] == "task" and sum(1 for j in live if j["probe"] == "task") >= MAX_TASK_WATCHES:
         raise ValueError(f"At most {MAX_TASK_WATCHES} watches can be checked by background tasks at once; cancel one, "
                          "or use a url, gmail or chat probe.")
-    job |= {"title": _clean(title)[:80] or _clean(text)[:60], "text": text, "status": ACTIVE,
+    said = text or work_text(job)
+    job |= {"title": _clean(title)[:80] or _clean(said)[:60], "text": text, "status": ACTIVE,
             "only_changes": int(bool(only_changes)), "created": now.timestamp(), "updated": now.timestamp()}
     with _db() as db:
         cur = db.execute(f"insert into schedules ({', '.join(job)}) values ({', '.join('?' * len(job))})",
