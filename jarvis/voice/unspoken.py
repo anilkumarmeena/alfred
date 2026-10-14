@@ -34,8 +34,9 @@ _SNAKE = re.compile(r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b")
 _SPACE_BEFORE = re.compile(r"[ \t]+(?=[.,;:!?])")
 _SPACES = re.compile(r"[ \t]{2,}")
 
-# A tail a later chunk could still change: a determiner or "task" still waiting for its number, "branch" for its name
-_HELD_PHRASE = re.compile(rf"(?:\b(?:{_DETERMINERS})\s+)?\b(?:task\s*#?\d*|branch(?:\s+(?:called|named))?\s*)$"
+# A tail a later chunk could still change: a determiner or "task" still waiting for its number (or a number for the
+# word after it: "task 2 weeks ago" is a count), "branch" for its name
+_HELD_PHRASE = re.compile(rf"(?:\b(?:{_DETERMINERS})\s+)?\b(?:task\s*#?\d*\s*|branch(?:\s+(?:called|named))?\s*)$"
                           rf"|\b(?:{_DETERMINERS})\s*$", re.I)
 _OPEN_TAG = re.compile(r"</?[A-Za-z][\w-]*(?:\s[^<>]*)?$|<$")
 _LAST_WORD = re.compile(r"\S+$")

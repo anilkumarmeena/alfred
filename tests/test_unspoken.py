@@ -80,6 +80,12 @@ def test_a_stream_holds_back_only_what_could_still_change():
     assert scrubber.end() == "Anything"
 
 
+def test_a_count_after_task_survives_a_chunk_ending_after_the_number():
+    scrubber = Scrubber()
+    said = scrubber.feed("The task 2 ") + scrubber.feed("weeks ago was bigger. Task 5 ") + scrubber.feed("is done.")
+    assert said + scrubber.end() == "The task 2 weeks ago was bigger. The task is done."
+
+
 def test_a_flush_marker_passes_through_after_what_was_held():
     flush = object()
 
