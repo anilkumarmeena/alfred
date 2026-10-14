@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import pytest
+from test_consent import model, says  # noqa: F401  (model is a fixture)
 from test_in_place import (  # noqa: F401  (env is a fixture)
     add_new_file,
     branches,
@@ -231,47 +232,45 @@ def test_discarding_asks_first_and_task_log_says_the_latest_steps():
     assert "latest steps" in tools.get("task_log").description
 
 
-def discarding(monkeypatch, said: str, model_says: str = "unclear") -> tuple[list[int], list[str]]:
-    """task_discard on the user's reply `said`: (tasks discarded, prompts the yes/no model saw)."""
-    gone, prompts = [], []
+@pytest.fixture
+def gone(monkeypatch) -> list[int]:
+    """Tasks task_discard went on to discard."""
+    gone = []
 
     async def fake_discard(task_id: int) -> dict:
         gone.append(task_id)
         return {"id": task_id, "title": "the Chrome fix", "kind": "code_change", "status": "discarded",
                 "updated": time.time()}
 
-    async def model(prompt: str) -> str:
-        prompts.append(prompt)
-        return json.dumps({"answer": model_says, "scope": "once"})
-
     monkeypatch.setattr(client, "discard", fake_discard)
-    monkeypatch.setattr(consent, "CONSENT_ENABLED", True)
-    monkeypatch.setattr(consent, "ask_model", model)
-    monkeypatch.setattr(consent, "_kept", {})
+    return gone
+
+
+def discard_on(said: str) -> dict:
+    """task_discard after the user's reply `said`."""
     conversation.current().heard.turn(said)
-    try:
-        asyncio.run(task_tools.task_discard(7))
-    except ValueError as e:
-        assert "Not discarded" in str(e) and "Check back" in str(e)
-    return gone, prompts
+    return asyncio.run(task_tools.task_discard(7))
 
 
 @pytest.mark.parametrize("said", ["Yes.", "Go ahead.", "Okay, sure.", "Yes, delete them.", "Yeah, all three."])
-def test_a_plain_yes_discards_at_once_without_the_model(monkeypatch, said):
-    assert discarding(monkeypatch, said) == ([7], [])
+def test_a_plain_yes_discards_at_once_without_the_model(model, gone, said):  # noqa: F811
+    discard_on(said)
+    assert gone == [7] and model.prompts == []
 
 
 # Heard in a real call: "JARVIS, good." to "Shall I go ahead?" threw away two branches of unmerged work
 @pytest.mark.parametrize("said", ["JARVIS, good.", "Sorry.", "Sure. Sorry.", "Headshot.", "Wait, which one?", ""])
-def test_a_reply_that_doesnt_plainly_say_yes_discards_nothing(monkeypatch, said):
-    gone, prompts = discarding(monkeypatch, said)
+def test_a_reply_that_doesnt_plainly_say_yes_discards_nothing(model, gone, said):  # noqa: F811
+    with pytest.raises(ValueError, match="Not discarded.*Check back"):
+        discard_on(said)
     assert gone == []
-    assert all(consent.KINDS[consent.DISCARD] in p for p in prompts)
+    assert all(consent.KINDS[consent.DISCARD] in p for p in model.prompts)
 
 
-def test_a_yes_in_other_words_is_the_models_to_judge(monkeypatch):
-    gone, [prompt] = discarding(monkeypatch, "Haan, hata do.", "yes")
-    assert gone == [7] and "Haan, hata do." in prompt
+def test_a_yes_in_other_words_is_the_models_to_judge(model, gone):  # noqa: F811
+    model.answer = says("yes")
+    discard_on("Haan, hata do.")
+    assert gone == [7] and "Haan, hata do." in model.prompts[0]
 
 
 def test_the_voice_prompt_checks_back_on_a_reply_that_doesnt_fit_but_never_asks_twice():

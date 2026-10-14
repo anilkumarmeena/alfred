@@ -190,7 +190,8 @@ def approves(said: str) -> bool:
     agreed, i = False, 0
     while i < len(words):
         if phrase := next((p for p in _AFFIRMATIVE if tuple(words[i : i + len(p)]) == p), None):
-            agreed, i = agreed or phrase not in _REACTIONS, i + len(phrase)
+            agreed = agreed or phrase not in _REACTIONS
+            i += len(phrase)
         elif words[i] in _FILLER:
             i += 1
         else:
