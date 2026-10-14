@@ -59,7 +59,9 @@ def test_the_persona_keeps_tool_how_tos_out_and_no_owner_s_examples():
 def test_the_persona_makes_a_promised_call_at_once_and_checks_its_own_state_with_tools():
     text = persona.persona()
     assert "When you say you'll start or do something, make that tool call in the same reply" in text
+    assert "What you must confirm first (the list below) is the exception" in text
     assert "Before answering about your own state" in text and "rather than going by long-term memory" in text
+    assert "rather than taking that as a no" in text
 
 
 def test_the_rules_moved_out_of_the_persona_are_in_the_tools_descriptions():

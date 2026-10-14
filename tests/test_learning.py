@@ -219,7 +219,8 @@ def test_the_review_call_has_no_tools_and_untrusted_content_is_named_as_such(dat
 def test_the_review_saves_plans_as_plans_until_they_are_confirmed_done():
     text = learning.system()
     assert f'"{profile.name()} plans to' in text and "never as if it's already done" in text
-    assert "only when the conversation confirms it finished" in text
+    assert f"only when {profile.name()} confirms it's done: JARVIS saying it did it" in text
+    assert "concrete job for later belongs on the to-do list" in text
 
 
 # ── What it makes of the reply ──────────────────────────────────

@@ -339,7 +339,7 @@ You needn't say "remember" for everything. Once a conversation is over (a minute
 <td width="50%" valign="top">
 
 **✅ It keeps**<br>
-Preferences, habits, goals, how you like to be spoken to; your machine, tools, projects, accounts. Plans are kept **as plans** until they're confirmed done.
+Preferences, habits, goals, how you like to be spoken to; your machine, tools, projects, accounts. Plans are kept **as plans** until you say they're done.
 
 </td>
 <td width="50%" valign="top">
