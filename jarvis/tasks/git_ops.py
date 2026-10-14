@@ -302,8 +302,9 @@ class GitOps(RunnerBase):
                 return await asyncio.to_thread(projects.init_git, project.name)
 
     def _jobs_on(self, project: str, in_place: bool = False) -> list[int]:
-        """Running or queued task ids on a project (only in-place ones if `in_place`)."""
-        tasks = (self.store.get(i) for i in self.jobs)
+        """Running or queued task ids on a project (only in-place ones if `in_place`). One waiting for a usage limit's
+        reset doesn't count: it holds no folder, and its wait may last days."""
+        tasks = (self.store.get(i) for i in self.jobs if i not in self.limit_waits)
         return sorted(t["id"] for t in tasks if t and t["project"] == project and (t["in_place"] or not in_place))
 
     def _folder_lock(self, project: str) -> asyncio.Lock:

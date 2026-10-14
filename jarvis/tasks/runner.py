@@ -60,6 +60,7 @@ from jarvis.core.config import (
     RUNNER_SOCKET,
     SCHEDULER_ENABLED,
     TASK_CONTINUES,
+    TASK_MODEL,
 )
 from jarvis.core.database import (
     COMMAND,
@@ -75,6 +76,7 @@ from jarvis.core.database import (
 from jarvis.node import machines, placement
 from jarvis.node.hub import Hub
 from jarvis.node.offload import Offline, Offload
+from jarvis.notify.push import task_target
 from jarvis.safety import host
 from jarvis.state import activity as bell, todo as todos
 from jarvis.tasks import (
@@ -85,6 +87,7 @@ from jarvis.tasks import (
     command_jobs,
     data_edits,
     goal,
+    hold,
     learning,
     notices,
     projects,
@@ -125,12 +128,13 @@ LIMIT_RESUMED = ("Claude's usage limit stopped you partway through this task, an
                  "task from where you were: first check what your last step left behind, as it may not have finished, "
                  "then end with your summary of the whole task as before.")
 LIMIT_SLACK = 60.0  # seconds past a usage limit's reset before resuming, for clock differences
+WAIT_STEP = 300.0  # most seconds a wait for the reset sleeps before checking the wall clock again
 
 
 def _waits_for_reset(task: dict) -> float | None:
-    """The usage-limit reset a queued task waits for (kept in `interrupted` by _launch), if still to come."""
-    after = (json.loads(task["interrupted"] or "null") or {}).get("after")
-    return after if after and after > time.time() else None
+    """The usage-limit reset a queued task waits for (kept in `interrupted` by _launch), passed or not: its wait
+    still ends in LIMIT_SLACK and the once-per-reset record."""
+    return (json.loads(task["interrupted"] or "null") or {}).get("after")
 
 
 class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
@@ -173,7 +177,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
 
         Running ones go first. The rest are stopped (resumable by reply); see _resumable for why.
         """
-        resuming, cut = [], []
+        resuming, cut, waits = [], [], 0  # waits: tasks only waiting for a usage limit's reset, which cost nothing
         for t in self.store.active():
             if t["kind"] in (COMMAND, CONNECTION):  # tracked separately
                 continue
@@ -184,7 +188,9 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             if not why and t["node"] and t["status"] == "running":  # still going on its machine: taken up again
                 resuming.append((t["id"], prompt))
                 continue
-            if not why and len(resuming) >= RESUME_TASKS and not _waits_for_reset(t):  # a wait costs nothing
+            if not why and _waits_for_reset(t) is not None:
+                waits += 1
+            elif not why and len(resuming) - waits >= RESUME_TASKS:
                 why = f"no more than {RESUME_TASKS} resume at once (JARVIS_RESUME_TASKS)"
             if not why:
                 resuming.append((t["id"], prompt))
@@ -293,7 +299,8 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
                 self._background(self._announce_approval(approval["id"]))
         for task_id, prompt in self.resuming:
             task = self.store.get(task_id)
-            if after := _waits_for_reset(task):  # nothing was cut off: it goes on waiting
+            if (after := _waits_for_reset(task)) is not None:  # nothing was cut off: it goes on waiting
+                self.limit_resumed[task_id] = after
                 self._launch(task_id, prompt, after=after)
                 continue
             self.store.log(task_id, "interrupted", RESUMED_LOG)
@@ -407,6 +414,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             raise ValueError(f"Task {task_id} is a {learning.TITLE}, which has nothing to carry on; apply or dismiss "
                              "its suggested edits with task_edits.")
         running = task["status"] in ("queued", "running")
+        self.limit_resumed.pop(task_id, None)  # a new word from the user: a usage limit hit after it waits afresh
         if not running and task["worktree"] and not self._lives_on(task) and not Path(task["worktree"]).exists():
             folder = "project folder" if task["in_place"] else "worktree"
             raise ValueError(f"Task {task_id}'s {folder} has been removed, so it can't carry on.")
@@ -531,6 +539,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             status, activity = "queued", f"waiting for Claude's usage limit to reset {usage.when(after)}, then carrying on"
             cut = json.dumps({"prompt": prompt, "after": after}, ensure_ascii=False)
             self.limit_waits[task_id] = after
+            self.wakes[task_id] = asyncio.Event()  # now, so a reply before the job's first step still wakes it
         elif ahead := self._ahead_in_folder(task):
             ids = " and ".join(map(str, ahead))
             status, activity = "queued", (f"queued behind task {ids}: this project's tasks work in its own folder, so "
@@ -556,6 +565,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         self.jobs.pop(task_id)
         self.prompts.pop(task_id, None)
         self.in_line.discard(task_id)
+        self._waited(task_id)
         if self.closing:  # left for _after_restart
             return
         self._finish(task_id, "stopped", announce.plain(announce.Ending(self.store.get(task_id)["title"],
@@ -642,8 +652,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             self.in_line.discard(task_id)
             self.begun.discard(task_id)
             self.pulse.forget(task_id)
-            self.limit_waits.pop(task_id, None)
-            self.wakes.pop(task_id, None)
+            self._waited(task_id)
         if self.closing:  # left for _after_restart
             return
 
@@ -663,7 +672,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         owes = bool(task["question"] or self.store.approvals(task_id))  # waits on the user, whatever else happened
         if outcome and outcome.kind == retry.LIMIT and not owes and (after := self._limit_reset(task, outcome)):
             self.store.set(task_id, **fields)
-            self._wait_out_limit(task, LIMIT_RESUMED if task["session_id"] else prompt, after)
+            self._wait_out_limit(task, LIMIT_RESUMED if task["session_id"] else prompt, after, bool(outcome.resets))
             return
         if outcome and outcome.error == STEPS_OUT and not owes:
             more, outcome = self._carried_on(task, outcome)
@@ -771,15 +780,18 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
     def _carried_on(self, task: dict, outcome: Outcome) -> tuple[str | None, Outcome]:
         """(prompt carrying a run that ran out of steps on in its session, or None, and the outcome to report).
 
-        At most TASK_CONTINUES times since the user last asked; past that it fails, saying so."""
+        At most TASK_CONTINUES times since the user last asked or sent it a message; past that it fails, saying so.
+        A watch's check isn't carried on: the scheduler checks again when it's next due."""
         task_id = task["id"]
-        entries = goal.since_asked(self.store.history(task_id, goal.LOG_ENTRIES))
-        done = sum(e["kind"] == CONTINUED_LOG for e in entries)
-        if task["session_id"] and done < TASK_CONTINUES:
+        entries = self.store.history(task_id, goal.LOG_ENTRIES)
+        asked = max((i for i, e in enumerate(entries) if e["kind"] in ("start", "reply", "nudge")), default=0)
+        done = sum(e["kind"] == CONTINUED_LOG for e in entries[asked:])
+        if task["hidden"] or not task["session_id"]:
+            return None, outcome
+        if done < TASK_CONTINUES:
             self.store.log(task_id, CONTINUED_LOG, f"ran out of steps, so JARVIS carried it on by itself "
                                                    f"({done + 1} of {TASK_CONTINUES})")
-            if not task["hidden"]:
-                bell.add(f"Task {task_id} ran out of steps, so it carries on by itself: {task['title']}", "run", task_id)
+            bell.add(f"Task {task_id} ran out of steps, so it carries on by itself: {task['title']}", "run", task_id)
             return CONTINUED, outcome
         if not done:
             return None, outcome
@@ -788,38 +800,66 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
                                                         "the most it does, so it needs a reply to carry on")
 
     def _limit_reset(self, task: dict, outcome: Outcome) -> float | None:
-        """When a run the usage limit cut short should resume by itself, or None: a scheduled run (the scheduler
-        reruns it), or one that already resumed after this reset and hit the limit again."""
+        """The usage-limit reset a run cut short waits for, or None to report it failed: a scheduled run (the scheduler
+        runs it again after the reset), one that hit the limit again before a new reset (once per reset), or a second
+        hit with no reset known (a guessed one can't tell, so it can't loop)."""
         if task["job"] is not None:
             return None
-        local = None if task["node"] else usage.hold_until()  # this computer's account; another's isn't known here
-        after = outcome.resets or local or time.time() + usage.UNKNOWN_RESET
-        return after if after > self.limit_resumed.get(task["id"], 0) else None
+        resets = outcome.resets or (None if task["node"] else usage.used_up_until())  # another's account isn't known
+        last = self.limit_resumed.get(task["id"])
+        if not resets:
+            return None if last is not None else time.time() + usage.UNKNOWN_RESET
+        return resets if last is None or resets > last else None
 
-    def _wait_out_limit(self, task: dict, prompt: str, after: float) -> None:
-        """Queue the task until the usage limit resets, and say so once."""
+    def _wait_out_limit(self, task: dict, prompt: str, resets: float, reported: bool) -> None:
+        """Queue the task until the usage limit resets, and say so once (a wait also as a notification and push).
+
+        A limit on its model family alone needn't wait: the next run uses a lighter model (usage.available). That's
+        tried once, when Claude `reported` the limit and no limit for every model is used up; a later hit waits."""
         task_id = task["id"]
-        said = (f"Task {task_id}, {task['title']}, hit Claude's usage limit. It carries on by itself when that resets "
-                f"{usage.when(after)}.")
+        now = time.time()
+        if (reported and task_id not in self.limit_resumed and not task["node"] and not usage.used_up_until()
+                and usage.available(TASK_MODEL) != TASK_MODEL):
+            self.limit_resumed[task_id] = now
+            after, said = now, (f"Task {task_id}, {task['title']}, hit Claude's usage limit for its model, so it "
+                                "carries on with a lighter one.")
+        else:
+            self.limit_resumed[task_id] = resets
+            after, said = resets, (f"Task {task_id}, {task['title']}, hit Claude's usage limit. It carries on by itself "
+                                   f"when that resets {usage.when(resets)}.")
         self.store.log(task_id, "limit", said)
         self._launch(task_id, prompt, after=after)
-        if not task["hidden"]:
-            self._emit("status", self.store.update(task_id, spoken=said, seen=0), said)
+        if task["hidden"]:
+            return
+        self._emit("status", self.store.update(task_id, spoken=said, seen=0), said)
+        if after > time.time() and not hold.held():
+            self._background(self._notify(f"JARVIS · task {task_id}", said))
+            self._background(self._push(f"Task {task_id} waits for the usage limit", said, *task_target(task_id)))
 
     async def _wait_for_reset(self, task_id: int, after: float) -> None:
-        """Sleep until the usage limit resets (and any limit still used up on this computer), or a message comes."""
-        wake = self.wakes[task_id] = asyncio.Event()
-        remote = bool(self.store.get(task_id)["node"])
-        while (left := max(after, 0 if remote else usage.hold_until() or 0) + LIMIT_SLACK - time.time()) > 0:
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(wake.wait(), left)
-            if wake.is_set():
-                self.store.log(task_id, "limit", "a message came, so it carries on before the usage limit's reset")
+        """Sleep until `after`, and any limit still used up on this computer, has reset, or a message comes. Wakes
+        every WAIT_STEP to check the wall clock: the event loop's clock stops while the computer sleeps."""
+        # A message sent before the limit was hit doesn't end the wait: it was for that run, and goes with the next
+        wake = self.wakes.setdefault(task_id, asyncio.Event())
+        task = self.store.get(task_id)
+        while not wake.is_set():
+            until = self.limit_waits[task_id] = max(after, 0 if task["node"] else usage.used_up_until() or 0)
+            if (left := until + LIMIT_SLACK - time.time()) <= 0:
                 break
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(wake.wait(), min(left, WAIT_STEP))
+        if wake.is_set():
+            self.limit_resumed.pop(task_id, None)  # sent on early: hitting the limit again waits for the reset again
+            self.store.log(task_id, "limit", "a message came, so it carries on before the usage limit's reset")
         else:
-            self.limit_resumed[task_id] = after
             self.store.log(task_id, "limit", "Claude's usage limit has reset, so it carries on by itself")
+        self._waited(task_id)
         self.store.set(task_id, interrupted=None)
+
+    def _waited(self, task_id: int) -> None:
+        """Forget a task's wait for a usage limit's reset: it's over, or its job ended."""
+        self.limit_waits.pop(task_id, None)
+        self.wakes.pop(task_id, None)
 
 
 async def serve() -> None:

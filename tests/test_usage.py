@@ -110,6 +110,16 @@ def test_the_limit_watch_records_what_the_cli_says(usage_file):
     assert watch.describe("API Error: usage limit reached") == "the Claude usage limit"
 
 
+def test_a_window_extra_usage_carries_on_past_isnt_what_stopped_a_run(usage_file):
+    watch = sdk.LimitWatch("test")
+    watch.saw(RateLimitEvent(RateLimitInfo(status="rejected", rate_limit_type="five_hour", resets_at=int(NOW + 600),
+                                           overage_status="allowed"), "u1", "s1"))
+    assert watch.rejected is None and watch.describe("tool failed") is None
+    watch.saw(RateLimitEvent(RateLimitInfo(status="rejected", rate_limit_type="five_hour", resets_at=int(NOW + 600)),
+                             "u2", "s1"))
+    assert watch.rejected is not None
+
+
 def test_an_unreadable_file_is_nothing_known(usage_file):
     usage_file.write_text("{not json")
     assert usage.windows(NOW) == {}

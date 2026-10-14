@@ -202,7 +202,8 @@ class LimitWatch:
         usage.record(info)
         if info.status != "allowed":
             log.warning("%s rate limit: %s", self.label, info)
-        self.rejected = info if info.status == "rejected" else None
+        # Extra usage carries a run on past a rejected window, so that window didn't stop it
+        self.rejected = info if info.status == "rejected" and info.overage_status != "allowed" else None
 
     def describe(self, error: str | None) -> str | None:
         """E.g. 'the Claude usage limit, which resets at 3 PM' if that caused the failure, else None."""
