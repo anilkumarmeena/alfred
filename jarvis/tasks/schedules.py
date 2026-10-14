@@ -289,8 +289,8 @@ def _timing(job: dict, when: str, in_minutes: int, repeat: str, every_minutes: i
         first = next_on_days(out["at"], out["days"], from_)
     elif every_minutes or kind == "watch":
         every = every_minutes or EVERY[probe]
-        least = {"watch": MIN_EVERY[probe], "task": MIN_TASK_EVERY, "resume": MIN_TASK_EVERY, "todo": MIN_TASK_EVERY,
-                 "command": MIN_COMMAND_EVERY}.get(kind, MIN_REMINDER_EVERY)
+        least = MIN_TASK_EVERY if kind in ("task", *WORK) else {"watch": MIN_EVERY[probe],
+                                                                 "command": MIN_COMMAND_EVERY}.get(kind, MIN_REMINDER_EVERY)
         if every < least:
             raise ValueError(f"Every {least} minutes at most often for this kind of job.")
         out["every"] = every

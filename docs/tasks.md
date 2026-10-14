@@ -115,6 +115,7 @@ To-dos live in the `todos` table of `data/tasks.db`, not in memory.
 | "What's on my list?" | Reads it back, open items first |
 | "Tick off the phone app" | Marks it done |
 | "Start a task on the phone app from my list" | A task linked to the item |
+| "At 3 a.m. start tasks for the next two to-dos" | [Scheduled](#-scheduler): linked tasks start then, on their own |
 
 - A **linked task**, once checked finished, ticks its item off, or JARVIS offers to reword the item to what's left.
 - A task started **without naming an item** is matched against your open items as it finishes; a clear match is **offered** for ticking off, never ticked unasked.
@@ -270,6 +271,13 @@ The runner runs what you schedule by voice, once or on a repeat. Jobs live in `d
 | 🛠️ | **Task** | "Every weekday at nine, give me a morning brief" | A background task on a lighter model, with a **notepad** |
 | 👀 | **Watch** | "Tell me when the deploy is live" · "tell me when Sam replies" | Checks until it happens (you hear once) or it ends |
 | 💻 | **Command** | "Run `scripts/report.sh weekly` in my reports project every Monday at seven" | A [command task](#long-jobs) per run, no model while it works |
+| ▶️ | **Resume** | "At 3 a.m. resume all stopped tasks" · "resume tasks 12 and 14 at three" | Carries those tasks on, as a follow-up would |
+| ✅ | **To-dos** | "At 3 a.m. start tasks for the next two to-dos" | A task for each item, linked to it |
+
+- **Resume and to-dos** do unattended, at your time, what you'd otherwise start by voice. One notification says what was resumed or started; a run with nothing to do stays silent.
+  - **Resume** takes the tasks you name, or every task stopped in the last week ("and failed ones" adds those that failed, say on the usage limit). Scheduled runs and fixes for commands are left out: they retry by themselves.
+  - **To-dos** takes the items you name, or the next open ones no task has taken on yet. One short model call writes each task's instruction from the item, your projects and memory, and passes over items that need you ("call the dentist"); what you add when scheduling (a skill code tasks must use, say) ends every instruction as you said it. Each item is ticked off once its task is checked finished.
+  - Both wait for a used-up usage limit to reset, keep to how many tasks run at once (the rest queue), and leave risky commands waiting for your yes.
 
 - **Notepad:** each run keeps one for the next, so "only tell me if something's new" stays silent otherwise.
 - **Watches** end after **24 h** unless you say otherwise, **a week** at most.
