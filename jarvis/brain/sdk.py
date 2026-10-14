@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from contextlib import aclosing
@@ -21,10 +22,10 @@ from claude_agent_sdk import (
 
 from jarvis import tools
 from jarvis.brain import retry, usage
+from jarvis.core import claude_logins
 from jarvis.core.config import (
     ASSISTANT_NAME,
     CLAUDE_CLI,
-    CLAUDE_OWN_CONFIG_DIR,
     DATA_DIR,
     INJECTION_TASK_SECONDS,
     TOOL_SEARCH,
@@ -50,6 +51,9 @@ ASK_SECONDS = 120  # default `ask` timeout
 ATTRIBUTION = {"commit": f"Co-Authored-By: {ASSISTANT_NAME}", "pr": f"Generated with {ASSISTANT_NAME}"}
 # Read-only tools: the CLI may run them in parallel within one step
 READS = ToolAnnotations(readOnlyHint=True)
+# A call that failed because its login isn't signed in (any more): JARVIS passes that login over until signed in again
+SIGNED_OUT = re.compile(r"failed to authenticate|oauth session expired|authentication_failed|please run /login|"
+                        r"not logged in|invalid api key", re.IGNORECASE)
 
 
 def _sdk_tool(t: tools.Tool, kept: "Kept | None" = None):
@@ -96,16 +100,16 @@ def on_demand(options: dict) -> dict:
 
 
 def sdk_options(env: dict[str, str] | None = None, screen_seconds: float = INJECTION_TASK_SECONDS,
-                **options) -> ClaudeAgentOptions:
-    """CLI options on the user's Claude login (or JARVIS's own): no user/project settings, no other MCP servers, no
-    skills unless named.
+                login: str | None = None, **options) -> ClaudeAgentOptions:
+    """CLI options on the Claude login in use (core.claude_logins), or `login`: no user/project settings, no other MCP
+    servers, no skills unless named.
 
     Settings are excluded because their allow rules would bypass permission_mode and can_use_tool. With tools and
     the injection check on, tool results are screened, `screen_seconds` per check. `settings` (JSON) gains
     ATTRIBUTION, which the CLI reads from flag settings.
     """
-    login = {"CLAUDE_CONFIG_DIR": CLAUDE_OWN_CONFIG_DIR} if CLAUDE_OWN_CONFIG_DIR else {}
-    env = login | gpu.env(options.get("sandbox")) | (env or {})
+    signed_in = claude_logins.env(claude_logins.active() if login is None else login)
+    env = signed_in | gpu.env(options.get("sandbox")) | (env or {})
     settings = {"attribution": ATTRIBUTION} | json.loads(options.get("settings") or "{}")
     options = on_demand(options | {"env": env, "settings": json.dumps(settings)})
     if (options.get("tools") or options.get("mcp_servers")) and injection_check_on():
@@ -137,13 +141,14 @@ async def ask(prompt: str, system_prompt: str, model: str, timeout: float = ASK_
     async with asyncio.timeout(timeout), aclosing(claude_agent_sdk.query(prompt=prompt, options=options)) as messages:
         async for m in messages:
             if isinstance(m, RateLimitEvent):
-                usage.record(m.rate_limit_info)
+                record(m.rate_limit_info, options)
                 rejected = m.rate_limit_info.status == "rejected"
             elif isinstance(m, AssistantMessage):
                 error = m.error or error
             elif isinstance(m, claude_agent_sdk.ResultMessage):
                 cost = m.total_cost_usd or 0.0
                 if m.is_error:
+                    signed_out(claude_logins.of_env(options.env), f"{error} {m.result}")
                     kind = retry.result_kind(m.api_error_status, m.terminal_reason, rejected, error)
                     raise retry.CallFailed(f"the model call failed: {m.subtype}", kind)
                 reply = m.result or ""
@@ -190,22 +195,42 @@ async def ask_flag(prompt: str, field: str, system_prompt: str, model: str, time
     return found[field] if found else None
 
 
-class LimitWatch:
-    """Detect the usage limit from rate-limit events, else error text. Events are recorded for other processes."""
+def record(info: RateLimitInfo, options: ClaudeAgentOptions) -> None:
+    """Record a rate-limit event for the login the call ran on."""
+    usage.record(info, login=claude_logins.of_env(options.env))
 
-    def __init__(self, label: str) -> None:
+
+def signed_out(login: str | None, error: str | None) -> None:
+    """Pass a login over until it's signed in again, if `error` says the call failed to authenticate."""
+    if login is not None and SIGNED_OUT.search(error or ""):
+        log.warning("the %s Claude login isn't signed in: %s", login or "default", (error or "").strip()[:200])
+        claude_logins.note(login, False, "Claude says it isn't signed in any more: sign it in again.")
+
+
+class LimitWatch:
+    """Detect the usage limit from rate-limit events, else error text. Events are recorded for other processes, under
+    `login`, the login the session runs on (set once its options are made); a failure to authenticate passes that
+    login over."""
+
+    def __init__(self, label: str, login: str | None = None) -> None:
         self.label = label
+        self.login = login
         self.rejected: RateLimitInfo | None = None
+
+    def runs_on(self, options: ClaudeAgentOptions) -> ClaudeAgentOptions:
+        self.login = claude_logins.of_env(getattr(options, "env", None))
+        return options
 
     def saw(self, event: RateLimitEvent) -> None:
         info = event.rate_limit_info
-        usage.record(info)
+        usage.record(info, login=self.login)
         if info.status != "allowed":
             log.warning("%s rate limit: %s", self.label, info)
         self.rejected = info if info.status == "rejected" else None
 
     def describe(self, error: str | None) -> str | None:
         """E.g. 'the Claude usage limit, which resets at 3 PM' if that caused the failure, else None."""
+        signed_out(self.login, error)
         if self.rejected and self.rejected.resets_at and self.rejected.resets_at < time.time():
             self.rejected = None  # CLI reports only changes; the window may have passed
         if self.rejected is None and not usage.LIMIT_TEXT.search(error or ""):

@@ -167,8 +167,11 @@ models-int8: ## Download the 8-bit Kokoro (~230 MB less memory, slower; JARVIS_T
 setup: uv-bin ## Generate keys, passcode and LiveKit config (rerunnable)
 	$(UV) python -m jarvis.setup_local
 
-claude-login: ## Log in to Claude (yours; JARVIS's own if .env sets JARVIS_CLAUDE_CONFIG_DIR)
-	$(if $(CLAUDE_PATH),CLAUDE_CONFIG_DIR="$(CLAUDE_PATH)" )claude auth login
+claude-login: ## Log in to Claude (yours, or JARVIS's own NAME=work), check, restart services; also in Settings
+	@cd "$(MAIN_DIR)" && $(JARVIS_PYTHON) -m jarvis.claude_login login $(NAME)
+
+claude-check: ## Check JARVIS's services can use a Claude login (NAME=work; default: yours)
+	@cd "$(MAIN_DIR)" && $(JARVIS_PYTHON) -m jarvis.claude_login check $(NAME)
 
 claude-status: ## Show the Claude account JARVIS uses
 	@$(if $(CLAUDE_PATH),CLAUDE_CONFIG_DIR="$(CLAUDE_PATH)" )claude auth status | grep -E '"(loggedIn|email|orgName|subscriptionType)"'

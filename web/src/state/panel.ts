@@ -12,7 +12,7 @@ import { loginShown, passcode, pushSub, setPasscode, showLogin } from "./store";
 export type Section = "tasks" | "todos" | "projects" | "jarvis" | "history" | "settings";  // jarvis: what it can do and knows
 export type SettingsItem =
   "conn" | "accounts" | "memory" | "vocabulary" | "skills" | "approvals" | "about" | "prefs" | "dnd" | "safety"
-  | "notify" | "system" | "access" | "keys" | "machines";
+  | "notify" | "system" | "access" | "keys" | "machines" | "claude";
 
 export interface Task {
   id: number; kind: string; title: string; project: string | null; status: string; created: number; updated: number;
@@ -115,6 +115,17 @@ export interface Login { name: string; created: number; used: number | null; thi
 // A JARVIS key: its source ("" = unset), never its value. required: can't be cleared
 export interface JarvisKey { name: string; label: string; hint: string; required: boolean; source: "vault" | ".env" | "file" | "" }
 export interface Access { logins: Login[]; keys: JarvisKey[] }
+// A Claude account JARVIS can run on, listed by priority. name "" is the default: the computer's own Claude Code
+// sign-in. check: the last check that JARVIS's services can use it; active: the one JARVIS runs on now (the first not
+// skipped); skipped: why JARVIS passes it over ("" if it doesn't)
+export interface ClaudeLogin {
+  name: string; active: boolean; skipped: string; signed_in: boolean; email: string | null; org: string | null; plan: string | null;
+  check: { ok: boolean; said: string; at: number } | null; usage: string;
+}
+export interface ClaudeLogins { logins: ClaudeLogin[]; can_change: boolean }
+export interface ClaudeSignIn { state: string; url: string }
+// How a sign-in or check went, with the logins afterwards
+export interface ClaudeResult extends ClaudeLogins { ok: boolean; said: string }
 export interface Activity { id: number; at: number; text: string; kind: "ok" | "bad" | "warn" | "run"; task: number | null }
 // Another computer JARVIS sends heavy work to. online: it answered a ping just now; pending: awaiting confirmation
 export interface Machine {
@@ -195,6 +206,7 @@ export const devices = signal<Device[] | null>(null);
 export const servers = signal<Server[] | null>(null);
 export const system = signal<System | null>(null);
 export const access = signal<Access | null>(null);
+export const claudeLogins = signal<ClaudeLogins | null>(null);
 export const prefs = signal<Prefs | null>(null);
 export const rules = signal<Rule[] | null>(null);
 export const voiceprints = signal<Voiceprints | null>(null);
@@ -328,11 +340,12 @@ const SETTINGS: Record<SettingsItem, () => Promise<void>> = {
   notify: async () => { devices.value = await act("devices", { endpoint: pushSub.peek()?.endpoint ?? "" }) ?? devices.peek(); },
   system: async () => { system.value = await act("system") ?? system.peek(); },
   access: async () => { access.value = await act("access") ?? access.peek(); },
+  claude: async () => { claudeLogins.value = await act("claude_logins") ?? claudeLogins.peek(); },
   keys: async () => {},
   machines: async () => { machines.value = await act("machines") ?? machines.peek(); },
 };
 // Loaded whenever Settings or JARVIS opens, for the summaries on their lists
-const LISTED: SettingsItem[] = ["system", "conn", "skills", "prefs", "access", "machines"];
+const LISTED: SettingsItem[] = ["system", "conn", "skills", "prefs", "access", "machines", "claude"];
 
 async function loadPrefs() { prefs.value = await act<Prefs>("preferences") ?? prefs.peek(); }
 

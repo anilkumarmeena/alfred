@@ -186,14 +186,14 @@ async def ask_model(prompt: str) -> str:
     """
     from claude_agent_sdk import RateLimitEvent, ResultMessage
 
-    from jarvis.brain import usage
+    from jarvis.brain import sdk
 
     client = await _session()
     try:
         await client.query(prompt)
         async for m in client.receive_response():
             if isinstance(m, RateLimitEvent):
-                usage.record(m.rate_limit_info)
+                sdk.record(m.rate_limit_info, client.options)  # under the login it ran on
             elif isinstance(m, ResultMessage):
                 if m.is_error:
                     raise RuntimeError(f"the model call failed: {m.subtype}")

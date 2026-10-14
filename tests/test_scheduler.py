@@ -14,7 +14,7 @@ from test_nudges import fake_run, finishes, settle
 from conftest import use_profile, use_task_cache
 from jarvis import tools
 from jarvis.brain import retry
-from jarvis.core import profile
+from jarvis.core import config, profile
 from jarvis.core.database import Store
 from jarvis.state import settings
 from jarvis.tasks import runner, schedules, scheduler, worker
@@ -669,7 +669,7 @@ def test_old_hidden_runs_are_forgotten_but_the_newest_task_kept(db):
 
 def test_tidying_removes_forgotten_runs_folders_and_old_jobs(db, tmp_path, monkeypatch):
     monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path / "data")
-    monkeypatch.setattr(scheduler, "CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    monkeypatch.setattr(config, "CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))  # the default login's folder
     store = Store()
     old, newest = (store.create("research", "Check", "x", None, job=1, hidden=True) for _ in range(2))
     store.db.execute("update tasks set status = 'done', updated = 0")

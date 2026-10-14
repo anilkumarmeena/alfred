@@ -123,9 +123,9 @@ class Profile:
 
     @property
     def voice_logs(self) -> Path:
-        """Voice brain's Claude session transcripts (the CLI names the folder after cwd `shell`)."""
-        from jarvis.core import config
-        return Path(config.CLAUDE_CONFIG_DIR) / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(self.shell))
+        """Voice brain's Claude session transcripts, in the login in use (the CLI names the folder after cwd `shell`)."""
+        from jarvis.core import claude_logins
+        return claude_logins.folder(claude_logins.active()) / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(self.shell))
 
 
 def _db() -> AbstractContextManager[sqlite3.Connection]:

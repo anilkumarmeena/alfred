@@ -32,6 +32,7 @@ PROFILE = profile.Profile("test", "Sam", config.mac_timezone() or "UTC", config.
                           SCRATCH / "secrets")
 profile.activate(PROFILE)
 transcribe.LOG_FILE = SCRATCH / "transcribe.log"  # keep errors out of the checkout's logs/
+config.CLAUDE_LOGINS_DIR = SCRATCH / "claude-logins"  # never this computer's Claude logins
 
 
 def use_profile(monkeypatch: pytest.MonkeyPatch, data: Path | None = None, **changes) -> profile.Profile:

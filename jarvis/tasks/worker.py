@@ -49,7 +49,7 @@ from jarvis.core.config import (
     TASK_MODEL,
     TASK_READ_DIRS,
 )
-from jarvis.core import platform, profile
+from jarvis.core import claude_logins, platform, profile
 from jarvis.integrations import mcp_servers
 from jarvis.safety import host
 from jarvis.skills import home as skills
@@ -250,6 +250,7 @@ def _options(task: dict, reporter: Reporter) -> ClaudeAgentOptions:
         settings=json.dumps(flags) if flags else None,
         max_turns=TASK_MAX_TURNS,
         resume=task["session_id"],
+        login=claude_logins.resume_on(task["session_id"]),  # its own login, or the next one if that's passed over
         stderr=lambda line: log.debug("task %s claude: %s", task["id"], line),
     )
 
@@ -290,7 +291,7 @@ def _error(msg: ResultMessage, limits: LimitWatch, api_error: str | None) -> tup
     if msg.subtype == "error_max_turns":
         return "it ran out of steps", retry.ERROR
     text = msg.result or "; ".join(str(e) for e in msg.errors or []) or msg.subtype
-    limit = limits.describe(text)  # first: it clears rejections whose window has reset
+    limit = limits.describe(f"{api_error or ''} {text}")  # first: it clears rejections whose window has reset
     kind = retry.result_kind(msg.api_error_status, msg.terminal_reason, limits.rejected is not None, api_error)
     return (f"it hit {limit}" if limit else text[:200]), kind
 
@@ -355,7 +356,7 @@ async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
         return None
 
     result: ResultMessage | None = None
-    async with ClaudeSDKClient(_options(task, reporter)) as client:
+    async with ClaudeSDKClient(limits.runs_on(_options(task, reporter))) as client:
         inbox: asyncio.Queue = asyncio.Queue()
 
         async def pump() -> None:

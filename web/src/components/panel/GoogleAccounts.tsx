@@ -88,7 +88,7 @@ function ClientLine({ setup }: { setup: GoogleSetup }) {
 }
 
 // Open a tab during the click (browsers block tabs opened later); Google's URL goes into it once the server answers.
-function blankTab(): Window | null {
+export function blankTab(): Window | null {
   try {
     const w = window.open("about:blank", "_blank");
     if (w) w.opener = null;

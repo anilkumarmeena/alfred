@@ -175,7 +175,7 @@ class CliBrain(Notes):
                 await self.close()
             if self.client is None:
                 self._accounts = google.ACCOUNTS
-                options = _options(self.shell, self.jobs, self.kept)
+                options = self.limits.runs_on(_options(self.shell, self.jobs, self.kept))
                 client = ClaudeSDKClient(options)
                 await client.connect()
                 self.client = client

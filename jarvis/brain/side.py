@@ -131,12 +131,12 @@ async def _answer(brief: str, options) -> str:
     """One side session's reply. RuntimeError on failure."""
     import claude_agent_sdk  # resolved at call time so tests can fake query
 
-    from jarvis.brain import usage
+    from jarvis.brain import sdk
 
     reply = ""
     async for m in claude_agent_sdk.query(prompt=brief, options=options):
         if isinstance(m, claude_agent_sdk.RateLimitEvent):
-            usage.record(m.rate_limit_info)
+            sdk.record(m.rate_limit_info, options)  # under the login it ran on
         elif isinstance(m, claude_agent_sdk.ResultMessage):
             if m.is_error:
                 raise RuntimeError(f"the side job failed: {m.subtype}")

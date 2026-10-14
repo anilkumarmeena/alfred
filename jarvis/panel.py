@@ -23,9 +23,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from jarvis import setup_local
+from jarvis import claude_login, setup_local
 from jarvis.brain import usage
-from jarvis.core import config, credentials, logins, vault
+from jarvis.core import claude_logins, config, credentials, logins, vault
 from jarvis.core.database import COMMAND, WAIT_APPROVAL, edits
 from jarvis.integrations import accounts, google_signin, mcp_servers
 from jarvis.node import keys, machines
@@ -890,6 +890,104 @@ async def key_clear(body: dict) -> dict:
     """Clear an optional key: {"name"}. Falls back to .env if set there."""
     await asyncio.to_thread(credentials.clear, credentials.need(_text(body, "name", 40)))
     return await access(body)
+
+
+# ── Claude logins (core.claude_logins, jarvis.claude_login) ─────
+# Signed in here through the web service, in the desktop session, so each lands in the keychain the services read.
+# JARVIS runs on the first usable one in the priority order set here. Only the owner changes them: a login is a Claude
+# account and its usage. "" names the default login.
+
+CLAUDE_LOGINS = "change JARVIS's Claude logins"
+
+
+def _claude_login(body: dict) -> str:
+    return claude_logins.known(_text(body, "name", 40))
+
+
+def _claude_row(name: str, active: str, checks: dict) -> dict:
+    said = claude_login.status(name)
+    found = claude_logins.account(name)
+    return {"name": name, "active": name == active, "skipped": claude_logins.skipped(name),
+            "signed_in": bool(said.get("loggedIn")),
+            "email": said.get("email") or found.get("emailAddress"), "org": said.get("orgName"),
+            "plan": said.get("subscriptionType"), "check": checks.get(name),
+            "usage": usage.said(kept=usage.of(name)) if usage.of(name) else ""}
+
+
+async def _claude_logins(body: dict) -> dict:
+    active, checks = await asyncio.to_thread(claude_logins.active), await asyncio.to_thread(claude_logins.checks)
+    names = await asyncio.to_thread(claude_logins.order)
+    rows = await asyncio.gather(*(asyncio.to_thread(_claude_row, name, active, checks) for name in names))
+    return {"logins": list(rows), "can_change": await asyncio.to_thread(logins.is_owner, str(body.get("login", "")))}
+
+
+def _claude_owner_only(body: dict) -> None:
+    logins.owner_only(str(body.get("login", "")), CLAUDE_LOGINS)
+
+
+@action
+async def claude_logins_(body: dict) -> dict:
+    """The Claude logins JARVIS can run on, by priority: each one's account, last check and usage, why it's passed
+    over if it is, and which one JARVIS runs on now."""
+    return await _claude_logins(body)
+
+
+@action
+async def claude_login_start(body: dict) -> dict:
+    """Start signing a login in: {"name" ("" = the default; new = add it), "email" (optional, prefilled)}. Returns
+    Claude's sign-in link and the state to finish with."""
+    await asyncio.to_thread(_claude_owner_only, body)
+    raw = _text(body, "name", 40)
+    name = claude_logins.valid(raw) if raw else claude_logins.DEFAULT
+    return await asyncio.to_thread(claude_login.signins.start, name, _text(body, "email", 200))
+
+
+@action
+async def claude_login_finish(body: dict) -> dict:
+    """Finish a sign-in with the code Claude's page showed: {"state", "code"}. Checks the login, then lists them."""
+    await asyncio.to_thread(_claude_owner_only, body)
+    ok, said = await asyncio.to_thread(claude_login.signins.finish, _text(body, "state", 100), _text(body, "code", 2000))
+    if ok:
+        await asyncio.to_thread(activity.add, "Signed a Claude login in from the control panel.")
+    return {"ok": ok, "said": said} | await _claude_logins(body)
+
+
+@action
+async def claude_login_cancel(body: dict) -> dict:
+    await asyncio.to_thread(claude_login.signins.cancel, _text(body, "state", 100))
+    return {}
+
+
+@action
+async def claude_login_check(body: dict) -> dict:
+    """Check JARVIS's services can use a login: {"name"}. One tiny model call."""
+    await asyncio.to_thread(_claude_owner_only, body)
+    ok, said = await asyncio.to_thread(claude_login.check, _claude_login(body))
+    return {"ok": ok, "said": said} | await _claude_logins(body)
+
+
+@action
+async def claude_login_order(body: dict) -> dict:
+    """Set the priority order: {"names": every login, first = most wanted}. Applies from JARVIS's next call; tasks
+    already started stay on theirs while it's usable."""
+    await asyncio.to_thread(_claude_owner_only, body)
+    names = body.get("names")
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        raise ValueError("Send the logins' names, in order.")
+    await asyncio.to_thread(claude_logins.set_order, names)
+    await asyncio.to_thread(activity.add, "Changed the Claude logins' order in the control panel: "
+                                          + " > ".join(n or "default" for n in names) + ".")
+    return await _claude_logins(body)
+
+
+@action
+async def claude_login_remove(body: dict) -> dict:
+    """Sign one of JARVIS's own logins out and forget it: {"name"}. In use: JARVIS goes back to the default."""
+    await asyncio.to_thread(_claude_owner_only, body)
+    name = _claude_login(body)
+    await asyncio.to_thread(claude_login.sign_out, name)
+    await asyncio.to_thread(activity.add, f"Removed the Claude login {name} in the control panel.")
+    return await _claude_logins(body)
 
 
 # ── Connections and system ──────────────────────────────────────

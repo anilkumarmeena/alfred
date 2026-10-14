@@ -28,8 +28,8 @@ from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
 
 from jarvis.brain import retry, usage
-from jarvis.core import profile
-from jarvis.core.config import CLAUDE_CONFIG_DIR, DATA_DIR, VERDICT_MODEL
+from jarvis.core import claude_logins, profile
+from jarvis.core.config import DATA_DIR, VERDICT_MODEL
 from jarvis.core.database import ACTIVE as TASK_ACTIVE, COMMAND
 from jarvis.tasks import hold, schedules
 
@@ -597,8 +597,9 @@ class Scheduler:
         for task_id in task_ids:
             folder = DATA_DIR / "tasks" / str(task_id)
             shutil.rmtree(folder, ignore_errors=True)
-            # CLI session dir: cwd path with non-alphanumerics replaced by dashes
-            shutil.rmtree(f"{CLAUDE_CONFIG_DIR}/projects/{re.sub(r'[^A-Za-z0-9]', '-', str(folder))}", ignore_errors=True)
+            # CLI session dir, in whichever login ran it: cwd path with non-alphanumerics replaced by dashes
+            for login in claude_logins.folders():
+                shutil.rmtree(login / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(folder)), ignore_errors=True)
         for folder in temps:
             shutil.rmtree(folder, ignore_errors=True)
         return schedules.prune(FINISHED_DAYS)

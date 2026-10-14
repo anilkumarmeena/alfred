@@ -1,4 +1,5 @@
-"""Claude usage-limit state, as last reported by the CLI's rate-limit events, shared in data/usage.json.
+"""Claude usage-limit state, as last reported by the CLI's rate-limit events, shared in data/usage.json (the default
+login's; usage-<name>.json for each of JARVIS's own, core.claude_logins), for the login in use.
 
 Events arrive only on state change (allowed / allowed_warning / rejected) per window, with reset time and sometimes
 utilization. Never queries Claude; a window past its reset is treated as fresh.
@@ -8,6 +9,7 @@ utilization. Never queries Claude; a window past its reset is treated as fresh.
   available()  the model to use (lighter while its family's weekly window is used up)
   hold_until() when scheduled model runs should wait until (used-up window, or five-hour past USAGE_HOLD)
   said()       a one- or two-sentence summary, for usage_left
+  of(login)    a login's windows as stored, for said(kept=...)
 """
 
 import json
@@ -15,8 +17,9 @@ import logging
 import re
 import time
 from datetime import datetime
+from pathlib import Path
 
-from jarvis.core import profile
+from jarvis.core import claude_logins, profile
 from jarvis.core.config import FAST_MODEL, HELPER_MODEL, USAGE_FILE, USAGE_HOLD
 from jarvis.core.files import write_atomic
 
@@ -32,26 +35,39 @@ FORGET = 6 * 3600  # seconds before a window with no reset time is forgotten
 LIMIT_TEXT = re.compile(r"usage limit|rate.?limit|hit your limit|limit reached", re.IGNORECASE)
 
 
-def _read() -> dict[str, dict]:
+def _file(login: str | None = None) -> Path:
+    """A login's usage file (the one in use without `login`): each account has limits of its own."""
+    name = claude_logins.active() if login is None else login
+    return USAGE_FILE.with_name(f"usage-{name}.json") if name else USAGE_FILE
+
+
+def _read(login: str | None = None) -> dict[str, dict]:
+    file = _file(login)
     try:
-        data = json.loads(USAGE_FILE.read_text())
+        data = json.loads(file.read_text())
         return data if isinstance(data, dict) else {}
     except FileNotFoundError:
         return {}
     except (OSError, ValueError):
-        log.warning("%s is unreadable; starting afresh", USAGE_FILE.name)
+        log.warning("%s is unreadable; starting afresh", file.name)
         return {}
 
 
-def record(info, now: float | None = None) -> None:
-    """Store a RateLimitEvent's rate_limit_info under its window. Never raises."""
+def of(login: str) -> dict[str, dict]:
+    return _read(login)
+
+
+def record(info, now: float | None = None, login: str | None = None) -> None:
+    """Store a RateLimitEvent's rate_limit_info under its window, for the login the call ran on (the one in use if
+    not known). Never raises."""
     now = now or time.time()
     try:
-        data = _read()
+        login = claude_logins.active(now) if login is None else login
+        data = _read(login)
         data[info.rate_limit_type or "unknown"] = {
             "status": info.status, "resets_at": info.resets_at, "utilization": info.utilization,
             "overage": info.overage_status, "seen": now}
-        write_atomic(USAGE_FILE, json.dumps(data))
+        write_atomic(_file(login), json.dumps(data))
     except Exception as e:
         log.warning("couldn't record Claude usage: %s", type(e).__name__)
 
@@ -161,6 +177,11 @@ def alerts(now: float | None = None) -> list[tuple[str, str]]:
     """Warnings as (key, sentence); a key is stable per window until reset, so notices say each once."""
     now = now or time.time()
     out_ = []
+    first, on = claude_logins.order()[0], claude_logins.active(now)
+    if on != first:  # moved down the priority order
+        out_.append((f"usage:login:{first}:{on}", f"JARVIS is running on the {on or 'default'} Claude login for now: "
+                                                    f"the {first or 'default'} login is first, but "
+                                                    f"{claude_logins.skipped(first, now)}."))
     for name, w in windows(now).items():
         what = _what(name)
         reset = f", until it resets {when(w['resets_at'], now)}" if w.get("resets_at") else ""

@@ -111,12 +111,12 @@ class Quick:
 async def _exchange(client, text: str) -> str:
     from claude_agent_sdk import RateLimitEvent, ResultMessage
 
-    from jarvis.brain import usage
+    from jarvis.brain import sdk
 
     await client.query(text)
     async for m in client.receive_response():
         if isinstance(m, RateLimitEvent):
-            usage.record(m.rate_limit_info)
+            sdk.record(m.rate_limit_info, client.options)  # under the login it ran on
         elif isinstance(m, ResultMessage):
             if m.is_error:
                 raise RuntimeError(f"the model call failed: {m.subtype}")
