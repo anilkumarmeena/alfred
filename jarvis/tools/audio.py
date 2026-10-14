@@ -16,6 +16,7 @@ from jarvis.core import config, platform
 from jarvis.core.files import write_atomic
 from jarvis.tasks import client
 from jarvis.voice import audio_file as render
+from jarvis.voice.speakable import speakable
 
 from . import tool
 from .files import read_file
@@ -78,7 +79,7 @@ async def audio_file(text: str = "", path: str = "", title: str = "", format: st
     named = ""
     if path:
         text, named = await asyncio.to_thread(_document, path)
-    spoken = render.speakable(text)
+    spoken = speakable(text)
     if not spoken:
         raise ValueError("There's nothing in it to read.")
     if len(spoken) > render.MAX_CHARS:

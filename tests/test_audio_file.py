@@ -18,6 +18,7 @@ from jarvis.core import config, platform
 from jarvis.state import shared_files
 from jarvis.tasks import client as task_client, worker
 from jarvis.voice import audio_file as af
+from jarvis.voice.speakable import speakable
 
 
 def fake_speak(text: str, voice: str, speed: float) -> np.ndarray:
@@ -44,7 +45,7 @@ def work(tmp_path, monkeypatch):
 
 
 def test_markdown_is_read_as_plain_speech():
-    text = af.speakable("""# Monday briefing
+    text = speakable("""# Monday briefing
 
 **Good morning.** See [the plan](https://example.com/plan?x=(1)) and https://www.bbc.co.uk/news.
 The `deploy_script` ran; my_var_name stays as it is.
