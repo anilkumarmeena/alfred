@@ -99,7 +99,7 @@ Your mic goes through **[DeepFilterNet 3](https://github.com/Rikorose/DeepFilter
 
 | | Rule | Knob |
 |:-:|---|---|
-| ⏱️ | The turn ends **0.8 s** after you stop speaking, once Whisper's text is in | `JARVIS_TURN_SILENCE` |
+| ⏱️ | The turn ends **0.8 s** after you stop speaking, once Whisper has all your words (a pause mid-sentence splits your speech into clips; the turn waits for the last one) | `JARVIS_TURN_SILENCE` |
 | 🔗 | **Went on?** If you carry on before hearing the reply, the two parts are answered together as one thought | |
 | ❓ | **Unsure words:** a turn Whisper heard with low confidence is marked, so JARVIS checks back with its best guess | `JARVIS_WHISPER_UNSURE_LOGPROB` |
 | 🏃 | **Your own pace:** if talking to JARVIS seems to take a speaker effort (unsure words, going on often, slow speech), replies get plainer | `voice_pace:<speaker>` row |
@@ -108,7 +108,7 @@ Your mic goes through **[DeepFilterNet 3](https://github.com/Rikorose/DeepFilter
 - The VAD needs **0.2 s of unbroken speech** to start an utterance (`JARVIS_VAD_MIN_SPEECH`), so a lone click never reaches Whisper.
 - If JARVIS cuts you off mid-thought too often, raise `JARVIS_TURN_SILENCE` a little; lower answers sooner.
 
-**Inspect:** `make voice-timing` shows how long turn ends took and how often you went on (see [Voice timing](#-voice-timing)).
+**Inspect:** `make voice-timing` shows how long turn ends took, and its outcome counts how many turns you went on from before hearing the reply (`unspoken`; see [Voice timing](#-voice-timing)).
 
 ## 📝 Whisper in, Kokoro out
 
@@ -310,7 +310,6 @@ make voice-timing HOURS=2    # the last two
 | `tools`, `tool_names` | Tool calls made |
 | `spoke` | How long JARVIS spoke |
 | `ended` | **spoken**, **interrupted**, **unspoken** (you went on before it was heard; `resumed` is your pause) or **closed** |
-| `eot`, `judge`, `judge_s`, `wait` | How the turn's end was decided |
 | `speaker`, `logprob` | Who spoke and how well Whisper heard it |
 
 </details>
@@ -322,7 +321,6 @@ make voice-timing HOURS=2    # the last two
 | First line | How turns ended. Many **unspoken** means JARVIS answers before you've finished; "pause before going on" shows those pauses |
 | Seconds after the user stopped speaking | Each stage's median, p90 and max |
 | **Where the wait goes** | Time to first audio, split: waiting for the turn to end, before the model, model to first words, first words to voice |
-| Turn ends judged | How often the fast model was asked, its verdicts and time |
 | Slowest turns | The worst turns, as log lines |
 
 > [!IMPORTANT]

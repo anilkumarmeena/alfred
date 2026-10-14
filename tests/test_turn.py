@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 
 import numpy as np
 from claude_agent_sdk import ResultMessage
@@ -154,7 +155,7 @@ def test_each_speakers_pace_is_kept_and_read_back():
     assert "voice_pace:owner" not in kept
     again = turn.Paces(lambda key, default="": kept.get(key, default), kept.__setitem__)
     assert again["guest"].went_on == 0.1 and again["owner"] == turn.Pace()
-    kept["voice_pace:old"] = json.dumps({"min_delay": 1.2, "max_delay": 6.0, "turns": 4})  # learned delays are gone
+    kept["voice_pace:old"] = json.dumps({"min_delay": 1.2, "max_delay": 6.0, "turns": 4})  # unknown keys are dropped
     assert again["old"] == turn.Pace(turns=4)
     kept["voice_pace:broken"] = "{not json"
     assert again["broken"] == turn.Pace()
@@ -204,13 +205,60 @@ def test_whisper_keeps_each_clip_passed_on_for_the_turn():
 # ── In the voice agent and the brain ─────────────────────────────
 
 
+class Whisper:
+    def __init__(self, hearing: int = 0, heard_at: float = 0.0) -> None:
+        self.hearing, self.heard_at = hearing, heard_at
+
+
 def test_a_turn_ends_on_silence_alone():
+    whisper = Whisper()
+
     async def options():
-        return AgentSession(vad=silero.VAD.load(), turn_handling=agent.TURN_HANDLING).options.turn_handling
+        return AgentSession(vad=silero.VAD.load(), turn_handling=agent.turn_handling(whisper)).options.turn_handling
 
     found = asyncio.run(options())
-    assert found["turn_detection"] == "vad"  # no turn detector model, and no fast model reading the words
+    assert isinstance(found["turn_detection"], turn.Transcribed)  # no model reads the words
     assert found["endpointing"]["mode"] == "fixed" and found["endpointing"]["min_delay"] == config.TURN_SILENCE
+    detector = found["turn_detection"]
+    assert asyncio.run(detector.unlikely_threshold("en")) is None  # so the silence alone sets the wait
+    assert asyncio.run(detector.predict_end_of_turn(None)) == 1.0
+
+
+def test_the_turn_waits_for_whisper_to_finish_a_clip_in_flight():
+    whisper = Whisper(hearing=1)
+    detector = turn.Transcribed(whisper)
+
+    async def main():
+        deciding = asyncio.ensure_future(detector.predict_end_of_turn(None))
+        await asyncio.sleep(0.15)
+        assert not deciding.done()  # the last clip's words aren't in yet
+        whisper.hearing, whisper.heard_at = 0, time.monotonic()
+        return await asyncio.wait_for(deciding, 0.2)
+
+    assert asyncio.run(main()) == 1.0
+
+
+def test_a_clip_about_to_reach_whisper_is_waited_for_unless_one_just_finished(monkeypatch):
+    whisper = Whisper()
+    detector = turn.Transcribed(whisper)
+
+    async def main():
+        deciding = asyncio.ensure_future(detector.predict_end_of_turn(None))
+        await asyncio.sleep(0)
+        whisper.hearing = 1  # the clip whose speech just ended reaches Whisper
+        await asyncio.sleep(0.1)
+        assert not deciding.done()
+        whisper.hearing = 0
+        return await asyncio.wait_for(deciding, 0.2)
+
+    assert asyncio.run(main()) == 1.0
+    whisper.heard_at = time.monotonic()  # this check was started by the transcript that just came in
+    started = time.monotonic()
+    asyncio.run(detector.predict_end_of_turn(None))
+    assert time.monotonic() - started < turn.Transcribed.SETTLE
+    monkeypatch.setattr(turn.Transcribed, "MOST", 0.05)
+    whisper.hearing = 1  # Whisper stuck: the turn ends anyway
+    assert asyncio.run(asyncio.wait_for(detector.predict_end_of_turn(None), 1.0)) == 1.0
 
 
 def test_framing_goes_with_the_next_turn_only():

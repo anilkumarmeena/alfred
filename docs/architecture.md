@@ -225,7 +225,7 @@ sequenceDiagram
 | | Stage | Code (`jarvis/voice/`) | What to know |
 |:-:|---|---|---|
 | 🔇 | **Noise filter** | `denoise.py` | DeepFilterNet 3 on ONNX Runtime, one CPU core, as a frame processor |
-| ⏸️ | **Turn end** | `agent.py` `TURN_HANDLING` | Silence alone: `JARVIS_TURN_SILENCE` after the VAD hears speech stop. No model judges the words |
+| ⏸️ | **Turn end** | `agent.py` `turn_handling`, `turn.py` `Transcribed` | Silence alone: `JARVIS_TURN_SILENCE` after the VAD hears speech stop, once Whisper has every clip. No model judges the words |
 | 📝 | **Transcribe** | `speech.py` `WhisperSTT`, `core/whisper.py` | Batch mode. **MLX Whisper** large-v3-turbo 4-bit on Apple silicon; **faster-whisper** elsewhere |
 | 🚪 | **Speech gate** | `speech_gate.py` | Drops Whisper's phantoms ("Thank you.") on near-silence. `enforce` or `shadow` |
 | 👤 | **Speaker check** | `speaker.py`, `state/voiceprints.py` | Drops utterances that aren't the user's, once a voiceprint is enrolled |
@@ -234,7 +234,7 @@ sequenceDiagram
 | 🔕 | **Speaker off** | `quiet.py` | The `SPEAKER` participant attribute turns TTS off; replies go to captions only |
 
 - **Noise filter:** `JARVIS_DENOISE=vad` filters only what the VAD hears.
-- **Turn end:** when unsure, a warm fast model (`jarvis/brain/quick.py`) reads both sides and judges whether the thought is finished. Delays start at 0.9 s / 4 s and adapt to each speaker's pace.
+- **Turn end:** `JARVIS_TURN_SILENCE` (0.8 s) after speech stops, held only until Whisper has every clip's words (`turn.py` `Transcribed`), so a pause mid-sentence doesn't split the turn.
 - **Transcribe:** faster-whisper runs large-v3-turbo in float16 on a working CUDA GPU, else `small.en` in int8 on the CPU, one thread per physical core (`JARVIS_STT`, `JARVIS_STT_DEVICE`). **Preemptive generation is off**, so the brain only sees finished utterances. The speech vocabulary is sent as `initial_prompt`, and known mishearings are corrected after.
 - **Speech gate:** judges with VAD, loudness, length and Whisper's confidences.
 - **Speaker check:** WeSpeaker ResNet34, cosine similarity. `BargeInVAD` (`barge_in.py`) makes **only the user's voice** interrupt a reply.

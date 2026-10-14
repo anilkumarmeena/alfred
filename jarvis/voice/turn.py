@@ -31,6 +31,7 @@ class Transcribed:
     SETTLE = 0.05  # for a clip whose speech just ended to reach Whisper
     FRESH = 0.1  # a clip finished this recently is the transcript that started this check
     MOST = 10.0  # never hold a turn longer than this for Whisper
+    POLL = 0.02  # a held turn ends this soon after Whisper finishes
 
     def __init__(self, stt, clock=time.monotonic) -> None:
         self.stt = stt  # WhisperSTT: `hearing` clips in flight, `heard_at` when the last one finished
@@ -47,7 +48,7 @@ class Transcribed:
             await asyncio.sleep(self.SETTLE)
         deadline = self.clock() + self.MOST
         while self.stt.hearing and self.clock() < deadline:
-            await asyncio.sleep(0.02)
+            await asyncio.sleep(self.POLL)
         return 1.0
 
 AVERAGE = 0.1  # EMA weight

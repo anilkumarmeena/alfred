@@ -305,8 +305,9 @@ VOICE_MALLOC_LARGE_CACHE = _flag("JARVIS_VOICE_MALLOC_LARGE_CACHE", False)
 # Minutes between voice-process memory logs (jarvis.voice.ram); 0 = never
 VOICE_MEMORY_LOG_MINUTES = max(0.0, float(os.environ.get("JARVIS_VOICE_MEMORY_LOG_MINUTES", "") or "10"))
 # Silence in seconds after the last speech that ends a turn. Counted from when speech stopped, so the VAD's silence
-# and Whisper's time fall inside it; the turn also waits for Whisper's text. Lower answers sooner but cuts off more
-# mid-thought pauses (a turn that goes on before the reply is heard is answered together with the next).
+# (VAD_MIN_SILENCE, its floor) and Whisper's time fall inside it; the turn also waits for Whisper's words
+# (jarvis.voice.turn.Transcribed). Lower answers sooner but cuts off more mid-thought pauses (a turn that goes on
+# before the reply is heard is answered together with the next).
 TURN_SILENCE = _number(os.environ.get("JARVIS_TURN_SILENCE", ""), 0.8, 0.3, 5.0)
 # Below this average log-prob a turn is marked unsure, so the brain may confirm its guess
 WHISPER_UNSURE_LOGPROB = _number(os.environ.get("JARVIS_WHISPER_UNSURE_LOGPROB", ""), -1.0, -10.0, 0.0)

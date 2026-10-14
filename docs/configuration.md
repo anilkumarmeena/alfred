@@ -141,7 +141,7 @@ uv run python -m jarvis.state.settings prefs voice bm_lewis  # change one
 | `JARVIS_TTS_SPEED` | `1.05` | Speaking speed, 0.5 to 2.0 |
 | `JARVIS_TTS_MODEL` | `kokoro-v1.0.onnx` | Kokoro model in `models/` |
 | `JARVIS_TTS_THREADS` | One fewer than performance cores (every core counts on Linux), 2–4 | Kokoro's ONNX Runtime threads; `0` uses every core |
-| `JARVIS_TURN_SILENCE` | `0.8` | Seconds after you stop speaking before your turn ends (0.3 to 5); it also waits for Whisper's text |
+| `JARVIS_TURN_SILENCE` | `0.8` | Seconds after you stop speaking before your turn ends (up to 5; never sooner than `JARVIS_VAD_MIN_SILENCE`); it also waits for Whisper's words |
 | `JARVIS_VAD_MIN_SILENCE` | `0.55` | Silence that ends an utterance; the floor under every reply's wait |
 | `JARVIS_VAD_MIN_SPEECH`<br>`JARVIS_VAD_THRESHOLD` | `0.2`<br>`0.5` | Unbroken speech before an utterance starts; probability that counts as speech |
 | `JARVIS_WHISPER_UNSURE_LOGPROB` | `-1.0` | Below this average log-probability a turn is marked unsure, so JARVIS checks back |
