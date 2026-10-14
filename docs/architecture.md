@@ -713,7 +713,7 @@ Defence in depth: **every layer assumes the one above it can be talked into some
 | 🐚 | **Voice shell** | `jarvis/safety/shell.py`, `jarvis/safety/commands.py` | Sandbox by default. Risky commands need a yes and run only as asked. Secrets refused |
 | 🗣️ | **Consent** | `jarvis/safety/consent.py`, `jarvis/state/conversation.py` | A yes counts only from `heard`. The fallback model never sees commands or tool output |
 | ✍️ | **Draft gates** | `jarvis/safety/draft_gate.py`, `jarvis/safety/mcp_gate.py` | Sends, deletes and MCP writes read aloud from code-built summaries, approved once |
-| 🛡️ | **Injection screening** | `jarvis/safety/injection.py` | Every tool result in every session is judged by a fast model |
+| 🛡️ | **Injection screening** | `jarvis/safety/injection.py` | Every tool result carrying outside content, in every session, is judged by a fast model |
 | 🔍 | **Hidden-instruction scan** | `jarvis/safety/scan.py` | Strips invisible Unicode and flags instruction-like text before it's kept or loaded |
 | 📦 | **Task sandbox** | `jarvis/tasks/gate.py`, `jarvis/tasks/worker.py` | One writable folder, secrets hidden, `.env` blanked, no settings |
 | 🧱 | **Host walls** | `jarvis/safety/host.py` | Seatbelt (macOS) or bubblewrap (Linux) deny secret reads, writes to JARVIS's files and the runner socket, whatever runs. **No walls, no run** |
@@ -722,6 +722,7 @@ Defence in depth: **every layer assumes the one above it can be talked into some
 | 🌍 | **Browser guard** | `jarvis/integrations/browser.py` | Proxy refuses local and tailnet addresses after DNS. Page text is fenced |
 
 - **Injection screening** covers voice, lookups, side jobs, tasks and subagents, after `PostToolUse`. **Block** withholds the passages, **warn** annotates. A failed check passes the result with an "unchecked" note.
+- **What's screened:** every tool's result by default (built-in reads, web, connections, mail, documents), so a new tool is covered. JARVIS's own tools mark theirs with `@tool(screened=...)`: `False` for its own data (memory, to-dos, skills, connection settings, approvals, projects, machines), or a tuple of fields for task and schedule records, where only what a task wrote or a command printed (`summary`, `question`, `output_tail`, a job's `notepad` and `last_result`) is judged. A task's reporting tools and subagent answers are skipped too.
 - **Hidden-instruction scan** runs before text is kept in memory, to-dos or projects, or loaded from a project's CLAUDE.md, skills or agents. It is pattern-based, a backstop.
 - **Host walls:** no keys in the environment. Compared below.
 - **Vault:** reading other processes' environments is refused.

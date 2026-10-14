@@ -28,6 +28,7 @@ def vetted(text: str, what: str) -> str:
                                 "environment: their machine, setup, tools, projects and accounts."}},
     ["fact", "section"],
     said="Remembered: {fact}",
+    screened=False,
 )
 def remember(fact: str, section: str) -> str:
     return memory.remember(vetted(fact, "the fact"), section)
@@ -43,6 +44,7 @@ def remember(fact: str, section: str) -> str:
      "fact": {"type": "string", "description": "The whole new fact, one self-contained sentence."}},
     ["old", "fact"],
     said="Changed a memory to: {fact}",
+    screened=False,
 )
 def memory_replace(old: str, fact: str) -> str:
     return memory.replace(old, vetted(fact, "the fact"))
@@ -55,6 +57,7 @@ def memory_replace(old: str, fact: str) -> str:
     {"text": {"type": "string", "description": "Text that appears in the memory line(s) to remove."}},
     ["text"],
     said="Forgot what mentions '{text}'",
+    screened=False,
 )
 def forget(text: str) -> str:
     return memory.forget(text)
@@ -71,6 +74,7 @@ def forget(text: str) -> str:
                                  "also says, as each one is replaced by the word."}},
     ["word"],
     said="{word} is in the speech vocabulary",
+    screened=False,
 )
 def vocabulary_add(word: str, heard_as: list[str] | None = None) -> str:
     return vocabulary.add(vetted(word, "the word"), [vetted(h, "the mishearing") for h in heard_as or []])
@@ -86,6 +90,7 @@ def vocabulary_add(word: str, heard_as: list[str] | None = None) -> str:
     "remove the voiceprint, or switch the check off.",
     {"stop": {"type": "boolean", "description": "true: stop an enrollment under way, keeping the voiceprint as it was."}},
     stays=True,
+    screened=False,
 )
 async def voice_enroll(stop: bool = False) -> str:
     if (check := conversation.current().speaker) is None:  # this conversation's speaker check
@@ -98,7 +103,7 @@ async def voice_enroll(stop: bool = False) -> str:
 @tool("todo_list", "The user's to-do list, as markdown: '- [ ]' items are open, in the order added, then '- [x]' done. "
       "It's kept in JARVIS's database, reached only through the todo tools. Read it whenever the user asks what's on "
       "their list, about their to-dos or what they wanted to do. A background task started for an open item names it "
-      "in task_start's todo, so the item is settled when the task finishes.", reads=True)
+      "in task_start's todo, so the item is settled when the task finishes.", reads=True, screened=False)
 def todo_list() -> str:
     return todo.read() or "The to-do list is empty."
 
@@ -110,6 +115,7 @@ def todo_list() -> str:
     {"item": {"type": "string", "description": "One self-contained sentence."}},
     ["item"],
     changes=True,
+    screened=False,
 )
 def todo_add(item: str) -> str:
     return todo.add(vetted(item, "the to-do"))
@@ -121,6 +127,7 @@ def todo_add(item: str) -> str:
     {"text": {"type": "string", "description": "Text that appears in that item only."}},
     ["text"],
     changes=True,
+    screened=False,
 )
 def todo_done(text: str) -> str:
     return todo.done(text)
@@ -137,6 +144,7 @@ def todo_done(text: str) -> str:
         "days": {"type": "integer", "description": "Only the last this many days, today included. Ignored with date."},
     },
     reads=True,
+    screened=False,
 )
 def conversation_search(text: str = "", date: str = "", days: int = 0) -> str:
     return memory.search_conversations(text, date, days)

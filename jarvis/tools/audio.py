@@ -60,6 +60,7 @@ def _first_words(text: str, n: int = 6) -> str:
                   "default": False},
     },
     changes=True,
+    screened=False,
 )
 async def audio_file(text: str = "", path: str = "", title: str = "", format: str = "", voice: str = "",
                      phone: bool = False) -> str:

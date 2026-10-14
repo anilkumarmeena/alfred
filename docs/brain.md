@@ -213,7 +213,7 @@ The system prompt is built **once per session** and then **frozen** so the promp
 **Extra wiring in `_options()`:**
 
 - **`PostToolUse` bell hook**: changes made by tools land in the control panel's bell.
-- **Injection screening**: each tool result is checked (up to `INJECTION_VOICE_SECONDS`, default 6 s) before the model sees it.
+- **Injection screening**: each tool result carrying outside content is checked (up to `INJECTION_VOICE_SECONDS`, default 6 s) before the model sees it; JARVIS's own data (memory, to-dos, a task's status) isn't.
 - **Slow MCP calls** move to the background after `CONNECTION_WAIT` (20 s); slow **JARVIS** calls after `TOOL_WAIT` (8 s).
 - **Commit attribution**: `sdk_options` adds `attribution` to every session's flag settings, so commits end with `Co-Authored-By: JARVIS` (the assistant's name), not the model's. Tasks get the same.
 
