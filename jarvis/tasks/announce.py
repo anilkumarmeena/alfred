@@ -5,11 +5,12 @@ suggested edits. `lead` (words already fit to say) is kept verbatim and the rest
 fixed wording when JARVIS_ANNOUNCE=off, on error, past ANNOUNCE_SECONDS, or at the usage limit.
 
 Only the spoken text is produced here; structured facts stay on the task. `context` gives the voice brain the task
-number and pending edits, unspoken.
+number and pending edits, unspoken. `first` and `brief` pick and shorten the update a greeting leads with.
 """
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 
 from jarvis import prompts
@@ -25,6 +26,8 @@ def system() -> str:
     return prompts.load("task_announcement", user_name=profile.name())
 REPORT_MOST = 4000  # chars of the report the model reads
 SAID_MOST = 600  # max chars spoken
+BRIEF_MOST = 200  # chars of an update a greeting leads with, in whole sentences
+_SENTENCE = re.compile(r"(?<=[.!?…])\s+")
 DONE, FAILED, STOPPED, QUESTION = "done", "failed", "stopped", "question"
 
 
@@ -118,6 +121,37 @@ async def spoken(e: Ending) -> str:
     if len(worded) > SAID_MOST:
         worded = worded[:SAID_MOST].rsplit(" ", 1)[0] + "…"
     return f"{e.lead} {worded}" if e.lead else worded
+
+
+def _weight(task: dict) -> int:
+    """How much a waiting update matters, most first: it needs the user, it failed, work finished, then routine
+    (scheduled runs, anything else)."""
+    if task["status"] == "waiting":
+        return 0
+    if task["status"] == "failed":
+        return 1
+    return 2 if task["status"] == "done" and not task.get("job") else 3
+
+
+def first(tasks: list[dict]) -> dict | None:
+    """The update to lead with: the weightiest with words to say, the newest among equals."""
+    return min((t for t in tasks if (t.get("spoken") or "").strip()),
+               key=lambda t: (_weight(t), -t.get("updated", 0)), default=None)
+
+
+def brief(task: dict) -> str:
+    """The task's latest update, cut to whole sentences within BRIEF_MOST chars (at least one). A question is kept
+    whole: it ends with what's asked."""
+    said = " ".join(task["spoken"].split())
+    if task["status"] == "waiting":
+        return said
+    sentences = _SENTENCE.split(said)
+    kept = sentences[0]
+    for s in sentences[1:]:
+        if len(kept) + 1 + len(s) > BRIEF_MOST:
+            break
+        kept += " " + s
+    return sentence(kept)
 
 
 def context(task: dict) -> str:

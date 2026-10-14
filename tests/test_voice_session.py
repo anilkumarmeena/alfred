@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from jarvis.core import profile
 from jarvis.state import conversation
 from jarvis.tasks import client
 from jarvis.voice import floor as floor_module, session as voice_session
@@ -292,14 +293,94 @@ def test_the_runners_events_bring_requests_and_take_back_those_answered_elsewher
     assert [a.text for a in voice.announcements.queue] == ["Your 3 o'clock starts soon."]
 
 
-def test_the_greeting_mentions_updates_and_ends_with_the_oldest_request():
+def update(task_id: int, status: str, spoken: str, updated: float = 0, **fields) -> dict:
+    """An unseen task as the runner lists it."""
+    return {"id": task_id, "title": f"task {task_id}", "status": status, "spoken": spoken, "updated": updated,
+            "job": None, "edits": None} | fields
+
+
+RESTARTED = update(5, "done", "The restart worked, everything's back up.")
+
+
+def test_the_greeting_leads_with_an_update_then_ends_with_the_oldest_request():
     async def main():
-        voice = call(runner=Runner(pending=[OTHER, REQUEST], unseen=[{"id": 5}]))
+        voice = call(runner=Runner(pending=[OTHER, REQUEST], unseen=[RESTARTED]))
         return voice, await voice.greeting()
 
     voice, greeting = asyncio.run(main())
-    assert greeting.endswith(f"There is one task update waiting. {REQUEST['spoken']}")
+    assert greeting == f"Hello {profile.name()}. The restart worked, everything's back up. {REQUEST['spoken']}"
     assert voice.asks.open["id"] == 13 and list(voice.asks.waiting) == [14]
+    assert 'The update on "task 5" was task 5.' in voice.brain.notes[0]  # a reply about it reaches the task
+
+
+def test_the_greeting_leads_with_what_needs_the_user_then_failures_then_finished_work_then_routine():
+    async def main(*unseen):
+        return await call(runner=Runner(unseen=list(unseen))).greeting()
+
+    checked = update(1, "done", "Your inbox check found nothing new.", updated=9, job=4)
+    finished = update(2, "done", "The report is written.", updated=1)
+    failed = update(3, "failed", "The upgrade failed: the disk is full.", updated=2)
+    asking = update(4, "waiting", "The migration needs a decision. Shall I keep the old table?", updated=0)
+    hello = f"Hello {profile.name()}."
+    assert asyncio.run(main(checked, finished, failed, asking)) == (  # the question last, for the floor to hold
+        f"{hello} There are 4 task updates waiting. The migration needs a decision. Shall I keep the old table?")
+    assert asyncio.run(main(asking)) == f"{hello} The migration needs a decision. Shall I keep the old table?"
+    assert asyncio.run(main(checked, finished, failed)).startswith(f"{hello} The upgrade failed")
+    assert asyncio.run(main(checked, finished)) == f"{hello} The report is written. There is one more task update waiting."
+    assert asyncio.run(main(checked)) == f"{hello} Your inbox check found nothing new."
+
+
+def test_among_equal_updates_the_greeting_leads_with_the_newest():
+    older, newer = update(1, "done", "The backup finished.", updated=1), update(2, "done", "The deploy is live.", updated=2)
+    greeting = asyncio.run(call(runner=Runner(unseen=[older, newer])).greeting())
+    assert greeting.startswith(f"Hello {profile.name()}. The deploy is live.")
+
+
+def test_a_task_whose_request_is_asked_is_not_also_led_with():
+    async def main():
+        waiting = update(117, "waiting", "Task 117 is waiting for your go-ahead to delete files.", updated=9)
+        voice = call(runner=Runner(pending=[REQUEST], unseen=[waiting, RESTARTED]))
+        return await voice.greeting()
+
+    assert asyncio.run(main()) == (f"Hello {profile.name()}. The restart worked, everything's back up. "
+                                   f"{REQUEST['spoken']}")
+
+
+def test_with_nothing_waiting_or_the_runner_down_the_greeting_is_just_hello():
+    class Down(Runner):
+        async def tasks(self, unseen=False):
+            raise client.RunnerUnavailable("down")
+
+    voice = call()
+    assert asyncio.run(voice.greeting()) == f"Hello {profile.name()}. JARVIS online." and voice.brain.notes == []
+    assert asyncio.run(call(runner=Down()).greeting()) == f"Hello {profile.name()}. JARVIS online."
+
+
+def test_updates_with_nothing_to_say_are_only_counted():
+    greeting = asyncio.run(call(runner=Runner(unseen=[update(5, "done", "")])).greeting())
+    assert greeting == f"Hello {profile.name()}. JARVIS online. There is one task update waiting."
+
+
+def test_the_update_the_greeting_led_with_is_marked_heard_once_it_is_said():
+    class Marks(Runner):
+        def __init__(self, **lists) -> None:
+            super().__init__(**lists)
+            self.marked: list[list[int]] = []
+
+        async def mark_seen(self, ids) -> None:
+            self.marked.append(ids)
+
+    async def main():
+        runner = Marks(unseen=[RESTARTED, update(6, "done", "The tests pass.", updated=1)])
+        voice = call(runner=runner)
+        await voice.greeting()
+        assert runner.marked == []
+        voice.start(Session())
+        await settle()
+        await voice.close()
+        return runner.marked
+
+    assert asyncio.run(main()) == [[6]]  # the newer one led; the other waits for task_list
 
 
 # ── What the call holds ───────────────────────────────────────

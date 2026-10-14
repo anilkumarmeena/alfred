@@ -28,6 +28,15 @@ QUESTION_RECHECK_SECONDS = 30
 RUNNER_EVENTS = retry.Policy(waits=(30,), retries=retry.KINDS, forever=True, passing=(client.RunnerUnavailable,))
 
 
+def _waiting(n: int, more: str = "") -> str:
+    """How many task updates wait, as a sentence with a leading space ("" for none); `more` is " more" after a lead."""
+    if not n:
+        return ""
+    if n == 1:
+        return f" There is one{more} task update waiting."
+    return f" There are {n}{more} task updates waiting."
+
+
 class VoiceSession:
     """One call.
 
@@ -56,6 +65,7 @@ class VoiceSession:
         self._hints: list[str] = []  # how the next turn was heard, for the brain
         self._last_words = ""
         self._loops: list[asyncio.Task] = []
+        self._greeted: int | None = None  # the task whose update the greeting led with
 
     @property
     def _quick_models(self) -> list:
@@ -76,11 +86,21 @@ class VoiceSession:
             quick.warm()
 
     def start(self, session) -> None:
-        """After the greeting: start the task-update, announcement and approval loops on LiveKit's `session`."""
-        self._loops = [asyncio.create_task(self.watch_tasks()),
+        """After the greeting: mark the update it led with as heard; start the task-update, announcement and approval
+        loops on LiveKit's `session`."""
+        self._loops = [asyncio.create_task(self._heard_greeting()),
+                       asyncio.create_task(self.watch_tasks()),
                        asyncio.create_task(self.announcements.run(session, self.brain, self.stt, self.asks,
                                                                   self.runner.mark_seen)),
                        asyncio.create_task(self.ask_approvals(session))]
+
+    async def _heard_greeting(self) -> None:
+        """Heard, the greeting's lead isn't led with again next time."""
+        if self._greeted is not None:
+            try:
+                await self.runner.mark_seen([self._greeted])
+            except Exception as e:
+                log.warning("marking task %s as heard failed: %s", self._greeted, e)
 
     async def close(self) -> None:
         """Stop all loops, push pending announcements to the phone, and tell the runner (for the learning review)."""
@@ -214,15 +234,26 @@ class VoiceSession:
     # ── Unprompted ─────────────────────────────────────────────
 
     async def greeting(self) -> str:
-        greeting = f"Hello {profile.name()}. JARVIS online."
+        """Hello, led by the weightiest unseen task update in brief, then how many more wait, then the oldest pending
+        request. Fixed wording, no model call, so speech starts at once."""
+        greeting = f"Hello {profile.name()}."
         try:
             async with asyncio.timeout(2):
                 unseen, pending = await asyncio.gather(self.runner.tasks(unseen=True), self.runner.approvals())
         except Exception:  # a down runner mustn't delay the greeting
-            return greeting
-        if n := len(unseen):
-            greeting += f" There {'is one task update' if n == 1 else f'are {n} task updates'} waiting."
-            self.brain.note(greeting)  # so "what are they?" leads to task_list
+            return greeting + " JARVIS online."
+        asked = {approval["task"] for approval in pending}  # their requests are asked instead
+        unseen = [t for t in unseen if t["id"] not in asked]
+        if not (lead := announce.first(unseen)):
+            greeting += " JARVIS online." + _waiting(len(unseen))
+        elif lead["status"] == "waiting":  # its question goes last, so the floor holds for the answer
+            greeting += _waiting(len(unseen) if len(unseen) > 1 else 0) + " " + announce.brief(lead)
+        else:
+            greeting += " " + announce.brief(lead) + _waiting(len(unseen) - 1, " more")
+        if lead:
+            self._greeted = lead["id"]
+        if unseen:  # so "what are they?" leads to task_list, and a reply to the lead reaches its task
+            self.brain.note(greeting, announce.context(lead) if lead else "")
         for approval in pending:
             self.asks.add(approval)
         if approval := self.asks.due():  # greeting ends with the oldest pending request

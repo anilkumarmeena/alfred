@@ -251,6 +251,7 @@ sequenceDiagram
 | 🧮 | **Memory** | The shared speech process stays near **0.9 GB** thanks to three caps |
 
 - **Unprompted speech** covers task updates, alerts (notices, reminders, watch findings), finished jobs and approval requests. Held 15 minutes or left at session end, they go to the phone.
+- **The greeting** leads with the weightiest task update you haven't heard (it needs you, then failed, then finished, then routine runs), cut to a sentence or two in fixed words, then counts the rest and ends with the oldest pending approval request. Updates still unheard wait for the next greeting.
 - **Interrupting:** if a `Bash` command of that reply is still running, the reply finishes unheard instead, and the next turn waits for it.
 - **Measuring:** `make voice-timing` reports medians, p90 and the slowest turns. Typical on an M2: Whisper 0.4 s, first words 1–2 s, about 7 s when a tool is needed.
 - **Memory caps:** `JARVIS_MLX_CACHE_MB` (Apple silicon only), `JARVIS_TTS_MEMORY_ARENA` off, and freed memory handed back to the system (`MallocLargeCache=0` on macOS, a pinned glibc mmap threshold on Linux; `JARVIS_VOICE_MALLOC_LARGE_CACHE`). `uv run python -m jarvis.voice.ram` prints footprints.
