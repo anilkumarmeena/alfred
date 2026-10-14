@@ -56,6 +56,12 @@ def test_the_persona_keeps_tool_how_tos_out_and_no_owner_s_examples():
         assert "Priya" not in str(tools.get(name).properties) + tools.get(name).description
 
 
+def test_the_persona_makes_a_promised_call_at_once_and_checks_its_own_state_with_tools():
+    text = persona.persona()
+    assert "When you say you'll start or do something, make that tool call in the same reply" in text
+    assert "Before answering about your own state" in text and "rather than going by long-term memory" in text
+
+
 def test_the_rules_moved_out_of_the_persona_are_in_the_tools_descriptions():
     said = {
         "schedule_add": ["only when the user asks", "what will happen and when", "Set only_changes",

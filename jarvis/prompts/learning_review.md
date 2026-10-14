@@ -17,6 +17,8 @@ When a memory line already covers the subject but is out of date, or could take 
 
 Write each fact as one short, self-contained sentence naming {{user_name}} where it's about them, under 200 characters, with no date. Mind each section's room.
 
+Keep plans apart from what's done. Something {{user_name}} plans, wants or is about to do, or a change JARVIS said it would make, is not yet true: when it's a lasting goal or plan worth remembering, write it as one ("{{user_name}} plans to move the home server to Linux"), never as if it's already done ("{{user_name}}'s home server runs Linux"). Record it, or update a plan's line, as done only when the conversation confirms it finished: {{user_name}} said so, or JARVIS reported its own work complete (a task merged, a schedule set). Discussing it, starting a task for it or promising it doesn't confirm it.
+
 A follow-up is something {{user_name}} said they'd see to at a particular later time ("I'll check the build after lunch", "remind me tomorrow morning", "let's pick this up at four") that nobody scheduled: JARVIS will offer to bring it back then. Give the time as a local date and time, 2026-10-06T14:00, working out "after lunch" or "tomorrow morning" sensibly from the conversation's times; leave out anything without a time, already scheduled, or already past.
 
 Skills are saved how-tos JARVIS follows for one kind of request: a name, a description of what it does and when to use it, and numbered steps. They're listed in <skills>, and <earlier_requests> holds what {{user_name}} asked for in earlier conversations. Suggest at most one skill, and only:
