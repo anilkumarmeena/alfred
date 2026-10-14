@@ -104,7 +104,7 @@ export interface Service { name: string; state: string; since?: number | null; e
 // A preference: Settings value ("" = none), default, and .env value (wins over both)
 export interface Preference { value: string; default: string; env: string }
 export type PrefKey = "name" | "timezone" | "voice" | "voice_speed" | "speech_gate" | "max_tasks" | "browser" | "browser_window"
-  | "speaker_check" | "speaker_threshold" | "injection_check" | "injection_model";
+  | "speaker_check" | "speaker_threshold" | "injection_check" | "injection_model" | "quiet_hours";
 // Voiceprint metadata (never the embedding). current: made by the speaker model in use
 export interface Voiceprint { name: string; seconds: number; consistency: number; via: string; created: number; current: boolean }
 export interface Voiceprints { owner: Voiceprint | null; model: boolean; passage: string; seconds: number }
@@ -321,7 +321,9 @@ const SETTINGS: Record<SettingsItem, () => Promise<void>> = {
       act<Voiceprints>("voiceprint").then((r) => { if (r) voiceprints.value = r; }),
     ]);
   },
-  dnd: async () => { const r = await act<Quiet>("hold_status"); if (r) quiet.value = r; },
+  dnd: async () => {
+    await Promise.all([loadPrefs(), act<Quiet>("hold_status").then((r) => { if (r) quiet.value = r; })]);
+  },
   safety: loadPrefs,
   notify: async () => { devices.value = await act("devices", { endpoint: pushSub.peek()?.endpoint ?? "" }) ?? devices.peek(); },
   system: async () => { system.value = await act("system") ?? system.peek(); },

@@ -170,6 +170,14 @@ def test_preferences_kept_from_the_panel_and_read_by_config(prefs):
     assert config.tts_speed() == 1.05 and settings.get("voice_speed") == ""
 
 
+def test_quiet_hours_kept_from_the_panel(prefs):
+    assert call("preferences")["preferences"]["quiet_hours"] == {"value": "", "default": "23:00-08:00", "env": ""}
+    shown = call("preference_save", {"key": "quiet_hours", "value": " 22:30 - 7:00 "})
+    assert shown["preferences"]["quiet_hours"]["value"] == "22:30-07:00"
+    shown = call("preference_save", {"key": "quiet_hours", "value": "No"})
+    assert shown["preferences"]["quiet_hours"]["value"] == "off"
+
+
 @pytest.mark.skipif(not settings.VOICES_FILE.is_file(), reason="needs Kokoro's voices file (make models)")
 def test_a_voice_picked_in_the_panel_is_spoken_unless_env_sets_one(prefs, monkeypatch):
     assert {"bm_george", "bm_lewis", "af_heart"} <= set(call("preferences")["voices"])
@@ -182,7 +190,8 @@ def test_a_voice_picked_in_the_panel_is_spoken_unless_env_sets_one(prefs, monkey
 
 @pytest.mark.parametrize("key, value", [("timezone", "Mars/Olympus"), ("voice", "zz_nobody"), ("voice_speed", "5"),
                                         ("speech_gate", "loud"), ("max_tasks", "0"), ("max_tasks", "two"),
-                                        ("name", "x" * 41), ("colour", "blue")])
+                                        ("name", "x" * 41), ("colour", "blue"), ("quiet_hours", "late"),
+                                        ("quiet_hours", "10:00-10:00"), ("quiet_hours", "22:00:10-22:00:50")])
 def test_a_preference_it_cant_take_is_refused(prefs, key, value):
     with pytest.raises(ValueError):
         call("preference_save", {"key": key, "value": value})

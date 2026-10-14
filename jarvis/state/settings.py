@@ -131,6 +131,15 @@ def _clean(key: str, value: str) -> str:
         if value.lower() not in config.BROWSER_WINDOWS:
             raise ValueError(f"The browser window is {' or '.join(config.BROWSER_WINDOWS)}.")
         return value.lower()
+    if key == "quiet_hours":
+        from jarvis.tasks import hold  # circular import
+        if value.lower() in config.OFF:
+            return "off"
+        try:
+            start, end = hold.window(value)
+        except ValueError:
+            raise ValueError("Give quiet hours as two different times, like 23:00-08:00, or off.") from None
+        return f"{start:%H:%M}-{end:%H:%M}"
     fraction = key in ("voice_speed", "speaker_threshold")
     low, high = {"voice_speed": config.SPEED_RANGE,
                  "speaker_threshold": config.SPEAKER_THRESHOLD_RANGE}.get(key, config.MAX_TASKS_RANGE)
@@ -212,7 +221,7 @@ def _prefs(key: str | None, value: str | None) -> int:
             print(f"{name}: {p['env'] or p['value'] or p['default']}"
                   + (" (from .env)" if p["env"] else "" if p["value"] else " (default)"))
     if key and value is not None:
-        print(RESTART)
+        print("JARVIS uses it from now." if key == "quiet_hours" else RESTART)
     return 0
 
 

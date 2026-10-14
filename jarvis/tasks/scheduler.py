@@ -27,10 +27,9 @@ from pathlib import Path
 
 from jarvis.brain import retry, usage
 from jarvis.core import profile
-from jarvis.core.config import CLAUDE_CONFIG_DIR, DATA_DIR, QUIET_HOURS, VERDICT_MODEL
+from jarvis.core.config import CLAUDE_CONFIG_DIR, DATA_DIR, VERDICT_MODEL
 from jarvis.core.database import ACTIVE as TASK_ACTIVE, COMMAND
 from jarvis.tasks import hold, schedules
-from jarvis.tasks.hold import in_quiet_hours, parse_quiet_hours
 
 log = logging.getLogger("jarvis.tasks.scheduler")
 TICK_SECONDS = 30
@@ -278,14 +277,14 @@ class Scheduler:
     (voice agent events) and `push` (phone)."""
 
     def __init__(self, runner, notify: Notify, announce: Callable[[dict], None] | None = None, push=None,
-                 quiet_hours: str = QUIET_HOURS, probes: dict | None = None,
+                 quiet_hours: str | None = None, probes: dict | None = None,
                  clock: Callable[[], datetime] = lambda: datetime.now(profile.tz()),
                  sleep: Callable[[float], Awaitable[object]] = asyncio.sleep) -> None:
         self.runner = runner
         self.notify = notify
         self.announce = announce
         self.push = push
-        self.quiet = parse_quiet_hours(quiet_hours)
+        self.quiet_hours = quiet_hours  # None: the user's quiet_hours preference, read at each check
         self.probes = PROBES if probes is None else probes
         self.clock = clock
         self.sleep = sleep
@@ -358,7 +357,7 @@ class Scheduler:
                 schedules.update(job["id"], next_run=wait, last_result=said)
             return False
         if job["kind"] == "watch":
-            if in_quiet_hours(now, self.quiet) or self._busy(job):
+            if hold.is_quiet(now, self.quiet_hours) or self._busy(job):
                 return False  # stays due
             job = schedules.update(job["id"], next_run=nxt or stamp, last_run=stamp, runs=job["runs"] + 1)
             if job["probe"] == "task":

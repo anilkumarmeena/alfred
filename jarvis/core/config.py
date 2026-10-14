@@ -43,16 +43,18 @@ SECRETS_DIR.mkdir(exist_ok=True)
 DB_FILE = Path(os.environ.get("JARVIS_DB_FILE", "") or DATA_DIR / "tasks.db")
 
 # Settings-table key -> .env variable that overrides it. Name and time zone live on the profile (env wins for the
-# owner). max_tasks is read at service start; voice, speed and speech gate per conversation.
+# owner). max_tasks is read at service start; voice, speed and speech gate per conversation; quiet hours (local
+# hours with no watch checks or notices, jarvis.tasks.hold; "off" = never quiet) at each check.
 PREFERENCES = {"name": "JARVIS_USER_NAME", "timezone": "JARVIS_TIMEZONE", "voice": "JARVIS_TTS_VOICE",
                "voice_speed": "JARVIS_TTS_SPEED", "speech_gate": "JARVIS_SPEECH_GATE", "max_tasks": "JARVIS_MAX_TASKS",
                "browser": "JARVIS_BROWSER", "browser_window": "JARVIS_BROWSER_WINDOW",
                "speaker_check": "JARVIS_SPEAKER_CHECK", "speaker_threshold": "JARVIS_SPEAKER_THRESHOLD",
-               "injection_check": "JARVIS_INJECTION_CHECK", "injection_model": "JARVIS_INJECTION_MODEL"}
+               "injection_check": "JARVIS_INJECTION_CHECK", "injection_model": "JARVIS_INJECTION_MODEL",
+               "quiet_hours": "JARVIS_QUIET_HOURS"}
 # Fallbacks when neither is set; name and time zone fall back to mac_name() / mac_timezone()
 DEFAULTS = {"voice": "bm_george", "voice_speed": "1.05", "speech_gate": "enforce", "max_tasks": "6",
             "browser": "on", "browser_window": "headed", "speaker_check": "on", "speaker_threshold": "0.35",
-            "injection_check": "on", "injection_model": "claude-haiku-4-5-20251001"}
+            "injection_check": "on", "injection_model": "claude-haiku-4-5-20251001", "quiet_hours": "23:00-08:00"}
 SPEED_RANGE, MAX_TASKS_RANGE, SPEAKER_THRESHOLD_RANGE = (0.5, 2.0), (1, 12), (0.1, 0.8)
 
 
@@ -241,8 +243,6 @@ NODE_SYNC_MAX_GB = _number(os.environ.get("JARVIS_NODE_SYNC_MAX_GB", ""), 20, 0.
 
 # Notices (jarvis.tasks.notices): JARVIS's own news, said unasked: tasks stuck or waiting, usage limits, machines lost
 NOTICES_ENABLED = _flag("JARVIS_NOTICES", True)
-# Local hours with no watch checks or notices (jarvis.tasks.hold); empty = never quiet
-QUIET_HOURS = os.environ.get("JARVIS_QUIET_HOURS", "23:00-08:00")
 
 # Scheduler (jarvis.tasks.scheduler): reminders, repeating tasks and watches
 SCHEDULER_ENABLED = _flag("JARVIS_SCHEDULER", True)
