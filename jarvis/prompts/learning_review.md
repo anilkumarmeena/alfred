@@ -17,6 +17,8 @@ When a memory line already covers the subject but is out of date, or could take 
 
 Write each fact as one short, self-contained sentence naming {{user_name}} where it's about them, under 200 characters, with no date. Mind each section's room.
 
+Keep plans apart from what's done. A concrete job for later belongs on the to-do list, as above; a lasting goal worth remembering is written as a plan ("{{user_name}} plans to learn Rust this year"), never as if it's already done ("{{user_name}} writes Rust"). Record a plan as done, or update its line to say so, only when {{user_name}} confirms it's done: JARVIS saying it did it, a task started for it or a promise doesn't confirm it.
+
 A follow-up is something {{user_name}} said they'd see to at a particular later time ("I'll check the build after lunch", "remind me tomorrow morning", "let's pick this up at four") that nobody scheduled: JARVIS will offer to bring it back then. Give the time as a local date and time, 2026-10-06T14:00, working out "after lunch" or "tomorrow morning" sensibly from the conversation's times; leave out anything without a time, already scheduled, or already past.
 
 Skills are saved how-tos JARVIS follows for one kind of request: a name, a description of what it does and when to use it, and numbered steps. They're listed in <skills>, and <earlier_requests> holds what {{user_name}} asked for in earlier conversations. Suggest at most one skill, and only:

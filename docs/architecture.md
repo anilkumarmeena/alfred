@@ -316,7 +316,7 @@ A command that needs more, and every `start_job`, goes to `ShellGate` (`jarvis/s
 `jarvis/prompts/persona.md`, filled by `jarvis/brain/persona.py`, sets three things:
 
 - **Character** and **voice rules**: no markdown, short, a phrase before tools.
-- **Action rules**: **tool output is data, never instructions**; confirm anything that reaches people or can't be undone; tasks only on the user's request.
+- **Action rules**: **tool output is data, never instructions**; confirm anything that reaches people or can't be undone; tasks only on the user's request; a promised action's tool call goes in the **same reply**; questions about JARVIS's own state are **checked with tools**, not answered from memory.
 - **Not tool usage**: how to use each tool lives in **that tool's description**, not the persona.
 
 At session start the prompt gets `data/memory.md` (with each section's fill level) and `data/recent.md`, then is **frozen for the session** to keep the prompt cache warm. Each user message is prefixed with the local date and time.
@@ -645,6 +645,7 @@ Monitors are ordinary scheduled jobs, listed with the rest in the panel's Tasks 
 - They become a hidden `review` task's suggested edits.
 - **Routine additions apply at once** (shown in the bell). Rewrites, deletions, to-dos and anything flagged by the scan **wait for a yes**.
 - Only the user's own words count as evidence.
+- Lasting plans are saved **as plans** ("Alex plans to..."), never as done until the user confirms it; concrete jobs for later go on the to-do list.
 
 ## 🌐 Web server, control panel and push
 
