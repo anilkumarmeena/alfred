@@ -34,6 +34,7 @@ browsers and from tasks' host commands. Mixins: approvals, command_tasks, git_op
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import logging
 import os
@@ -518,13 +519,19 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
 
     # ── Running ─────────────────────────────────────────────────
 
-    def _launch(self, task_id: int, prompt: str) -> dict:
+    def _launch(self, task_id: int, prompt: str, after: float | None = None) -> dict:
         """Start or queue a run (activity says what it waits on), clearing stale question/error/spoken fields.
 
-        A task on another machine takes no slot here: it runs at once (as far as this computer's concerned)."""
+        A task on another machine takes no slot here: it runs at once (as far as this computer's concerned). `after`:
+        a usage limit's reset to wait for first, holding no slot; kept in `interrupted` so a crash doesn't lose it."""
         self._open()
         task = self.store.get(task_id)
-        if ahead := self._ahead_in_folder(task):
+        cut = None
+        if after is not None:
+            status, activity = "queued", f"waiting for Claude's usage limit to reset {usage.when(after)}, then carrying on"
+            cut = json.dumps({"prompt": prompt, "after": after}, ensure_ascii=False)
+            self.limit_waits[task_id] = after
+        elif ahead := self._ahead_in_folder(task):
             ids = " and ".join(map(str, ahead))
             status, activity = "queued", (f"queued behind task {ids}: this project's tasks work in its own folder, so "
                                           "they run one at a time")
@@ -536,7 +543,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             status, activity = ("running", STARTING) if self._slot_free(task_id) else ("queued", self._slot_wait())
             self.in_line.add(task_id)
         task = self.store.update(task_id, status=status, question=None, wait_kind=None, wants=None, error=None,
-                                 spoken=None, activity=activity, interrupted=None)
+                                 spoken=None, activity=activity, interrupted=cut)
         self.prompts[task_id] = prompt
         job = self.jobs[task_id] = asyncio.create_task(self._job(task_id, prompt))
         job.add_done_callback(lambda _: self._never_began(task_id, job))
@@ -585,6 +592,8 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         outcome = None  # None means stopped
         had: set[str] | None = None  # access at run start
         try:
+            if (after := self.limit_waits.get(task_id)) is not None:
+                await self._wait_for_reset(task_id, after)
             if placing := self.placing.get(task_id):
                 await asyncio.shield(placing)
             task = self.store.get(task_id)
@@ -633,6 +642,8 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             self.in_line.discard(task_id)
             self.begun.discard(task_id)
             self.pulse.forget(task_id)
+            self.limit_waits.pop(task_id, None)
+            self.wakes.pop(task_id, None)
         if self.closing:  # left for _after_restart
             return
 
@@ -649,7 +660,14 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         check = more = reading = None
         new_access = access.has(task) - had if had is not None else set()
         gained = [n for n in access.GRANTS if n in new_access]
-        if outcome and not outcome.error and not task["question"] and not self.store.approvals(task_id):
+        owes = bool(task["question"] or self.store.approvals(task_id))  # waits on the user, whatever else happened
+        if outcome and outcome.kind == retry.LIMIT and not owes and (after := self._limit_reset(task, outcome)):
+            self.store.set(task_id, **fields)
+            self._wait_out_limit(task, LIMIT_RESUMED if task["session_id"] else prompt, after)
+            return
+        if outcome and outcome.error == STEPS_OUT and not owes:
+            more, outcome = self._carried_on(task, outcome)
+        elif outcome and not outcome.error and not owes:
             if gained:  # granted mid-run: continue with it
                 more = (f"You now have {access.listing(gained)}. Carry on with the task, using it where it's needed, "
                         "then end with your summary of the whole task as before.")
@@ -747,6 +765,61 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         said, more = goal.next_step(check, done, fields["cost"])
         self.store.log(task_id, goal.KIND, said)
         return check, more
+
+    # ── Carrying on by itself ───────────────────────────────────
+
+    def _carried_on(self, task: dict, outcome: Outcome) -> tuple[str | None, Outcome]:
+        """(prompt carrying a run that ran out of steps on in its session, or None, and the outcome to report).
+
+        At most TASK_CONTINUES times since the user last asked; past that it fails, saying so."""
+        task_id = task["id"]
+        entries = goal.since_asked(self.store.history(task_id, goal.LOG_ENTRIES))
+        done = sum(e["kind"] == CONTINUED_LOG for e in entries)
+        if task["session_id"] and done < TASK_CONTINUES:
+            self.store.log(task_id, CONTINUED_LOG, f"ran out of steps, so JARVIS carried it on by itself "
+                                                   f"({done + 1} of {TASK_CONTINUES})")
+            if not task["hidden"]:
+                bell.add(f"Task {task_id} ran out of steps, so it carries on by itself: {task['title']}", "run", task_id)
+            return CONTINUED, outcome
+        if not done:
+            return None, outcome
+        times = f"{done} time{'s' if done != 1 else ''}"
+        return None, dataclasses.replace(outcome, error=f"{STEPS_OUT} again after JARVIS carried it on by itself {times}, "
+                                                        "the most it does, so it needs a reply to carry on")
+
+    def _limit_reset(self, task: dict, outcome: Outcome) -> float | None:
+        """When a run the usage limit cut short should resume by itself, or None: a scheduled run (the scheduler
+        reruns it), or one that already resumed after this reset and hit the limit again."""
+        if task["job"] is not None:
+            return None
+        local = None if task["node"] else usage.hold_until()  # this computer's account; another's isn't known here
+        after = outcome.resets or local or time.time() + usage.UNKNOWN_RESET
+        return after if after > self.limit_resumed.get(task["id"], 0) else None
+
+    def _wait_out_limit(self, task: dict, prompt: str, after: float) -> None:
+        """Queue the task until the usage limit resets, and say so once."""
+        task_id = task["id"]
+        said = (f"Task {task_id}, {task['title']}, hit Claude's usage limit. It carries on by itself when that resets "
+                f"{usage.when(after)}.")
+        self.store.log(task_id, "limit", said)
+        self._launch(task_id, prompt, after=after)
+        if not task["hidden"]:
+            self._emit("status", self.store.update(task_id, spoken=said, seen=0), said)
+
+    async def _wait_for_reset(self, task_id: int, after: float) -> None:
+        """Sleep until the usage limit resets (and any limit still used up on this computer), or a message comes."""
+        wake = self.wakes[task_id] = asyncio.Event()
+        remote = bool(self.store.get(task_id)["node"])
+        while (left := max(after, 0 if remote else usage.hold_until() or 0) + LIMIT_SLACK - time.time()) > 0:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(wake.wait(), left)
+            if wake.is_set():
+                self.store.log(task_id, "limit", "a message came, so it carries on before the usage limit's reset")
+                break
+        else:
+            self.limit_resumed[task_id] = after
+            self.store.log(task_id, "limit", "Claude's usage limit has reset, so it carries on by itself")
+        self.store.set(task_id, interrupted=None)
 
 
 async def serve() -> None:

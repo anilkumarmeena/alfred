@@ -86,6 +86,8 @@ Ask for anything that takes a while and JARVIS starts a task. Keep talking, star
 - **Suggested edits:** small ones are applied when the task finishes and you're told; bigger ones (deleting memory, changing a project's settings) wait for your yes.
 - **Goal loop:** when a task says it's finished, a short model call checks the result against what was asked and sends it back to finish what it can (`JARVIS_GOAL_LOOP`, up to 2 rounds) before you hear about it.
 - **Stalled tasks:** a running task with no sign of progress for **15 minutes** is flagged and offered a nudge or a stop.
+- **Out of steps:** a task that uses up its turns before finishing carries on by itself in the same session, keeping what it did, up to **3 times** per request (`JARVIS_TASK_CONTINUES`). Past that it stops and says so; a reply carries it on with a fresh three.
+- **Usage limit:** a task cut short by Claude's usage limit says so once, waits queued (holding no slot) and carries on by itself when the limit resets, once per reset. A message to it while it waits sends it on at once. Scheduled runs leave this to the scheduler, which runs them again after the reset.
 
 > [!NOTE]
 > **JARVIS never stops a task on its own.** A stalled task is only flagged; you decide.

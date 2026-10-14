@@ -503,6 +503,7 @@ Each run resumes the task's own Claude session, so follow-ups keep everything it
 - **Subagents:** `code-searcher` (Haiku), `test-runner` and `web-researcher` (Sonnet). The run waits for background subagents before finishing (`WAKE_GRACE`, `SUBAGENT_WAIT`).
 - **Announcing:** with a fixed-words fallback. Events go out on `GET /events`, plus a desktop notification (macOS, or notify-send on a Linux desktop) and push.
 - **Stalls:** silent for `JARVIS_TASK_STALL_MINUTES` (15) without a legitimate reason → `stalled` in views and one notice.
+- **Carrying on:** a run that hits `JARVIS_TASK_MAX_TURNS` is relaunched in its session (`Runner._carried_on`), up to `JARVIS_TASK_CONTINUES` (3) `continued` log entries since the user last asked. A run the usage limit cut short is queued with `after` (its reset) in `interrupted`, so a restart or crash keeps the wait; it resumes once per reset (`limit_resumed`), and a reply wakes it early.
 - **Suggested data edits:** riskier edits and anything from research or flagged by the scan are `needs_yes`.
 
 **Command tasks** (`command_jobs.py`, `command_tasks.py`) run in a login shell (`/bin/zsh -lc` on macOS; the user's zsh or bash on Linux) in their own session under `data/commands/`, outside the sandbox but **without `.env` keys**. They're polled every 2 s and keep running across runner restarts.
