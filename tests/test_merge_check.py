@@ -52,7 +52,7 @@ def test_failures_that_main_shares_or_the_environment_explains_dont_block(jarvis
     r, task = run_worktree_task(monkeypatch, add_new_file, project="jarvis")
     suite["branch"], suite["main"] = {OLD, ENV_ONLY}, {OLD}
     merged = asyncio.run(r.merge(task["id"]))
-    assert "merged into main, its tests passing" in merged["spoken"] and (jarvis / "new.py").exists()
+    assert "merged into main as one commit, its tests passing" in merged["spoken"] and (jarvis / "new.py").exists()
     assert suite["runs"][1] == (jarvis, ["tests/test_old.py"])  # only the failing file, not the env-only one
 
 

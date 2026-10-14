@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from jarvis.core import proc
-from jarvis.core.config import WORKTREES_DIR
+from jarvis.core.config import ASSISTANT_NAME, WORKTREES_DIR
 from jarvis.core.database import ACTIVE
 from jarvis.safety import remembered
 from jarvis.state import activity as bell
@@ -33,6 +33,7 @@ JUNK = [*(f"{d}/" for d in projects.CACHE_DIRS), "*.pyc", ".DS_Store"]
 PATHSPEC = ["--", ".", *(f":(exclude,glob)**/{p}" for p in JUNK)]
 # Skipped when snapshotting a non-git folder
 SNAPSHOT_SKIP = {".git", *projects.CACHE_DIRS}
+SQUASH_BODY = 1200  # characters of a task's summary kept in its squashed commit
 
 
 async def _git(cwd: str | Path, *args: str, timeout: float = 60) -> str:
@@ -137,9 +138,23 @@ async def commit_op(body: dict) -> dict:
     return {"said": await _git(wt, "diff", "--shortstat", body["base"], "HEAD") or "no changes"}
 
 
+def squash_message(title: str, summary: str, task: int) -> str:
+    """The one commit a task's branch becomes: its title, the opening of its summary (whole paragraphs up to
+    SQUASH_BODY characters), and trailers ending with the assistant as co-author."""
+    body = ""
+    for para in re.split(r"\n\s*\n", summary.strip()):
+        if body and len(body) + 2 + len(para) > SQUASH_BODY:
+            break
+        body += f"\n\n{para}" if body else para
+    if len(body) > SQUASH_BODY:  # a single long opening paragraph: cut at a word
+        body = body[:SQUASH_BODY].rsplit(" ", 1)[0] + "…"
+    return "\n\n".join(p for p in (" ".join(title.split()) or f"Task {task}", body,
+                                   f"JARVIS-Task: {task}\nCo-Authored-By: {ASSISTANT_NAME}") if p)
+
+
 async def merge_op(body: dict) -> dict:
-    """{"repo", "branch", "worktree", "task", "name"}: merge the branch into what's checked out, then remove it.
-    Returns {"did", "cleaned"}; ValueError (nothing changed) if it can't."""
+    """{"repo", "branch", "worktree", "task", "name", "title", "summary"}: squash the branch into one commit on what's
+    checked out, then remove it. Returns {"did", "cleaned"}; ValueError (nothing changed) if it can't."""
     task_id, name = body["task"], body["name"]
     repo, branch, wt = Path(body["repo"]), body["branch"], body.get("worktree")
     if wt and Path(wt).exists() and await _git(wt, "status", "--porcelain", *PATHSPEC):
@@ -159,12 +174,40 @@ async def merge_op(body: dict) -> dict:
         tested = projects.is_jarvis(repo)
         if tested and (why := await merge_check.refusal(repo, branch, wt, into)):
             raise ValueError(f"Task {task_id}'s branch {branch} wasn't merged, since {why}.")
-        code, out = await _git_try(repo, "merge", "--no-ff", "--no-edit", branch, timeout=300)
-        if code:
-            await _git_try(repo, "merge", "--abort")
-            raise ValueError(f"Merging {branch} into {into} failed, so nothing changed and the branch is kept: {out}"[:400])
-        did = f"merged into {into}" + (", its tests passing" if tested else "")
-    return {"did": did, "cleaned": await _remove_branch(repo, wt, branch if exists else None)}
+        message = squash_message(body.get("title") or "", body.get("summary") or "", task_id)
+        if await _squash(repo, branch, into, message):
+            did = f"merged into {into} as one commit" + (", its tests passing" if tested else "")
+        else:
+            did = f"{branch} had no changes that weren't already in {into}"
+    try:
+        cleaned = await _remove_branch(repo, wt, branch if exists else None)
+    except RuntimeError as e:  # the merge itself is done, so it's still reported
+        cleaned = f"Its worktree and branch weren't removed: {e}"[:300]
+    return {"did": did, "cleaned": cleaned}
+
+
+async def _squash(repo: Path, branch: str, into: str, message: str) -> bool:
+    """Squash `branch` into one commit on `into` (checked out, clean); False if it had nothing to add. ValueError
+    if it can't, with `into` put back as it was."""
+    try:
+        # --ff: a merge.ff=false or =only setting would otherwise refuse or fail any squash
+        code, out = await _git_try(repo, "merge", "--squash", "--ff", branch, timeout=300)
+        if not code:
+            if (await _git_try(repo, "diff", "--cached", "--quiet"))[0] == 0:
+                await _git_try(repo, "reset", "-q", "--merge")  # drops the SQUASH_MSG git left for a commit by hand
+                return False
+            # --no-verify: no pre-commit hook, as for a merge commit (and in commit_op); --cleanup=whitespace keeps "#"
+            # lines, such as markdown headings in the summary
+            code, out = await _git_try(repo, "commit", "-q", "--no-verify", "--cleanup=whitespace", "-m", message,
+                                       timeout=300)
+            if not code:
+                return True
+    except BaseException:  # a timeout or cancellation mid-squash: don't leave it staged
+        await _git_try(repo, "reset", "-q", "--merge")
+        raise
+    undone = (await _git_try(repo, "reset", "-q", "--merge"))[0] == 0
+    state = "nothing changed" if undone else f"{into} may still have its changes staged"
+    raise ValueError(f"Merging {branch} into {into} failed, so {state} and the branch is kept: {out}"[:400])
 
 
 async def discard_op(body: dict) -> dict:
@@ -180,20 +223,21 @@ async def discard_op(body: dict) -> dict:
             and (await _git_try(repo, "merge-base", "--is-ancestor", branch, "HEAD"))[0] == 0:
         raise ValueError(f"Task {task_id}'s branch {branch} is already merged, so discarding it wouldn't undo "
                          "anything; task_merge just cleans it up.")
-    return {"did": await _remove_branch(repo, wt, branch if exists else None, force=True)}
+    return {"did": await _remove_branch(repo, wt, branch if exists else None)}
 
 
-async def _remove_branch(repo: Path, worktree: str | None, branch: str | None, force: bool = False) -> str:
-    """Remove worktree and branch. `force` (discard) also drops unmerged commits; returns what was done."""
+async def _remove_branch(repo: Path, worktree: str | None, branch: str | None) -> str:
+    """Remove worktree and branch, whose work is merged or being discarded; returns what was done."""
     done = []
     if worktree and Path(worktree).exists():
         await _git(repo, "worktree", "remove", "--force", worktree)  # --force: only caches like node_modules remain
         done.append("worktree removed")
     await _git_try(repo, "worktree", "prune")
-    if branch:
-        code, out = await _git_try(repo, "branch", "-D" if force else "-d", branch)
+    if branch:  # -D: a squashed branch isn't an ancestor of HEAD, so -d would refuse it
+        code, out = await _git_try(repo, "branch", "-D", branch)
         done.append("branch deleted" if code == 0 else f"branch kept: {out}"[:200])
-    return (" and ".join(done) or "nothing left to clean up").capitalize()
+    said = " and ".join(done) or "nothing left to clean up"
+    return said[0].upper() + said[1:]  # not capitalize(): it would lowercase git's own words in "branch kept: …"
 
 
 OPS: dict[str, Callable[[dict], Awaitable[dict]]] = {
@@ -236,7 +280,8 @@ class GitOps(RunnerBase):
             async with self._folder_lock(project.name):  # in-place tasks wait for the merge
                 done = await self._op(project.node, "merge", {"repo": str(project.path), "branch": task["branch"],
                                                               "worktree": task["worktree"], "task": task_id,
-                                                              "name": project.name})
+                                                              "name": project.name, "title": task["title"],
+                                                              "summary": task["summary"]})
         spoken = f"Task {task_id}, {task['title']}, {done['did']}. {done['cleaned']}."
         self.store.log(task_id, "merged", spoken)
         bell.add(spoken, "ok", task_id)
