@@ -46,9 +46,11 @@ SAID_SENTENCES = 3  # of an announced answer
 SAID_MOST = 400  # chars of an announced answer
 ANSWER_MOST = 4000  # chars of an answer the wording model reads
 _SOURCE = re.compile(r"^\W*sources?\W*:.*$", re.IGNORECASE | re.MULTILINE)  # a file lookup's last line
-_HEADING = re.compile(r"^\s*(#{1,6}\s.*|\*\*[^*]+\*\*:?)\s*$", re.MULTILINE)  # incl. a line that's all bold
-_DETAIL = re.compile(r"(?:^|\s)~?\.?/\w|\w/\w+/\w|\w/[\w.-]+\.\w{1,5}\b|\.\w{1,5}:\d|\blines? \d",
-                     re.IGNORECASE)  # paths and line numbers, not "and/or" or "24/7"
+# incl. a line that's all bold, unless it's a sentence ("**Port 8080.**")
+_HEADING = re.compile(r"^\s*(#{1,6}\s.*|\*\*[^*]*[^*.!?…\s]\*\*:?)\s*$", re.MULTILINE)
+# paths and line numbers, not "and/or", "24/7", dates like 10/14/2026 or ratios like 3.5:1
+_DETAIL = re.compile(r"(?:^|\s)~?\.?/\w|\b(?!\d+/\d+/\d)\w+/\w+/\w|\w/[\w.-]+\.[a-z]\w{0,4}\b|\.[a-z]\w{0,4}:\d"
+                     r"|\blines? \d", re.IGNORECASE)
 _SENTENCE = re.compile(r"(?<=[.!?…])\s+")
 
 def system() -> str:

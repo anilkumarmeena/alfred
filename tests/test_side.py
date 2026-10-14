@@ -140,6 +140,15 @@ def test_a_long_plain_answer_is_worded_down_too(wording):
     assert note == f"[Not said aloud, for follow-up questions: {long}]"
 
 
+@pytest.mark.parametrize("answer, said", [
+    ("**The release is on 10/14/2026.**\n\n## Check source\n- notes/releases.md", "The release is on 10/14/2026."),
+    ("**Mix it 3.5:1, water to flour.**\nSee recipes/bread.md at line 4.", "Mix it 3.5:1, water to flour."),
+])
+def test_dates_ratios_and_a_bold_sentence_on_its_own_line_are_still_said(wording, answer, said):
+    wording.reply = RuntimeError("no")
+    assert announced(answer)[0] == f"On the wake word: {said}"
+
+
 def test_an_answer_that_is_all_detail_still_says_it_is_back(wording):
     wording.reply = "- jarvis/core/config.py:88"
     assert announced("- jarvis/core/config.py:88")[0] == "The lookup on the wake word is back; ask me for the details."
