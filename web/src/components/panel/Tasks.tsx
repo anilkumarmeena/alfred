@@ -9,7 +9,7 @@ import {
   loadTask, loadTasks, needYou, openSchedule, openTask, questions, quiet, roomy, runnerDown, schedules, tasks, when, type Approval,
   type Task, type TaskDetail,
 } from "../../state/panel";
-import { BellIcon, ChevronIcon, EyeIcon, PauseIcon, PlayIcon, RepeatIcon, RetryIcon, StopIcon, TerminalIcon, TrashIcon } from "../icons";
+import { BellIcon, ChevronIcon, EyeIcon, PauseIcon, PlayIcon, RepeatIcon, RetryIcon, StopIcon, TerminalIcon, TodosIcon, TrashIcon } from "../icons";
 import { Answer } from "./Answer";
 import { cap, Empty, InlineForm, Led, Pill, StatusPill } from "./bits";
 import { Markdown } from "./Markdown";
@@ -152,7 +152,8 @@ function JobButtons({ j, icons = false }: { j: Schedule; icons?: boolean }) {
   );
 }
 
-const KIND_ICON: Record<string, () => preact.JSX.Element> = { reminder: BellIcon, task: RepeatIcon, watch: EyeIcon, command: TerminalIcon };
+const KIND_ICON: Record<string, () => preact.JSX.Element> = { reminder: BellIcon, task: RepeatIcon, watch: EyeIcon, command: TerminalIcon,
+  resume: PlayIcon, todo: TodosIcon };
 
 // Title with its state as a light (green on, grey paused); kind and next run below; one-tap pause and cancel
 function JobRow({ j }: { j: Schedule }) {
@@ -181,7 +182,8 @@ export function Scheduled() {
   );
 }
 
-const SAYS: Record<string, string> = { reminder: "Says", task: "Instruction", watch: "Watching for", command: "Command" };
+const SAYS: Record<string, string> = { reminder: "Says", task: "Instruction", watch: "Watching for", command: "Command",
+  resume: "Message to each task", todo: "Added to each instruction" };
 
 export function ScheduleView({ id }: { id: number }) {
   const j = jobDetail.value?.id === id ? jobDetail.value : null;
@@ -198,13 +200,13 @@ export function ScheduleView({ id }: { id: number }) {
         <dt>When</dt><dd>{j.when}</dd>
         <dt>Status</dt><dd><JobPill j={j} />{j.status === "active" ? ` ${nextRun(j, now.value)}` : ""}</dd>
         {j.check && <><dt>Checks</dt><dd>{j.check}</dd></>}
+        {j.does && <><dt>Does</dt><dd>{j.does}</dd></>}
         {j.folder && <><dt>Runs in</dt><dd>{j.folder}</dd></>}
         <dt>Runs</dt><dd>{j.runs}{j.last_run ? ` · last ${when(j.last_run)}` : ""}</dd>
         {j.kind === "task" && <><dt>Speaks</dt><dd>{j.only_changes ? "only when there's something new" : "after every run"}</dd></>}
         {j.kind === "command" && <><dt>Speaks</dt><dd>{j.only_changes ? "only when a run prints something" : "after every run"}</dd></>}
       </dl>
-      <label class="lbl">{SAYS[j.kind] ?? "What"}</label>
-      <Markdown text={j.text} class="summary" />
+      {j.text && <><label class="lbl">{SAYS[j.kind] ?? "What"}</label><Markdown text={j.text} class="summary" /></>}
       {j.last_result && <><label class="lbl">Latest result</label><Markdown text={j.last_result} class="summary" /></>}
       {j.notepad && <>
         <label class="lbl">Notepad for the next run · {when(j.notepad.at)}</label>

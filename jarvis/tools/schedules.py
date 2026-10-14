@@ -1,4 +1,5 @@
-"""Voice tools for scheduled jobs (reminders, tasks, watches, commands), do-not-disturb, and usage left."""
+"""Voice tools for scheduled jobs (reminders, tasks, watches, commands, resume and todo jobs), do-not-disturb, and usage
+left."""
 
 import time
 from datetime import datetime
@@ -30,6 +31,10 @@ def _brief(job: dict) -> dict:
         out["next_run"] = schedules.clock(job["next_run"])
     if job["kind"] == "watch":
         out["check"] = schedules.check_text(job)
+    if job["kind"] in schedules.WORK:
+        out["does"] = schedules.work_text(job)
+        if not job["text"]:
+            del out["text"]
     if job["task_kind"]:
         out["task_kind"] = job["task_kind"]
     if job["project"]:
@@ -144,15 +149,29 @@ _COMMAND = {
     "and then JARVIS sums that up and says it (the cheapest, for anything a script can read: a page, an API, a feed, "
     "a file); a task with only_changes, a background task that looks with its tools each run and speaks only when "
     "there's something new (for what needs judgement or the user's accounts; costs a model run each time); or, for "
-    "one thing they're waiting for, a watch, which stops once it has happened. Times are local; work them out from "
-    "the date and time at the start of the user's message. Then say in one sentence what will happen and when.",
+    "one thing they're waiting for, a watch, which stops once it has happened. resume and todo do at a set time what "
+    "task_reply and task_start do now, for work the user wants done unattended, overnight say: resume carries on "
+    "stopped tasks (\"at three, resume all stopped tasks\", \"resume tasks 12 and 14 at 3 a.m.\"), the ones in tasks "
+    "or, without tasks, every one stopped in the last week (failed true adds failed ones, such as those cut off by "
+    "the usage limit), as a follow-up would. todo starts a task for each of the next count open items on the user's "
+    "to-do list that no task has taken on, or for the items in todos (\"at 3 a.m. start tasks for the next two "
+    "to-dos\"), each linked to its item, which is ticked off once its task is checked finished; JARVIS writes each "
+    "task's instruction from the item, the projects and memory, passing over items that need the user. Both wait "
+    "out a used-up usage limit, keep to how many tasks run at once (the rest queue), and leave risky commands "
+    "waiting for the user's yes; one notification says what was resumed or started. Times are local; work them out "
+    "from the date and time at the start of the user's message. Then say in one sentence what will happen and when.",
     {
         "kind": {"type": "string", "enum": list(schedules.KINDS)},
         "title": {"type": "string", "description": "Three to six words, as you'd say it aloud, e.g. 'morning brief'."},
         "text": {"type": "string", "description": "reminder: what to say. task: the instruction. watch: what to watch "
                                                   "for, in full, e.g. 'version 2.4 of the web app is live on "
                                                   "app.acme.com'. command: the shell command, as you'd give it to "
-                                                  "Bash, e.g. 'scripts/report.sh weekly'."},
+                                                  "Bash, e.g. 'scripts/report.sh weekly'. Needed for these four. "
+                                                  "resume: anything the user wants each resumed task told (optional). "
+                                                  "todo: what every task it starts must be told, from what the user "
+                                                  "said and their standing preferences in memory for such tasks (a "
+                                                  "skill code tasks must name, say), added as it is to the end of "
+                                                  "each instruction (optional)."},
         **_WHEN,
         "task_kind": {"type": "string", "enum": list(schedules.TASK_KINDS),
                       "description": "task, and watch with probe task: the background task's kind (default research; "
@@ -171,19 +190,31 @@ _COMMAND = {
                                                           "delivered, a quiet one too. command: a run that succeeds "
                                                           "and prints nothing stays silent, with no model call; one "
                                                           "that prints something is summed up and said."},
+        "tasks": {"type": "array", "items": {"type": "integer"},
+                  "description": f"resume: the tasks to carry on, by id from task_list (at most {schedules.MAX_PICKS}). "
+                                 "Leave out for every stopped task."},
+        "failed": {"type": "boolean", "description": "resume without tasks: also carry on tasks that failed in the "
+                                                    "last week (default false: stopped ones only)."},
+        "todos": {"type": "array", "items": {"type": "string"},
+                  "description": "todo: the open items to start tasks for, as todo_list shows them (each one's text, "
+                                 "or a part found only in it)."},
+        "count": {"type": "integer", "description": "todo without todos: how many of the next open items to start "
+                                                   f"tasks for (default 1, at most {schedules.MAX_PICKS})."},
     },
-    ["kind", "title", "text"],
+    ["kind", "title"],
     said="Scheduled {title}",
     shell=True,
     screened=_JOB_TEXT,
 )
-def schedule_add(kind: str, title: str, text: str, when: str = "", in_minutes: int = 0, repeat: str = "",
+def schedule_add(kind: str, title: str, text: str = "", when: str = "", in_minutes: int = 0, repeat: str = "",
                  every_minutes: int = 0, until: str = "", task_kind: str = "", project: str = "", probe: str = "",
                  target: str = "", expect: str = "", only_changes: bool = False, folder: str = "",
                  timeout_minutes: int = 0, summarize: bool | None = None, auto_fix: bool | None = None,
-                 log_file: str = "") -> dict:
+                 log_file: str = "", tasks: list[int] | None = None, failed: bool = False,
+                 todos: list[str] | None = None, count: int = 0) -> dict:
     job = schedules.add(kind, title, text, when, in_minutes, repeat, every_minutes, until, task_kind, project, probe,
-                        target, expect, only_changes, folder, timeout_minutes, summarize, auto_fix, log_file)
+                        target, expect, only_changes, folder, timeout_minutes, summarize, auto_fix, log_file, tasks,
+                        failed, todos, count)
     out = _brief(job) | _held()
     if kind == "watch" and (note := _quiet_note()):
         out["note"] = note
@@ -192,8 +223,9 @@ def schedule_add(kind: str, title: str, text: str, when: str = "", in_minutes: i
 
 @tool(
     "schedule_list",
-    "Scheduled reminders, tasks, watches and commands: active and paused ones, soonest first, each with when it runs, "
-    "its next run, what its latest run found and, for a task, the notepad it kept for its next run. A command shows "
+    "Scheduled reminders, tasks, watches, commands, and resume and todo jobs: active and paused ones, soonest first, "
+    "each with when it runs, its next run, what its latest run found (for resume and todo, what it resumed or "
+    "started; does says what it takes on) and, for a task, the notepad it kept for its next run. A command shows "
     "its latest run (outcome, how long it took, its summary, any task fixing it) or, while one runs, how far it has "
     "got. finished adds those that ended in the last week. While do not disturb is on, it says so, with the jobs under "
     "jobs. A scheduled task's run that fails on a network or passing error is retried on its own (after "
@@ -293,7 +325,7 @@ def usage_left() -> dict:
     return out
 
 
-@tool("schedule_cancel", "Cancel a scheduled reminder, task, watch or command, by its id from schedule_list. A run "
+@tool("schedule_cancel", "Cancel a scheduled reminder, task, watch, command, or resume or todo job, by its id from schedule_list. A run "
       "already under way carries on: task_stop stops a task, and stop_job a command's run.", {"id": {"type": "integer"}},
       ["id"],
       said="Cancelled scheduled job {id}", screened=_JOB_TEXT)

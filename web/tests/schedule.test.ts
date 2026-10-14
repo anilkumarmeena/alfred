@@ -36,7 +36,7 @@ const JOB: Schedule = {
   id: 3, kind: "task", title: "Morning brief", text: "Give me a **morning brief**.", status: "active",
   next_run: ts(new Date(Date.now() + 3600_000)), last_run: null, until: null, runs: 2,
   last_result: "Two meetings and **one** urgent email.", task_kind: "research", project: null,
-  when: "every weekday at 09:00", check: "", only_changes: 0, notepad: null, folder: null,
+  when: "every weekday at 09:00", check: "", does: "", only_changes: 0, notepad: null, folder: null,
 };
 const WATCH: Schedule = { ...JOB, id: 4, kind: "watch", title: "Deploy live", status: "paused", task_kind: null, check: "JARVIS checks the page: https://app.example" };
 

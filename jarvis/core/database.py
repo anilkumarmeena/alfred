@@ -320,10 +320,10 @@ class Store:
         return self._rows(f"select * from tasks where status in ({', '.join('?' * len(statuses))}) and updated > ?"
                           f" and {_SHOWN} order by id", (*statuses, time.time() - hours * 3600))
 
-    def todos_taken(self) -> set[int]:
+    def todos_taken(self) -> frozenset[int]:
         """To-do items a task works on, or worked on until it stopped or failed: all but finished or discarded ones."""
-        return {r["todo"] for r in self.db.execute(
-            "select distinct todo from tasks where todo is not null and status not in ('done', 'discarded')")}
+        return frozenset(r["todo"] for r in self.db.execute(
+            "select distinct todo from tasks where todo is not null and status not in ('done', 'discarded')"))
 
     def runs(self, job: int, limit: int = 10) -> list[dict]:
         """A scheduled job's latest runs, newest first, hidden ones included."""
