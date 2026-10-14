@@ -26,6 +26,8 @@ Concepts:
               may be remembered as rules; user `orders` from this turn's speech pre-approve what they name
   access      extra grants at start, on reply, or via request_access (task waits)
   shutdown    SIGTERM marks queued/running tasks `interrupted`; next start resumes up to RESUME_TASKS (_after_restart)
+  carrying on a run out of turns carries on in its session, up to TASK_CONTINUES times per user ask (_carried_on);
+              one the usage limit cut short waits queued for the reset, then resumes, once per reset (_limit_reset)
 Also runs notices, the scheduler and the learning review. API: Unix socket in data/ (mode 600), unreachable from
 browsers and from tasks' host commands. Mixins: approvals, command_tasks, git_ops, task_edits, events; HTTP in api.
 """
@@ -45,7 +47,7 @@ from pathlib import Path
 from aiohttp import web
 from claude_agent_sdk import CanUseToolShadowedWarning
 
-from jarvis.brain import retry
+from jarvis.brain import retry, usage
 from jarvis.core import profile
 from jarvis.core.config import (
     GOAL_DAILY_CHECKS,
@@ -56,6 +58,7 @@ from jarvis.core.config import (
     RESUME_TASKS,
     RUNNER_SOCKET,
     SCHEDULER_ENABLED,
+    TASK_CONTINUES,
 )
 from jarvis.core.database import (
     COMMAND,
@@ -94,7 +97,7 @@ from jarvis.tasks.git_ops import GitOps
 from jarvis.tasks.host_tools import TaskJobs, few
 from jarvis.tasks.reporting import nudge_text, with_nudges
 from jarvis.tasks.task_edits import TaskEdits
-from jarvis.tasks.worker import Outcome, run
+from jarvis.tasks.worker import STEPS_OUT, Outcome, run
 
 # Re-exported: tests import these from here
 from jarvis.tasks.approvals import NotAllowed, approval_result  # noqa: F401
@@ -113,6 +116,20 @@ RESUMED = ("JARVIS restarted while you were working on this task, cutting your l
            "from where you were: first check what that step left behind, as it may not have finished, then end with "
            "your summary of the whole task as before.")
 RESUMED_LOG = "resumed after JARVIS restarted"  # log marker; also detects crash loops
+CONTINUED = ("You ran out of steps before finishing, so JARVIS has carried you on in this same session, with everything "
+             "you did kept. Carry on with the task from where you were, without redoing what's finished, then end with "
+             "your summary of the whole task as before.")
+CONTINUED_LOG = "continued"  # log kind of each carry-on after running out of steps, counted against TASK_CONTINUES
+LIMIT_RESUMED = ("Claude's usage limit stopped you partway through this task, and it has reset now. Carry on with the "
+                 "task from where you were: first check what your last step left behind, as it may not have finished, "
+                 "then end with your summary of the whole task as before.")
+LIMIT_SLACK = 60.0  # seconds past a usage limit's reset before resuming, for clock differences
+
+
+def _waits_for_reset(task: dict) -> float | None:
+    """The usage-limit reset a queued task waits for (kept in `interrupted` by _launch), if still to come."""
+    after = (json.loads(task["interrupted"] or "null") or {}).get("after")
+    return after if after and after > time.time() else None
 
 
 class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
@@ -145,6 +162,9 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         self.offload = Offload(self, self.hub)  # sending them work
         self.placing: dict[int, asyncio.Task] = {}  # tasks and commands whose machine is being chosen
         self.placed: dict[int, str] = {}  # what to say about where each new one runs, for its start reply
+        self.limit_waits: dict[int, float] = {}  # tasks queued until a usage limit resets -> its reset time
+        self.wakes: dict[int, asyncio.Event] = {}  # set to end a task's wait for the reset early (a message came)
+        self.limit_resumed: dict[int, float] = {}  # the reset each task last resumed after by itself
         self.resuming = self._after_restart()
 
     def _after_restart(self) -> list[tuple[int, str]]:
@@ -163,7 +183,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             if not why and t["node"] and t["status"] == "running":  # still going on its machine: taken up again
                 resuming.append((t["id"], prompt))
                 continue
-            if not why and len(resuming) >= RESUME_TASKS:
+            if not why and len(resuming) >= RESUME_TASKS and not _waits_for_reset(t):  # a wait costs nothing
                 why = f"no more than {RESUME_TASKS} resume at once (JARVIS_RESUME_TASKS)"
             if not why:
                 resuming.append((t["id"], prompt))
@@ -271,8 +291,12 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             if not approval["announced"]:
                 self._background(self._announce_approval(approval["id"]))
         for task_id, prompt in self.resuming:
+            task = self.store.get(task_id)
+            if after := _waits_for_reset(task):  # nothing was cut off: it goes on waiting
+                self._launch(task_id, prompt, after=after)
+                continue
             self.store.log(task_id, "interrupted", RESUMED_LOG)
-            bell.add(f"Resumed task {task_id} after JARVIS restarted: {self.store.get(task_id)['title']}", "run", task_id)
+            bell.add(f"Resumed task {task_id} after JARVIS restarted: {task['title']}", "run", task_id)
             self._launch(task_id, prompt)
         self.resuming = []
 
@@ -290,7 +314,8 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         for task_id in cut:
             on_mac = self.host_jobs.on_mac.get(task_id, [])
             self.store.set(task_id, interrupted=json.dumps(
-                {"at": time.time(), "on_mac": on_mac, "prompt": self.prompts.get(task_id)}, ensure_ascii=False))
+                {"at": time.time(), "on_mac": on_mac, "prompt": self.prompts.get(task_id),
+                 "after": self.limit_waits.get(task_id)}, ensure_ascii=False))
             self.store.log(task_id, "interrupted", "JARVIS is shutting down" + (
                 f", while it ran {few(on_mac)} on the computer" if on_mac else ""))
         for job in cut.values():
@@ -400,6 +425,8 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             # Nudge: queued tasks get it with the prompt, running ones after their current tool call
             self.store.log(task_id, "nudge", message)
             self.store.add_nudge(task_id, message + note)
+            if wake := self.wakes.get(task_id):  # waiting for a usage limit's reset: the message goes now
+                wake.set()
             self._apply_orders(task_id)
             return self.store.get(task_id)
         lead = "Answer" if task["status"] == "waiting" else "Follow-up"

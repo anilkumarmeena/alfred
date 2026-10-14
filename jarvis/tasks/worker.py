@@ -88,6 +88,7 @@ class Outcome:
     error: str  # "" on success
     cost: float
     kind: str = ""  # failure kind (jarvis.brain.retry)
+    resets: float | None = None  # when the usage limit it hit resets, if Claude said
 
 
 ARTIFACT_ENV = {"CLAUDE_CODE_ARTIFACT": "1"}  # undocumented; the CLI omits Artifact under the SDK without it
@@ -283,12 +284,15 @@ def _describe(block: ToolUseBlock) -> str | None:
     return None  # incl. Agent: Subagents reports its start
 
 
+STEPS_OUT = "it ran out of steps"  # error of a run that hit TASK_MAX_TURNS; the runner carries it on
+
+
 def _error(msg: ResultMessage, limits: LimitWatch, api_error: str | None) -> tuple[str, str]:
     """(reason, retry kind) for a failed result; ("", "") on success."""
     if not msg.is_error:
         return "", ""
     if msg.subtype == "error_max_turns":
-        return "it ran out of steps", retry.ERROR
+        return STEPS_OUT, retry.ERROR
     text = msg.result or "; ".join(str(e) for e in msg.errors or []) or msg.subtype
     limit = limits.describe(text)  # first: it clears rejections whose window has reset
     kind = retry.result_kind(msg.api_error_status, msg.terminal_reason, limits.rejected is not None, api_error)
@@ -438,4 +442,5 @@ async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
     error, kind = _error(result, limits, api_error)
     if not error and not asked and not (result.result or "").strip():
         error, kind = "it ended without a final report", retry.ERROR
-    return Outcome(result.result or "", error, result.total_cost_usd or 0, kind)
+    resets = limits.rejected.resets_at if kind == retry.LIMIT and limits.rejected else None
+    return Outcome(result.result or "", error, result.total_cost_usd or 0, kind, resets)
