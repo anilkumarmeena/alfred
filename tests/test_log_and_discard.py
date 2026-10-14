@@ -267,6 +267,14 @@ def test_a_reply_that_doesnt_plainly_say_yes_discards_nothing(model, gone, said)
     assert all(consent.KINDS[consent.DISCARD] in p for p in model.prompts)
 
 
+def test_a_yes_already_spent_discards_nothing(model, gone):  # noqa: F811
+    conversation.current().heard.turn("Yes.")
+    conversation.current().heard.spent = True  # a turn the brain carries on after they spoke again (cli.follow_up)
+    with pytest.raises(ValueError, match="Not discarded"):
+        asyncio.run(task_tools.task_discard(7))
+    assert gone == []
+
+
 def test_a_yes_in_other_words_is_the_models_to_judge(model, gone):  # noqa: F811
     model.answer = says("yes")
     discard_on("Haan, hata do.")

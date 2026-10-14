@@ -211,17 +211,36 @@ def test_outside_content_and_tools_jarvis_doesnt_know_are_checked(model):
 
 def task_record(**fields) -> str:
     return json.dumps({"id": 7, "title": "Compare phone plans", "kind": "research", "status": "done",
-                       "minutes_since_update": 3, "log": ["progress: reading the plans and the provider's emails"]}
-                      | fields, ensure_ascii=False)
+                       "minutes_since_update": 3, "project": "the phone plans folder",
+                       "in_place": "Works in the project's own folder, no separate branch."} | fields, ensure_ascii=False)
 
 
 def test_only_what_a_task_wrote_is_checked_in_its_record(model):
     assert screen(mcp(task_record()), tool="mcp__jarvis__task_detail") == {}  # nothing task-written
-    assert screen(mcp(task_record(spoken="Task 7 is merged.")), tool="mcp__jarvis__task_merge") == {}
+    assert screen(mcp(task_record(spoken="Merged.")), tool="mcp__jarvis__task_merge") == {}  # too short to check
     assert model.prompts == []
     screen(mcp(task_record(summary=EMAIL)), tool="mcp__jarvis__task_detail")
     assert ATTACK in model.prompts[0]
-    assert "Compare phone plans" not in model.prompts[0] and "reading the plans" not in model.prompts[0]
+    assert "Compare phone plans" not in model.prompts[0] and "own folder" not in model.prompts[0]
+
+
+# Each repeats what the task wrote or a command printed: an update worded from its summary, a log line, a running
+# command's last line, a suggested edit's reason
+@pytest.mark.parametrize("tool, fields", [
+    ("task_list", {"spoken": f"Your task is done. {ATTACK}"}),
+    ("task_detail", {"log": ["progress: reading the plans", f"done: {ATTACK}"]}),
+    ("task_list", {"activity": ATTACK}),
+    ("task_detail", {"suggested_edits": [{"n": 1, "change": "add a to-do: call the provider", "reason": ATTACK}]}),
+    ("task_edits", {"still_pending": [{"n": 1, "change": "add a to-do: call the provider", "reason": ATTACK}]}),
+    ("schedule_list", {"latest_run": {"spoken": ATTACK}}),
+])
+def test_what_a_task_wrote_is_checked_wherever_it_shows_in_its_record(model, tool, fields):
+    screen(mcp(task_record(**fields)), tool=f"mcp__jarvis__{tool}")
+    assert len(model.prompts) == 1 and ATTACK in model.prompts[0] and "Compare phone plans" not in model.prompts[0]
+
+
+def test_past_conversations_are_checked(model):
+    assert injection.covers("mcp__jarvis__conversation_search") is True
 
 
 def test_a_block_in_a_task_record_withholds_only_the_passage(model):

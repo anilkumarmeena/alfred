@@ -10,10 +10,10 @@ from jarvis.tasks import command_jobs, hold, schedules
 from jarvis.tasks.scheduler import RETRY_MINUTES
 
 from . import tool
-from .tasks import _clip
+from .tasks import _TASK_TEXT, _clip
 
-# Screened in a scheduled job (Tool.screened): what its runs found or wrote down, and a command's output
-_JOB_TEXT = ("last_result", "notepad", "summary", "output_tail")
+# Screened in a scheduled job (Tool.screened): what its runs found or wrote down, and its task's own text
+_JOB_TEXT = (*_TASK_TEXT, "last_result", "notepad")
 _quiet = hold.parse_quiet_hours(QUIET_HOURS)
 QUIET_NOTE = (f"Watches aren't checked in quiet hours ({_quiet[0]:%H:%M} to {_quiet[1]:%H:%M}); the first check after "
               "catches up.") if _quiet else ""

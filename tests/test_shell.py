@@ -47,6 +47,7 @@ COMMAND = "rm -rf ~/Desktop/renders/old"  # risky: deletes files
         "Mm-hmm.", "Mhm.", "Uh-huh.", "Mm hmm, go ahead.", "Sure.", "Yeah, go ahead.", "Okay, do it.", "That's okay.",
         "Yes, I'm sure.", "It's fine.", "Get going.", "Fine by me.", "I'm okay with that.", "Yes, delete the old screenshots.",
         "Okay, kill the headless Chrome.", "Sure, clean it up.", "Let it close the hidden Chrome.", "Totally fine.",
+        "That's right.", "Right, go on then.",
     ],
 )
 def test_clear_affirmatives_approve(said):
@@ -68,7 +69,8 @@ def test_clear_affirmatives_approve(said):
         "I'm not sure.", "Uh-uh, go ahead.", "Sure, open the calendar for tomorrow.", "Yeah, delete the email from John.",
         "Okay, close the laptop lid then tell me the weather.", "Sure, start the timer.",
         # remarks that react rather than answer: the model or the brain checks back
-        "Great.", "Perfect, thanks.", "JARVIS, good.", "Cool.", "Sorry.", "Sure. Sorry.", "Headshot.",
+        "Great.", "Perfect, thanks.", "JARVIS, good.", "Cool.", "Sorry.", "Sure. Sorry.", "Headshot.", "Right.",
+        "JARVIS, right.",
     ],
 )
 def test_anything_else_is_not_a_yes(said):

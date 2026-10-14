@@ -227,7 +227,7 @@ class VoiceSession:
             self.asks.add(approval)
         if approval := self.asks.due():  # greeting ends with the oldest pending request
             spoken = self.asks.ask(approval)
-            self.brain.note(spoken)
+            self.brain.note(spoken, approvals.asked(approval))
             greeting += " " + spoken
         return greeting
 
@@ -249,7 +249,7 @@ class VoiceSession:
                     continue
                 self.talk.offer.close()  # a yes now is for this request, not an earlier offer
                 spoken = self.asks.ask(approval)
-                self.brain.note(spoken)
+                self.brain.note(spoken, approvals.asked(approval))
                 await self.floor.say(session, spoken)
 
     async def watch_tasks(self) -> None:

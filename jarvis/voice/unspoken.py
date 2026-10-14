@@ -3,7 +3,7 @@
 The brain is told what's private (bracketed notes, <private> notes, tool guidance) and not to say it; this catches what
 slips through anyway, on everything spoken (brain replies and JARVIS's own lines alike, jarvis.voice.agent):
   - [bracketed notes] and <private>…</private> notes go, as do stray tags; a Markdown link keeps its words. Brackets
-    and angle brackets that aren't notes ("[0, 1)", "array[0]", "List<String>", "<Enter>") are left be
+    and angle brackets that aren't notes ("[0, 1)", "array[0]", "[Enter]", "List<String>", "<Enter>") are left be
   - "task 230" becomes "the task"; a task branch ("jarvis/230-spoken-lookups") becomes "the branch"
   - a file path is said as its last part ("/Users/x/app/main.py" → "main.py"); URLs, dates, "and/or" and lists like
     "Mon/Wed/Fri" are left be
@@ -16,9 +16,11 @@ still arriving, "the task" before its number), so speech starts as soon as it wo
 import re
 from collections.abc import AsyncIterable, AsyncIterator
 
-_LINK = re.compile(r"\[([^\[\]]+)\]\([^()\s]*\)")
-# A note's "[": not in a word ("array[0]"), and words follow ("[That was…", not "[0, 1)"); at the end, they may
-_NOTE = re.compile(r"(?<!\w)\[(?=[^\W\d_]|$)")
+_LINK = re.compile(r"\[([^\[\]\n]{1,120})\]\([^()\s]*\)")
+# A note's "[", not in a word ("array[0]") nor round a single word ("Press [Enter]"): words follow ("[That was…", to
+# the end if it's never closed), or it closes soon on the same line ("[1]", "[3 pictures not passed on]"); "[0, 1)"
+# isn't one. At the very end, it may yet be.
+_NOTE = re.compile(r"(?<!\w)\[(?![^\W\d_][\w'-]*\])(?:(?=[^\W\d_])|(?=[^\[\]\n]{0,120}\])|$)")
 _PRIVATE = re.compile(r"<private\s*>.*?(?:</private\s*>|\Z)", re.S | re.I)
 # The brain's tags are lowercase words without attributes; "List<String>", "<Enter>" and "a <b and b> c" aren't tags
 _TAG = re.compile(r"(?<!\w)<[a-z][\w-]*\s*/?>|</[a-z][\w-]*\s*>")
@@ -28,10 +30,11 @@ _COUNTED = r"(?!\s*(?:%|(?:percent|seconds?|minutes?|hours?|days?|weeks?|months?
 _TASK = re.compile(rf"\b(?:({_DETERMINERS})\s+)?(task)\s*#?\d+\b{_COUNTED}", re.I)
 _BRANCH = re.compile(r"(?:\b(?:(the)\s+)?(branch)(?:\s+(?:called|named))?\s+)?"
                      r"(?<![\w/])[A-Za-z][\w.-]+/\d+-[A-Za-z][\w.-]*\w", re.I)  # not "w/2-3 days", "pages/10-12"
-# Absolute or home paths with two parts or more, or relative ones ending in a file extension ("Mon/Wed/Fri" isn't one)
+# Absolute or home paths with two parts or more, or relative ones ending in a file extension or a slash
+# ("Mon/Wed/Fri" isn't one)
 _SEGMENT = r"[\w@+-][\w.@+-]*"
 _PATH = re.compile(rf"(?<![\w/:.@-])(?:(?:~|\.{{1,2}})?/(?:{_SEGMENT}/)+{_SEGMENT}/?"
-                   rf"|(?:{_SEGMENT}/)+{_SEGMENT}\.[A-Za-z]{{1,5}}\b)")
+                   rf"|(?:{_SEGMENT}/)+{_SEGMENT}\.[A-Za-z]{{1,5}}\b|(?:{_SEGMENT}/){{2,}}(?![\w@+-]))")
 _SITE = re.compile(r"[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,}/")
 _SNAKE = re.compile(r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b")
 _SPACE_BEFORE = re.compile(r"[ \t]+(?=[.,;:!?])")
@@ -41,7 +44,9 @@ _SPACES = re.compile(r"[ \t]{2,}")
 # word after it: "task 2 weeks ago" is a count), "branch" for its name
 _HELD_PHRASE = re.compile(rf"(?:\b(?:{_DETERMINERS})\s+)?\b(?:task\s*#?\d*\s*|branch(?:\s+(?:called|named))?\s*)$"
                           rf"|\b(?:{_DETERMINERS})\s*$", re.I)
-_OPEN_TAG = re.compile(r"(?<!\w)<(?:[a-z][\w-]*\s*/?)?$|</(?:[a-z][\w-]*\s*)?$")
+_OPEN_TAG = re.compile(r"(?<!\w)<(?:[a-z][\w-]*\s*/?)?$|</(?:[a-z][\w-]*\s*)?$|<(?i:private)\s*$")
+# What may yet close as a link or a short note: "[3 options", "[Enter]", "[docs](https://exa"
+_OPEN_BRACKET = re.compile(r"\[[^\[\]\n]{0,120}(?:\](?:\([^()\s]*)?)?$")
 _LAST_WORD = re.compile(r"\S+$")
 
 
@@ -98,8 +103,7 @@ def _notes(text: str) -> list[tuple[int, int]]:
 def _spans(text: str) -> list[tuple[int, int]]:
     """(start, end) of each note and tag: bracketed notes, private notes, an unfinished tag at the end."""
     spans = _notes(text) + [m.span() for m in _PRIVATE.finditer(text)]
-    if tag := _OPEN_TAG.search(text):
-        spans.append(tag.span())
+    spans += [m.span() for m in (_OPEN_TAG.search(text), _OPEN_BRACKET.search(text)) if m]
     return spans
 
 

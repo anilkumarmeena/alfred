@@ -143,8 +143,7 @@ def todo_done(text: str) -> str:
         "date": {"type": "string", "description": "One day, as YYYY-MM-DD."},
         "days": {"type": "integer", "description": "Only the last this many days, today included. Ignored with date."},
     },
-    reads=True,
-    screened=False,
+    reads=True,  # screened: past exchanges and announcements quote mail, pages and a command's output
 )
 def conversation_search(text: str = "", date: str = "", days: int = 0) -> str:
     return memory.search_conversations(text, date, days)
