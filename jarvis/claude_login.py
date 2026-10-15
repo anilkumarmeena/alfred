@@ -1,8 +1,8 @@
 """Signing JARVIS's Claude logins in (core.claude_logins), from the control panel (Settings › Claude logins) or with
 uv run python -m jarvis.claude_login [login | check] [NAME]
 
-  login (default)  sign NAME in (without one, the default login: yours), check that the services can use it, then
-                   restart them if they're running
+  login (default)  sign NAME in (without one, this Mac's own Claude Code login), check that the services can use
+                   it, then restart them if they're running
   check            only the check
 
 On macOS the CLI keeps a login in the login keychain, which the services (launchd, the desktop's "Aqua" session)
@@ -115,7 +115,7 @@ def _launchd_reply(name: str) -> str:
         return out.read_text(errors="replace").strip() if out.exists() else ""
 
 
-def check(name: str = claude_logins.DEFAULT) -> tuple[bool, str]:
+def check(name: str = claude_logins.MAC) -> tuple[bool, str]:
     """Whether JARVIS's services can use a login, and what to say; kept for the panel (claude_logins.note)."""
     try:
         reply = _launchd_reply(name) if platform.MAC and not desktop_session() else _reply(name)
@@ -261,8 +261,8 @@ signins = SignIns()
 
 
 def sign_out(name: str) -> None:
-    """Sign one of JARVIS's logins out (its keychain entry) and forget its folder."""
-    claude_logins.known(name)
+    """Sign a login out (its keychain entry) and forget its folder; never the Mac's own, which the terminal uses."""
+    claude_logins.removable(name)
     try:
         subprocess.run([cli(), "auth", "logout"], env=os.environ | claude_logins.env(name), capture_output=True,
                        timeout=STATUS_SECONDS, cwd=DATA_DIR)
@@ -306,8 +306,8 @@ def login(name: str) -> None:
                  "the keychain in this session and rerun.")
     if claude_logins.active() != name:
         place = claude_logins.order().index(name) + 1
-        print(f"It's number {place} in the priority order, so JARVIS runs on {claude_logins.active() or 'the default'} "
-              "for now: change the order in Settings › Claude logins.")
+        print(f"It's number {place} in the priority order, so JARVIS runs on {claude_logins.active()} for now: "
+              "change the order in Settings › Claude logins.")
     restart_services()
 
 
@@ -318,7 +318,7 @@ def main() -> None:
     command = args[0] if args and args[0] in ("login", "check") else "login"
     rest = args[1:] if args and args[0] in ("login", "check") else args
     try:
-        name = claude_logins.valid(rest[0]) if rest and rest[0] not in ("", "default") else claude_logins.DEFAULT
+        name = claude_logins.valid(rest[0]) if rest and rest[0] not in ("", "default") else claude_logins.MAC
         if command == "check":
             ok, said = check(claude_logins.known(name))
             print(said)

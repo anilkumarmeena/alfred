@@ -1,15 +1,17 @@
 // Claude logins: the Claude accounts JARVIS can run on, by priority (jarvis.core.claude_logins). JARVIS runs on the
-// first one that's usable, moving down the list while one's limit is used up or its sign-in stopped working.
+// first one that's usable, moving down the list while one's limit is used up or its sign-in stopped working. This
+// Mac's own Claude Code login (name "") is on the list like any other, but always stays: the terminal uses it.
 // Signing in runs Claude Code's own sign-in on JARVIS's computer (jarvis.claude_login): Claude's page opens in a new
 // tab, on any device, and the code it shows at the end is pasted here. Only the owner's login changes them.
 import { useSignal, type Signal } from "@preact/signals";
 import { act, ago, claudeLogins, toast, type ClaudeLogin, type ClaudeLogins, type ClaudeResult, type ClaudeSignIn } from "../../state/panel";
 import { now } from "../../state/store";
 import { DownIcon, TrashIcon, UpIcon } from "../icons";
-import { Empty, Led, Pill } from "./bits";
+import { cap, Empty, Led, Pill } from "./bits";
 import { blankTab } from "./GoogleAccounts";
 
-const called = (l: Pick<ClaudeLogin, "name">) => l.name || "default";
+const MAC = "This Mac";  // this Mac's own Claude Code login, name ""
+const called = (l: Pick<ClaudeLogin, "name">) => (l.name ? `the ${l.name} login` : "this Mac's login");
 const broken = (l: ClaudeLogin) => !l.signed_in || l.check?.ok === false;
 
 export function claudeSummary(): [string, "ok" | "warn" | null] {
@@ -17,10 +19,10 @@ export function claudeSummary(): [string, "ok" | "warn" | null] {
   if (!c) return ["The Claude accounts JARVIS runs on", null];
   const on = c.logins.find((l) => l.active);
   if (!on) return ["The Claude accounts JARVIS runs on", null];
-  if (broken(on)) return [`The ${called(on)} login needs signing in again`, "warn"];
+  if (broken(on)) return [`${cap(called(on))} needs signing in again`, "warn"];
   const first = c.logins[0], more = c.logins.length > 1 ? ` · ${c.logins.length} logins` : "";
   if (first && !first.active) return [`On ${called(on)} for now: ${called(first)} ${first.skipped.replace(/^its /, "has its ")}`, "warn"];
-  return [`Runs on ${on.email ?? `the ${called(on)} login`}${more}`, on.check?.ok ? "ok" : null];
+  return [`Runs on ${on.email ?? called(on)}${more}`, on.check?.ok ? "ok" : null];
 }
 
 // One sign-in: `started` once Claude's link is back, `failed` when the code didn't work
@@ -38,7 +40,7 @@ async function startSignIn(flow: Signal<Flow | null>, name: string, email = "", 
 function SignInBox({ flow }: { flow: Signal<Flow | null> }) {
   const code = useSignal(""), busy = useSignal(false);
   const f = flow.value!;
-  const who = f.name ? <>the <b>{f.name}</b> login</> : <>the default login</>;
+  const who = f.name ? <>the <b>{f.name}</b> login</> : <>this Mac's own login (your terminal and VS Code use it too)</>;
   async function finish(e: Event) {
     e.preventDefault();
     if (!code.value.trim() || busy.value || !f.started) return;
@@ -108,9 +110,7 @@ function LoginRow({ l, at, count, flow, can }: { l: ClaudeLogin; at: number; cou
     if (r) toast(r.said);
   }
   async function remove() {
-    if (confirm(`Sign the ${l.name} login out and remove it?${l.active ? " JARVIS goes back to the default login." : ""}`)) {
-      await run("claude_login_remove", "Removed");
-    }
+    if (confirm(`Sign the ${l.name} login out and remove it?`)) await run("claude_login_remove", "Removed");
   }
   const led = !l.signed_in ? "bad" : l.skipped ? "warn" : !l.check ? "off" : l.check.ok ? "ok" : "bad";
   const account = [l.email, l.org, l.plan && `${l.plan} plan`].filter(Boolean).join(" · ");
@@ -118,8 +118,8 @@ function LoginRow({ l, at, count, flow, can }: { l: ClaudeLogin; at: number; cou
     <li class="row">
       <Led kind={led} />
       <div class="grow">
-        <div><span class="sub">{at + 1}.</span> <b>{l.name || "Default"}</b> {l.active && <Pill kind="running">in use</Pill>}</div>
-        <div class="sub">{l.signed_in ? account || "Signed in" : "Not signed in"}{!l.name && " · this computer's Claude Code sign-in"}</div>
+        <div><span class="sub">{at + 1}.</span> <b>{l.name || MAC}</b> {l.active && <Pill kind="running">in use</Pill>}</div>
+        <div class="sub">{l.signed_in ? account || "Signed in" : "Not signed in"}{!l.name && " · Claude Code's own login on this Mac"}</div>
         {l.skipped && <div class="sub warn">Skipped: {l.skipped}.</div>}
         {l.check && <div class="sub">{l.check.said} Checked {ago(l.check.at, now.value)}.</div>}
         {l.usage && <div class="sub">{l.usage}</div>}

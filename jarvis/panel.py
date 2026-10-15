@@ -894,8 +894,8 @@ async def key_clear(body: dict) -> dict:
 
 # ── Claude logins (core.claude_logins, jarvis.claude_login) ─────
 # Signed in here through the web service, in the desktop session, so each lands in the keychain the services read.
-# JARVIS runs on the first usable one in the priority order set here. Only the owner changes them: a login is a Claude
-# account and its usage. "" names the default login.
+# JARVIS runs on the first usable one in the priority order set here. "" names this Mac's own Claude Code login,
+# always on the list; any other can be removed. Only the owner changes them: a login is a Claude account and its usage.
 
 CLAUDE_LOGINS = "change JARVIS's Claude logins"
 
@@ -934,11 +934,11 @@ async def claude_logins_(body: dict) -> dict:
 
 @action
 async def claude_login_start(body: dict) -> dict:
-    """Start signing a login in: {"name" ("" = the default; new = add it), "email" (optional, prefilled)}. Returns
+    """Start signing a login in: {"name" (new = add it; "" = this Mac's own), "email" (optional, prefilled)}. Returns
     Claude's sign-in link and the state to finish with."""
     await asyncio.to_thread(_claude_owner_only, body)
     raw = _text(body, "name", 40)
-    name = claude_logins.valid(raw) if raw else claude_logins.DEFAULT
+    name = claude_logins.valid(raw) if raw else claude_logins.MAC
     return await asyncio.to_thread(claude_login.signins.start, name, _text(body, "email", 200))
 
 
@@ -976,13 +976,13 @@ async def claude_login_order(body: dict) -> dict:
         raise ValueError("Send the logins' names, in order.")
     await asyncio.to_thread(claude_logins.set_order, names)
     await asyncio.to_thread(activity.add, "Changed the Claude logins' order in the control panel: "
-                                          + " > ".join(n or "default" for n in names) + ".")
+                                          + " > ".join(n or "this Mac" for n in names) + ".")
     return await _claude_logins(body)
 
 
 @action
 async def claude_login_remove(body: dict) -> dict:
-    """Sign one of JARVIS's own logins out and forget it: {"name"}. In use: JARVIS goes back to the default."""
+    """Sign a login out and forget it: {"name"}. Never this Mac's own, which the terminal uses."""
     await asyncio.to_thread(_claude_owner_only, body)
     name = _claude_login(body)
     await asyncio.to_thread(claude_login.sign_out, name)

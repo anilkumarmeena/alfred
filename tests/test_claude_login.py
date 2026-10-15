@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from jarvis import claude_login
 from jarvis.brain import sdk, usage
 from jarvis.core import claude_logins, config
 from jarvis.core.config import ROOT
@@ -95,14 +96,24 @@ def test_an_environment_names_its_login(logins_dir):
     assert claude_logins.of_env({"CLAUDE_CONFIG_DIR": "/elsewhere"}) is None
 
 
-def test_removing_a_login_closes_up_the_order(logins_dir):
+def test_any_login_but_the_macs_own_can_be_removed(logins_dir):
     claude_logins.make("work")
     claude_logins.set_order(["work", ""])
     claude_logins.note("work", True, "fine")
     claude_logins.remove("work")
     assert claude_logins.order() == [""] and claude_logins.active() == "" and "work" not in claude_logins.checks()
     with pytest.raises(ValueError):
-        claude_logins.remove("")  # the default is the computer's own sign-in
+        claude_logins.remove("")  # the terminal uses it: it always stays
+    with pytest.raises(ValueError):
+        claude_logins.remove("nope")
+
+
+def test_the_macs_own_login_is_never_signed_out(logins_dir, monkeypatch):
+    calls = []
+    monkeypatch.setattr(claude_login.subprocess, "run", lambda *a, **k: calls.append(a))
+    with pytest.raises(ValueError):
+        claude_login.sign_out("")
+    assert not calls and claude_logins.order() == [""]
 
 
 def test_a_used_up_limit_moves_jarvis_down_the_order_until_it_resets(logins_dir, monkeypatch, tmp_path):

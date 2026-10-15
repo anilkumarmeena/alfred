@@ -115,13 +115,13 @@ export interface Login { name: string; created: number; used: number | null; thi
 // A JARVIS key: its source ("" = unset), never its value. required: can't be cleared
 export interface JarvisKey { name: string; label: string; hint: string; required: boolean; source: "vault" | ".env" | "file" | "" }
 export interface Access { logins: Login[]; keys: JarvisKey[] }
-// A Claude account JARVIS can run on, listed by priority. name "" is the default: the computer's own Claude Code
-// sign-in. check: the last check that JARVIS's services can use it; active: the one JARVIS runs on now (the first not
+// A Claude account JARVIS can run on, listed by priority. name "": this Mac's own Claude Code login. check: the last check that JARVIS's services can use it; active: the one JARVIS runs on now (the first not
 // skipped); skipped: why JARVIS passes it over ("" if it doesn't)
 export interface ClaudeLogin {
   name: string; active: boolean; skipped: string; signed_in: boolean; email: string | null; org: string | null; plan: string | null;
   check: { ok: boolean; said: string; at: number } | null; usage: string;
 }
+// logins: the ones JARVIS may use, by priority, this Mac's own (name "") always among them
 export interface ClaudeLogins { logins: ClaudeLogin[]; can_change: boolean }
 export interface ClaudeSignIn { state: string; url: string }
 // How a sign-in or check went, with the logins afterwards

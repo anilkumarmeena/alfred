@@ -1,21 +1,24 @@
-"""The Claude logins JARVIS can run on, in priority order, and which one it runs on now.
+"""The Claude logins JARVIS runs on, in priority order, and which one it runs on now.
 
-The default login is the user's own Claude Code sign-in (or JARVIS_CLAUDE_CONFIG_DIR's, when .env names one). Named
-logins are JARVIS's own: each a CLI config folder in secrets/claude-logins/<name>, so each has its own keychain entry,
-account, usage limits and session transcripts, and signing one in or out never touches another. Install-wide, like
-the Claude login always was (see core.profile). Signing in: jarvis.claude_login.
+One login is this Mac's own Claude Code sign-in (MAC, named ""; JARVIS_CLAUDE_CONFIG_DIR's when .env names one), the
+one `claude` in a terminal uses. Every other is a CLI config folder in secrets/claude-logins/<name>, so each has its
+own keychain entry, account, usage limits and session transcripts, and signing one in or out never touches another.
+All are on the list alike for the user to order; the Mac's always stays on it (the terminal uses it, so it's never
+signed out here), so JARVIS always has one, and any other can be removed.
+Install-wide, like the Claude login always was (see core.profile). Signing in: jarvis.claude_login.
 
 JARVIS runs on the first login in the priority order (secrets/claude-logins/order) that's usable: not one whose
 limit is used up (brain.usage, per login) or whose sign-in stopped working (its last check, or a call that failed to
 authenticate). Chosen at every CLI start, so a change in order or a used-up limit applies from the next call.
 
-  order() / set_order(names)   every login, by priority ("" = the default)
+  order() / set_order(names)   the logins JARVIS may use, by priority
+  removable(name) / remove(name)   any login but the Mac's
   active() / skipped(name)     the login in use / why one is passed over ("" if it isn't)
   env(name) / of_env(env)      the CLI's environment for a login / the login an environment is for
   folder(name) / folders()     a login's config folder / every login's
   resume_on(session_id)        the login to resume a session on: its own, or, while that one is passed over, the one
                                in use, with the transcript copied over
-  named() / make() / remove()  JARVIS's own logins
+  named() / make() / remove()  JARVIS's logins; removable(name): it isn't the last
   note(name, ...) / checks()   the last check of each login (could the services use it?)
 """
 
@@ -28,7 +31,7 @@ from pathlib import Path
 from jarvis.core import config
 from jarvis.core.files import write_atomic
 
-DEFAULT = ""
+MAC = ""  # this Mac's own Claude Code sign-in
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
 RESERVED = {"default", "order"}
 SESSION = re.compile(r"[A-Za-z0-9-]{1,64}")
@@ -42,7 +45,7 @@ def valid(name: str) -> str:
     """`name` as a new login's name, or ValueError."""
     name = name.strip().lower()
     if not NAME.fullmatch(name) or name in RESERVED:
-        raise ValueError("A Claude login's name is up to 32 lowercase letters, digits and dashes (not \"default\").")
+        raise ValueError("A Claude login's name is up to 32 lowercase letters, digits and dashes.")
     return name
 
 
@@ -53,8 +56,8 @@ def named() -> list[str]:
 
 
 def known(name: str) -> str:
-    """`name` if it's the default ("") or one of JARVIS's logins, else ValueError."""
-    if name != DEFAULT and name not in named():
+    """`name` if it's one of JARVIS's logins or the fallback, else ValueError."""
+    if name != MAC and name not in named():
         raise ValueError(f"There's no Claude login called {name}.")
     return name
 
@@ -65,11 +68,11 @@ def folder(name: str) -> Path:
 
 
 def folders() -> list[Path]:
-    return [folder(name) for name in (DEFAULT, *named())]
+    return [folder(name) for name in (MAC, *named())]
 
 
 def env(name: str) -> dict[str, str]:
-    """The CLI's environment for a login. The default sets CLAUDE_CONFIG_DIR only for JARVIS_CLAUDE_CONFIG_DIR's:
+    """The CLI's environment for a login. The fallback sets CLAUDE_CONFIG_DIR only for JARVIS_CLAUDE_CONFIG_DIR's:
     setting it at all makes the CLI look for another keychain entry (see core.config)."""
     if name:
         return {"CLAUDE_CONFIG_DIR": str(folder(name))}
@@ -80,34 +83,45 @@ def of_env(env: dict[str, str] | None) -> str | None:
     """The login a CLI environment is for, or None if it's none of them."""
     given = (env or {}).get("CLAUDE_CONFIG_DIR", "")
     if not given or given == config.CLAUDE_OWN_CONFIG_DIR:
-        return DEFAULT
+        return MAC
     found = Path(given)
     return found.name if found.parent == _root() and found.name in named() else None
 
 
-def order() -> list[str]:
-    """Every login, highest priority first: the saved order, then any not in it (the default first, then new ones)."""
+def _saved(file: str) -> list[str]:
     try:
-        saved = json.loads((_root() / "order").read_text())
+        found = json.loads((_root() / file).read_text())
     except (OSError, ValueError):
-        saved = []
-    every = [DEFAULT, *named()]
-    kept = [n for n in dict.fromkeys(saved if isinstance(saved, list) else []) if n in every]
+        return []
+    return [n for n in found if isinstance(n, str)] if isinstance(found, list) else []
+
+
+def _save(file: str, names: list[str]) -> None:
+    _root().mkdir(mode=0o700, parents=True, exist_ok=True)
+    write_atomic(_root() / file, json.dumps(names))
+
+
+def order() -> list[str]:
+    """The logins JARVIS may use, highest priority first: the saved order, then any not in it (the Mac's first,
+    then new ones)."""
+    every = [MAC, *named()]
+    kept = [n for n in dict.fromkeys(_saved("order")) if n in every]
     return kept + [n for n in every if n not in kept]
 
 
 def set_order(names: list[str]) -> None:
-    """Save the priority order: every login, once each."""
+    """Save the priority order: every login JARVIS may use, once each."""
     if sorted(names) != sorted(order()):
         raise ValueError("The order has to list every Claude login once.")
-    _root().mkdir(mode=0o700, parents=True, exist_ok=True)
-    write_atomic(_root() / "order", json.dumps(names))
+    _save("order", names)
 
 
 def skipped(name: str, now: float | None = None) -> str:
     """Why JARVIS passes over a login ("" if it doesn't): its sign-in stopped working, or its limit is used up."""
     from jarvis.brain import usage  # it reads the login in use from here
 
+    if name not in order():
+        return "it isn't on JARVIS's list"  # removed while a task on it waited
     found = checks().get(name)
     if found and not found.get("ok"):
         return "its sign-in isn't working"
@@ -153,10 +167,18 @@ def make(name: str) -> Path:
     return made
 
 
+def removable(name: str) -> str:
+    """`name` if it can be removed (any login but the Mac's), else ValueError."""
+    if name == MAC:
+        raise ValueError("This Mac's own Claude Code login stays on the list: move it down instead.")
+    if name not in named():
+        raise ValueError(f"There's no Claude login called {name}.")
+    return name
+
+
 def remove(name: str) -> None:
-    """Forget one of JARVIS's logins' folder (sign it out first); the order closes up around it."""
-    if not known(name):
-        raise ValueError("The default login is the computer's own Claude Code sign-in: sign it out there.")
+    """Forget a login's folder (sign it out first); the order closes up around it. Never the Mac's."""
+    removable(name)
     shutil.rmtree(folder(name), ignore_errors=True)
     found = checks()
     if found.pop(name, None):
@@ -167,7 +189,7 @@ def holding(session_id: str | None) -> str | None:
     """The login whose folder holds session `session_id`'s transcript, or None."""
     if not session_id or not SESSION.fullmatch(session_id):
         return None
-    for name in (DEFAULT, *named()):
+    for name in (MAC, *named()):
         if next(folder(name).glob(f"projects/*/{session_id}.jsonl"), None):
             return name
     return None
