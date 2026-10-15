@@ -407,9 +407,12 @@ def test_merge_merges_the_branch_then_deletes_it_and_its_worktree(env, monkeypat
     worktree = Path(task["worktree"])
     assert worktree.exists() and task["branch"] in branches(other)
 
+    head = git(other, "rev-parse", "HEAD")
     merged = asyncio.run(r.merge(task["id"]))
     assert (other / "new.py").read_text() == "x = 1\n"
-    assert git(other, "log", "-1", "--format=%s") == f"Merge branch '{task['branch']}'"
+    assert git(other, "log", "-1", "--format=%P") == head  # one commit, one parent: not a merge commit
+    assert git(other, "log", "-1", "--format=%B") == (f"add a thing\n\nDid it.\nDetails.\n\nJARVIS-Task: {task['id']}\n"
+                                                      "Co-Authored-By: JARVIS")
     assert branches(other) == ["main"]
     assert not worktree.exists() and str(worktree) not in git(other, "worktree", "list")
     assert "merged into main" in merged["spoken"] and "branch deleted" in merged["spoken"]
@@ -445,6 +448,91 @@ def test_merge_conflict_leaves_everything_as_it_was(env, monkeypatch):
         asyncio.run(r.merge(task["id"]))
     assert git(other, "rev-parse", "HEAD") == head and git(other, "status", "--porcelain") == ""
     assert task["branch"] in branches(other) and Path(task["worktree"]).exists()
+    assert not (other / ".git" / "SQUASH_MSG").exists()  # nor a stale message for the user's next commit
+
+
+def test_merge_squashes_checkpoints_and_catch_up_merges_into_one_commit(env, monkeypatch):
+    other = env["other"]
+    r, task = run_worktree_task(monkeypatch, add_new_file)
+    wt = Path(task["worktree"])
+    (wt / "new.py").write_text("x = 2\n")
+    git(wt, "commit", "-qam", "add a thing (unfinished)")
+    (other / "main.py").write_text("m = 1\n")
+    git(other, "add", "-A")
+    git(other, "commit", "-qm", "meanwhile")
+    git(wt, "merge", "-q", "--no-edit", "main")  # the task caught up with main
+    head = git(other, "rev-parse", "HEAD")
+
+    merged = asyncio.run(r.merge(task["id"]))
+    assert "merged into main as one commit" in merged["spoken"] and branches(other) == ["main"]
+    assert git(other, "log", "--format=%s", f"{head}..HEAD").splitlines() == ["add a thing"]
+    assert git(other, "log", "-1", "--format=%P") == head
+    assert git(other, "show", "--name-only", "--format=", "HEAD") == "new.py"
+    assert (other / "new.py").read_text() == "x = 2\n" and (other / "main.py").exists()
+    assert not (other / ".git" / "SQUASH_MSG").exists()
+
+
+def test_merge_squashes_whatever_the_users_fast_forward_setting(env, monkeypatch):
+    other = env["other"]
+    r, task = run_worktree_task(monkeypatch, add_new_file)
+    (other / "main.py").write_text("m = 1\n")
+    git(other, "add", "-A")
+    git(other, "commit", "-qm", "meanwhile")
+    git(other, "config", "merge.ff", "false")  # alone, it makes git refuse --squash
+    merged = asyncio.run(r.merge(task["id"]))
+    assert "merged into main as one commit" in merged["spoken"] and (other / "new.py").exists()
+
+
+def test_a_commit_that_fails_leaves_the_checkout_as_it_was(env, monkeypatch):
+    other = env["other"]
+    r, task = run_worktree_task(monkeypatch, add_new_file)
+    git(other, "config", "commit.gpgsign", "true")
+    git(other, "config", "gpg.program", "false")  # signing fails, so the commit does
+    head = git(other, "rev-parse", "HEAD")
+    with pytest.raises(ValueError, match="failed, so nothing changed"):
+        asyncio.run(r.merge(task["id"]))
+    assert git(other, "rev-parse", "HEAD") == head and git(other, "status", "--porcelain") == ""
+    assert task["branch"] in branches(other) and not (other / ".git" / "SQUASH_MSG").exists()
+
+
+def test_a_merge_whose_cleanup_fails_is_still_reported_merged(env, monkeypatch):
+    r, task = run_worktree_task(monkeypatch, add_new_file)
+
+    async def stuck(repo, worktree, branch):
+        raise RuntimeError("worktree locked")
+
+    monkeypatch.setattr(git_ops, "_remove_branch", stuck)
+    merged = asyncio.run(r.merge(task["id"]))
+    assert "merged into main as one commit" in merged["spoken"]
+    assert "weren't removed: worktree locked" in merged["spoken"]
+    assert any(e["kind"] == "merged" for e in r.store.history(task["id"]))
+
+
+def test_merge_of_a_branch_already_squashed_in_only_cleans_up(env, monkeypatch):
+    other = env["other"]
+    r, task = run_worktree_task(monkeypatch, add_new_file)
+    git(other, "merge", "-q", "--squash", task["branch"])
+    git(other, "commit", "-qm", "squashed by hand")
+    head = git(other, "rev-parse", "HEAD")
+
+    merged = asyncio.run(r.merge(task["id"]))
+    assert git(other, "rev-parse", "HEAD") == head and git(other, "status", "--porcelain") == ""
+    assert branches(other) == ["main"] and not Path(task["worktree"]).exists()
+    assert "no changes that weren't already in main" in merged["spoken"] and "branch deleted" in merged["spoken"]
+    assert not (other / ".git" / "SQUASH_MSG").exists()
+
+
+def test_squash_message_keeps_the_opening_of_the_summary_and_ends_with_the_co_author():
+    long = "word " * 400
+    paras = git_ops.squash_message("Fix the thing", f"Fixed it.\n\n# What changed\n\n{long}\n\nMore.", 7).split("\n\n")
+    assert paras[0] == "Fix the thing" and paras[1:-1] == ["Fixed it.", "# What changed"]  # the long one didn't fit
+    assert paras[-1] == "JARVIS-Task: 7\nCo-Authored-By: JARVIS"
+    cut = git_ops.squash_message("t", long, 7).split("\n\n")[1]
+    assert cut.endswith("word…") and len(cut) <= git_ops.SQUASH_BODY + 1
+    two = git_ops.squash_message("t", "a" * 600 + "\n\n" + "b" * 599, 7).split("\n\n")
+    assert two[1:-1] == ["a" * 600]  # 1201 characters joined: the second paragraph is left out, not cut
+    assert git_ops.squash_message("Fix\n  the thing ", "", 7).startswith("Fix the thing\n\n")
+    assert git_ops.squash_message("t", "", 7) == "t\n\nJARVIS-Task: 7\nCo-Authored-By: JARVIS"
 
 
 def test_merge_refuses_a_dirty_checkout_or_uncommitted_worktree_changes(env, monkeypatch):
@@ -475,4 +563,4 @@ def test_merge_works_for_jarvis_itself(jarvis, monkeypatch):
     r, task = run_worktree_task(monkeypatch, add_new_file, project="jarvis")
     merged = asyncio.run(r.merge(task["id"]))
     assert (jarvis / "new.py").exists() and branches(jarvis) == ["main"]
-    assert "merged into main, its tests passing" in merged["spoken"]
+    assert "merged into main as one commit, its tests passing" in merged["spoken"]

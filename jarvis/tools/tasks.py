@@ -349,7 +349,8 @@ async def task_stop(id: int) -> dict:
 
 @tool(
     "task_merge",
-    "Merge a finished code_change task's own branch into the branch checked out in the project's folder, then "
+    "Merge a finished code_change task's own branch, squashed into one commit, into the branch checked out in the "
+    "project's folder, then "
     "delete the task's branch and remove its worktree. A branch that's already merged is just cleaned up. JARVIS's "
     "own branches run its tests first, which takes a few minutes (the merge then carries on in the background and its "
     "result comes back to you), and aren't merged if tests fail on them. Only "

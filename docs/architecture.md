@@ -488,7 +488,7 @@ Each run resumes the task's own Claude session, so follow-ups keep everything it
 |:-:|---|---|---|
 | 📂 | **In place** (default) | `git_ops.py` | **One in-place task per project at a time**; uncommitted work saved first |
 | 🌿 | **Worktrees** | `git_ops.py`, `projects.is_jarvis` | Committed to the task branch as a run ends. **Never pushed** |
-| 🔀 | **Merge / discard** | `POST /tasks/<id>/merge`, `/discard` | `--no-ff` into the checked-out branch; conflicts abort cleanly |
+| 🔀 | **Merge / discard** | `POST /tasks/<id>/merge`, `/discard` | Squashed into **one commit** on the checked-out branch (title, summary, `Co-Authored-By`), so checkpoint commits stay off it; conflicts abort cleanly |
 | 💬 | **Nudges** | `reporting.py` `_nudge_hook` | Delivered after the task's next tool call by a `PostToolUse` hook |
 | 🎯 | **Goal loop** | `goal.py`, `Runner._check_goal` | A tool-less model call checks the result against the request and evidence |
 | 🤝 | **Subagents** | `subagents.py` | Same gate and sandbox; **they can't edit** |
