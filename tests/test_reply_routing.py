@@ -183,10 +183,11 @@ def test_a_request_put_while_the_brain_answered_is_withdrawn_when_its_reply_asks
 
 def test_only_jarvis_s_own_messages_count_as_spoken():
     spoke = []
-    voice = type("Voice", (), {"spoke": lambda self, metrics, interrupted: spoke.append((metrics, interrupted))})()
+    voice = type("Voice", (), {"spoke": lambda self, text, metrics, interrupted: spoke.append((text, metrics,
+                                                                                             interrupted))})()
     agent._item_added(voice, llm.AgentHandoff(new_agent_id="jarvis"))  # has no role
     agent._item_added(voice, llm.FunctionCall(call_id="1", name="todo_list", arguments="{}"))
     agent._item_added(voice, llm.ChatMessage(role="user", content=["hi"], metrics={"stopped_speaking_at": 1.0}))
     agent._item_added(voice, llm.ChatMessage(role="assistant", content=["Hello."], interrupted=True,
                                              metrics={"started_speaking_at": 2.0}))
-    assert spoke == [({"started_speaking_at": 2.0}, True)]
+    assert spoke == [("Hello.", {"started_speaking_at": 2.0}, True)]

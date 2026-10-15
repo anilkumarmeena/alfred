@@ -1,4 +1,5 @@
-"""Tests for jarvis.voice.session: turn routing (rule offer, request, brain), prompt requests, what a call holds."""
+"""Tests for jarvis.voice.session: turn routing (rule offer, request, brain, spoken over), prompt requests, what a call
+holds."""
 
 import asyncio
 
@@ -220,6 +221,144 @@ def test_a_runner_that_cant_be_reached_is_said_so():
         return await reply(voice, "Yes.")
 
     assert asyncio.run(main()) == "Sorry, I couldn't pass that on to the task runner."
+
+
+# ── Spoken over ───────────────────────────────────────────────
+
+NEWS = ("The meeting moved to Friday. ", "Priya can't make it.")
+
+
+async def talked_over(voice: VoiceSession, words: str, heard: str = "The meeting moved to Friday.") -> None:
+    """A reply to "any news?" spoken up to `heard`, then `words` spoken over it."""
+    await reply(voice, "Any news?")
+    voice.spoke(heard, {}, interrupted=True)
+    voice.completed(words, {})
+    await reply(voice, words)
+
+
+def test_a_thank_you_over_a_reply_gets_a_word_back_and_a_recap_of_what_wasnt_heard():
+    voice = call(Brain(*NEWS))
+    asyncio.run(talked_over(voice, "Thank you."))
+    [(where, todo)] = voice.brain.framed
+    assert 'heard up to "The meeting moved to Friday."' in where and "didn't hear: \"Priya can't make it.\"" in where
+    assert "passing remark" in todo and "one short sentence" in todo
+    assert voice.brain.asked == ["Any news?", "Thank you."]
+
+
+def test_a_question_over_a_reply_is_answered_and_the_rest_dropped_unless_it_matters():
+    voice = call(Brain(*NEWS))
+    asyncio.run(talked_over(voice, "Which meeting?"))
+    [(where, todo)] = voice.brain.framed
+    assert "Priya can't make it." in where and "new point: answer that, and drop the rest" in todo
+
+
+def test_words_no_rule_settles_leave_the_brain_to_judge():
+    voice = call(Brain(*NEWS))
+    asyncio.run(talked_over(voice, "Wait, wrong meeting"))
+    [(_, todo)] = voice.brain.framed
+    assert todo.startswith("[If what they said is only a passing remark")
+
+
+def test_the_timing_log_says_what_cut_the_reply_off():
+    async def main():
+        voice = call(Brain(*NEWS))
+        await reply(voice, "Any news?")
+        voice.spoke("The meeting", {}, interrupted=True)
+        voice.completed("Thanks.", {})
+        record = voice.timings.turn.record
+        await reply(voice, "Thanks.")
+        return record
+
+    assert asyncio.run(main())["barge"] == "remark"
+
+
+def test_a_reply_heard_to_its_end_tells_the_next_turn_nothing():
+    async def main():
+        voice = call(Brain(*NEWS))
+        await reply(voice, "Any news?")
+        voice.spoke("".join(NEWS), {}, interrupted=False)
+        await reply(voice, "Thanks.")
+        return voice
+
+    assert asyncio.run(main()).brain.framed == []
+
+
+def test_only_the_turn_right_after_the_cut_hears_of_it():
+    async def main():
+        voice = call(Brain(*NEWS))
+        await talked_over(voice, "Thanks.")
+        voice.spoke("".join(NEWS), {}, interrupted=False)
+        await reply(voice, "And Sam?")
+        return voice
+
+    assert len(asyncio.run(main()).brain.framed) == 1
+
+
+def test_a_reply_stopped_before_a_word_played_counts_as_unheard_and_unfinished():
+    async def main():
+        voice = call(Brain(*NEWS))
+        stream = voice.respond("Any news?")
+        await anext(stream)
+        await stream.aclose()  # LiveKit stops the reply; nothing played, so it reports nothing
+        await reply(voice, "Hmm.")
+        return voice
+
+    [(where, todo)] = asyncio.run(main()).brain.framed
+    assert where == ('[They spoke over your last reply and heard none of it. They didn\'t hear: '
+                     '"The meeting moved to Friday.". It was stopped before you\'d finished it.]')
+    assert "passing remark" in todo
+
+
+def test_whats_heard_of_a_reply_that_began_before_this_one_isnt_taken_for_it():
+    async def main():
+        voice = call(Brain(*NEWS))
+        await reply(voice, "Any news?")
+        voice.spoke("Hello Sam. JARVIS online.", {"started_speaking_at": 1.0}, interrupted=True)  # long before
+        voice.spoke("".join(NEWS), {}, interrupted=False)
+        await reply(voice, "Thanks.")
+        return voice
+
+    assert asyncio.run(main()).brain.framed == []
+
+
+def test_speech_reported_after_the_next_turn_ended_isnt_taken_for_the_reply():
+    async def main():
+        voice = call(Brain(*NEWS))
+        await reply(voice, "Any news?")
+        voice.spoke("The meeting", {}, interrupted=True)
+        voice.completed("Thanks.", {})
+        voice.spoke("Task 12 is done.", {}, interrupted=True)  # an announcement squeezed in
+        await reply(voice, "Thanks.")
+        return voice
+
+    [(where, _)] = asyncio.run(main()).brain.framed
+    assert 'heard up to "The meeting"' in where
+
+
+def test_hints_on_how_the_turn_was_heard_go_along_with_the_cut():
+    async def main():
+        voice = call(Brain(*NEWS))
+        await reply(voice, "Any news?")
+        voice.spoke("The meeting", {}, interrupted=True)
+        voice._hints = ["[Heard unclearly.]"]
+        await reply(voice, "Okay.")
+        return voice
+
+    [lines] = asyncio.run(main()).brain.framed
+    assert lines[0] == "[Heard unclearly.]" and len(lines) == 3
+
+
+def test_a_yes_to_a_request_over_a_reply_still_goes_to_the_runner():
+    async def main():
+        voice = call(Brain(*NEWS))
+        await reply(voice, "Any news?")
+        voice.spoke("The meeting", {}, interrupted=True)
+        voice.asks.add(REQUEST)
+        voice.asks.ask(voice.asks.due())
+        return voice, await reply(voice, "Yes.")
+
+    voice, said = asyncio.run(main())
+    assert said == "Okay, the task carries on." and voice.brain.framed == []
 
 
 # ── Tasks' requests, as they come ─────────────────────────────

@@ -18,7 +18,7 @@ from jarvis.safety import approvals, consent, remembered
 from jarvis.safety.approvals import VoiceApprovals
 from jarvis.state import conversation, memory
 from jarvis.tasks import announce, client
-from jarvis.voice import ram, timing, turn
+from jarvis.voice import cutoff, ram, timing, turn
 from jarvis.voice.floor import Announcement, Announcements, Floor, Moment
 
 log = logging.getLogger("jarvis")
@@ -64,6 +64,7 @@ class VoiceSession:
         self._hints: list[str] = []  # how the next turn was heard, for the brain
         self._words: list[str] = []  # transcripts of the turn in progress
         self._last_words = ""
+        self._reply: cutoff.Reply | None = None  # the last reply to a turn, to tell where it was cut off
         self._loops: list[asyncio.Task] = []
         self._greeted: dict | None = None  # the task whose whole update the greeting led with
         self._asking = False  # the greeting leads with a task's question
@@ -146,6 +147,8 @@ class VoiceSession:
     def completed(self, said: str, metrics) -> None:
         """User turn ended: log by whom, and queue hints on how it was heard for the brain."""
         self._words = []
+        if self._reply is not None:
+            self._reply.over = True  # what LiveKit reports from now on isn't of it
         who, logprob = turn.clips_heard(self.stt.take_clips() if self.stt is not None else [])
         how = {"speaker": who} | ({"logprob": round(logprob, 3)} if logprob is not None else {})
         cut = self.timings.heard(said, metrics, how)
@@ -154,9 +157,11 @@ class VoiceSession:
             self._hints = self.pacing.hints(logprob, self._last_words if cut else None)
         self._last_words = said
 
-    def spoke(self, metrics, interrupted: bool) -> None:
-        """JARVIS finished speaking; `metrics` are LiveKit's."""
+    def spoke(self, text: str, metrics, interrupted: bool) -> None:
+        """JARVIS finished speaking `text`, or what of it played before being cut off; `metrics` are LiveKit's."""
         self.timings.spoke(metrics, interrupted)
+        if self._reply is not None:
+            self._reply.spoke(text, interrupted, metrics.get("started_speaking_at"))
 
     async def respond(self, text: str | None) -> AsyncIterator[str]:
         """Timed reply to a user turn."""
@@ -164,13 +169,17 @@ class VoiceSession:
         if not text:
             return
         self.timings.replying()
-        async for chunk in self.reply(text):
+        cut = self._reply.cut() if self._reply is not None else None
+        self._reply = reply = cutoff.Reply()
+        async for chunk in self.reply(text, cut):
             timing.mark("first_text")
+            reply.sent.append(chunk)
             yield chunk
+        reply.finished = True
 
-    async def reply(self, text: str) -> AsyncIterator[str]:
+    async def reply(self, text: str, cut: cutoff.Cut | None = None) -> AsyncIterator[str]:
         """Route a turn: yes/no to an offered rule or pending task request is handled here (jarvis.safety.consent);
-        anything else goes to the brain."""
+        anything else goes to the brain, told where `cut`, if given, cut its last reply off."""
         verdict = await consent.reply(text, consent.RULE) if self.talk.offer.open else None
         if offered := self.talk.offer.hear(text, verdict):
             yield self._said(await self.keep(text, *offered))
@@ -180,9 +189,9 @@ class VoiceSession:
             yield self._said(await self.answer(text, *heard))
             return
         said: list[str] = []
-        if self._hints:
-            self.brain.frame(self._hints)
-            self._hints = []
+        if framing := self._hints + (self._cut_off(cut, text) if cut is not None else []):
+            self.brain.frame(framing)
+        self._hints = []
         if self.router is not None:
             self.brain.next_model = await self.router.pick(text)
         async for chunk in self.brain.respond(text):
@@ -193,6 +202,13 @@ class VoiceSession:
             self.asks.close()
         self.asks.changed.set()  # the brain's question may be over
         ram.log_job()  # debug-level memory line
+
+    @staticmethod
+    def _cut_off(cut: cutoff.Cut, text: str) -> list[str]:
+        """Where the last reply was cut off and what to do about the rest, for the brain; `text` cut it off."""
+        kind = cutoff.obvious(cut, text)
+        timing.note("barge", kind or "unsure")
+        return cutoff.framing(cut, kind)
 
     def _said(self, reply: str) -> str:
         self.floor.said(reply)

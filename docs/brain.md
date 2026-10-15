@@ -252,6 +252,14 @@ When the user speaks over a reply, `respond()` is cancelled. What happens next d
 | Just talking | Interrupts and drains the CLI (≤ 15 s) | Normal |
 | Drain fails or times out | **Restarts the CLI** | New session (see open questions) |
 
+Whatever was running, the next turn is told **where the reply was cut off**: the call (`jarvis/voice/cutoff.py`) lines LiveKit's transcript of what played up with the text sent to speech, and frames the user's words with what they heard and what they didn't. Rules then read those words, with no model call, so nothing waits:
+
+| The words | The brain is asked to |
+|---|---|
+| A **passing remark**: "thanks", "okay", "hmm", "yes yes" | Answer in a word or two, then **recap the rest in one short sentence** |
+| A **question** | **Answer it** and drop the rest unless asked; offer it in a few words if it held something they need |
+| Anything else: a request, a correction, a "yes" right after JARVIS asked something | Judge for itself, both ways described |
+
 ---
 
 ## 🏃 Never stuck: background work

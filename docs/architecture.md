@@ -124,7 +124,7 @@ JARVIS runs on **macOS on Apple silicon** and **Linux** (x86_64 and aarch64, wit
 | Package | Key files | Responsibility |
 |---|---|---|
 | `jarvis/voice/` | `agent.py`, `session.py`, `speech.py`, `turn.py`, `floor.py` | The call: LiveKit worker, per-call `VoiceSession`, Whisper and Kokoro, turn-taking, speaking unprompted |
-| | `denoise.py`, `speech_gate.py`, `speaker.py`, `barge_in.py`, `clauses.py`, `quiet.py` | Noise filter, phantom gate, speaker check, voice-only barge-in, sentence splits, speaker-off |
+| | `denoise.py`, `speech_gate.py`, `speaker.py`, `barge_in.py`, `cutoff.py`, `clauses.py`, `quiet.py` | Noise filter, phantom gate, speaker check, voice-only barge-in, where a reply was cut off, sentence splits, speaker-off |
 | | `timing.py`, `ram.py`, `audio_file.py` | Per-turn latency log, memory footprints, text into audio files |
 | `jarvis/brain/` | `cli.py`, `sdk.py`, `persona.py` | `CliBrain` on the Claude Agent SDK, options shared with tasks, the persona |
 | | `quick.py`, `route.py`, `side.py`, `usage.py`, `retry.py` | Warm fast-model judgements, quick-model routing, background lookups, usage limits, retries |
@@ -246,13 +246,13 @@ sequenceDiagram
 | | Topic | How it works |
 |:-:|---|---|
 | 🎤 | **Unprompted speech** | `floor.py` waits until nobody is mid-exchange, then a fast model picks *now*, *interrupt* (urgent only), *later* or *send to phone* |
-| ✋ | **Interrupting** | Barge-in cancels the reply; the brain drains the CLI's output in the background so the next turn starts clean |
+| ✋ | **Interrupting** | Barge-in cancels the reply; the brain drains the CLI's output in the background so the next turn starts clean, knowing what was heard |
 | ⏱️ | **Measuring** | One JSON line per turn in `logs/voice-turns.jsonl` (`timing.py`), each stage's offset from end of speech |
 | 🧮 | **Memory** | The shared speech process stays near **0.9 GB** thanks to three caps |
 
 - **Unprompted speech** covers task updates, alerts (notices, reminders, watch findings), finished jobs and approval requests. Held 15 minutes or left at session end, they go to the phone.
 - **The greeting** leads with the weightiest task update you haven't heard (it needs you, then failed, then finished, then routine runs), cut to a sentence or two in fixed words, then counts the rest and ends with the oldest pending approval request (after a task's question, that request waits until the question is answered or two minutes pass). Tasks running again or waiting on an approval request are left out: their words are out of date. The lead counts as heard only if it was said whole, not talked over, and the task said nothing new meanwhile; other updates wait for the next greeting.
-- **Interrupting:** if a `Bash` command of that reply is still running, the reply finishes unheard instead, and the next turn waits for it.
+- **Interrupting:** if a `Bash` command of that reply is still running, the reply finishes unheard instead, and the next turn waits for it. `cutoff.py` lines LiveKit's transcript of what played up with the reply, so the next turn knows where it was cut off: a passing remark ("thanks") gets a word back and a one-line recap of the rest, a question gets answered and the rest dropped.
 - **Measuring:** `make voice-timing` reports medians, p90 and the slowest turns. Typical on an M2: Whisper 0.4 s, first words 1–2 s, about 7 s when a tool is needed.
 - **Memory caps:** `JARVIS_MLX_CACHE_MB` (Apple silicon only), `JARVIS_TTS_MEMORY_ARENA` off, and freed memory handed back to the system (`MallocLargeCache=0` on macOS, a pinned glibc mmap threshold on Linux; `JARVIS_VOICE_MALLOC_LARGE_CACHE`). `uv run python -m jarvis.voice.ram` prints footprints.
 
