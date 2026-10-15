@@ -221,6 +221,43 @@ def test_the_review_saves_plans_as_plans_until_they_are_confirmed_done():
     assert f'"{profile.name()} plans to' in text and "never as if it's already done" in text
     assert f"only when {profile.name()} confirms it's done: JARVIS saying it did it" in text
     assert "concrete job for later belongs on the to-do list" in text
+    assert "only asked for, discussed, scheduled or started is a plan" in text
+    assert "Leave out what's in progress, running, scheduled or watched right now" in text
+
+
+@pytest.mark.parametrize("fact, done", [
+    ("JARVIS's iPhone app is built", True),
+    ("The offline mode for Atlas was merged last week", True),
+    ("Atlas now has an offline mode", True),
+    ("Alex's home server was set up with Docker", True),
+    ("The login bug in Atlas is fixed", True),
+    ("Alex prefers fixed meeting times", False),
+    ("Alex plans an offline mode for the Atlas app", False),
+    ("Alex uses Zed for editing", False),
+])
+def test_a_review_fact_saying_work_is_finished_waits_for_a_yes(data, fact, done):
+    edit = data_edits.check(REMEMBER | {"fact": fact})
+    why = data_edits.needs_yes(edit, "review")
+    assert (why is not None) is done
+    if done:
+        assert "says some work is finished" in why and profile.name() in why
+    assert data_edits.needs_yes(edit, "code_change") is None  # tasks that did the work can say so
+
+
+def test_a_review_rewriting_a_plan_as_done_says_why_it_asks(data):
+    plan = "- Alex plans an offline mode for Atlas (2026-09-01)"
+    profile.current().memory_file.write_text(f"## Environment\n{plan}\n")
+    edit = data_edits.check({"action": "edit", "file": "memory.md", "old": plan,
+                             "new": f"- Atlas now has an offline mode ({TODAY})", "reason": "Said so."})
+    assert "says some work is finished" in data_edits.needs_yes(edit, "review")
+
+
+def test_a_finished_work_fact_from_a_review_is_held_not_saved(data):
+    built = REMEMBER | {"section": "environment", "fact": "JARVIS now supports Telegram"}
+    _, task, events, _ = run_learned([REMEMBER, built])
+    assert [(e["status"], bool(e.get("needs_yes"))) for e in edits(task)] == [("applied", False), ("pending", True)]
+    assert "Telegram" not in profile.current().memory_file.read_text()
+    assert events[0]["text"].endswith("save to memory, under Alex's environment: JARVIS now supports Telegram.")
 
 
 # ── What it makes of the reply ──────────────────────────────────
