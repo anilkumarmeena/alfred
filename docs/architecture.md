@@ -497,7 +497,7 @@ Each run resumes the task's own Claude session, so follow-ups keep everything it
 | ✏️ | **Suggested data edits** | `data_edits.py`, `task_edits.py` | Tasks can't write `data/`; they call `propose_data_edit` |
 
 - **In place:** uncommitted work is saved first with `git stash create` under `refs/jarvis/task-<id>-<time>`. Folders without git are diffed by snapshot. Git that changes the checkout is denied (`_IN_PLACE_DENIED`, `TaskGate.checkout`, `commands.refused`), except a plain `git commit` with sandboxed Bash once the user's own words order one ("fix it and commit", `Approvals.commit_ordered`); never `--amend`, and push stays gated.
-- **Worktrees:** JARVIS's own repo always uses worktrees, and its branches must pass the test suite before merging (`merge_check.py`).
+- **Worktrees:** JARVIS's own repo always uses worktrees, and its branches must pass the test suite before merging (`merge_check.py`). Every run of the suite is noted against the git tree it ran on (`.git/jarvis-tested/`, written by `tests/conftest.py`), so a branch whose exact code already passed every test it collects (the task's own final run, usually) merges after a collection, not a second run.
 - **Merge / discard:** refused while the task is active or with uncommitted changes. `task_discard` also needs the user's own words this turn (`heard`) to be a plain yes, read by `consent.reply`.
 - **Nudges:** messages to a running task are queued in `nudges`.
 - **Goal loop:** evidence means the diff and test steps. `incomplete` resumes the session, up to `JARVIS_GOAL_ROUNDS` (2). It also settles the to-do the task was started for.

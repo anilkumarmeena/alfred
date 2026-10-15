@@ -448,13 +448,13 @@ class Offload:
         else:
             r._finish(task["id"], "done" if ok else "failed", said, title=job["title"])
 
-    async def _sum_up(self, node: int, wait: float = SUMMARY_WAIT) -> None:
+    async def _sum_up(self, node: int) -> None:
         """One summary of the runs a machine reports from while away, once its reports stop coming and the tasks it
         ran alone have been taken up and ended here."""
         count = -1
         while count != len(self.away.get(node, [])) or node in self.adopted.values():
             count = len(self.away.get(node, []))
-            await asyncio.sleep(wait)
+            await asyncio.sleep(SUMMARY_WAIT)  # read here, not bound as a default, so tests can shorten it
         said = self.away.pop(node, [])
         self.summing.discard(node)
         if not said:

@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
-from test_approvals import BREW, asked, item, pushes, running_task, through  # noqa: F401  (fixtures)
+from test_approvals import BREW, announced, asked, item, pushes, running_task, through  # noqa: F401  (fixtures)
 from test_in_place import env  # noqa: F401  (a fixture)
 from test_nudges import fake_run, finishes, settle
 from test_shell import ask
@@ -171,8 +171,7 @@ def test_a_reply_with_the_users_order_approves_what_it_was_waiting_for(env, monk
     async def asks(task, prompt, reporter) -> Outcome:
         reporter.session(task["id"], "s1")
         assert not reporter.cleared(task["id"], item(PUSH))
-        reporter.request_approval(task["id"], item(PUSH))
-        await asyncio.sleep(0.2)  # a later ask: a request of its own
+        await announced(reporter, reporter.request_approval(task["id"], item(PUSH)))  # a later ask: a request of its own
         reporter.request_approval(task["id"], item("rm -rf build"))
         return Outcome("Merged; waiting to push.", "", 0.01)
 
@@ -191,7 +190,8 @@ def test_a_reply_with_the_users_order_approves_what_it_was_waiting_for(env, monk
         task = r.start("code_change", "ship it", "Merge it", "other")
         await settle(r)
         push, delete = r.approvals()
-        await asyncio.sleep(0.2)  # announced
+        await announced(r, push)
+        await announced(r, delete)
         r.reply(task["id"], "Go ahead and push it.", order="Okay, merge and push.")
         await settle(r)
         return r, task, push, delete, r.store.get(task["id"])
@@ -339,7 +339,7 @@ def test_withdrawn_requests_the_order_didnt_cover_are_still_withdrawn(env, monke
         task = r.start("code_change", "ship it", "Ship it", "other")
         await settle(r)
         [pending] = r.approvals()
-        await asyncio.sleep(0.2)
+        await announced(r, pending)
         r.reply(task["id"], "Just push.", order="Just push it.")
         await settle(r)
         return r, pending
