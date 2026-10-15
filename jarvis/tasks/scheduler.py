@@ -4,8 +4,9 @@
   task      background task on SCHEDULE_MODEL; ends with a NOTEPAD: line kept for the next run. only_changes runs
             judged "nothing new" by `read` stay silent. Transient failures retry after RETRY_MINUTES; a failure
             kind is announced once until a run succeeds
-  watch     task probe (model judges met via `read`) or model-free url/gmail/chat probe. Met: announce and finish;
-            not yet: silent. Expiry unmet is announced once
+  watch     task probe (model judges met via `read`), model-free url probe, or tool probe (jarvis.tasks.tool_watch:
+            a reading tool called with no model; only something new reaches a model). Met: announce and finish; not
+            yet: silent. Expiry unmet is announced once
   command   model-free command task with no slot; the runner announces, summarises and (auto_fix) fixes; with
             only_changes a successful run that prints nothing stays silent
   resume    carry on stopped tasks; todo: start tasks for to-do items (jarvis.tasks.unattended). Run in the background
@@ -21,24 +22,23 @@ import logging
 import re
 import shutil
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 from datetime import datetime
-from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
 
 from jarvis.brain import retry, usage
 from jarvis.core import claude_logins, profile
 from jarvis.core.config import DATA_DIR, VERDICT_MODEL
 from jarvis.core.database import ACTIVE as TASK_ACTIVE, COMMAND
-from jarvis.tasks import hold, schedules
+from jarvis.tasks import hold, schedules, tool_watch
 
 log = logging.getLogger("jarvis.tasks.scheduler")
 TICK_SECONDS = 30
 CATCH_UP_HOURS = 2  # day-based runs missed by up to this long still run once
 LATE_SECONDS = 120  # a reminder later than this mentions its due time
 MAX_FAILS = 3  # consecutive failed watch checks before announcing (once)
-PROBE_TIMEOUT = 60
+PROBE_TIMEOUT = 120  # a tool probe may start a connection's server, then ask a model
 PAGE_BYTES = 2_000_000  # url probe read cap
 HIDDEN_DAYS, FINISHED_DAYS = 3, 30  # retention for hidden runs and finished jobs
 TEMP_DAYS = 7  # an ended task's temp folder is kept this long, for follow-ups
@@ -47,7 +47,6 @@ NOTEPAD = "NOTEPAD:"
 NOTEPAD_CHARS = 1500
 RETRY_MINUTES = (5, 15, 30)  # successive retry delays for transient task failures
 RUNS = retry.Policy(waits=tuple(m * 60 for m in RETRY_MINUTES))
-SNIPPET_WORDS = 12  # Chat message words quoted, in `spoken` only
 _NOTEPAD = re.compile(r"^[\W_]*NOTEPAD[\W_]*:\s*", re.IGNORECASE | re.MULTILINE)
 
 Notify = Callable[[str, str], Awaitable[object]]
@@ -180,33 +179,11 @@ class Found:
     met: bool
     text: str  # one sentence; when met, the notification text (lock screen)
     spoken: str = ""  # spoken instead of `text`; may quote people, so never notified or pushed
-    seen: set[str] | None = None  # chat: current message keys, stored as baseline on first check
+    seen: list[str] | None = None  # tool: keys of the items seen so far, the next check's baseline
 
 
 class ProbeFailed(RuntimeError):
     """Probe failure with a JARVIS-written message, safe to log and say."""
-
-
-async def each_account(read: Callable[[str], list[dict]]) -> list[dict]:
-    """Run `read(label)` for every connected Google account concurrently; ProbeFailed only if all fail."""
-    from ai_armory.toolsets.google.common import connected
-
-    from jarvis.tools import google  # configures AI Armory's Google toolsets with JARVIS's accounts
-
-    google.fresh()  # accounts added or removed, and the current profile name and time zone
-    labels = connected()
-    results = await asyncio.gather(*(asyncio.to_thread(read, label) for label in labels), return_exceptions=True)
-    found, failed = [], []
-    for label, result in zip(labels, results):
-        if isinstance(result, BaseException):
-            failed.append(f"{label} ({type(result).__name__})")
-        else:
-            found += result
-    if failed and not found:
-        raise ProbeFailed("every account failed: " + ", ".join(failed))
-    if failed:
-        log.warning("some Google accounts failed: %s", ", ".join(failed))
-    return found
 
 
 async def probe_url(job: dict) -> Found:
@@ -231,44 +208,52 @@ async def probe_url(job: dict) -> Found:
     return Found(True, f"{url} is up" + (f" and shows \"{expect}\"." if expect else "."))
 
 
-def _dated(date: str) -> float:
-    try:
-        return parsedate_to_datetime(date).timestamp()
-    except (TypeError, ValueError):
-        return 0.0
+def _clean(text: str) -> str:
+    return sentence(" ".join(str(text or "").split())[:300])
 
 
-async def probe_gmail(job: dict) -> Found:
-    """Met when mail matching the Gmail search arrived since the watch began."""
-    from ai_armory.toolsets.google.gmail import gmail_search
+async def probe_tool(job: dict) -> Found:
+    """Met when the tool's result has something new (an item not seen at an earlier check and not dated before the
+    watch began, containing `expect` if set) that a model, reading only that, finds is what the watch waits for. A
+    first check (also after the watch's tool or arguments change) sees only what's dated since then as new. New items
+    the model didn't read, or couldn't while Claude's usage limit is used up, stay new for the next check."""
+    value = await tool_watch.call(job["target"], schedules.arguments(job))
+    found = {tool_watch.key(i): i for i in tool_watch.items(value)}
+    checked, earlier = job["last_run"] or time.time(), schedules.baseline(job)
+    first = job["baseline"] is None
+    since = (job["updated"] if first else job["created"]) - 60
+    known = set(earlier)
 
-    found = await each_account(lambda label: gmail_search(job["target"], account=label, max_results=10))
-    new = sorted((m for m in found if _dated(m.get("date") or "") > job["created"] - 60),
-                 key=lambda m: _dated(m["date"]))
+    def is_new(k: str, item) -> bool:
+        at = tool_watch.dated(item)
+        if at is not None and at < since:
+            return False  # old, even if changed since (an email marked read)
+        return (at is not None and at <= checked + 60) if first else k not in known
+
+    new = {k: i for k, i in found.items() if is_new(k, i)}
+    if expect := (job["expect"] or "").lower():
+        new = {k: i for k, i in new.items() if expect in tool_watch.words(i).lower()}
+
+    def seen(unread: Collection[str] = ()) -> list[str]:
+        """Keys to know next time: this result's (but `unread`), then earlier ones still kept (an account that failed
+        this once doesn't make its items new again next time)."""
+        keys = [k for k in found if k not in unread]
+        return (keys + [k for k in earlier if k not in found])[:tool_watch.MAX_SEEN]
+
     if not new:
-        return Found(False, f"No new mail matching it ({len(found)} older).")
-    name, address = parseaddr(new[-1]["from"])
-    subject = " ".join((new[-1]["subject"] or "no subject").split())[:100]
-    return Found(True, sentence(f"New email from {name or address or 'someone'}: {subject}"))
+        return Found(False, f"Nothing new ({len(found)} there already).", seen=seen())
+    if wait := usage.hold_until(checked):
+        return Found(False, f"Something new turned up; it's read once Claude's usage limit resets "
+                            f"{usage.when(wait, checked)}.")
+    if not (verdict := await tool_watch.judge(job, list(new.values()))):
+        raise ProbeFailed("something new turned up, but reading it failed")
+    notice = _clean(verdict["notice"]) or "Something new turned up."
+    if verdict["met"]:
+        return Found(True, notice, _clean(verdict.get("spoken")), seen())
+    return Found(False, f"Something new, not it yet: {notice}", seen=seen(set(list(new)[tool_watch.SHOWN_ITEMS:])))
 
 
-async def probe_chat(job: dict) -> Found:
-    """Met when someone matching the target DMs or @mentions the user on Chat after the first check (the baseline)."""
-    from ai_armory.toolsets.google.chat import first_words, news
-
-    who = job["target"].lower()
-    mine = [n for n in await each_account(news)
-            if who in (n["from"] or "").lower() or (n["kind"] == "dm" and who in (n["name"] or "").lower())]
-    keys = {f"{n['account']}:{n['latest']}" for n in mine}
-    new = [n for n in mine if f"{n['account']}:{n['latest']}" not in schedules.baseline(job)]
-    if job["baseline"] is None or not new:
-        return Found(False, f"Nothing new from {job['target']} on Chat.", seen=keys)
-    n = new[0]
-    text = f"{n['from']} wrote to you on Chat." if n["kind"] == "dm" else f"{n['from']} mentioned you in {n['name']} on Chat."
-    return Found(True, text, sentence(f"{text[:-1]}: {first_words(n['text'], SNIPPET_WORDS)}"), keys)
-
-
-PROBES = {"url": probe_url, "gmail": probe_gmail, "chat": probe_chat}
+PROBES = {"url": probe_url, "tool": probe_tool}
 
 
 # ── Scheduler ───────────────────────────────────────────────────
@@ -433,12 +418,14 @@ class Scheduler:
                 await self._alert(job, said)
             return
         fields: dict = {"fails": 0, "last_result": found.text}
-        if found.seen is not None and job["baseline"] is None:
-            fields["baseline"] = json.dumps(sorted(found.seen))
+        if found.seen is not None:
+            fields["baseline"] = json.dumps(found.seen)
         if found.met:
             fields |= {"status": schedules.DONE, "next_run": None}
         current = schedules.get(job["id"])
         if not current or current["status"] not in schedules.LIVE:  # cancelled meanwhile
+            return
+        if any(current[k] != job[k] for k in ("target", "arguments", "expect")):  # changed meanwhile: checks afresh
             return
         schedules.update(job["id"], **fields)
         if found.met:

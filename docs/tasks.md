@@ -287,7 +287,8 @@ The runner runs what you schedule by voice, once or on a repeat. Jobs live in `d
 
 - **Notepad:** each run keeps one for the next, so "only tell me if something's new" stays silent otherwise.
 - **Watches** end after **24 h** unless you say otherwise, **a week** at most.
-  - A **page** (answers, optionally showing some text), **Gmail** (matching mail arrives) or **Chat** (someone writes) is checked with **no model**, every 5–10 minutes.
+  - A **page** (answers, optionally showing some text) is checked with **no model**, every 5 minutes.
+  - A **tool** watch calls one reading tool, of your accounts or a connection, every 10 minutes with **no model**: Gmail (a search, for matching mail), Chat (unread messages naming someone), or any connection's reading tool (say, a repo's issues). Only when its result has something new does a short model call read the new part and say it, if it's what you're waiting for.
   - Anything else is a **task-checked** watch every 15 minutes, at most five at once.
 - **Managing:** "what's scheduled?", "move the morning brief to half past eight", "pause it", "cancel the deploy watch". The app's **Tasks** page lists jobs with their next run and recent runs.
 
@@ -327,7 +328,7 @@ JARVIS watches **nothing on its own**: no mail, calendar, Chat or other service 
 |:-:|---|---|---|
 | 📜 | **A small script, run as a command** | No model until the script prints something; then one short summary | Anything a script can read: a page, an API, a feed, a file |
 | 🛠️ | **A scheduled task, "only if something's new"** | A model run each time | What needs judgement, or your mail, calendar and other accounts |
-| 👀 | **A watch** | Cheap for a page, Gmail or Chat; a task otherwise | One thing you're waiting for: said once, then it stops |
+| 👀 | **A watch** | Cheap for a page or a reading tool (Gmail, Chat, a connection); a task otherwise | One thing you're waiting for: said once, then it stops |
 
 The script prints only what's new, keeping its own note of what it has seen; a run that prints nothing stays silent and out of the task list. Every monitor is an ordinary scheduled job, listed on the app's **Tasks** page, and changed or cancelled like any other.
 
