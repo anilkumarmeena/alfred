@@ -646,7 +646,8 @@ Monitors are ordinary scheduled jobs, listed with the rest in the panel's Tasks 
 - They become a hidden `review` task's suggested edits.
 - **Routine additions apply at once** (shown in the bell). Rewrites, deletions, to-dos and anything flagged by the scan **wait for a yes**.
 - Only the user's own words count as evidence.
-- Lasting plans are saved **as plans** ("Alex plans to..."), never as done until the user confirms it; concrete jobs for later go on the to-do list.
+- Lasting plans are saved **as plans** ("Alex plans to..."), never as done until the user confirms it; concrete jobs for later go on the to-do list. Work that was only asked for, scheduled or started counts as a plan, and what's running or in progress right now is left to the task, schedule and to-do lists.
+- A new fact saying work is finished (built, merged, fixed, now has...: `data_edits.DONE_WORDS`) **waits for a yes**, in case it was only a plan.
 
 ## 🌐 Web server, control panel and push
 

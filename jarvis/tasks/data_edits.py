@@ -3,10 +3,12 @@
 Edits are validated by `check`, stored numbered on the task's `edits` column, and applied by `apply`.
   ACTIONS  mirror voice tools: project_register/update, todo_add/done/reword, remember, forget; `edit` replaces one
            exact span of memory.md within its size limits
-  LEARNED  learning review only: `skill` (always needs a yes), `vocabulary` (auto-applied), `follow_up` (needs a yes)
+  LEARNED  learning review only: `skill` (always needs a yes), `vocabulary` (auto-applied), `follow_up` (needs a yes);
+           a review's fact or line rewrite saying work is finished (DONE_WORDS) needs a yes too, in case it was a plan
 Every text field is scanned for hidden instructions; anything suspicious is `flagged`, which forces needs_yes.
 """
 
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -41,6 +43,10 @@ LEARNED: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 LISTS = ("aliases", "heard_as")  # list-of-text fields
 FILES = ("memory.md",)
 PENDING, APPLIED, DISMISSED, FAILED = "pending", "applied", "dismissed", "failed"
+# Wording that says some work is finished: from a learning review it may be a plan saved as done, so it needs a yes
+DONE_WORDS = re.compile(r"\b(?:built|finished|completed|merged|shipped|deployed|launched|released|implemented"
+                        r"|(?:is|are|was|were|has been|have been) (?:done|fixed|added|set up|installed|created)"
+                        r"|now (?:has|have|supports|runs|works|is (?:live|ready|working|running)))\b", re.IGNORECASE)
 
 
 def _file(name: str) -> Path:
@@ -168,6 +174,10 @@ def needs_yes(edit: dict, kind: str) -> str | None:
         return "it comes from a research task, which reads mail and web pages that could be steering it"
     if kind == "review" and edit["action"] in ("todo_add", "todo_done", "follow_up"):
         return "the learning review guessed it from the conversation, unasked"
+    said = edit.get("fact") or edit.get("new") or ""
+    if kind == "review" and edit["action"] in ("remember", "edit") and DONE_WORDS.search(said):
+        return (f"it says some work is finished, and only {profile.name()} can confirm that: it may have only been "
+                "planned, asked for or started")
     if edit["action"] == "forget":
         return "it deletes lines from long-term memory"
     if edit["action"] == "todo_reword":

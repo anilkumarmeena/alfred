@@ -5,7 +5,8 @@ A conversation is over when the voice agent reports a hang-up (POST /learn) and 
 reconnect, or after LEARNING_QUIET_MINUTES of silence. The mark moves before saving, so nothing is reviewed twice;
 on first run the existing log is only marked read. Too few user words: skipped without a call.
 One tool-less LEARNING_MODEL call returns JSON suggestions, saved as a hidden `review` task's edits (data_edits
-checks). Routine ones (new facts, misheard words) apply at once; rewrites, deletions, to-dos and skills need a yes.
+checks). Routine ones (new facts, misheard words) apply at once; rewrites, deletions, to-dos, skills and facts
+saying work is finished need a yes.
 Recent requests (HISTORY_DAYS) let it propose skills for repeated workflows. JARVIS_LEARNING=off disables it.
 """
 
