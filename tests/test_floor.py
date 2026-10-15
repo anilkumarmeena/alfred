@@ -130,7 +130,7 @@ def test_the_users_words_hold_announcements_until_the_reply_starts():
     floor = Floor(clock)
     floor.heard("   ")  # blank: nothing heard
     assert floor.held("listening", "listening") is None
-    floor.heard("Sure, go ahead.")  # the turn detector hasn't decided they've finished
+    floor.heard("Sure, go ahead.")  # their turn hasn't ended yet
     assert floor.held("listening", "listening")
     floor.turn()
     assert floor.held("listening", "listening") is None
@@ -220,7 +220,7 @@ def test_an_email_announcement_waits_for_the_answer_to_a_question_and_the_reply_
         stt.hearing = 0
         floor.heard("Yes, do both.")
         await settle()
-        assert session.said == []  # the turn detector hasn't handed it to the brain yet
+        assert session.said == []  # the turn hasn't ended, so the brain doesn't have it yet
         floor.turn()
         session.agent_state = "thinking"
         await settle()

@@ -1,4 +1,4 @@
-"""Short timing judgements on a fast model from a warm CLI session (end of turn, when to speak up).
+"""Short timing judgements on a fast model from a warm CLI session (model routing, when to speak up).
 
 Unlike jarvis.safety.consent (one session per check), these judge only timing, never permission, so one session
 serves many calls. It's replaced after USES calls and after any failure or timeout. Each message stands alone.

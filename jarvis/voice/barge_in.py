@@ -209,10 +209,6 @@ class BargeInVAD(vad.VAD):
     def provider(self) -> str:
         return self._inner.provider
 
-    @property
-    def min_silence_duration(self) -> float | None:  # session checks it against the turn detector
-        return getattr(self._inner, "min_silence_duration", None)
-
     def stream(self) -> "BargeInStream":
         return BargeInStream(self, self._inner.stream(), self._gate)
 

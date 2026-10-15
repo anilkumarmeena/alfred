@@ -308,13 +308,11 @@ TTS_MEMORY_ARENA = _flag("JARVIS_TTS_MEMORY_ARENA", False)
 VOICE_MALLOC_LARGE_CACHE = _flag("JARVIS_VOICE_MALLOC_LARGE_CACHE", False)
 # Minutes between voice-process memory logs (jarvis.voice.ram); 0 = never
 VOICE_MEMORY_LOG_MINUTES = max(0.0, float(os.environ.get("JARVIS_VOICE_MEMORY_LOG_MINUTES", "") or "10"))
-# End-of-turn silence in seconds (from last speech, including Whisper time): min when the turn sounds finished, max
-# when it doesn't. Starting values; each user's delays adapt (jarvis.voice.turn).
-TURN_MIN_DELAY = float(os.environ.get("JARVIS_TURN_MIN_DELAY", "") or "0.9")
-TURN_MAX_DELAY = float(os.environ.get("JARVIS_TURN_MAX_DELAY", "") or "4.0")
-# A fast model breaks ties when the turn detector is unsure; detector wins on timeout or when off
-TURN_JUDGE = _flag("JARVIS_TURN_JUDGE", True)
-TURN_JUDGE_SECONDS = _number(os.environ.get("JARVIS_TURN_JUDGE_SECONDS", ""), 2.0, 0.3, 6.0)
+# Silence in seconds after the last speech that ends a turn. Counted from when speech stopped, so the VAD's silence
+# (VAD_MIN_SILENCE, its floor) and Whisper's time fall inside it; the turn also waits for Whisper's words
+# (jarvis.voice.turn.Transcribed). Lower answers sooner but cuts off more mid-thought pauses (a turn that goes on
+# before the reply is heard is answered together with the next).
+TURN_SILENCE = _number(os.environ.get("JARVIS_TURN_SILENCE", ""), 0.8, 0.3, 5.0)
 # Below this average log-prob a turn is marked unsure, so the brain may confirm its guess
 WHISPER_UNSURE_LOGPROB = _number(os.environ.get("JARVIS_WHISPER_UNSURE_LOGPROB", ""), -1.0, -10.0, 0.0)
 # Silero VAD: speech needed to start an utterance and the probability threshold. LiveKit's 0.05 s default lets a

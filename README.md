@@ -49,7 +49,7 @@ Background tasks, a scheduler, the monitors you ask for and a learning review ke
 <td width="50%" valign="top">
 
 **🗣️ Voice**<br>
-Whisper in (MLX on Apple silicon, faster-whisper elsewhere), Kokoro out. A turn detector decides when you've finished; a speech gate and voiceprint make sure only **you** get answered.
+Whisper in (MLX on Apple silicon, faster-whisper elsewhere), Kokoro out. A short silence ends your turn; a speech gate and voiceprint make sure only **you** get answered.
 
 </td>
 <td width="50%" valign="top">

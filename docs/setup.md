@@ -204,10 +204,10 @@ make install
 | 📡 | `make livekit-bin` | **Linux:** the same, as the pinned **1.13.7** release (amd64 or arm64), **sha256-checked**, into `~/.local/bin`; no sudo. **macOS without Homebrew:** built from the pinned 1.13.7 source with a pinned Go, both **sha256-checked** |
 | ⚡ | `make uv-bin` | **uv**, pinned, into `~/.local/bin`; only if none is found, no sudo |
 | 🐍 | `uv sync` | Python 3.12+ and every dependency, into `.venv` |
-| 🧠 | `make models` | Speech, VAD, turn, noise and speaker models for this machine (below) |
+| 🧠 | `make models` | Speech, VAD, noise and speaker models for this machine (below) |
 | 🌐 | `make web-build` | `npm install` (once) and a build into `web/dist` |
 
-`make models` fetches **Kokoro** (TTS), **Whisper**, **Silero VAD**, the **turn detector**, **DeepFilterNet 3** (noise filter) and **WeSpeaker ResNet34** (speaker check) into `models/` and the Hugging Face cache. The noise-filter and speaker models are pinned and **checked by hash**. Which Whisper depends on the machine:
+`make models` fetches **Kokoro** (TTS), **Whisper**, **Silero VAD**, **DeepFilterNet 3** (noise filter) and **WeSpeaker ResNet34** (speaker check) into `models/` and the Hugging Face cache. The noise-filter and speaker models are pinned and **checked by hash**. Which Whisper depends on the machine:
 
 | | Whisper on | Live voice | Recordings |
 |:-:|---|---|---|

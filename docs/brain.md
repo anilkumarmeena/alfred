@@ -228,7 +228,7 @@ The system prompt is built **once per session** and then **frozen** so the promp
 | Lookup subagent | `JARVIS_LOOKUP_MODEL` | `FAST_MODEL` (Haiku) | `cli.py` |
 | Side jobs | `JARVIS_SIDE_MODEL` | `HELPER_MODEL` (`claude-sonnet-5`) | `side.py` |
 | Quick routing (light turns) | `JARVIS_VOICE_QUICK_MODEL` | **off** | `route.py` |
-| Router / turn-end / timing judges | — | `FAST_MODEL` (`claude-haiku-4-5-20251001`) | `quick.py` |
+| Router / timing judges | — | `FAST_MODEL` (`claude-haiku-4-5-20251001`) | `quick.py` |
 | Consent (unclear yes/no) | `JARVIS_CONSENT_MODEL` | `FAST_MODEL` | `safety/consent.py` |
 
 **Automatic step-down** (`usage.available`): when a family's **weekly** window is used up, the brain drops a tier for new sessions and turns.
@@ -330,7 +330,7 @@ sequenceDiagram
 - **One warm session** on Haiku, one call at a time, each message standalone.
 - **Replaced** after 30 calls, any failure, or a 20 s hang.
 - A caller that gives up never leaves the session mid-answer: sent calls drain in the background, queued ones are skipped.
-- Used by: the router, end-of-turn judgement, "when to speak up". **Never** for permission decisions (consent uses its own session per check).
+- Used by: the router, "when to speak up". **Never** for permission decisions (consent uses its own session per check).
 
 </details>
 
@@ -404,7 +404,7 @@ Things I noticed reading the code. **None of them is a confirmed bug.** They're 
 |:-:|---|---|
 | 1 | 🔁 **Context after a CLI restart** | A failed interrupt or `ClaudeSDKError` calls `close()`; the next turn opens a **fresh session** whose only memory of this call is `recent.md` (6,000 chars). Long calls can lose earlier context. |
 | 2 | 🧊 **Frozen prompt** | Memory written mid-session (`remember`) isn't in the system prompt until the next session. The model knows because it made the call, but a restart (item 1) brings back only what's on disk. |
-| 3 | 🤖 **Fast model is a generation behind** | `FAST_MODEL = claude-haiku-4-5-20251001` while main is Opus 5.5. Router, turn-end, lookups and consent all run on it. Worth checking whether Haiku 5.5 is faster or better here. |
+| 3 | 🤖 **Fast model is a generation behind** | `FAST_MODEL = claude-haiku-4-5-20251001` while main is Opus 5.5. Router, lookups and consent all run on it. Worth checking whether Haiku 5.5 is faster or better here. |
 | 4 | ⚡ **Routing is off by default** | The doc says the gain depends on warm prompt caches. There's a `model` field in the timing log to measure it, but no default decision yet. |
 | 5 | 🧩 **One implementation** | `VoiceBrain` is a protocol with one implementation, and `make_brain()` hardcodes `CliBrain`. Fine today; it matters if a second channel (chat, Telegram) or a non-CLI brain is planned. |
 | 6 | 🧠 **Memory caps** | 2,000 + 3,000 chars is small and keeps the prompt cheap, but there's **no retrieval** beyond `conversation_search` over day logs. Topic memory or embeddings would be a bigger design step. |

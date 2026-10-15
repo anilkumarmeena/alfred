@@ -41,18 +41,16 @@ def _waiting(n: int, more: str = "") -> str:
 class VoiceSession:
     """One call.
 
-    `talk` defaults to the current conversation. Optional parts: `stt` (WhisperSTT), `turns` (end-of-turn decisions),
-    `pacing` (per-user pace), `router` (lighter model for simple turns), `moment` (when to raise things).
-    `runner` is the task runner client."""
+    `talk` defaults to the current conversation. Optional parts: `stt` (WhisperSTT), `pacing` (per-user pace),
+    `router` (lighter model for simple turns), `moment` (when to raise things). `runner` is the task runner client."""
 
     def __init__(self, brain: VoiceBrain, talk: conversation.Conversation | None = None, *, stt=None,
-                 turns: turn.JudgedTurns | None = None, pacing: turn.Pacing | None = None, router: Router | None = None,
-                 moment: Moment | None = None, timings: timing.Timings | None = None, floor: Floor | None = None,
+                 pacing: turn.Pacing | None = None, router: Router | None = None, moment: Moment | None = None,
+                 timings: timing.Timings | None = None, floor: Floor | None = None,
                  push: Callable[[str], Awaitable[object]] | None = None, runner=client) -> None:
         self.brain = brain
         self.talk = talk or conversation.current()
         self.stt = stt
-        self.turns = turns
         self.pacing = pacing
         self.router = router
         self.moment = moment
@@ -64,6 +62,7 @@ class VoiceSession:
         # background_lookup jobs, announced when done
         self.lookups = side.Jobs(lambda text, note: self.announcements.add(Announcement(text, note)))
         self._hints: list[str] = []  # how the next turn was heard, for the brain
+        self._words: list[str] = []  # transcripts of the turn in progress
         self._last_words = ""
         self._loops: list[asyncio.Task] = []
         self._greeted: dict | None = None  # the task whose whole update the greeting led with
@@ -72,8 +71,7 @@ class VoiceSession:
     @property
     def _quick_models(self) -> list:
         """Fast-model sessions, opened and closed with the call."""
-        judge = self.turns.judge if self.turns is not None else None
-        return [checker.quick for checker in (judge, self.router, self.moment) if checker is not None]
+        return [checker.quick for checker in (self.router, self.moment) if checker is not None]
 
     def open(self) -> None:
         """Before the room connects: expose speaker check and lookups to tools; warm the fast-model sessions."""
@@ -140,27 +138,25 @@ class VoiceSession:
     def transcribed(self, transcript: str) -> None:
         """A final transcript; the turn may not have ended yet."""
         self.floor.heard(transcript)
-        if self.turns is not None:
-            self.turns.heard(transcript)
+        if transcript.strip():
+            self._words.append(transcript.strip())
             if self.router is not None:
-                self.router.guess(" ".join(self.turns.words))  # pick the model while waiting for the turn end
+                self.router.guess(" ".join(self._words))  # pick the model while waiting for the turn end
 
     def completed(self, said: str, metrics) -> None:
-        """User turn ended: log how and by whom, and queue hints on how it was heard for the brain."""
-        how = self.turns.committed() if self.turns is not None else {}
+        """User turn ended: log by whom, and queue hints on how it was heard for the brain."""
+        self._words = []
         who, logprob = turn.clips_heard(self.stt.take_clips() if self.stt is not None else [])
-        how |= {"speaker": who} | ({"logprob": round(logprob, 3)} if logprob is not None else {})
+        how = {"speaker": who} | ({"logprob": round(logprob, 3)} if logprob is not None else {})
         cut = self.timings.heard(said, metrics, how)
         if self.pacing is not None:
             self.pacing.use(who)
             self._hints = self.pacing.hints(logprob, self._last_words if cut else None)
         self._last_words = said
 
-    def spoke(self, text: str, metrics, interrupted: bool) -> None:
-        """JARVIS finished speaking `text`; `metrics` are LiveKit's."""
+    def spoke(self, metrics, interrupted: bool) -> None:
+        """JARVIS finished speaking; `metrics` are LiveKit's."""
         self.timings.spoke(metrics, interrupted)
-        if self.turns is not None:
-            self.turns.said(text)
 
     async def respond(self, text: str | None) -> AsyncIterator[str]:
         """Timed reply to a user turn."""
