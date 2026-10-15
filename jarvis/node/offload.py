@@ -740,7 +740,7 @@ class Offload:
                 if k != "nonce_hash"}
 
     async def _propose(self, node: int, body: dict) -> dict:
-        return self.runner.propose(self._own(node, body["task"])["id"], dict(body.get("args") or {}))
+        return await self.runner.propose(self._own(node, body["task"])["id"], dict(body.get("args") or {}))
 
     async def _access(self, node: int, body: dict) -> dict:
         task = self._own(node, body["task"])

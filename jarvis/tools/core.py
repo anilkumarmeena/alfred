@@ -111,14 +111,16 @@ def todo_list() -> str:
 @tool(
     "todo_add",
     "Add an item to the end of the user's to-do list. Use this, never remember, for anything the user wants "
-    "to do, build or look into later: to-dos go on the list, never into memory.",
+    "to do, build or look into later: to-dos go on the list, never into memory. An item the list already has isn't "
+    "added twice: an open one is kept, taking in any new detail, and a done one is put back on the list; the reply "
+    "says which item it matched, so tell the user.",
     {"item": {"type": "string", "description": "One self-contained sentence."}},
     ["item"],
     changes=True,
     screened=False,
 )
-def todo_add(item: str) -> str:
-    return todo.add(vetted(item, "the to-do"))
+async def todo_add(item: str) -> str:
+    return await todo.add_new(vetted(item, "the to-do"), reopen=True)
 
 
 @tool(

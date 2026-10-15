@@ -4,10 +4,8 @@ Covers keeping, applying and dismissing suggestions (POST /tasks/ID/edits), lear
 hidden review task's edits, and the to-do changes a finished task makes.
 """
 
-import asyncio
-
 from jarvis.core.database import edits
-from jarvis.state import activity as bell, memory
+from jarvis.state import activity as bell, memory, todo
 from jarvis.tasks import announce, data_edits, goal, learning
 from jarvis.tasks.runner_base import RunnerBase
 
@@ -18,15 +16,18 @@ LEARNED_REPORT = "It read our last conversation for what's worth keeping in memo
 class TaskEdits(RunnerBase):
     """Suggested data-file edits: propose, apply/dismiss, learning reviews, to-do settling."""
 
-    def propose(self, task_id: int, args: dict, needs_yes: str | None = None) -> dict:
+    async def propose(self, task_id: int, args: dict, needs_yes: str | None = None) -> dict:
         """Record an edit the task suggests; ValueError (shown to the task) if unusable.
 
-        `needs_yes` forces a user approval reason beyond what data_edits.needs_yes decides.
+        `needs_yes` forces a user approval reason beyond what data_edits.needs_yes decides. A to-do the list already
+        has is refused, or suggested as a rewording of it when it adds detail.
         """
         task = self.store.get(task_id)
         if len(edits(task)) >= data_edits.MAX_EDITS:
             raise ValueError(f"A task can suggest at most {data_edits.MAX_EDITS} edits; list any others in your summary.")
         edit = data_edits.check(args, task["kind"])
+        if edit["action"] == "todo_add" and (found := await todo.repeat_of(edit["item"])):
+            edit = _merged(edit, found, task["kind"])
         if why := needs_yes or data_edits.needs_yes(edit, task["kind"]):
             edit["needs_yes"] = why
         kept = self.store.add_edit(task_id, edit)
@@ -56,7 +57,7 @@ class TaskEdits(RunnerBase):
                     edit["status"], edit["result"] = data_edits.DISMISSED, "dismissed"
                 else:
                     try:
-                        edit["result"] = await asyncio.to_thread(data_edits.apply, edit)
+                        edit["result"] = await data_edits.apply(edit)
                         edit["status"] = data_edits.APPLIED
                     except (ValueError, OSError) as e:  # memory.Full message kept whole: it lists facts to make room
                         edit["status"], edit["result"] = data_edits.FAILED, str(e) if isinstance(e, memory.Full) else str(e)[:300]
@@ -74,7 +75,7 @@ class TaskEdits(RunnerBase):
         self.store.log(task_id, "start", about)
         for args in suggested:
             try:
-                self.propose(task_id, args)
+                await self.propose(task_id, args)
             except ValueError as e:
                 self.store.log(task_id, "edit", f"left out a suggestion: {e}"[:300])
         if routine := [e["n"] for e in edits(self.store.get(task_id)) if not e.get("needs_yes")]:
@@ -103,7 +104,7 @@ class TaskEdits(RunnerBase):
         done = []
         for change in changes:
             try:
-                edit = self.propose(task["id"], change.edit, change.needs_yes)
+                edit = await self.propose(task["id"], change.edit, change.needs_yes)
             except ValueError as e:
                 self.store.log(task["id"], "edit", f"left out a to-do edit: {e}"[:300])
                 continue
@@ -112,3 +113,15 @@ class TaskEdits(RunnerBase):
                 if kept[edit["n"] - 1]["status"] == data_edits.APPLIED:
                     done.append(f"ticked off your to-do \"{edit['text']}\"")
         return done
+
+
+def _merged(edit: dict, found: todo.Repeat, kind: str) -> dict:
+    """In place of a todo_add repeating `found`: a todo_reword taking in its new detail; else ValueError naming it."""
+    old = found.item
+    if old["done"]:
+        raise ValueError(f"{todo.repeated(found)}. If part of it is still to do, suggest only that part.")
+    if not found.merged:
+        raise ValueError(f"{todo.repeated(found)}.")
+    reword = data_edits.check({"action": "todo_reword", "text": old["text"], "item": found.merged,
+                               "reason": f"It repeats this to-do, adding detail. {edit['reason']}"}, kind)
+    return reword | ({"flagged": edit["flagged"]} if edit.get("flagged") else {})

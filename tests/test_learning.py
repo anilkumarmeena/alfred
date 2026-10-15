@@ -364,6 +364,14 @@ def test_routine_suggestions_are_applied_at_once_and_quietly(data):
     assert bell == ["Learned from our conversation: save to memory, under About Alex: Alex uses Zed for editing"]
 
 
+def test_a_to_do_the_list_already_has_is_left_out_silently(data):
+    todo.add("Try Zed's vim mode.")
+    r, task, events, _ = run_learned([TODO])
+    assert edits(task) == [] and events == [] and todo.read().count("Zed") == 1
+    assert "left out a suggestion: it's already on the to-do list as 'Try Zed's vim mode.'" in str(
+        r.store.history(task["id"]))
+
+
 def test_riskier_suggestions_wait_for_a_yes_and_are_said_without_a_push(data):
     update = {"action": "edit", "file": "memory.md", "old": "- Alex prefers short answers (2026-09-01)",
               "new": f"- Alex prefers short, plain answers ({TODAY})", "reason": "Said so."}

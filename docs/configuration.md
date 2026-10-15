@@ -330,6 +330,7 @@ Quiet hours are a [preference](#-changed-in-the-app) (`JARVIS_QUIET_HOURS`, set 
 | `JARVIS_LEARNING_MODEL` | Haiku | Its one call per conversation |
 | `JARVIS_LEARNING_QUIET_MINUTES` | `10` | Quiet minutes after which a conversation counts as over |
 | `JARVIS_SKILL_REVIEW_MODEL` | Sonnet | Reviews an installed [skill](integrations.md#-skills)'s scripts |
+| `JARVIS_TODO_MATCH`<br>`JARVIS_TODO_MATCH_MODEL`<br>`JARVIS_TODO_MATCH_SECONDS` | `on`<br>Haiku<br>`8` | Judge whether a new to-do repeats one [on the list](tasks.md#-to-do-list) that shares most of its words; off, or on failure, only the same wording counts |
 
 ## 🔔 Notifications
 

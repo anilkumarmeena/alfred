@@ -184,7 +184,7 @@ def test_a_learned_word_is_checked_and_kept_only_with_unusual_mishearings(words)
     assert edit == {"action": "vocabulary", "word": "Priya", "heard_as": ["Pria"], "reason": "Alex spelt it out."}
     assert data_edits.needs_yes(edit, "review") is None
     assert data_edits.describe(edit) == "add Priya to the speech vocabulary (heard as Pria)"
-    assert data_edits.apply(edit) == "Added Priya to the vocabulary, heard as Pria."
+    assert asyncio.run(data_edits.apply(edit)) == "Added Priya to the vocabulary, heard as Pria."
     assert vocabulary.find(vocabulary.entries(), "Priya").learned
     with pytest.raises(ValueError, match="already in the vocabulary"):
         data_edits.check({"action": "vocabulary", "word": "priya", "heard_as": ["PRIA"], "reason": "Again."}, "review")

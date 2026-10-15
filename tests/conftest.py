@@ -22,6 +22,7 @@ os.environ["JARVIS_GOAL_LOOP"] = "0"  # test_goal enables it with a fake check
 os.environ["JARVIS_CONSENT"] = "0"  # test_consent fakes the model call
 os.environ["JARVIS_ANNOUNCE"] = "0"  # test_announce fakes the model call
 os.environ["JARVIS_INJECTION_CHECK"] = "0"  # test_injection fakes the check
+os.environ["JARVIS_TODO_MATCH"] = "0"  # test_todo fakes the model call
 
 # Must follow the env setup above: jarvis.core.config reads JARVIS_DATA_DIR on import
 from jarvis.core import config, credentials, logins, profile, transcribe, vault  # noqa: E402

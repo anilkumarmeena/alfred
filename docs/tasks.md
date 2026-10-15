@@ -121,6 +121,7 @@ To-dos live in the `todos` table of `data/tasks.db`, not in memory.
 
 - A **linked task**, once checked finished, ticks its item off, or JARVIS offers to reword the item to what's left.
 - A task started **without naming an item** is matched against your open items as it finishes; a clear match is **offered** for ticking off, never ticked unasked.
+- **No repeats.** An item already on the list, open or done, isn't added twice, whether you ask for it or a task or the [learning review](#-learning-review) suggests it. Same wording (ignoring case and punctuation) is a repeat; an item sharing most of its words with others goes to a quick model check (`JARVIS_TODO_MATCH`). An open repeat stays, taking in any new detail; a done one comes back on the list when you ask for it, and is refused when a task suggests it. JARVIS says which item it matched. What you type in the panel goes in as it is.
 
 ## 💻 Shell commands and long jobs
 

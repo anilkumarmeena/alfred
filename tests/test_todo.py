@@ -1,5 +1,7 @@
 """Tests for jarvis.state.todo: the to-do list in data/tasks.db."""
 
+import asyncio
+import json
 import sqlite3
 from datetime import date, datetime
 
@@ -82,3 +84,111 @@ def test_todo_tools_are_registered_and_say_the_list_is_theirs_alone():
     assert "through the todo tools" in tools.get("todo_list").description
     assert "never into memory" in tools.get("todo_add").description
     assert "never into memory" in tools.get("remember").description and "todo" not in persona.persona()
+
+
+# ── Repeats ─────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def judge(db, monkeypatch):
+    """The repeat check's model call, faked: set `judge.reply` (or an exception); `judge.asked` keeps what it saw."""
+    from jarvis.brain import sdk
+
+    class Judge:
+        reply: dict | Exception | None = {"same": None, "merged": ""}
+        asked: list[dict] = []
+
+    async def ask_json(prompt, schema, system_prompt, model, **options):
+        Judge.asked.append(json.loads(prompt))
+        assert "free of repeats" in system_prompt and options["timeout"] == todo.TODO_MATCH_SECONDS
+        if isinstance(Judge.reply, Exception):
+            raise Judge.reply
+        return Judge.reply, 0.0
+
+    Judge.asked = []
+    monkeypatch.setattr(todo, "TODO_MATCH_ENABLED", True)
+    monkeypatch.setattr(sdk, "ask_json", ask_json)
+    return Judge
+
+
+def add_new(item: str, reopen: bool = False) -> str:
+    return asyncio.run(todo.add_new(item, reopen))
+
+
+def test_an_item_worded_the_same_is_not_added_twice_and_the_model_isnt_asked(judge, db):
+    todo.add("Renew the domain.")
+    assert add_new("renew  the DOMAIN") == "Not added: it's already on the to-do list as 'Renew the domain.'."
+    assert rows(db) == [(1, "Renew the domain.", 0, 0)] and judge.asked == []
+
+
+def test_a_done_item_worded_the_same_is_reopened_by_voice_and_left_for_suggestions(judge, db):
+    todo.add("Renew the domain")
+    todo.done("domain")
+    assert add_new("Renew the domain") == f"Not added: it's already done (ticked off {TODAY}): 'Renew the domain'."
+    assert rows(db) == [(1, "Renew the domain", 1, 1)]
+    assert add_new("Renew the domain", reopen=True) == (f"Not added twice: it's already done (ticked off {TODAY}): "
+                                                        "'Renew the domain', so it's back on the list.")
+    assert rows(db) == [(1, "Renew the domain", 0, 0)]
+
+
+def test_an_item_like_others_goes_to_the_model_with_its_likeliest_lookalikes(judge, db):
+    for item in ("Paint the fence", "Plan the trip to the coast", "Book the train for the coast trip"):
+        todo.add(item)
+    todo.done("fence")
+    said = add_new("Book train tickets for the coast trip")
+    assert said == "Added to the to-do list: Book train tickets for the coast trip"
+    assert judge.asked == [{"new": "Book train tickets for the coast trip",
+                            "listed": [{"n": 1, "text": "Book the train for the coast trip", "state": "open"},
+                                       {"n": 2, "text": "Plan the trip to the coast", "state": "open"}]}]
+    judge.asked.clear()
+    add_new("Water the plants")  # shares nothing: no call
+    assert judge.asked == []
+
+
+def test_a_repeat_the_model_finds_is_skipped_or_takes_in_the_new_detail(judge, db):
+    todo.add("Second laptop support: run scheduled jobs there while the main computer is off")
+    judge.reply = {"same": 1, "merged": ""}
+    said = add_new("Second laptop support, still to build: scheduled jobs run there while the main computer is off")
+    assert said == ("Not added: it's already on the to-do list as 'Second laptop support: run scheduled jobs there "
+                    "while the main computer is off'.")
+    merged = "Second laptop support: run scheduled jobs there while the main computer is off, and pair it by login only"
+    judge.reply = {"same": 1, "merged": f" {merged} "}
+    said = add_new("Second laptop support: scheduled jobs while the main computer is off, pairing by login only")
+    assert said == ("Merged into the to-do already on the list, 'Second laptop support: run scheduled jobs there while "
+                    f"the main computer is off', which now reads: {merged}")
+    assert rows(db) == [(1, merged, 0, 0)]
+
+
+def test_a_merge_that_changes_nothing_or_points_nowhere_is_ignored(judge, db):
+    todo.add("Plan the trip to the coast")
+    judge.reply = {"same": 1, "merged": "plan the trip to the coast."}
+    assert add_new("Plan a coast trip") == "Not added: it's already on the to-do list as 'Plan the trip to the coast'."
+    judge.reply = {"same": 7, "merged": "Anything"}
+    assert add_new("Plan a coast trip") == "Added to the to-do list: Plan a coast trip"
+
+
+def test_a_failed_model_call_adds_the_item(judge, db):
+    todo.add("Plan the trip to the coast")
+    judge.reply = TimeoutError()
+    assert add_new("Plan a coast trip") == "Added to the to-do list: Plan a coast trip"
+    judge.reply = None  # a reply that wasn't JSON
+    assert add_new("Plan the coast trip") == "Added to the to-do list: Plan the coast trip"
+    assert len(rows(db)) == 3
+
+
+def test_with_the_check_off_only_the_same_wording_counts(judge, db, monkeypatch):
+    monkeypatch.setattr(todo, "TODO_MATCH_ENABLED", False)
+    todo.add("Plan the trip to the coast")
+    assert add_new("Plan a coast trip") == "Added to the to-do list: Plan a coast trip"
+    assert add_new("Plan a coast trip!").startswith("Not added") and judge.asked == []
+
+
+def test_the_voice_tool_reopens_a_done_repeat_and_says_so(judge, db):
+    todo.add("Plan the trip to the coast")
+    todo.done("coast")
+    judge.reply = {"same": 1, "merged": "Plan the trip to the coast, with a night by the sea"}
+    said = asyncio.run(core.todo_add("Plan a coast trip with a night by the sea"))
+    assert said == (f"Not added twice: it's already done (ticked off {TODAY}): 'Plan the trip to the coast', so it's "
+                    "back on the list, now reading: Plan the trip to the coast, with a night by the sea")
+    assert rows(db) == [(1, "Plan the trip to the coast, with a night by the sea", 0, 0)]
+    assert "isn't added twice" in tools.get("todo_add").description

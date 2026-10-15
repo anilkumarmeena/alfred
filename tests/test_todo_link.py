@@ -76,7 +76,7 @@ def test_a_reword_is_a_suggested_edit_put_to_the_user(listed):
     edit = data_edits.check({"action": "todo_reword", "text": "iPhone app", "item": "Ship the iPhone app", "reason": "x"})
     assert data_edits.describe(edit) == "reword the to-do matching 'iPhone app' as: Ship the iPhone app"
     assert data_edits.needs_yes(edit, "code_change") == "it rewords an item on the to-do list"
-    data_edits.apply(edit)
+    asyncio.run(data_edits.apply(edit))
     assert todo.get(2)["text"] == "Ship the iPhone app"
     assert "todo_reword" in data_edits.ACTIONS
 

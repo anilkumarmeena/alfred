@@ -269,6 +269,14 @@ LEARNING_ENABLED = _flag("JARVIS_LEARNING", True)
 LEARNING_MODEL = os.environ.get("JARVIS_LEARNING_MODEL", "") or FAST_MODEL
 LEARNING_QUIET_MINUTES = max(1, int(os.environ.get("JARVIS_LEARNING_QUIET_MINUTES", "") or "10"))
 
+# Repeated to-dos (jarvis.state.todo): a new item sharing most of its words with ones on the list goes to
+# TODO_MATCH_MODEL, which says whether it repeats one; on failure or after TODO_MATCH_SECONDS it's added. The voice
+# tool waits for it, so keep it short, though well above CLI startup time. JARVIS_TODO_MATCH=off = only items worded
+# the same count as repeats.
+TODO_MATCH_ENABLED = _flag("JARVIS_TODO_MATCH", True)
+TODO_MATCH_MODEL = os.environ.get("JARVIS_TODO_MATCH_MODEL", "") or FAST_MODEL
+TODO_MATCH_SECONDS = _number(os.environ.get("JARVIS_TODO_MATCH_SECONDS", ""), 8.0, 2.0, 30.0)
+
 # Skills (jarvis.skills): Claude Code SKILL.md folders. Scripts in installed skills are reviewed before enabling.
 SKILL_REVIEW_MODEL = os.environ.get("JARVIS_SKILL_REVIEW_MODEL", "") or HELPER_MODEL
 
