@@ -30,9 +30,6 @@ from jarvis.tasks.host_tools import few
 from jarvis.tasks.runner_base import RunnerBase
 
 log = logging.getLogger("jarvis.tasks.runner")
-# Excluded from task commits even if .gitignore misses them
-JUNK = [*(f"{d}/" for d in projects.CACHE_DIRS), "*.pyc", ".DS_Store"]
-PATHSPEC = ["--", ".", *(f":(exclude,glob)**/{p}" for p in JUNK)]
 # Skipped when snapshotting a non-git folder
 SNAPSHOT_SKIP = {".git", *projects.CACHE_DIRS}
 SQUASH_BODY = 1200  # characters of a task's summary kept in its squashed commit
@@ -139,7 +136,7 @@ async def commit_op(body: dict) -> dict:
     wt = body["worktree"]
     if not Path(wt).exists():
         return {"said": "worktree missing"}
-    await _git(wt, "add", "-A", *PATHSPEC)
+    await _git(wt, "add", "-A", *projects.PATHSPEC)
     if await _git(wt, "diff", "--cached", "--name-only"):
         subject = body["title"] if body["finished"] else f"{body['title']} (unfinished)"
         message = f"{subject}\n\n{str(body['summary'])[:3000]}".strip() + f"\n\nJARVIS-Task: {body['task']}"
@@ -170,7 +167,7 @@ async def merge_op(body: dict) -> dict:
     folder as it was and the branch kept. Once merged, it's too late: the cleanup finishes and it returns as usual."""
     task_id, name = body["task"], body["name"]
     repo, branch, wt = Path(body["repo"]), body["branch"], body.get("worktree")
-    if wt and Path(wt).exists() and await _git(wt, "status", "--porcelain", *PATHSPEC):
+    if wt and Path(wt).exists() and await _git(wt, "status", "--porcelain", *projects.PATHSPEC):
         raise ValueError(f"Task {task_id}'s worktree has changes that aren't committed to {branch}, so it wasn't merged.")
     into = await _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
     if into == "HEAD":

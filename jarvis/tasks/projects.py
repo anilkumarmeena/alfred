@@ -31,6 +31,9 @@ JARVIS_REPO = ROOT  # always worktree mode
 NO_GIT, NO_COMMITS, GIT = "none", "no commits", "repo"
 # Dependency/cache folders, never part of a task's work regardless of .gitignore
 CACHE_DIRS = ("node_modules", "venv", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".next")
+# What a task's commit takes in (git add -A): its folder, less what's excluded even if .gitignore misses it
+JUNK = [*(f"{d}/" for d in CACHE_DIRS), "*.pyc", ".DS_Store"]
+PATHSPEC = ["--", ".", *(f":(exclude,glob)**/{p}" for p in JUNK)]
 DEFAULT_GITIGNORE = "\n".join([
     ".DS_Store", ".env", ".env.*", "!.env.example", *(f"{d}/" for d in CACHE_DIRS),
     "*.pyc", "dist/", "build/", "coverage/", "*.log",

@@ -1,6 +1,7 @@
 """Tests for jarvis.tasks.merge_check: branch test failures block a self-merge unless pre-existing or worktree-only."""
 
 import asyncio
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -93,6 +94,71 @@ def test_a_branch_whose_worktree_is_gone_is_tested_in_a_checkout_made_for_it(jar
     assert seen == [(True, jarvis / ".venv")] and "its tests passing" in merged["spoken"]
     assert "merge-check" not in git(jarvis, "worktree", "list")
     assert list((env["tmp"] / "worktrees").glob("merge-check-*")) == []
+
+
+@pytest.fixture
+def collects(monkeypatch):
+    """Fake collection: the node ids the branch's suite has; records each pytest call's arguments."""
+    found = {"ids": [NEW, ENV_ONLY], "calls": []}
+
+    async def pytest_(folder, venv, *args):
+        found["calls"].append(args)
+        return 0, "\n".join(found["ids"]) + f"\n\n{len(found['ids'])} tests collected in 0.01s\n"
+
+    monkeypatch.setattr(merge_check, "_pytest", pytest_)
+    return found
+
+
+def test_a_branch_whose_exact_code_already_passed_merges_without_another_run(jarvis, suite, collects, monkeypatch):
+    r, task = run_worktree_task(monkeypatch, add_new_file, project="jarvis")
+    worktree = Path(task["worktree"])
+    tree = merge_check.code_tree(worktree)
+    assert tree == git(jarvis, "rev-parse", f"{task['branch']}^{{tree}}")  # what the task's commit took in
+    merge_check.record(worktree, tree, {NEW}, {ENV_ONLY})  # the task's own last run, in its worktree
+    suite["branch"] = {NEW}  # a run now would fail
+    merged = asyncio.run(r.merge(task["id"]))
+    assert "merged into main as one commit, its tests passing" in merged["spoken"]
+    assert suite["runs"] == [] and collects["calls"] == [("--collect-only",)]
+
+
+@pytest.mark.parametrize("ran, failed, collected", [
+    ({NEW}, {OLD}, [NEW]),  # a real failure
+    ({NEW}, set(), [NEW, OLD]),  # a test it didn't run
+    (set(), set(), [NEW]),  # nothing recorded
+])
+def test_a_branch_runs_the_suite_unless_every_test_it_has_passed_on_its_code(jarvis, suite, collects, monkeypatch,
+                                                                            ran, failed, collected):
+    r, task = run_worktree_task(monkeypatch, add_new_file, project="jarvis")
+    worktree = Path(task["worktree"])
+    merge_check.record(worktree, merge_check.code_tree(worktree), ran, failed)
+    collects["ids"] = collected
+    asyncio.run(r.merge(task["id"]))
+    assert suite["runs"] == [(worktree, [])]
+
+
+def test_a_pass_on_other_code_doesnt_count(jarvis, suite, collects, monkeypatch):
+    r, task = run_worktree_task(monkeypatch, add_new_file, project="jarvis")
+    worktree = Path(task["worktree"])
+    (worktree / "new.py").write_text("changed after the run\n")
+    tested = merge_check.code_tree(worktree)
+    merge_check.record(worktree, tested, {NEW, ENV_ONLY}, set())
+    git(worktree, "checkout", "new.py")  # the branch has the code as it was, not as tested
+    assert tested != merge_check.code_tree(worktree)
+    asyncio.run(r.merge(task["id"]))
+    assert suite["runs"] == [(worktree, [])]
+
+
+def test_a_part_of_the_suite_run_later_keeps_the_whole_runs_record(jarvis, monkeypatch):
+    _, task = run_worktree_task(monkeypatch, add_new_file, project="jarvis")
+    worktree = Path(task["worktree"])
+    tree = merge_check.code_tree(worktree)
+    stored = jarvis / ".git" / merge_check.RECORDS / f"{tree}.json"
+    merge_check.record(worktree, tree, {NEW, OLD}, set())
+    merge_check.record(worktree, tree, {NEW}, set())  # one file, after
+    merge_check.record(worktree, tree, set(), set())  # a collection only
+    assert json.loads(stored.read_text()) == {"ran": [NEW, OLD], "failed": []}
+    merge_check.record(worktree, tree, {NEW}, {OLD})  # the whole suite again
+    assert json.loads(stored.read_text()) == {"ran": [NEW], "failed": [OLD]}
 
 
 def test_other_projects_branches_merge_without_running_tests(env, suite, monkeypatch):

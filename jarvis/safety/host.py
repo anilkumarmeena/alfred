@@ -657,6 +657,7 @@ exit "$exit_code"
 RUNNING = "running"
 STOPPED = "stopped"
 STOP_GRACE = 5.0  # seconds between SIGTERM and SIGKILL
+JOB_POLL = 2.0  # seconds between checks on a running job
 
 
 def outcome(code: int) -> str:
@@ -684,7 +685,7 @@ class Jobs:
 
     def __init__(self, folder: Path, shell: tuple[str, ...] = SHELL, notify: bool = True, walls: bool = False) -> None:
         self.folder, self.shell, self.notify, self.walls = folder, shell, notify, walls
-        self.poll = 2.0  # seconds
+        self.poll = JOB_POLL
         self.grace = STOP_GRACE
         self._watchers: set[asyncio.Task] = set()
         self._procs: dict[int, subprocess.Popen] = {}  # jobs started here, so `stop` can reap them

@@ -63,6 +63,12 @@ def events(r: runner.Runner) -> asyncio.Queue:
     return q
 
 
+async def announced(r: runner.Runner, approval: dict) -> None:
+    """Wait until request `approval` has been put to the user (or settled first), its push sent."""
+    await until(lambda: (a := r.store.approval(approval["id"]))["announced"] or a["state"] != PENDING)
+    await asyncio.sleep(0.01)  # the push it starts in the background goes out
+
+
 def drained(q: asyncio.Queue) -> list[dict]:
     out = []
     while not q.empty():
@@ -81,7 +87,7 @@ def test_what_a_task_asks_at_once_is_one_request_announced_once(env, pushes):
         first = r.request_approval(task["id"], item())
         second = r.request_approval(task["id"], item("rm -rf build"))
         again = r.request_approval(task["id"], item())  # the same command twice is asked about once
-        await asyncio.sleep(0.2)
+        await announced(r, first)
         return r, task, first, second, again, drained(q)
 
     r, task, first, second, again, sent = asyncio.run(main())
@@ -105,7 +111,7 @@ def test_a_later_ask_is_a_new_request(env, pushes):
         r = runner.Runner()
         task = r.store.create("code_change", "build", "Build it", "other")
         first = r.request_approval(task["id"], item())
-        await asyncio.sleep(0.2)
+        await announced(r, first)
         return first, r.request_approval(task["id"], item("rm -rf build"))
 
     first, later = asyncio.run(main())
@@ -141,9 +147,9 @@ def test_a_task_waits_quietly_then_carries_on_with_a_yes(env, monkeypatch, pushe
         task = r.start("code_change", "the iPhone build", "Build it", "other")
         await settle(r)
         waiting = r.store.get(task["id"])
-        await asyncio.sleep(0.2)  # announced
-        statuses = [e for e in drained(q) if e["type"] == "status" and e["task"]["status"] == "waiting"]
         [pending] = r.approvals()
+        await announced(r, pending)
+        statuses = [e for e in drained(q) if e["type"] == "status" and e["task"]["status"] == "waiting"]
         answer = r.answer(pending["id"], "approve", "cli")
         await settle(r)
         return r, task, waiting, statuses, pending, answer
@@ -232,7 +238,7 @@ def test_the_first_answer_wins_and_the_phone_needs_the_nonce(env, pushes):
         task = r.store.create("code_change", "build", "Build it", "other")
         r.store.set(task["id"], status="running")
         approval = r.request_approval(task["id"], item())
-        await asyncio.sleep(0.2)
+        await announced(r, approval)
         nonce = pushes[0]["data"]["approval"]["nonce"]
         with pytest.raises(runner.NotAllowed):
             r.answer(approval["id"], "approve", "push", nonce="guess")
@@ -275,7 +281,7 @@ def test_new_instructions_withdraw_what_it_was_waiting_for_and_it_isnt_asked_aga
         task = r.start("code_change", "clip bar mockup", "Build it", "other")
         await settle(r)
         [pending] = r.approvals()
-        await asyncio.sleep(0.2)  # announced
+        await announced(r, pending)
         r.reply(task["id"], "Don't use rm for the temporary screenshots. Just overwrite them.")
         await settle(r)
         return r, task, pending, drained(q), r.answer(pending["id"], "approve", "cli")
@@ -299,8 +305,7 @@ def test_new_instructions_withdraw_what_it_was_waiting_for_and_it_isnt_asked_aga
 def test_an_answer_to_one_request_keeps_the_others_waiting(env, monkeypatch, pushes):
     async def asks_twice(task, prompt, reporter) -> Outcome:
         reporter.session(task["id"], "s1")
-        reporter.request_approval(task["id"], item())
-        await asyncio.sleep(0.2)  # a later ask is a separate request
+        await announced(reporter, reporter.request_approval(task["id"], item()))  # a later ask is a separate request
         reporter.request_approval(task["id"], item("rm -rf ~/old"))
         return Outcome("Waiting for both.", "", 0.01)
 
@@ -608,7 +613,7 @@ def running_task(r: runner.Runner, title: str = "the Chrome cleanup") -> dict:
 async def asked(r: runner.Runner, task: dict, command: str) -> dict:
     """Request `command` and wait until it has been put to the user."""
     approval = r.request_approval(task["id"], item(command))
-    await asyncio.sleep(0.2)
+    await announced(r, approval)
     return approval
 
 
@@ -715,7 +720,7 @@ def test_the_runner_takes_an_answer_through_the_assistant_only_as_the_user_was_t
                                                                  "task": task["id"], "commands": fresh["commands"],
                                                                  "said": "approve it"}),
                                            route(r, "POST", "/approvals/{id:\\d+}"))
-        await asyncio.sleep(0.2)
+        await announced(r, fresh)
         approval = r.store.approval(fresh["id"])
         tries = [(other["id"], approval["commands"], "approve it"),
                  (task["id"], [item("rm -rf /")], "approve it"),
