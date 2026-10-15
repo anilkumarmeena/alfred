@@ -1,10 +1,13 @@
 """Command tasks (database.COMMAND): a shell command run in the background with no model until it ends.
 
 Sources: start_job, audio rendering, scheduled "command" jobs. Runs as a host.Jobs job in COMMANDS_DIR (N.log), outside
-the sandbox via a login shell, without JARVIS's keys; survives runner restarts, polled via `how`, stopped at its limit.
+the sandbox via a login shell, without JARVIS's keys, on the Claude login JARVIS runs on; survives runner restarts,
+polled via `how`, stopped at its limit.
 On end:
   success  `summarize` (COMMAND_SUMMARY_MODEL)
-  failure  `triage` (COMMAND_TRIAGE_MODEL): FIX starts a code_change task (`fix_prompt`); ASK waits for the user's yes
+  failure  `pass_over`: the CLI said its Claude login is signed out or used up, so it reruns on the next login
+           (command_tasks._fall_over), or with none left only says so. Else
+           `triage` (COMMAND_TRIAGE_MODEL): FIX starts a code_change task (`fix_prompt`); ASK waits for the user's yes
            (secrets, deploys, data loss, system settings); REPORT only explains. The fix task never runs the command:
            its sandbox hides the keys the command needs. Once it finishes, `wants_rerun` (VERDICT_MODEL) reads its
            summary and, unless it says the cause remains, JARVIS reruns the command once, as a command task with its
@@ -16,9 +19,13 @@ import json
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
-from jarvis.core import profile
+from claude_agent_sdk import RateLimitInfo
+
+from jarvis.core import claude_logins, profile
 from jarvis.core.config import (
     COMMAND_SUMMARY_MODEL,
     COMMAND_TRIAGE_MODEL,
@@ -66,10 +73,20 @@ def project_of(folder: Path, named=None) -> str | None:
 
 
 class Runs(host.Jobs):
-    """Long jobs for command tasks, numbered by task id; no desktop notification (the runner announces)."""
+    """Long jobs for command tasks, numbered by task id; no desktop notification (the runner announces).
+
+    Each runs on the Claude login JARVIS runs on (core.claude_logins), so a `claude` the command calls uses it too:
+    CLAUDE_CONFIG_DIR names its folder (only the folder; the login stays in its keychain entry), `login` in the record."""
 
     def __init__(self, folder: Path | None = None, shell: tuple[str, ...] = host.SHELL) -> None:
         super().__init__(folder or COMMANDS_DIR, shell, notify=False)
+
+    def launch(self, command: str, title: str, cwd: Path, task: int | None = None, env: dict[str, str] | None = None,
+               report: bool = False, extra: dict | None = None, job_id: int | None = None,
+               walls: bool = True) -> dict:
+        login = claude_logins.active()
+        return super().launch(command, title, cwd, task, claude_logins.env(login) | (env or {}), report,
+                              {"login": login} | (extra or {}), job_id, walls)
 
     def start(self, task_id: int, command: str, title: str, folder: Path) -> dict:
         """Start the command; returns its record. ValueError if the folder is gone."""
@@ -150,6 +167,51 @@ def ending(how: dict) -> str:
     if how["outcome"] == LOST:
         return "it ended without an exit status: it was killed, or the computer restarted"
     return f"exit code {how['code']}"
+
+
+# ── A Claude login that stopped working ─────────────────────────
+
+LOGIN_CHARS = 3000  # output tail read for the CLI saying its login stopped working: a run ends soon after
+# The CLI's own words, narrower than sdk.SIGNED_OUT and usage.LIMIT_TEXT: here they may come from any other tool too
+SIGNED_OUT = re.compile(r"please run /login|failed to authenticate|authentication_failed|oauth session expired",
+                        re.IGNORECASE)
+LIMITED = re.compile(r"you.ve hit your (?:(session|weekly|opus|sonnet) )?limit|claude ai usage limit reached",
+                     re.IGNORECASE)
+RESETS = re.compile(r"resets (\d{1,2})(?::(\d{2}))?\s*([ap]m)(?: \(([\w/+-]+)\))?", re.IGNORECASE)
+WINDOWS = {"session": "five_hour", "weekly": "seven_day", "opus": "seven_day_opus", "sonnet": "seven_day_sonnet"}
+
+
+def _resets(text: str, now: float) -> int | None:
+    """When a limit the CLI said resets ('resets 8am (Asia/Calcutta)') does: that time next, or None."""
+    if not (m := RESETS.search(text)):
+        return None
+    try:
+        zone = ZoneInfo(m[4]) if m[4] else profile.tz()
+    except (KeyError, ValueError):
+        zone = profile.tz()
+    hour = int(m[1]) % 12 + (12 if m[3].lower() == "pm" else 0)
+    if hour > 23 or int(m[2] or 0) > 59:
+        return None
+    at = datetime.fromtimestamp(now, zone).replace(hour=hour, minute=int(m[2] or 0), second=0, microsecond=0)
+    return int((at if at.timestamp() > now else at + timedelta(days=1)).timestamp())
+
+
+def pass_over(login: str, output: str, now: float | None = None) -> str:
+    """If a command's output tail says its Claude login is signed out or at its usage limit, mark that login so JARVIS
+    passes it over (as its own calls do) and say why, e.g. "the work Claude login isn't signed in"; else ""."""
+    from jarvis.brain import sdk, usage
+
+    now = now or time.time()
+    name = f"the {login or 'default'} Claude login"
+    if found := SIGNED_OUT.search(output):
+        sdk.signed_out(login, found[0])
+        return f"{name} isn't signed in"
+    if found := LIMITED.search(output):
+        window = WINDOWS.get((found[1] or "").lower(), "unknown")
+        resets = _resets(output[found.end():found.end() + 80], now)
+        usage.record(RateLimitInfo("rejected", resets_at=resets, rate_limit_type=window), now, login)
+        return f"{name}'s {usage.NAMES.get(window, 'usage')} limit is used up"
+    return ""
 
 
 # ── Waking a model ──────────────────────────────────────────────

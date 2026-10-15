@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from jarvis.brain import usage
+from jarvis.core import claude_logins
 from jarvis.core.database import ACTIVE, COMMAND, CONNECTION, WAIT_QUESTION
 from jarvis.node import machines, placement
 from jarvis.node.offload import TurnedDown
@@ -14,7 +15,7 @@ from jarvis.safety.commands import secret_path
 from jarvis.state import activity as bell
 from jarvis.tasks import command_jobs, connection_jobs, projects, scheduler, schedules
 from jarvis.tasks.approvals import SAID_MOST
-from jarvis.tasks.command_jobs import ASK, DONE, FIX, LOST, REPORT, STOPPED, TIMEOUT, last_lines, spec, took
+from jarvis.tasks.command_jobs import ASK, DONE, FAILED, FIX, LOST, REPORT, STOPPED, TIMEOUT, last_lines, spec, took
 from jarvis.tasks.runner_base import RunnerBase
 from jarvis.tasks.scheduler import sentence
 
@@ -28,13 +29,15 @@ class CommandTasks(RunnerBase):
     def start_command(self, command: str, title: str, folder: str | Path, job: int | None = None,
                       project: str | None = None, timeout_minutes: int | None = None, log_file: str | None = None,
                       summarize: bool = True, auto_fix: bool = True, report: bool = False, attempt: int = 1,
-                      after: dict | None = None, placeable: bool = False, machine: str = "", approved: str = "") -> dict:
+                      after: dict | None = None, placeable: bool = False, machine: str = "", approved: str = "",
+                      tried: list[str] | None = None) -> dict:
         """Start a command task in absolute `folder` (~ allowed); takes no task slot.
 
         `job`: owning scheduled job. `log_file`: glob of the command's own log, read with its output. `project`
         defaults to the folder's. A post-fix rerun has `attempt` 2 and `after` = {task, fix, failed, fixed}.
         `placeable`: it may run on another machine (Settings › Machines, or `machine` where the user said), when its
         folder is in a project; `approved` says how a risky command got the user's yes, for that machine to check.
+        `tried`: the Claude logins earlier runs of it stopped on (`_fall_over`).
         Raises ValueError for an empty command or an unusable folder."""
         self._open()
         command = command.strip()
@@ -55,6 +58,8 @@ class CommandTasks(RunnerBase):
                "summarize": bool(summarize), "auto_fix": bool(auto_fix), "report": bool(report), "attempt": attempt}
         if after:
             how["after"] = after
+        if tried:
+            how["tried"] = tried
         if placeable:
             how |= {"placeable": True} | ({"approved": approved} if approved else {})
         owner = there.name if there else command_jobs.project_of(path) if placeable else None
@@ -81,7 +86,8 @@ class CommandTasks(RunnerBase):
     def _start_here(self, task_id: int, command: str, title: str, path: Path, how: dict) -> None:
         """Start the command on this computer; ValueError (recorded on the task) if it can't."""
         try:
-            how["started"] = self.commands.start(task_id, command, title, path)["started"]
+            record = self.commands.start(task_id, command, title, path)
+            how |= {"started": record["started"], "login": record["login"]}
         except (ValueError, OSError) as e:
             self.store.log(task_id, "failed", f"couldn't start: {e}")
             self.store.set(task_id, status="failed", error=f"Couldn't start: {e}"[:300], spoken=f"Couldn't start: {e}"[:300])
@@ -157,14 +163,18 @@ class CommandTasks(RunnerBase):
         if task["status"] in ACTIVE:
             raise ValueError(f"Task {task_id} is {task['status']}; it can run again once it has ended.")
         how = spec(task)
-        again = self.start_command(task["instruction"], task["title"], how["folder"], task["job"], task["project"],
-                                   how.get("timeout_minutes"), how.get("log_file"), how.get("summarize", True),
-                                   how.get("auto_fix", True), how.get("report", False),
-                                   placeable=bool(how.get("placeable")), approved=how.get("approved", ""))
+        again = self._again(task, how)
         self.store.log(task_id, "rerun", f"run again as task {again['id']}")
         if task["job"] is not None and (job := schedules.get(task["job"])) and job["last_task"] == task_id:
             schedules.update(job["id"], last_task=again["id"], run=json.dumps(self._run_of(again, spec(again))))
         return again
+
+    def _again(self, task: dict, how: dict, **changes) -> dict:
+        """Start command task `task` (spec `how`) again with the same settings, plus `changes` to start_command's."""
+        return self.start_command(task["instruction"], task["title"], how["folder"], task["job"], task["project"],
+                                  how.get("timeout_minutes"), how.get("log_file"), how.get("summarize", True),
+                                  how.get("auto_fix", True), how.get("report", False),
+                                  placeable=bool(how.get("placeable")), approved=how.get("approved", ""), **changes)
 
     async def stop_command(self, task_id: int) -> dict:
         """Stop a running command (gracefully, then forcibly). ValueError if it isn't running."""
@@ -330,10 +340,16 @@ class CommandTasks(RunnerBase):
         why, long = command_jobs.ending(how), took(seconds)
         output = self.commands.output(task_id, command_jobs.FIX_CHARS, how.get("log_file"), how["started"])
         job = schedules.get(task["job"]) if task["job"] is not None else None
+        trouble = self._login_trouble(task, how)
+        if trouble and self._fall_over(task, how, job, trouble):
+            return
         can_fix = bool(how.get("auto_fix") and task["project"] and how.get("attempt", 1) <= command_jobs.FIX_ATTEMPTS
                        and (job is None or job["status"] in schedules.LIVE))
         found = None
-        if not usage.hold_until():
+        if trouble:  # nothing a fix could change, and no other login to move to
+            found = command_jobs.Triage(REPORT, f"{trouble[0].upper()}{trouble[1:]}, and no other Claude login is free "
+                                                "to run it on.")
+        elif not usage.hold_until():
             found = await command_jobs.triage(task["title"], task["instruction"], how["folder"], why, seconds,
                                               output[-command_jobs.TRIAGE_CHARS:], can_fix)
         if found is None:  # no triage available: fix if allowed, else report
@@ -368,6 +384,37 @@ class CommandTasks(RunnerBase):
             return
         self._settle_run(task, how, sentence(f"Failed after {long}: {why}") + said)
         self._finish(task_id, "failed", f"{name}{said}", title=self._job_title(task), error=why)
+
+    def _login_trouble(self, task: dict, how: dict) -> str:
+        """Why the run failed, if its Claude login stopped it (signed out, or used up), which JARVIS then passes over;
+        else "". Only runs here know their login."""
+        if how.get("login") is None or how["outcome"] != FAILED:
+            return ""
+        return command_jobs.pass_over(how["login"], command_jobs.tail(self.commands.log_file(task["id"]),
+                                                                      command_jobs.LOGIN_CHARS))
+
+    def _fall_over(self, task: dict, how: dict, job: dict | None, trouble: str) -> bool:
+        """Run a command its Claude login stopped (`trouble`) again on the next login by priority, as tasks move on;
+        False when every login has been tried, or its scheduled job has ended."""
+        tried = [*how.get("tried", []), how["login"]]
+        if (now_on := claude_logins.active()) in tried or (job and job["status"] not in schedules.LIVE):
+            return False
+        try:
+            rerun = self._again(task, how, attempt=how.get("attempt", 1), after=how.get("after"), tried=tried)
+        except ValueError as e:
+            log.warning("command task %s couldn't run again on another Claude login: %s", task["id"], e)
+            return False
+        why, long = command_jobs.ending(how), took(how["ended"] - how["started"])
+        moved = f"Running it again on the {now_on or 'default'} one, as task {rerun['id']}."
+        self.store.set(task["id"], command=json.dumps(how))
+        self.store.log(task["id"], "rerun", f"{trouble}: running again as task {rerun['id']}")
+        if job and job["last_task"] == task["id"]:  # the rerun is now the job's latest
+            schedules.update(job["id"], last_task=rerun["id"], run=json.dumps(self._run_of(rerun, spec(rerun))),
+                             last_result=(sentence(f"Failed after {long}: {trouble}") + f" {moved}")[:300])
+        # No push now: the rerun's announcement says how it went
+        self._finish(task["id"], "failed", f"Task {task['id']}, {task['title']}, failed ({why}), after {long}: "
+                                           f"{trouble}. {moved}", alert=False, error=why)
+        return True
 
     def _start_fix(self, task: dict, how: dict, output: str, job: dict | None, said_yes: str = "") -> dict:
         """Start a code_change fix task in the command's project. ValueError if it can't start."""
@@ -417,11 +464,7 @@ class CommandTasks(RunnerBase):
         after = {"task": failed["id"], "fix": task["id"], "failed": how.get("said") or command_jobs.ending(how),
                  "fixed": scheduler.headline(summary)}
         try:
-            rerun = self.start_command(failed["instruction"], failed["title"], how["folder"], failed["job"],
-                                       failed["project"], how.get("timeout_minutes"), how.get("log_file"),
-                                       how.get("summarize", True), how.get("auto_fix", True), how.get("report", False),
-                                       how.get("attempt", 1) + 1, after, placeable=bool(how.get("placeable")),
-                                       approved=how.get("approved", ""))
+            rerun = self._again(failed, how, attempt=how.get("attempt", 1) + 1, after=after)
         except ValueError as e:
             return f"{said} The command couldn't run again: {e}", False
         self.store.log(failed["id"], "rerun", f"running again as task {rerun['id']}, after task {task['id']}'s fix")

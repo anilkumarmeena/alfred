@@ -6,7 +6,9 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
@@ -16,7 +18,8 @@ from test_nudges import fake_run, finishes
 from test_scheduler import NOW, Clock, at
 
 from jarvis import tools
-from jarvis.brain import sdk
+from jarvis.brain import sdk, usage
+from jarvis.core import claude_logins, config
 from jarvis.core.config import COMMAND_SUMMARY_MODEL, COMMAND_TRIAGE_MODEL
 from jarvis.core.database import COMMAND
 from jarvis.safety import host, shell
@@ -708,6 +711,93 @@ def test_a_folder_gone_is_said_once_and_the_job_waits_for_its_next_time(env):
     assert asyncio.run(s.tick()) == []
     assert "isn't a folder" in schedules.get(job["id"])["last_result"] and len(said["events"]) == 1
     assert r.store.recent() == []
+
+
+# ── Claude logins (core.claude_logins) ──────────────────────────
+
+
+@pytest.fixture
+def logins(env, tmp_path, monkeypatch):
+    """Two Claude logins, this computer's own first, with their checks and usage kept in tmp_path."""
+    monkeypatch.setattr(config, "CLAUDE_LOGINS_DIR", tmp_path / "claude-logins")
+    monkeypatch.setattr(config, "CLAUDE_OWN_CONFIG_DIR", "")
+    monkeypatch.setattr(usage, "USAGE_FILE", tmp_path / "usage.json")
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    return claude_logins.make("work")
+
+
+def test_a_command_runs_on_the_claude_login_jarvis_runs_on(env, logins):
+    async def main():
+        r = make()
+        own = r.start_command('echo "on=$CLAUDE_CONFIG_DIR."', "own", str(env["project"]), summarize=False)
+        claude_logins.set_order(["work", ""])
+        work = r.start_command('echo "on=$CLAUDE_CONFIG_DIR."', "work", str(env["project"]), summarize=False)
+        return r, await ended(r, own["id"]), await ended(r, work["id"])
+
+    r, own, work = asyncio.run(main())
+    assert own["summary"].endswith("on=.") and command_jobs.spec(own)["login"] == ""  # this computer's own sign-in
+    assert work["summary"].endswith(f"on={logins}.") and command_jobs.spec(work)["login"] == "work"
+    assert r.view(work)["command"]["login"] == "work"
+
+
+def test_a_run_whose_claude_login_is_signed_out_runs_again_on_the_next_one(env, logins):
+    signed_out = 'if [ -z "$CLAUDE_CONFIG_DIR" ]; then echo "Not logged in · Please run /login"; exit 4; fi; echo uploaded'
+
+    async def main():
+        r = make()
+        task = r.start_command(signed_out, "the upload", str(env["project"]), summarize=False)
+        failed = await ended(r, task["id"])
+        await settled(r)
+        return r, failed
+
+    r, failed = asyncio.run(main())
+    rerun = r.store.get(failed["id"] + 1)
+    assert failed["status"] == "failed" and failed["spoken"] == (
+        f"Task {failed['id']}, the upload, failed (exit code 4), after 0 seconds: the default Claude login isn't "
+        f"signed in. Running it again on the work one, as task {rerun['id']}.")
+    assert claude_logins.checks()[""]["ok"] is False and claude_logins.active() == "work"  # passed over from now on
+    assert rerun["status"] == "done" and rerun["summary"].endswith("uploaded")
+    assert (command_jobs.spec(rerun)["login"], command_jobs.spec(rerun)["tried"]) == ("work", [""])
+    assert triaged(env) == [] and [p["body"] for p in env["pushed"]] == [rerun["spoken"]]  # said once, by the rerun
+
+
+def test_a_scheduled_run_at_its_logins_limit_moves_on_until_every_login_is_used_up(env, logins):
+    job = daily("echo \"You've hit your session limit · resets 8am (Asia/Calcutta)\"; exit 4", summarize=False)
+
+    async def main():
+        r = make()
+        s, _ = scheduled(r)
+        await s.tick()
+        first = schedules.get(job["id"])["last_task"]
+        await ended(r, first)
+        await settled(r)
+        return r, first
+
+    r, first = asyncio.run(main())
+    rerun = r.store.get(first + 1)
+    assert "the default Claude login's five-hour limit is used up. Running it again on the work one" in \
+           r.store.get(first)["spoken"]
+    assert schedules.get(job["id"])["last_task"] == rerun["id"] and command_jobs.spec(rerun)["login"] == "work"
+    # The work login is used up too: with no login left to try, it's only said, as nothing a fix could change
+    assert rerun["status"] == "failed" and rerun["spoken"].endswith(
+        "The work Claude login's five-hour limit is used up, and no other Claude login is free to run it on.")
+    assert r.store.get(first + 2) is None and triaged(env) == []
+    for login in ("", "work"):
+        window = usage.of(login)["five_hour"]
+        assert window["status"] == "rejected" and time.time() < window["resets_at"] <= time.time() + 86400
+    assert claude_logins.skipped("work").startswith("its five-hour limit is used up until")
+
+
+def test_only_claudes_own_words_pass_a_login_over(logins):
+    for other in ("YouTube: quota exceeded, rate limit reached", "gh: not logged in to any hosts", "exit code 1"):
+        assert command_jobs.pass_over("work", other) == ""
+    assert usage.of("work") == {} and claude_logins.checks() == {}
+    now = datetime(2026, 10, 15, 9, 30, tzinfo=ZoneInfo("Asia/Calcutta")).timestamp()
+    said = command_jobs.pass_over("work", "■ You've hit your weekly limit · resets 8am (Asia/Calcutta)\n", now)
+    assert said == "the work Claude login's weekly limit is used up"
+    assert usage.of("work")["seven_day"]["resets_at"] == now + 22.5 * 3600  # 8 AM tomorrow, in the zone it names
+    assert command_jobs.pass_over("", "Failed to authenticate: OAuth token revoked. (authentication_failed)") == \
+           "the default Claude login isn't signed in"
 
 
 # ── Voice shell: start_job, job_status, stop_job ────────────────
