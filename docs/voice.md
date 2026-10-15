@@ -229,6 +229,16 @@ With a voiceprint and the check on, **only your voice cuts JARVIS off**; someone
 - If the check misses you, your words still interrupt once the whole utterance is transcribed and passes.
 - `JARVIS_SPEAKER_BARGE_IN=off` lets any voice interrupt.
 
+JARVIS knows **exactly where it was cut off**: what you heard and what you didn't. What it does next depends on what you said:
+
+| You said | JARVIS |
+|---|---|
+| A **passing remark**: "thanks", "okay", "hmm", "yes yes" | Answers in a word or two, then gives what you missed as a **one-line recap** |
+| A **question** | Answers that, and drops the rest unless it held something you need |
+| Anything else | Judges for itself which of the two it was |
+
+Nothing waits on a model: plain acknowledgements and questions are recognised by rules. The timing log's `barge` field shows each verdict. See [The Brain](brain.md#-being-talked-over).
+
 ### Modes and reviewing
 
 | Settings → Voice ID → **Other voices** | Behaviour |
@@ -311,6 +321,7 @@ make voice-timing HOURS=2    # the last two
 | `spoke` | How long JARVIS spoke |
 | `ended` | **spoken**, **interrupted**, **unspoken** (you went on before it was heard; `resumed` is your pause) or **closed** |
 | `speaker`, `logprob` | Who spoke and how well Whisper heard it |
+| `barge` | Your words cut JARVIS's last reply off: **remark**, **point** (a question) or **unsure** (left to the brain) |
 
 </details>
 

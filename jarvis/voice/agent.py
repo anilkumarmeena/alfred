@@ -165,9 +165,10 @@ async def entrypoint(ctx: JobContext) -> None:
 
 
 def _item_added(voice: VoiceSession, item: llm.ChatItem) -> None:
-    """Pass on what JARVIS said; other items (tool calls, agent handoffs, config updates) have no role."""
+    """Pass on what JARVIS said (what played, if cut off); other items (tool calls, agent handoffs, config updates)
+    have no role."""
     if isinstance(item, llm.ChatMessage) and item.role == "assistant":
-        voice.spoke(item.metrics, item.interrupted)
+        voice.spoke(item.text_content or "", item.metrics, item.interrupted)
 
 
 async def _to_phone(text: str) -> None:
