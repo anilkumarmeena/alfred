@@ -2,7 +2,8 @@
 
   code_change    edits the project folder in place (uncommitted), or a worktree + branch when in_place=false
   code_question  reads the live checkout; shell is read-only git only
-  research       web plus read-only account tools and research MCP servers (read-only); works in data/tasks/ID
+  research       web plus account tools (reads, Sheets and Docs edits) and research MCP servers (read-only); works in
+                 data/tasks/ID
 
 Safety: every tool call passes TaskGate (also as a PreToolUse hook, since skills' allowed-tools become allow rules).
 Reads stay in task folders, TASK_READ_DIRS and voice logs; writes in the worktree. Secrets are hidden from file tools
@@ -80,6 +81,9 @@ READ_ONLY_TOOLS = ["calendar_events", "calendar_event", "calendar_free_time", "g
                    "sheets_search", "sheets_read", "docs_search", "docs_read", "slides_search", "slides_read",
                    "drive_search", "chat_unread", "chat_spaces", "chat_read", "chat_search", "gmail_attachments",
                    "gmail_attachment_read", "gmail_attachment_transcribe"]
+# Sheets and Docs edits, as the voice conversation has them; deletes and sends need a spoken yes, so stay out
+GOOGLE_EDIT_TOOLS = ["sheets_write", "sheets_append", "sheets_format", "sheets_add_tab", "docs_insert",
+                     "docs_replace_text", "docs_format", "docs_beautify", "docs_insert_image"]
 
 
 @dataclass
@@ -191,7 +195,8 @@ def _options(task: dict, reporter: Reporter) -> ClaudeAgentOptions:
         read_roots = read_roots or [own, *TASK_READ_DIRS, profile.current().voice_logs]  # research has none otherwise
         more_writes = list(TASK_READ_DIRS)  # TaskGate still blocks secrets and JARVIS's own files
     if "accounts" in can:
-        mcp["jarvis"], jarvis_allowed = jarvis_server(READ_ONLY_TOOLS)
+        # docs_insert_image's local paths are checked by TaskGate.doc_images
+        mcp["jarvis"], jarvis_allowed = jarvis_server(READ_ONLY_TOOLS + GOOGLE_EDIT_TOOLS)
         # Research MCP servers, read-only
         servers = mcp_servers.session(mcp_servers.for_research(), read_only=True)
         mcp |= servers.configs

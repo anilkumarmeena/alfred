@@ -131,10 +131,10 @@ async def _mark_seen(tasks: list[dict]) -> None:
     "when it finishes or has a question. Kinds: code_change edits a project directly in its folder, "
     "uncommitted and one task at a time (a second one queues), or, for projects with in_place false, "
     "on its own git branch in a separate worktree (committed, never pushed); code_question reads a project's code and git history to answer something; "
-    "research uses the web and the user's read-only mail, calendar, Google Chat, Google Sheets and Docs, and their connected tools. "
+    "research uses the web and reads the user's mail, calendar, Google Chat, Google Sheets and Docs, and their connected tools, and can edit their Sheets and Docs. "
     "JARVIS's own project always works on a branch. "
     "When the user explicitly asks for something beyond the kind's tools (a claude.ai link to a page or document, "
-    "shell commands or ones on the computer itself, edits in another project, reading their mail), grant it in access. "
+    "shell commands or ones on the computer itself, edits in another project, reading their mail or editing their Sheets and Docs), grant it in access."
     "When the task works on an item of the user's to-do list, name it in todo. "
     "The task can't see this conversation, so the instruction must carry everything it needs. " + _NOW,
     {
