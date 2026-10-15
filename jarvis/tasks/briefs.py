@@ -30,6 +30,11 @@ def _also_readable() -> str:
             "files, keys, credentials and secrets folders.")
 
 
+def _google_limits() -> str:
+    """What account tools leave to the user (their deletes and sends need a spoken yes)."""
+    return ("You can't send mail or Chat messages, send calendar invites, delete sheet tabs or delete doc content: "
+            f"leave those for {profile.name()}, and say so in your summary.")
+
 
 def _artifact_brief(folder: Path) -> str:
     return (f"\n- When asked for a mockup, a preview or anything else to look at, write it as an HTML file in {folder}, which "
@@ -79,7 +84,7 @@ def _grants_brief(task: dict, cwd: Path, own: Path, can: set[str]) -> str:
     if kind != "research" and "accounts" in can:
         lines.append(f"- You can read {profile.name()}'s mail, calendar, Google Chat, Google Sheets, Docs, Slides and Drive, "
                      "and the tools they've connected (mcp__<server>__<tool>, loaded with ToolSearch when you need "
-                     "one), with read-only tools. You can't send or change anything there.")
+                     f"one), and edit their Google Sheets and Docs. {_google_limits()}")
     if lack := access.missing(task):
         lines.append(f"- If {profile.name()} asked for something that needs access you don't have, ask for it with "
                      f"request_access rather than giving up or working around it: {access.listing(lack)}. Then end "
@@ -139,9 +144,9 @@ def _system_prompt(task: dict, cwd: Path, setup: project_claude.Setup | None = N
         if can & {"shell", "mac", "projects"}:
             limits = "You can't contact anyone, and change only what the access below allows"
         else:
-            limits = "You can't change anything or contact anyone" + (
-                ", beyond writing pages in your own folder and publishing them as artifacts" if pages else "")
-        return f"""You research and gather information for {profile.name()}, using web search and their read-only tools: mail, calendar, Google Chat, the tools they've connected (mcp__<server>__<tool>, loaded with ToolSearch when you need one), their Google Sheets, Docs and Slides, and Google Drive search. {limits}.
+            limits = "You can't contact anyone, or change anything beyond their Google Sheets and Docs" + (
+                ", and writing pages in your own folder and publishing them as artifacts" if pages else "")
+        return f"""You research and gather information for {profile.name()}, using web search and their tools: you can read their mail, calendar, Google Chat, the tools they've connected (mcp__<server>__<tool>, loaded with ToolSearch when you need one), their Google Sheets, Docs and Slides, and search Google Drive, and you can edit their Google Sheets and Docs when the work calls for it. {_google_limits()} {limits}.
 
 {brief()}{pages}{granted}"""
     return {"type": "preset", "preset": "claude_code",

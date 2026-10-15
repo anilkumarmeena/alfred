@@ -100,7 +100,7 @@ def test_the_brain_gets_ai_armorys_own_schemas():
     assert tools.input_schema(google_tools()["gmail_search"]) == google_tools()["gmail_search"].armory.input_schema
 
 
-def test_research_tasks_only_read():
+def test_tasks_account_reads_are_read_only():
     assert set(worker.READ_ONLY_TOOLS) <= set(t.name for t in tools.all_tools())
     reads = {"calendar_events", "calendar_event", "calendar_free_time", "gmail_search", "gmail_read",
              "sheets_search", "sheets_read", "docs_search", "docs_read", "slides_search", "slides_read",
@@ -108,6 +108,13 @@ def test_research_tasks_only_read():
     assert reads <= set(worker.READ_ONLY_TOOLS)
     assert all(google_tools()[n].armory.read_only for n in worker.READ_ONLY_TOOLS if n in google_tools())
     assert not {n for n in worker.READ_ONLY_TOOLS if "draft" in n or n in GATED or n == "chat_mark_read"}
+
+
+def test_tasks_edit_sheets_and_docs_as_the_voice_does_but_never_delete_or_send():
+    tools_ = google_tools()
+    changes = {n for n in TOOLS["sheets"] | TOOLS["docs"] if not tools_[n].armory.read_only}
+    assert set(worker.GOOGLE_EDIT_TOOLS) == changes - GATED
+    assert not {n for n in worker.GOOGLE_EDIT_TOOLS if "draft" in n or n in GATED or tools_[n].gated}
 
 
 def test_bad_input_is_refused_before_anything_runs():

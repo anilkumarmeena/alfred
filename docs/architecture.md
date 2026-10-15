@@ -459,12 +459,12 @@ The runner is a **separate always-on service** because a call's job process dies
 |---|---|---|---|
 | `code_change` | Project folder **in place** (uncommitted), or a worktree on `jarvis/<id>-<title>` | Read/edit its folder, sandboxed shell, host commands, Artifact publishing | Commit, switch branches, read secrets, edit JARVIS's files |
 | `code_question` | Live checkout, read-only | Read and search, single read-only git commands | Edit, other commands |
-| `research` | `data/tasks/<id>/` | Web, read-only accounts and research MCP servers | Change anything, contact anyone |
+| `research` | `data/tasks/<id>/` | Web, accounts (reads, plus Sheets and Docs edits) and research MCP servers | Delete or send anything on Google, contact anyone, change anything else |
 | `command` | Any folder | A shell command, **no model, no task slot** | |
 | `connection` | | A slow MCP call carried on by the relay, no task slot | |
 | `review` | | The learning review's suggested edits, hidden | |
 
-**Access grants** (`jarvis/tasks/access.py`): `artifacts`, `shell`, `mac` (run commands on the computer itself, on either OS), `projects`, `accounts`. They're granted in `task_start` / `task_reply` when the user asks, or after the task calls `request_access`. **Secrets, JARVIS's own files and approvals never change with a grant.**
+**Access grants** (`jarvis/tasks/access.py`): `artifacts`, `shell`, `mac` (run commands on the computer itself, on either OS), `projects`, `accounts` (Google reads, and the same Sheets and Docs edits the voice has; deleting tabs or doc content and sending stay voice-only, behind a spoken yes). They're granted in `task_start` / `task_reply` when the user asks, or after the task calls `request_access`. **Secrets, JARVIS's own files and approvals never change with a grant.**
 
 ```mermaid
 stateDiagram-v2

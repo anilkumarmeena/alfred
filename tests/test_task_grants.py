@@ -10,7 +10,7 @@ from test_nudges import fake_run, settle
 from test_task_access import call, denied_paths, mac  # noqa: F401  (mac is a fixture)
 
 from jarvis import tools
-from jarvis.brain import persona
+from jarvis.brain import persona, sdk
 from jarvis.core import profile
 from jarvis.tasks import access, briefs, client, gate, reporting, runner, worker
 from jarvis.tasks.worker import Outcome
@@ -132,6 +132,61 @@ def test_a_code_task_granted_accounts_reads_mail(box):
     opts = worker._options(worker_task(worktree=str(box["worktree"]), **granted("accounts")), NullReporter())
     assert "jarvis" in opts.mcp_servers
     assert "You can read" in opts.system_prompt["append"] and "accounts (" not in opts.system_prompt["append"]
+
+
+SHEETS_DOCS_EDITS = {"sheets_write", "sheets_append", "sheets_format", "sheets_add_tab", "docs_insert",
+                     "docs_replace_text", "docs_format", "docs_beautify", "docs_insert_image"}
+# Deletes and sends need the user's spoken yes, and their drafts are no use without it
+NEVER = {"sheets_delete_tab", "sheets_draft_delete_tab", "docs_delete", "docs_draft_delete", "gmail_send",
+         "gmail_draft_send", "gmail_draft_reply", "gmail_create_draft", "chat_send", "chat_draft",
+         "calendar_send_invite", "calendar_draft_invite", "calendar_send_update", "calendar_send_response",
+         "calendar_delete_event", "calendar_draft_delete", "calendar_create_event"}
+
+
+@pytest.fixture
+def served(monkeypatch):
+    """Names of the tools each task session's jarvis server offers."""
+    monkeypatch.setattr(sdk, "create_sdk_mcp_server", lambda name, tools: {"type": "sdk", "name": name,
+                                                                           "tools": [t.name for t in tools]})
+    return lambda opts: set(opts.mcp_servers["jarvis"]["tools"])
+
+
+@pytest.mark.parametrize("kind", ["research", "code_change", "code_question"])
+def test_tasks_with_accounts_edit_sheets_and_docs_but_never_delete_or_send(box, served, kind):
+    tasks = {"research": lambda: worker_task(kind="research", project=None),  # accounts by default
+             "code_change": lambda: worker_task(worktree=str(box["worktree"]), **granted("accounts")),
+             "code_question": lambda: question("accounts")}
+    opts = worker._options(tasks[kind](), NullReporter())
+    assert SHEETS_DOCS_EDITS <= served(opts) and "sheets_read" in served(opts)
+    assert {f"mcp__jarvis__{n}" for n in SHEETS_DOCS_EDITS} <= set(opts.allowed_tools)  # as the voice has them
+    assert not NEVER & served(opts) and not {f"mcp__jarvis__{n}" for n in NEVER} & set(opts.allowed_tools)
+    prompt = opts.system_prompt if kind == "research" else opts.system_prompt["append"]
+    assert "edit their Google Sheets and Docs" in prompt and "delete sheet tabs or delete doc content" in prompt
+
+
+def test_tasks_without_accounts_get_no_google_tools(box):
+    opts = worker._options(worker_task(worktree=str(box["worktree"])), NullReporter())
+    assert "jarvis" not in opts.mcp_servers and not any(t.startswith("mcp__jarvis__") for t in opts.allowed_tools)
+
+
+def test_doc_images_come_from_links_or_files_the_task_may_read_never_secrets(box):
+    code = worker._options(worker_task(worktree=str(box["worktree"]), **granted("accounts")), NullReporter())
+    research = worker._options(worker_task(kind="research", project=None), NullReporter())
+    doc = {"account": "work", "document": "Plan"}
+
+    def insert(opts, *images) -> bool:
+        return allowed(call(opts, gate.DOC_IMAGES, **doc, images=list(images)))
+
+    chart = str(box["worktree"] / "chart.png")
+    assert insert(code, chart, {"image": "https://example.com/a.png", "caption": "A"}, {"image": chart})
+    assert insert(research, "https://example.com/a.png")
+    assert not insert(research, chart)  # no folder of its own to take images from
+    assert not insert(code, "/etc/hosts") and not insert(code, {"image": "~/Desktop/x.png"})
+    refused = call(code, gate.DOC_IMAGES, **doc, images=[str(box["key"])])  # readable folder, but a key
+    assert isinstance(refused, PermissionResultDeny) and "never secrets" in refused.message
+    hooked = asyncio.run(code.hooks["PreToolUse"][0].hooks[0](
+        {"tool_name": gate.DOC_IMAGES, "tool_input": doc | {"images": ["/etc/hosts"]}}, "t1", None))
+    assert hooked["hookSpecificOutput"]["permissionDecision"] == "deny"  # even if a rule allowed it outright
 
 
 def test_request_access_asks_the_runner_and_pauses(monkeypatch):
