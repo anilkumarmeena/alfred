@@ -67,7 +67,7 @@ def test_each_kind_of_task_gets_its_own_subagents(env, monkeypatch, name, agents
 
 def test_in_place_tasks_keep_refusing_git_writes_alongside_the_builtin_agents(env, monkeypatch):
     opts = task_options(env, monkeypatch, "in place")
-    assert "Bash(git commit:*)" in opts.disallowed_tools and "Agent(general-purpose)" in opts.disallowed_tools
+    assert "Bash(git push:*)" in opts.disallowed_tools and "Agent(general-purpose)" in opts.disallowed_tools
 
 
 def test_only_the_test_runner_gets_a_shell_and_the_searcher_is_read_only():

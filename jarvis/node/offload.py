@@ -97,7 +97,7 @@ class Offload:
         self.adoptions_file = STATE / "adopted.json"  # "machine:run" -> the task each run alone became here
         hub.handlers |= {"copy.pack": self._pack, "copy.bundle": self._bundle, "skills.pack": self._skills_pack,
                          "schedule.due": self._due, "report": self._report, "alive": self._alive, "task.nudges": self._nudges, "task.cleared": self._cleared,
-                         "task.approval": self._approval, "task.propose": self._propose, "task.access": self._access}
+                         "task.commit": self._commit, "task.approval": self._approval, "task.propose": self._propose, "task.access": self._access}
         hub.on_connect.append(self._connected)
         hub.on_lost.append(self._gone)
 
@@ -733,6 +733,11 @@ class Offload:
     async def _cleared(self, node: int, body: dict) -> dict:
         task = self._own(node, body["task"])
         return {"cleared": self.runner.cleared(task["id"], self._item(node, task, body.get("item")))}
+
+    async def _commit(self, node: int, body: dict) -> dict:
+        task = self._own(node, body["task"])
+        # A copy of the project there sends back its files, not commits: only in the project's own folder does one stay
+        return {"ordered": self.runner._lives_on(task) == node and self.runner.commit_ordered(task["id"])}
 
     async def _approval(self, node: int, body: dict) -> dict:
         task = self._own(node, body["task"])

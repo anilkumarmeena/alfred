@@ -120,7 +120,14 @@ async def changes_op(body: dict) -> dict:
     parts = [await _git(folder, "diff", "--shortstat", body["base"])]
     if untracked := len((await _git(folder, "ls-files", "--others", "--exclude-standard")).splitlines()):
         parts.append(f"{untracked} untracked file{'s' if untracked > 1 else ''} in the folder")
-    return {"said": "uncommitted: " + ("; ".join(p for p in parts if p) or "no changes")}
+    changed = "; ".join(p for p in parts if p) or "no changes"
+    # After a commit the user ordered, the diff from base spans it too. Any commit counts, theirs as well: say so plainly.
+    code, made = await _git_try(folder, "rev-list", "--count", f"{body['base']}..HEAD")
+    if code:  # base is the empty tree of a repo that had no commits: every commit is new
+        code, made = await _git_try(folder, "rev-list", "--count", "HEAD")
+    if code == 0 and made.strip().isdigit() and (n := int(made)):
+        return {"said": f"{n} new commit{'s' if n > 1 else ''} since it began; changed since then: {changed}"}
+    return {"said": "uncommitted: " + changed}
 
 
 async def commit_op(body: dict) -> dict:
@@ -316,8 +323,8 @@ class GitOps(RunnerBase):
             if not task["worktree"] or (task["changes"] or "").endswith("no changes"):
                 did = f"It left no changes in {folder}"
             else:
-                did = (f"Its changes in {folder} ({task['changes']}) are still there: they're uncommitted and mixed in "
-                       "with anything else there, so review or undo them by hand")
+                did = (f"Its changes in {folder} ({task['changes']}) are still there, mixed in with anything else "
+                       "there, so review or undo them by hand")
         elif not task["branch"]:
             did = "It never got a branch, so there was nothing to remove"
         else:

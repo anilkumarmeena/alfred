@@ -45,6 +45,24 @@ def test_a_project_is_registered_on_its_machine_which_checks_and_makes_its_folde
     assert next(p for p in task_tools.projects_list() if p["name"] == "film")["lives_on"] == "Studio"
 
 
+def test_a_task_in_the_projects_own_folder_there_commits_once_the_user_ordered_it(there, tmp_path):
+    heard = []
+
+    async def run(task, prompt, reporter) -> Outcome:
+        heard.append(await reporter.commit_ordered(task["id"]))
+        return Outcome("Done.", "", 0.01)
+
+    async def main():
+        w = await World(tmp_path, run).up()
+        await registered(w, there)
+        for order in ("Fix the typo and commit it.", None):
+            await finished(w.r, w.r.start("code_change", "fix typo", "Fix the typo", "film", order=order)["id"])
+        await w.down()
+
+    asyncio.run(main())
+    assert heard == [True, False]
+
+
 def test_an_in_place_task_works_in_the_projects_own_folder_there(there, tmp_path):
     (there / "app.py").write_text("print('mine, uncommitted')\n")
     seen = {}

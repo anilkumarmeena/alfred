@@ -7,7 +7,7 @@ from jarvis.core.config import NEW_PROJECTS_DIR
 from jarvis.core.database import COMMAND, KINDS, edits, minutes_since_update, nudges
 from jarvis.node import machines
 from jarvis.safety import approvals, consent, remembered
-from jarvis.safety.commands import ordered, orders, said_scope, tells_approve, tells_deny
+from jarvis.safety.commands import holds_commit, ordered, orders, said_scope, tells_approve, tells_deny
 from jarvis.state import conversation, todo
 from jarvis.tasks import access, client, command_jobs, data_edits, projects
 
@@ -47,7 +47,7 @@ def _brief(t: dict, requests: list[dict] = ()) -> dict:
     if t.get("in_place"):
         out.pop("branch", None)  # user's branch, not the task's
         on = f"on its checked-out branch {t['branch']}" if t.get("branch") else "on whatever is checked out"
-        out["in_place"] = f"Works in the project's own folder {on}, no separate branch; changes are left uncommitted."
+        out["in_place"] = f"Works in the project's own folder {on}, no separate branch; changes are left uncommitted unless the user asked for a commit."
     if t.get("todo") and (item := todo.get(t["todo"])):
         out["todo"] = item["text"] + (" (ticked off)" if item["done"] else "")
     if granted := access.granted(t):
@@ -112,12 +112,12 @@ def _edit(e: dict) -> dict:
 
 
 def _order() -> str:
-    """The user's own words this turn (`heard`) if they order a risky action, else "".
+    """The user's own words this turn (`heard`) if they order a risky action or a commit, or hold one back, else "".
 
-    Sent with a reply or new task so the task isn't asked again.
+    Sent with a reply or new task so the task isn't asked again, or no longer commits ("don't commit yet").
     """
     said = conversation.current().heard.said
-    return said if orders(said) else ""
+    return said if orders(said) or holds_commit(said) else ""
 
 
 async def _mark_seen(tasks: list[dict]) -> None:
@@ -129,7 +129,7 @@ async def _mark_seen(tasks: list[dict]) -> None:
     "task_start",
     "Start a background task. It runs in parallel while you keep talking, and you'll announce "
     "when it finishes or has a question. Kinds: code_change edits a project directly in its folder, "
-    "uncommitted and one task at a time (a second one queues), or, for projects with in_place false, "
+    "uncommitted unless the user's own words ask for a commit, and one task at a time (a second one queues), or, for projects with in_place false, "
     "on its own git branch in a separate worktree (committed, never pushed); code_question reads a project's code and git history to answer something; "
     "research uses the web and reads the user's mail, calendar, Google Chat, Google Sheets and Docs, and their connected tools, and can edit their Sheets and Docs. "
     "JARVIS's own project always works on a branch. "
@@ -339,8 +339,8 @@ def approval_rule_forget(rule: int) -> dict:
     return _rule(remembered.forget(rule)) | {"withdrawn": True}
 
 
-@tool("task_stop", "Stop a running, queued or waiting task. Code changes so far stay uncommitted in the "
-      "project's folder, or on its branch for worktree tasks. A command task's command stops, all of it, as stop_job "
+@tool("task_stop", "Stop a running, queued or waiting task. Code changes so far stay in the project's "
+      "folder (uncommitted, unless the user asked for a commit), or on its branch for worktree tasks. A command task's command stops, all of it, as stop_job "
       "stops it; one waiting for a yes to fix it is left as it failed.", {"id": {"type": "integer"}}, ["id"],
       screened=_TASK_TEXT)
 async def task_stop(id: int) -> dict:
@@ -368,8 +368,8 @@ async def task_merge(id: int) -> dict:
     "task_discard",
     "Throw away a finished, failed or stopped task's work without merging it, and mark it discarded. For a task with "
     "its own branch (in_place false), removes its worktree and deletes the branch, unmerged commits and all. A task "
-    "that worked in place leaves its changes uncommitted in the project's folder, untouched, for the user to undo by "
-    "hand. A running, queued or waiting task must be stopped first. It can't be undone: when the user wants a task "
+    "that worked in place leaves its changes in the project's folder, untouched (and any commit the user had it make), "
+    "for the user to undo by hand. A running, queued or waiting task must be stopped first. It can't be undone: when the user wants a task "
     "thrown away, first say in one sentence which task and what goes (its branch and worktree; for a task that worked "
     "in place, nothing: its changes stay in the folder for them to undo), wait for a yes, then call this. JARVIS "
     "checks their reply itself and refuses when it isn't a plain yes.",

@@ -19,7 +19,7 @@ from jarvis.core import profile
 from jarvis.core.config import TASK_APPROVAL_HOURS
 from jarvis.core.database import APPROVED, CANCELLED, DENIED, EXPIRED, PENDING, SPENT, WAIT_APPROVAL
 from jarvis.safety import remembered
-from jarvis.safety.commands import ordered, orders
+from jarvis.safety.commands import holds_commit, ordered, orders
 from jarvis.state import activity as bell
 from jarvis.tasks.runner_base import RunnerBase
 
@@ -146,12 +146,25 @@ class Approvals(RunnerBase):
         return next((o["said"] for o in self._orders(task_id)
                      if all(ordered(o["said"], i["command"]) for i in items)), "")
 
+    def commit_ordered(self, task_id: int) -> bool:
+        """Whether the user's own words ordered a commit ("fix it and commit"), which an in-place task may then make."""
+        return any("commit" in orders(o["said"]) for o in self._orders(task_id))
+
     def _order(self, task_id: int, said: str | None) -> None:
-        """Keep the user's words if they order a risky action ("merge and push"); such commands then skip asking."""
+        """Keep the user's words if they order a risky action ("merge and push"); such commands then skip asking.
+
+        Words that hold a commit back ("don't commit yet") drop the orders that made one."""
         said = " ".join((said or "").split())[:SAID_MOST]
+        kept = self._orders(task_id)
+        if holds_commit(said):  # "don't commit": a change of mind
+            left = [o for o in kept if "commit" not in orders(o["said"])]
+            if left != kept:
+                kept = left
+                self.store.set(task_id, orders=json.dumps(kept, ensure_ascii=False))
+                self.store.log(task_id, "order", f"{profile.name()}'s words no longer order a commit: \"{said}\"")
         if not orders(said):
             return
-        kept = [o for o in self._orders(task_id) if o["said"] != said] + [{"said": said, "at": time.time()}]
+        kept = [o for o in kept if o["said"] != said] + [{"said": said, "at": time.time()}]
         self.store.set(task_id, orders=json.dumps(kept, ensure_ascii=False))
         self.store.log(task_id, "order", f"{profile.name()}'s own words, which go ahead for what they order: \"{said}\"")
 

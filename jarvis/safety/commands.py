@@ -1057,8 +1057,15 @@ _VERBS = {  # user's word -> what it orders
     "start": {"start"}, "launch": {"start"}, "install": {"install"}, "reinstall": {"install"},
     "uninstall": {"uninstall"}, "remove": {"delete", "uninstall"}, "upgrade": {"upgrade"}, "update": {"upgrade"},
     "sync": {"sync"}, "delete": {"delete"}, "trash": {"delete"}, "erase": {"delete"}, "wipe": {"delete"},
-    "merge": {"merge"}, "create": {"open"}, "open": {"open"}, "raise": {"open"},
+    "merge": {"merge"}, "create": {"open"}, "open": {"open"}, "raise": {"open"}, "commit": {"commit"},
 }
+# "commit" orders one only as a verb on the work, or ending the clause: "commit it", "commit and push", "make a commit".
+# Not a commit named ("the last commit", "from commit abc123", "commit messages", "pre-commit") or the user's own
+# ("I'll commit it")
+_NOT_BEFORE_COMMIT = set("""the that this last latest previous recent my your its their his her which what whose each
+every first next one from since revert pre git i i'll i'd we we'll we'd they he she""".split())
+_AFTER_COMMIT = set("it this that them these those the changes change everything all your my our please now too and "
+                    "then".split()) | {""}
 _SERVICES = {  # order -> allowed launchctl / systemctl / brew services / docker / podman subcommands
     "restart": {"kickstart", "kill", "bootout", "bootstrap", "load", "unload", "stop", "start", "restart", "reload",
                 "try-restart", "reload-or-restart", "try-reload-or-restart"},
@@ -1079,7 +1086,13 @@ _CONTAINER_REMOVES = {"rm", "rmi", "prune", "down", "pause"}  # beyond a restart
 
 def _acts(words: list[str]) -> set[str]:
     """Acts ordered by these words' verbs."""
-    return {act for w in words for act in _VERBS.get(w, ())}
+    return {act for i, w in enumerate(words) for act in _VERBS.get(w, ()) if w != "commit" or _commits(words, i)}
+
+
+def _commits(words: list[str], i: int) -> bool:
+    """Whether words[i], "commit", orders one (see _AFTER_COMMIT)."""
+    before, after = words[i - 1] if i else "", words[i + 1] if i + 1 < len(words) else ""
+    return before not in _NOT_BEFORE_COMMIT and after in _AFTER_COMMIT
 
 
 def _order_words(said: str) -> list[str] | None:
@@ -1095,6 +1108,11 @@ def _order_words(said: str) -> list[str] | None:
 def orders(said: str) -> set[str]:
     """Acts the words order ('push', 'restart', ...); empty if not an order."""
     return _acts(_order_words(said) or [])
+
+
+def holds_commit(said: str) -> bool:
+    """Whether the words speak of committing without ordering it ("don't commit yet"): a commit ordered before lapses."""
+    return "commit" in _words(said) and "commit" not in orders(said)
 
 
 def _named(word: str, said: set[str]) -> bool:
@@ -1367,6 +1385,9 @@ USER_BUS = ("it needs the user's own session (systemd --user), which tasks can't
 # Refused for in-place tasks, which share the user's checkout
 IN_PLACE_GIT = ("commit", "push", "reset", "checkout", "switch", "restore", "stash", "clean", "rebase", "merge",
                 "pull", "cherry-pick", "revert", "am", "branch", "tag", "worktree", "update-ref", "gc", "prune", "init")
+# Lines cat prints from a heredoc (a commit message), up to its delimiter alone on a line; group 1 keeps the cat <<
+# word. Only cat's: what a heredoc feeds a shell are commands.
+_HEREDOC_BODY = re.compile(r"(\bcat[ \t]+<<-?[ \t]*(['\"]?)([A-Za-z_]\w*)\2[^\n]*)\n.*?\n[ \t]*\3[ \t]*(?=\n|\)|$)", re.S)
 
 
 def refused(command: str, in_place: bool = False) -> str:
@@ -1392,12 +1413,32 @@ def refused(command: str, in_place: bool = False) -> str:
             return "it reads or changes passwords in the keychain"
         if platform.LINUX and (why := _user_bus(program, argv[1:])):
             return why
-        if in_place and program == "git":
-            sub = _options_then(argv[1:], {"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
-            if sub and sub[0] in IN_PLACE_GIT:
-                return (f"git {sub[0]} changes the user's own checkout, which in-place tasks leave to them; "
-                        "list it in your summary instead")
+    if in_place and (found := in_place_git(command)):
+        return (f"git {found[0]} changes the user's own checkout, which in-place tasks leave to them; "
+                "list it in your summary instead")
     return ""
+
+
+def in_place_git(command: str) -> list[str]:
+    """Each git subcommand here that changes the user's checkout ('commit', 'push'...), in order.
+
+    An amend, which rewrites a commit of theirs, is 'commit --amend' (as is its abbreviation), unlike a new commit."""
+    if "git" not in command:  # most of a task's commands: skip the parsing
+        return []
+    if "<<" in command:
+        command = _HEREDOC_BODY.sub(r"\1", command)  # a commit message's lines aren't commands, nor its apostrophes quotes
+    if (pieces := _simple_commands(command)) is None:  # unbalanced quotes: every git word, operators split off
+        words = re.split(r"[\s;&|()`]+", command)
+        pieces = [words[i:] for i, w in enumerate(words) if Path(w).name == "git"]
+    found = []
+    for argv in pieces:
+        argv = _strip_prefixes(argv)
+        if not argv or Path(argv[0].lstrip("\\")).name != "git":
+            continue
+        sub = _options_then(argv[1:], {"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
+        if sub and sub[0] in IN_PLACE_GIT:
+            found.append("commit --amend" if sub[0] == "commit" and any(a.startswith("--am") for a in sub) else sub[0])
+    return found
 
 
 def _user_bus(program: str, args: list[str]) -> str:

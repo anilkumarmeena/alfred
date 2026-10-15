@@ -116,12 +116,20 @@ class NetReporter:
         got = await self._ask_main("task.nudges", {})
         return [str(m) for m in (got or {}).get("messages") or []]
 
-    async def cleared(self, task_id: int, item: dict) -> bool:
+    async def _main_says(self, kind: str, body: dict, key: str, timeout: float = 30) -> bool:
+        """Whether the main computer's answer has `key`; no if it refuses or can't be reached."""
         try:
-            got = await self._ask_main("task.cleared", {"item": item})
+            got = await self._ask_main(kind, body, timeout)
         except Refused:
             return False
-        return bool(got and got.get("cleared"))
+        return bool(got and got.get(key))
+
+    async def cleared(self, task_id: int, item: dict) -> bool:
+        return await self._main_says("task.cleared", {"item": item}, "cleared")
+
+    async def commit_ordered(self, task_id: int) -> bool:
+        # Well within the CLI's hook timeout, past which the commit would run unchecked; unreachable: no commit
+        return await self._main_says("task.commit", {}, "ordered", timeout=10)
 
     async def request_approval(self, task_id: int, item: dict) -> dict:
         try:

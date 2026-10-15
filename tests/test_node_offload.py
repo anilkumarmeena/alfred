@@ -288,6 +288,24 @@ def test_a_risky_command_there_waits_for_a_yes_given_here(world, tmp_path):
     assert "approved request" in heard["nudges"][0] and done["status"] == "done"
 
 
+def test_a_task_in_a_copy_there_never_commits_as_only_its_files_come_back(world, tmp_path):
+    heard = []
+
+    async def run(task, prompt, reporter) -> Outcome:
+        heard.append(await reporter.commit_ordered(task["id"]))
+        return Outcome("Done.", "", 0.01)
+
+    async def main():
+        w = await World(tmp_path, run).up()
+        machines.set_placement("tasks", str(w.node))
+        task = w.r.start("code_change", "fix typo", "Fix the typo", "video-agent", order="Fix the typo and commit it.")
+        await finished(w.r, task["id"])
+        await w.down()
+
+    asyncio.run(main())
+    assert heard == [False]
+
+
 def test_reports_made_while_the_link_was_down_arrive_in_order_afterwards(world, tmp_path):
     cut, back = asyncio.Event(), asyncio.Event()
     w_ref = {}
