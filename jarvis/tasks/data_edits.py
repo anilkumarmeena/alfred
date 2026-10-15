@@ -8,6 +8,7 @@ Edits are validated by `check`, stored numbered on the task's `edits` column, an
 Every text field is scanned for hidden instructions; anything suspicious is `flagged`, which forces needs_yes.
 """
 
+import asyncio
 import re
 from datetime import datetime
 from pathlib import Path
@@ -234,8 +235,14 @@ def pending(task: dict) -> list[dict]:
     return [e for e in edits(task) if e["status"] == PENDING]
 
 
-def apply(edit: dict) -> str:
+async def apply(edit: dict) -> str:
     """Apply the edit; returns the voice tool's reply. ValueError if it can't be done."""
+    if edit["action"] == "todo_add":  # the list may have gained it since: then it isn't added twice
+        return await todo.add_new(edit["item"])
+    return await asyncio.to_thread(_apply, edit)
+
+
+def _apply(edit: dict) -> str:
     match edit["action"]:
         case "project_register":
             out = projects.register(edit["name"], edit.get("path") or None, edit.get("aliases"), edit.get("about", ""),
@@ -244,8 +251,6 @@ def apply(edit: dict) -> str:
         case "project_update":
             out = projects.update(edit["name"], edit.get("path"), edit.get("aliases"), edit.get("about"), edit.get("in_place"))
             return f"Updated {out['name']}: at {out['path']}, {projects.mode(out['in_place'])}."
-        case "todo_add":
-            return todo.add(edit["item"])
         case "todo_done":
             return todo.done(edit["text"])
         case "todo_reword":

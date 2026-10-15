@@ -37,7 +37,7 @@ def suggests(*proposals: dict):
 
     async def body(task, prompt, reporter) -> Outcome:
         for p in proposals:
-            reporter.propose(task["id"], p)
+            await reporter.propose(task["id"], p)
         reporter.session(task["id"], "s1")
         return Outcome("Did it.\nDetails.", "", 0.01)
 
@@ -167,7 +167,7 @@ def test_one_edit_is_announced_as_such_and_none_adds_nothing(data, monkeypatch):
 
 def test_a_task_with_a_question_mentions_its_edits_only_once_finished(data, monkeypatch):
     async def asks(task, prompt, reporter) -> Outcome:
-        reporter.propose(task["id"], TODO)
+        await reporter.propose(task["id"], TODO)
         reporter.ask(task["id"], "Which phone?")
         return Outcome("Asked.", "", 0.01)
 
@@ -193,10 +193,10 @@ def test_a_task_can_suggest_only_so_many_edits(data, monkeypatch):
     monkeypatch.setattr(data_edits, "MAX_EDITS", 2)
     r = runner.Runner()
     task = r.store.create("code_change", "t", "i", "video-agent")
-    r.propose(task["id"], TODO)
-    r.propose(task["id"], FACT)
+    asyncio.run(r.propose(task["id"], TODO))
+    asyncio.run(r.propose(task["id"], FACT))
     with pytest.raises(ValueError, match="at most 2"):
-        r.propose(task["id"], FACT)
+        asyncio.run(r.propose(task["id"], FACT))
 
 
 # ── Applying and dismissing ─────────────────────────────────────
@@ -349,6 +349,42 @@ def test_the_task_tool_says_what_it_noted_or_what_to_fix(data, monkeypatch):
     bad = asyncio.run(propose({"action": "todo_add", "reason": "x"}))
     assert bad["is_error"] and bad["content"][0]["text"] == "Not suggested: todo_add needs item."
     assert len(edits(r.store.get(task["id"]))) == 1
+
+
+def test_a_suggested_to_do_the_list_has_is_refused_or_merged_into_it(data, monkeypatch):
+    from jarvis.brain import sdk
+
+    async def judged(prompt, *args, **options):
+        return {"same": 1, "merged": "Build the iPhone app, with push notifications"}, 0.0
+
+    monkeypatch.setattr(reporting, "create_sdk_mcp_server", lambda name, tools: {t.name: t.handler for t in tools})
+    r = runner.Runner()
+    task = r.store.create("code_change", "t", "i", "video-agent")
+    propose = reporting._task_server(task["id"], r)["propose_data_edit"]
+    said = [asyncio.run(propose({"action": "todo_add", "item": item, "reason": "x"}))["content"][0]["text"]
+            for item in ("build the iPhone app.", "Old")]
+    assert said == ["Not suggested: it's already on the to-do list as 'Build the iPhone app'.",
+                    f"Not suggested: it's already done (ticked off {TODAY}): 'Old'. If part of it is still to do, "
+                    "suggest only that part."]
+    monkeypatch.setattr(todo, "TODO_MATCH_ENABLED", True)
+    monkeypatch.setattr(sdk, "ask_json", judged)
+    merged = asyncio.run(propose({"action": "todo_add", "item": "Build an iPhone app with push notifications",
+                                  "reason": "Push needs it."}))
+    assert merged["content"][0]["text"].startswith("Suggested as edit 1: reword the to-do matching 'Build the iPhone "
+                                                   "app' as: Build the iPhone app, with push notifications.")
+    (kept,) = edits(r.store.get(task["id"]))
+    assert kept["reason"] == "It repeats this to-do, adding detail. Push needs it." and "rewords" in kept["needs_yes"]
+    asyncio.run(r.edits(task["id"], "apply", [1]))
+    assert "- [ ] Build the iPhone app, with push notifications" in todo.read()
+
+
+def test_a_suggested_to_do_the_list_gained_meanwhile_is_not_added_again(data, monkeypatch):
+    r, _ = run_task(monkeypatch, "code_change", "video-agent", TODO)
+    todo.add("Try the new push self-test")
+    out = asyncio.run(r.edits(1, "apply", [1]))
+    assert out["outcome"] == ["edit 1 applied: Not added: it's already on the to-do list as 'Try the new push "
+                              "self-test'."]
+    assert todo.read().count("Try the new push self-test") == 1
 
 
 def test_every_task_kind_can_suggest_edits(data, monkeypatch):

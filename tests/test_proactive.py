@@ -209,7 +209,7 @@ def test_a_follow_up_the_review_finds_becomes_a_reminder_on_the_users_yes():
     checked = data_edits.check(edit, "review")
     assert data_edits.needs_yes(checked, "review")
     assert data_edits.describe(checked).endswith(": Check the build")
-    said = data_edits.apply(checked)
+    said = asyncio.run(data_edits.apply(checked))
     assert said.startswith("I'll remind") and any(j["text"] == "Check the build" for j in schedules.items())
     with pytest.raises(ValueError):
         data_edits.check(edit, "")  # only the review may suggest them

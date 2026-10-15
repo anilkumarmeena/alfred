@@ -618,7 +618,8 @@ def test_only_the_review_suggests_skills_and_always_for_a_yes(skills_home):
     edit = data_edits.check(SKILL_EDIT, "review")
     assert edit["name"] == "standup-notes" and data_edits.needs_yes(edit, "review")
     assert data_edits.describe(edit) == "save a new skill standup-notes: Writes the standup."
-    assert data_edits.apply(edit) == "Saved the new skill standup-notes, switched on, from the next conversation."
+    said = asyncio.run(data_edits.apply(edit))
+    assert said == "Saved the new skill standup-notes, switched on, from the next conversation."
     assert home.get("standup-notes").source == home.LEARNED
     assert data_edits.describe(edit) == "update the skill standup-notes: Writes the standup."
     with pytest.raises(ValueError, match="!`command`"):
