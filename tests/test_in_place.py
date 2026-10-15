@@ -317,6 +317,7 @@ class NullReporter:
     def subagent(self, *a): ...
     def ask(self, *a): ...
     def flag(self, *a): ...
+    def commit_ordered(self, *a): return False
 
 
 def worker_task(**fields) -> dict:
@@ -328,8 +329,9 @@ def test_in_place_worker_runs_in_the_repo_and_refuses_git_writes(env, monkeypatc
     use_task_cache(monkeypatch, env["tmp"] / "cache")
     opts = worker._options(worker_task(in_place=1, worktree=str(env["video"]), branch="main"), NullReporter())
     assert opts.cwd == str(env["video"])
-    for command in ("commit", "push", "reset", "checkout", "stash", "clean", "branch"):
+    for command in ("push", "reset", "checkout", "stash", "clean", "branch"):
         assert f"Bash(git {command}:*)" in opts.disallowed_tools
+    assert "Bash(git commit:*)" not in opts.disallowed_tools  # the gate lets an ordered one through (test_in_place_commits)
     prompt = opts.system_prompt["append"]
     assert "on branch main" in prompt and "uncommitted" in prompt and "worktree" in prompt
     assert "fresh git worktree" not in prompt

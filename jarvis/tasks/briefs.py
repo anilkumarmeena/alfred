@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from jarvis import prompts
+from jarvis.brain.sdk import ATTRIBUTION
 from jarvis.core import profile
 from jarvis.core.config import ROOT, TASK_CACHE_DIR, TASK_READ_DIRS
 from jarvis.skills import home as skills
@@ -127,7 +128,7 @@ def _system_prompt(task: dict, cwd: Path, setup: project_claude.Setup | None = N
 - You are working directly in {profile.name()}'s own checkout of {task['project']} at {cwd}, {on}. There is no separate worktree or branch. Read the project's CLAUDE.md or README first if it has one.
 - {profile.name()} may have uncommitted changes here. Keep them: never reset, restore, check out, stash or clean files, and don't delete or overwrite work that isn't yours.
 - Bash commands run in a sandbox: they can write only inside this folder, and reach any host on the network.{_host_brief(task["id"])}
-- Don't commit, push, or create or switch branches. Leave your changes uncommitted for {profile.name()} to review, and list the files you changed in your summary."""
+- Don't push, or create or switch branches. Commit only when {profile.name()}'s own request asks you to (it reaches you through JARVIS, as with "fix it and commit"): then a plain git commit with Bash goes through, never --amend. Stage only the files you changed, never their own uncommitted work, and end the message with "{ATTRIBUTION['commit']}". Otherwise leave your changes uncommitted for {profile.name()} to review. Either way, list the files you changed in your summary."""
     elif kind == "code_change":
         extra = f"""
 - You are in a fresh git worktree of {task['project']}, on branch {task['branch']}, made from commit {task['base'][:7]}. Read the project's CLAUDE.md or README first if it has one.

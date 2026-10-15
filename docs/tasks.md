@@ -70,7 +70,7 @@ Ask for anything that takes a while and JARVIS starts a task. Keep talking, star
 
 | Mode | Behaviour |
 |---|---|
-| **In place** (default) | Straight into the project's folder, **uncommitted** for you to review; one task at a time per project |
+| **In place** (default) | Straight into the project's folder, **uncommitted** for you to review, unless you ask it to commit ("fix it and commit"); one task at a time per project |
 | **Worktree** (`projects set NAME --worktrees`) | Own worktree and `jarvis/<id>-...` branch per task, **committed but never pushed** |
 | **JARVIS's own repo** | Always uses worktrees |
 

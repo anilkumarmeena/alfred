@@ -15,6 +15,7 @@ helper subagents win name clashes. A run doesn't end while background subagents 
 """
 
 import asyncio
+import functools
 import json
 import logging
 import time
@@ -231,8 +232,10 @@ def _options(task: dict, reporter: Reporter) -> ClaudeAgentOptions:
     plugins = ([{"type": "local", "path": str(setup.plugin)}] if setup and setup.plugin else []) + (
         [{"type": "local", "path": str(mine_at)}] if mine else [])
     agents = (setup.agents if setup else {}) | helpers  # helpers win name clashes
+    in_place = kind == "code_change" and task["in_place"]
     gate = TaskGate(cwd, read_roots, write_roots, bash, agents, host_gate,
-                    editors=set(setup.agents) - set(helpers) if setup else (), more_writes=more_writes)
+                    editors=set(setup.agents) - set(helpers) if setup else (), more_writes=more_writes,
+                    commit_ordered=functools.partial(reporter.commit_ordered, task["id"]) if in_place else None)
     model, effort = _model(task)
 
     return sdk_options(

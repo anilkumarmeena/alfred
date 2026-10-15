@@ -457,7 +457,7 @@ The runner is a **separate always-on service** because a call's job process dies
 
 | Kind | Works in | Default abilities | Never |
 |---|---|---|---|
-| `code_change` | Project folder **in place** (uncommitted), or a worktree on `jarvis/<id>-<title>` | Read/edit its folder, sandboxed shell, host commands, Artifact publishing | Commit, switch branches, read secrets, edit JARVIS's files |
+| `code_change` | Project folder **in place** (uncommitted), or a worktree on `jarvis/<id>-<title>` | Read/edit its folder, sandboxed shell, host commands, Artifact publishing | Commit (in place, unless the user ordered one), switch branches, read secrets, edit JARVIS's files |
 | `code_question` | Live checkout, read-only | Read and search, single read-only git commands | Edit, other commands |
 | `research` | `data/tasks/<id>/` | Web, accounts (reads, plus Sheets and Docs edits) and research MCP servers | Delete or send anything on Google, contact anyone, change anything else |
 | `command` | Any folder | A shell command, **no model, no task slot** | |
@@ -496,7 +496,7 @@ Each run resumes the task's own Claude session, so follow-ups keep everything it
 | 🐢 | **Stalls** | `stall.py` `Pulse` | Silent too long → `stalled` and one alert. **Never stopped automatically** |
 | ✏️ | **Suggested data edits** | `data_edits.py`, `task_edits.py` | Tasks can't write `data/`; they call `propose_data_edit` |
 
-- **In place:** uncommitted work is saved first with `git stash create` under `refs/jarvis/task-<id>-<time>`. Folders without git are diffed by snapshot.
+- **In place:** uncommitted work is saved first with `git stash create` under `refs/jarvis/task-<id>-<time>`. Folders without git are diffed by snapshot. Git that changes the checkout is denied (`_IN_PLACE_DENIED`, `TaskGate.checkout`, `commands.refused`), except a plain `git commit` with sandboxed Bash once the user's own words order one ("fix it and commit", `Approvals.commit_ordered`); never `--amend`, and push stays gated.
 - **Worktrees:** JARVIS's own repo always uses worktrees, and its branches must pass the test suite before merging (`merge_check.py`).
 - **Merge / discard:** refused while the task is active or with uncommitted changes. `task_discard` also needs the user's own words this turn (`heard`) to be a plain yes, read by `consent.reply`.
 - **Nudges:** messages to a running task are queued in `nudges`.

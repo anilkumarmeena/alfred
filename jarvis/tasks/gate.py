@@ -7,6 +7,7 @@
 Secrets are hidden from file tools (`_secret`) and from the sandbox via Read deny rules (`_secret_rules`).
 """
 
+import logging
 import re
 import shlex
 from collections.abc import Awaitable, Callable, Iterable
@@ -20,6 +21,8 @@ from jarvis.safety import commands
 from jarvis.tasks.host_tools import HOST_COMMANDS, _inside, _resolve, answer
 from jarvis.tasks.subagents import _AGENT_TOOLS
 
+log = logging.getLogger("jarvis.tasks.gate")
+
 ARTIFACT = "Artifact"
 
 _FILE_ARG = {"Read": "file_path", "Glob": "path", "Grep": "path", "Edit": "file_path", "Write": "file_path", "NotebookEdit": "notebook_path"}
@@ -27,8 +30,9 @@ _WRITES = {"Edit", "Write", "NotebookEdit"}
 _GIT_READS = {"log", "show", "diff", "blame", "status", "shortlog", "ls-files", "rev-parse"}
 _GIT_BLOCKED = ("--output", "--ext-diff", "--no-index")  # write files, run programs, or read outside the repo
 _SHELL_META = re.compile(r"[;&|`$<>()\\\n]")
-# In-place tasks share the user's checkout: deny git commands that commit, push, move branches or drop changes
-_IN_PLACE_DENIED = [f"Bash(git {c}:*)" for c in commands.IN_PLACE_GIT]  # host side: commands.refused
+# In-place tasks share the user's checkout: deny git commands that commit, push, move branches or drop changes.
+# Commits are left to TaskGate.checkout, which lets one through when the user ordered it. Host side: commands.refused
+_IN_PLACE_DENIED = [f"Bash(git {c}:*)" for c in commands.IN_PLACE_GIT if c != "commit"]
 _ARTIFACT_ACTIONS = {"publish", "read", "list"}
 _ARTIFACT_PATHS = ("file_path", "file_paths", "out_dir", "paths")  # Artifact args naming local paths
 DOC_IMAGES = "mcp__jarvis__docs_insert_image"  # uploads local image files, so their paths are checked
@@ -113,17 +117,20 @@ class TaskGate:
 
     `bash` approves unsandboxed Bash (None: deny all). `agents`: allowed subagents; `editors`: those that may edit
     (project ones only). `host_gate` decides host_run/start_job. `more_writes`: extra write roots from the projects
-    grant, never secrets or JARVIS's files.
+    grant, never secrets or JARVIS's files. `commit_ordered` (the user's own checkout, in place): whether they ordered
+    a commit, which sandboxed Bash may then make (`checkout`).
 
     Allow rules from project skills skip can_use_tool, so `hook` (PreToolUse) runs the same checks on every call."""
 
     def __init__(self, cwd: Path, read_roots: list[Path], write_roots: list[Path], bash: Callable[[str], bool] | None = None,
                  agents: Iterable[str] = (), host_gate: Callable | None = None, editors: Iterable[str] = (),
-                 more_writes: Iterable[Path] = ()) -> None:
+                 more_writes: Iterable[Path] = (), commit_ordered: Callable[[], bool | Awaitable[bool]] | None = None) -> None:
         self.cwd, self.read_roots, self.write_roots, self.more_writes = cwd, read_roots, write_roots, list(more_writes)
         self.bash, self.agents, self.host_gate, self.editors = bash, set(agents), host_gate, set(editors)
-        # Tools `hook` checks: all the gate decides except sandboxed Bash
-        self.checked = (_AGENT_TOOLS | set(_FILE_ARG) | {ARTIFACT, DOC_IMAGES} | ({"Bash"} if bash is not None else set())
+        self.commit_ordered = commit_ordered
+        # Tools `hook` checks: all the gate decides, plus sandboxed Bash in the user's own checkout
+        self.checked = (_AGENT_TOOLS | set(_FILE_ARG) | {ARTIFACT, DOC_IMAGES}
+                        | ({"Bash"} if bash is not None or commit_ordered is not None else set())
                         | (set(HOST_COMMANDS) if host_gate is not None else set()))
         self.kinds: dict[str, str] = {}  # subagent id -> type, from PreToolUse
         self.decided: dict[str, Decision] = {}  # host-command decisions made by `hook`, by tool_use_id
@@ -201,13 +208,39 @@ class TaskGate:
                 return PermissionResultDeny(message=f"docs_insert_image takes https links{where} in this task.")
         return PermissionResultAllow()
 
+    async def checkout(self, command: str) -> Decision:
+        """Sandboxed Bash in the user's own checkout: no git that changes it, except a plain commit they ordered."""
+        if not (found := commands.in_place_git(command)):
+            return PermissionResultAllow()
+        if set(found) == {"commit"} and await self._commit_ordered():
+            return PermissionResultAllow()
+        name, other = profile.name(), next((sub for sub in found if sub != "commit"), "")
+        if other == "commit --amend":
+            return PermissionResultDeny(message=f"Not run: git commit --amend rewrites a commit of {name}'s; make a new one.")
+        if other:
+            return PermissionResultDeny(message=f"Not run: git {other} changes {name}'s own checkout, which in-place "
+                                                "tasks leave to them; list it in your summary instead.")
+        return PermissionResultDeny(message=f"Not run: commit here only when {name}'s own words ask for one. Leave "
+                                            "your changes uncommitted and list the files you changed in your summary.")
+
+    async def _commit_ordered(self) -> bool:
+        """Whether the user ordered a commit; no on any failure, as a hook that fails lets the command run."""
+        try:
+            return bool(self.commit_ordered and await answer(self.commit_ordered()))
+        except Exception:
+            log.exception("couldn't check for an order to commit")
+            return False
+
     async def pre_tool_use(self, data: dict, tool_use_id: str | None, _ctx) -> dict:
         if agent := data.get("agent_id"):
             self.kinds[agent] = data.get("agent_type") or ""
         if (name := data.get("tool_name")) not in self.checked:
             return {}
-        ctx = ToolPermissionContext(tool_use_id=tool_use_id, agent_id=agent)
-        decision = await answer(self.decide(name, data.get("tool_input") or {}, ctx))
+        args = data.get("tool_input") or {}
+        if name == "Bash" and self.bash is None:  # sandboxed; can_use_tool denies asking to leave the sandbox
+            decision = await self.checkout(str(args.get("command") or ""))
+        else:
+            decision = await answer(self.decide(name, args, ToolPermissionContext(tool_use_id=tool_use_id, agent_id=agent)))
         if isinstance(decision, PermissionResultDeny):
             return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                            "permissionDecisionReason": decision.message}}
