@@ -3,14 +3,17 @@
 Covered: every tool's result but UNSCREENED tools' (model-authored output, subagent answers, a task's own reporting
 tools) and JARVIS's own tools', which each mark what of theirs is screened (Tool.screened): all of it for outside
 content (mail, pages, documents), none for JARVIS's own data (tasks, schedules, memory, skills), or just the
-task-written fields of a task's record. Pictures and text under MIN_CHARS are skipped.
+task-written fields of a task's record. Pictures, text under MIN_CHARS and JARVIS's own wording given as a result
+(own(): a slow call's "still running" note) are skipped.
 A fast model (injection_model preference) returns one of:
   block   asks the assistant to act (send, delete, share, call tools): quoted passages are withheld (all text if
           they can't be located), the model is told to inform the user, and the bell lists it
   warn    aimed at the assistant but harmless: passes with a warning
   clean   passes unchanged
-Failure or timeout passes the result marked unchecked; a broken check never breaks a tool. Text is judged in parallel
-CHUNKs, verdicts cached by hash in injection_checks; each check uses its own single-use, pre-warmed CLI session.
+Failure or timeout passes the result marked unchecked; a broken check never breaks a tool. A result's strings are
+packed into CHUNKs judged in parallel, verdicts cached by hash in injection_checks; a clean chunk also keeps each of
+its strings clean, so a record that changed in one field (a task list) is judged on that field alone next time. Each
+check uses its own single-use, pre-warmed CLI session.
 """
 
 import asyncio
@@ -44,6 +47,7 @@ PARALLEL = 4  # concurrent checks per event loop
 KEEP_DAYS = 30  # verdict cache lifetime
 PRUNE_EVERY = 100  # inserts between prunes of expired verdicts
 IDLE_SECONDS = 300  # close an unused warmed session after this
+OWN_KEPT = 64  # distinct own() texts remembered
 WITHHELD = "[withheld by JARVIS's safety check: hidden instructions aimed at the assistant]"
 # Results are model-authored, or a subagent's answer (whose reads were screened in its session)
 UNSCREENED = {"Edit", "Write", "MultiEdit", "NotebookEdit", "TodoWrite", "ToolSearch", "ExitPlanMode", "Skill",
@@ -107,10 +111,10 @@ async def screen(tool: str, args: dict, response, model: str, seconds: float) ->
     if not (covered := covers(tool)):
         return {}
     fields = None if covered is True else covered
-    if len(text := "\n".join(_texts(response, fields)).strip()) < MIN_CHARS:
+    if len("\n".join(texts := _texts(response, fields)).strip()) < MIN_CHARS:
         return {}
     started = time.monotonic()
-    checks = await judge(text, model, seconds)
+    checks = await judge(texts, model, seconds)
     worst = max((c.verdict for c in checks), key=VERDICTS.index)
     log.info("injection check of %s: %s in %.1f s", tool, worst, time.monotonic() - started)
     if worst == CLEAN:
@@ -168,15 +172,35 @@ def covers(tool: str) -> bool | tuple[str, ...]:
     return True if found is None else found.screened
 
 
+_own: dict[str, None] = {}  # own() texts, oldest first
+
+
+def own(text: str) -> str:
+    """`text`, JARVIS's own wording that a tool call returns in place of a result, marked so screening skips it.
+
+    Marked where JARVIS writes it, never recognised by its wording: only a string equal to it is skipped, which
+    is JARVIS's own text wherever it shows, so nothing outside can hide behind it.
+    """
+    _own.pop(stripped := text.strip(), None)
+    _own[stripped] = None
+    while len(_own) > OWN_KEPT:
+        del _own[next(iter(_own))]
+    return text
+
+
 def _map(value, fields: tuple[str, ...] | None, fn: Callable[[str], str]):
-    """Same-shape `value` with `fn` applied, in order, to each screened string: all but pictures and _STRUCTURE
-    keys, or with `fields`, only the strings under those keys in JSON records (other text whole)."""
+    """Same-shape `value` with `fn` applied, in order, to each screened string: all but pictures, _STRUCTURE keys
+    and own() texts, or with `fields`, only the strings under those keys in JSON records (other text whole)."""
+    return _walk(value, fields, lambda text: text if text.strip() in _own else fn(text))
+
+
+def _walk(value, fields: tuple[str, ...] | None, fn: Callable[[str], str]):
     if isinstance(value, str):
         return fn(value) if fields is None else _in_json(value, fields, fn)
     if isinstance(value, list):
-        return [_map(v, fields, fn) for v in value]
+        return [_walk(v, fields, fn) for v in value]
     if isinstance(value, dict) and value.get("type") not in _PICTURES:
-        return {k: v if k in _STRUCTURE else _map(v, fields, fn) for k, v in value.items()}
+        return {k: v if k in _STRUCTURE else _walk(v, fields, fn) for k, v in value.items()}
     return value
 
 
@@ -239,22 +263,44 @@ _pending: dict[str, asyncio.Future] = {}  # in-flight checks by hash; identical 
 _limits: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()  # PARALLEL semaphore per event loop
 
 
-async def judge(text: str, model: str, seconds: float) -> list[Check]:
-    """One verdict per CHUNK, judged in parallel; UNCHECKED for failures, timeouts and text past MAX_CHUNKS."""
-    pieces = [text[i:i + CHUNK] for i in range(0, len(text), CHUNK)]
-    checks = list(await asyncio.gather(*(_piece(p, model, seconds) for p in pieces[:MAX_CHUNKS])))
+async def judge(texts: list[str], model: str, seconds: float) -> list[Check]:
+    """One verdict per CHUNK of the strings not already kept clean, judged in parallel; UNCHECKED for failures,
+    timeouts and text past MAX_CHUNKS."""
+    keys = {t: _key(model, t) for t in (t.strip() for t in texts) if t}
+    known = await asyncio.to_thread(_kept_clean, {k: t for t, k in keys.items()})
+    pieces = _pack([t for t in keys if t not in known])
+    checks = await asyncio.gather(*(_piece(p, [keys[t] for t in parts], model, seconds)
+                                    for p, parts in pieces[:MAX_CHUNKS]))
     if len(pieces) > MAX_CHUNKS:
         checks.append(Check(UNCHECKED, f"only its first {MAX_CHUNKS * CHUNK:,} characters were checked"))
-    return checks
+    return checks or [Check(CLEAN)]
 
 
-async def _piece(text: str, model: str, seconds: float) -> Check:
-    key = hashlib.sha256(f"{model}\n{text}".encode()).hexdigest()
+def _pack(texts: list[str]) -> list[tuple[str, tuple[str, ...]]]:
+    """(chunk, the strings wholly in it): strings joined by lines up to CHUNK; a longer one is cut into its own."""
+    chunks: list[tuple[str, tuple[str, ...]]] = []
+    for text in texts:
+        if len(text) > CHUNK:
+            chunks += [(text[i:i + CHUNK], ()) for i in range(0, len(text), CHUNK)]
+        elif chunks and chunks[-1][1] and len(chunks[-1][0]) + 1 + len(text) <= CHUNK:
+            chunk, parts = chunks[-1]
+            chunks[-1] = (f"{chunk}\n{text}", (*parts, text))
+        else:
+            chunks.append((text, (text,)))
+    return chunks
+
+
+def _key(model: str, text: str) -> str:
+    return hashlib.sha256(f"{model}\n{text}".encode()).hexdigest()
+
+
+async def _piece(text: str, part_keys: list[str], model: str, seconds: float) -> Check:
+    key = _key(model, text)
     if kept := await asyncio.to_thread(_kept, key):
         return kept
     loop = asyncio.get_running_loop()
     if (future := _pending.get(key)) is None or future.get_loop() is not loop:
-        future = _pending[key] = loop.create_task(_check(key, text, model))
+        future = _pending[key] = loop.create_task(_check(key, text, model, part_keys))
         future.add_done_callback(lambda f: _settled(key, f))
     try:
         # Shielded: a timed-out check keeps running so its verdict is cached
@@ -274,7 +320,9 @@ def _settled(key: str, future: asyncio.Future) -> None:
         future.exception()  # mark retrieved, in case nobody awaited it
 
 
-async def _check(key: str, text: str, model: str) -> Check:
+async def _check(key: str, text: str, model: str, part_keys: list[str]) -> Check:
+    """`text`'s verdict, kept under `key`, and when clean under its strings' `part_keys` too: here, not by the
+    caller, so a check that outlasts its wait still spares the next one."""
     limit = _limits.setdefault(asyncio.get_running_loop(), asyncio.Semaphore(PARALLEL))
     tag = f"content-{secrets.token_hex(4)}"  # unguessable, so the text can't close it early
     async with limit:
@@ -282,7 +330,7 @@ async def _check(key: str, text: str, model: str) -> Check:
                                 model)
     if (found := parse(reply)) is None:
         raise ValueError(f"no verdict in {reply[:200]!r}")
-    await asyncio.to_thread(_keep, key, found)
+    await asyncio.to_thread(_keep, [key, *part_keys] if found.verdict == CLEAN else [key], found)
     return found
 
 
@@ -324,13 +372,28 @@ def _kept(key: str) -> Check | None:
     return Check(row["verdict"], row["reason"], tuple(json.loads(row["excerpts"]))) if row else None
 
 
-def _keep(key: str, check: Check) -> None:
+def _kept_clean(by_key: dict[str, str]) -> set[str]:
+    """Of the texts in `by_key`, those kept clean within KEEP_DAYS."""
+    if not by_key:
+        return set()
+    try:
+        with _db() as db:
+            rows = db.execute(f"select hash from injection_checks where verdict = ? and at > ? and hash in "
+                              f"({','.join('?' * len(by_key))})", (CLEAN, time.time() - KEEP_DAYS * 86400, *by_key))
+            return {by_key[row["hash"]] for row in rows}
+    except (sqlite3.Error, OSError) as e:
+        log.warning("couldn't read kept injection checks: %s", e)
+        return set()
+
+
+def _keep(keys: list[str], check: Check) -> None:
     now = time.time()
     try:
         with _db() as db:
-            row = db.execute("insert or replace into injection_checks values (?, ?, ?, ?, ?)",
-                             (key, check.verdict, check.reason, json.dumps(check.excerpts), now)).lastrowid
-            if row % PRUNE_EVERY == 0:
+            rows = [db.execute("insert or replace into injection_checks values (?, ?, ?, ?, ?)",
+                               (key, check.verdict, check.reason, json.dumps(check.excerpts), now)).lastrowid
+                    for key in dict.fromkeys(keys)]
+            if any(row % PRUNE_EVERY == 0 for row in rows):
                 db.execute("delete from injection_checks where at < ?", (now - KEEP_DAYS * 86400,))
     except (sqlite3.Error, OSError) as e:
         log.warning("couldn't keep an injection check: %s", e)

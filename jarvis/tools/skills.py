@@ -151,6 +151,7 @@ def skill_draft(name: str, description: str, instructions: str) -> dict:
     {"source": {"type": "string", "description": "The repo, folder or zip link."},
      "name": {"type": "string", "description": "Which skill, when the link holds several."}},
     ["source"],
+    screened=("several", "skill", "summary"),  # what the fetched skill says, there and in the summary; next is JARVIS's
 )
 async def skill_install(source: str, name: str = "") -> dict:
     staged = await install.stage(source)

@@ -32,6 +32,9 @@ NEXT = ("Nothing changed yet. Call connection_confirm with this draft_id straigh
         "and asks for the yes itself, so don't describe it or ask.")
 LATER = "from the next conversation"
 NAMED = 12  # tools named per kind in a spoken summary before "and N more"
+# Screened (Tool.screened): what the registry or a server says, in its entries, the settings it needs, a draft's
+# summary and its tools' names; the rest (next, verified) is JARVIS's own
+_OUTSIDE = ("found", "needs_settings", "summary", "tools", "check")
 PANEL = "the control panel's Connections page"
 
 
@@ -117,6 +120,7 @@ def connections_list() -> list[dict] | str:
     {"query": {"type": "string", "description": "The service's name, or a word for what it does."}},
     ["query"],
     reads=True,
+    screened=_OUTSIDE,
 )
 async def connection_find(query: str) -> dict:
     found = await mcp_registry.search(query)
@@ -168,6 +172,7 @@ def _needs_said(server: Server) -> str:
      "keys": {"type": "array", "items": {"type": "string"},
               "description": "Found on the web: the environment variables (a package) or keys (a URL) it needs, "
                              "like NOTION_TOKEN: names only."}},
+    screened=_OUTSIDE,
 )
 async def connection_add(registry_name: str = "", way: int = 0, label: str = "", settings: dict | None = None,
                          source: str = "", package: str = "", url: str = "", keys: list[str] | None = None) -> dict:
@@ -292,6 +297,7 @@ def _sorted_said(server: Server, tools: list[dict], sorted_: dict[str, Tool], ov
      "check": {"type": "string", "description": "Its sign-in check: a reading tool taking no arguments. Left out, "
                                                 "it keeps the one it has, if that's still a reading tool."}},
     ["name"],
+    screened=_OUTSIDE,
 )
 async def connection_review(name: str, reading: list[str] | None = None, changing: list[str] | None = None,
                             off: list[str] | None = None, check: str | None = None) -> dict:
@@ -369,6 +375,7 @@ def connection_disable(name: str) -> str:
     "them.",
     {"name": {"type": "string", "description": "The connection's name or label."}},
     ["name"],
+    screened=_OUTSIDE,
 )
 async def connection_update(name: str) -> dict | str:
     server = _server(name)

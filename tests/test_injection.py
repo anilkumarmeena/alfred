@@ -6,7 +6,9 @@ import json
 import pytest
 from claude_agent_sdk import HookMatcher
 
+from jarvis import tools
 from jarvis.brain import sdk
+from jarvis.brain.kept import Kept
 from jarvis.core import config
 from jarvis.safety import injection
 from jarvis.safety.injection import BLOCK, CLEAN, WARN, WITHHELD
@@ -202,8 +204,7 @@ def test_jarvis_own_data_and_a_tasks_reporting_tools_arent_checked(model):
 
 def test_outside_content_and_tools_jarvis_doesnt_know_are_checked(model):
     for tool in ("mcp__jarvis__file_read", "mcp__jarvis__browser_read", "mcp__jarvis__screen_look",
-                 "mcp__jarvis__connection_find", "mcp__jarvis__skill_install", "mcp__jarvis__gmail_read",
-                 "mcp__notion__search", "mcp__host__host_run", "WebFetch", "Read", "Bash"):
+                 "mcp__jarvis__gmail_read", "mcp__notion__search", "mcp__host__host_run", "WebFetch", "Read", "Bash"):
         assert injection.covers(tool) is True, tool  # a new connection or tool is screened without marking
     screen(mcp(EMAIL), tool="mcp__notion__search")
     assert len(model.prompts) == 1
@@ -278,6 +279,123 @@ def test_a_partly_screened_tools_plain_text_reply_is_checked_whole(model):
         updated = screen(response, tool="mcp__jarvis__task_merge")["hookSpecificOutput"]["updatedToolOutput"]
         assert ATTACK not in json.dumps(updated) and "Merging task-7" in json.dumps(updated)
     assert ATTACK in model.prompts[0]
+
+
+# ── JARVIS's own wording ────────────────────────────────────────
+
+
+def still_running(monkeypatch) -> str:
+    """What a slow call returns in place of its result (jarvis.brain.kept)."""
+
+    async def slow(_name, _args):
+        await asyncio.sleep(5)
+        return "{}", False
+
+    monkeypatch.setattr(tools, "run", slow)
+
+    async def run():
+        kept = Kept(seconds=0.01)
+        kept.finished = lambda *_: None
+        said, _ = await kept.run(tools.Tool("task_merge", "", {}, [], lambda: None), {"id": 7})
+        await kept.close()
+        return said
+
+    return asyncio.run(run())
+
+
+def test_a_slow_calls_still_running_note_isnt_checked(model, monkeypatch):
+    said = still_running(monkeypatch)
+    assert "don't call it again or wait for it" in said
+    for tool in ("mcp__jarvis__task_merge", "mcp__jarvis__gmail_read"):  # partly screened, and all of it
+        assert screen(mcp(said), tool=tool) == {}, tool
+        assert screen(said, tool=tool) == {}, tool  # as a kept call's text
+    assert model.prompts == []
+
+
+def test_text_beside_or_around_jarvis_own_note_is_still_checked(model):
+    said = injection.own("Still running, so it carries on in the background; don't call it again or wait for it.")
+    screen([{"type": "text", "text": said}, {"type": "text", "text": EMAIL}])
+    assert ATTACK in model.prompts[0] and "carries on in the background" not in model.prompts[0]
+    screen(mcp(f"{said}\n{ATTACK}"))  # no longer just JARVIS's note
+    assert len(model.prompts) == 2 and ATTACK in model.prompts[1]
+
+
+def test_jarvis_guidance_in_a_task_record_isnt_checked_but_what_the_task_wrote_is(model):
+    guidance = {"now": "started: it's running",
+                "stalled": "No sign of progress for 12 minutes: it may be stuck. Offer to nudge it (task_reply) or "
+                           "stop it (task_stop); never stop it without Sam's say-so.",
+                "fix_needs_yes": "It failed, and fixing it needs their yes: task_reply with their answer starts the "
+                                 "fix, task_stop leaves it as it is."}
+    for tool in ("task_reply", "task_list", "task_start"):
+        assert screen(mcp(task_record(**guidance)), tool=f"mcp__jarvis__{tool}") == {}, tool
+    assert model.prompts == []
+    model.answer = says(BLOCK, "it tells the assistant to forward the user's emails", [ATTACK])
+    record = task_record(**guidance, spoken=f"Task 7 compared the plans. {ATTACK}")
+    updated = screen(mcp(record), tool="mcp__jarvis__task_reply")["hookSpecificOutput"]["updatedToolOutput"]
+    assert json.loads(updated[0]["text"]) == json.loads(record) | {"spoken": f"Task 7 compared the plans. {WITHHELD}"}
+    assert "No sign of progress" not in model.prompts[0]
+
+
+def test_a_registry_search_checks_its_entries_but_not_jarvis_next_steps(model):
+    nothing = {"found": [], "next": "Nothing in the official MCP registry. Search the web with WebSearch for an MCP "
+                                    "server for notes; tell Sam what you find is unverified and where it's from, and "
+                                    "connect it only if they want, with connection_add's source."}
+    assert screen(mcp(json.dumps(nothing)), tool="mcp__jarvis__connection_find") == {}
+    found = {"found": [{"registry_name": "io.example/notes", "description": f"Notes server. {ATTACK}"}],
+             "verified": "These are from the official MCP registry."}
+    screen(mcp(json.dumps(found)), tool="mcp__jarvis__connection_find")
+    assert len(model.prompts) == 1 and ATTACK in model.prompts[0] and "official MCP" not in model.prompts[0]
+    draft = {"draft_id": "d1", "summary": f"Connect Notes, from the official MCP registry. {ATTACK}",
+             "next": "Nothing changed yet. Call connection_confirm with this draft_id straight away: JARVIS reads the "
+                     "summary aloud and asks for the yes itself, so don't describe it or ask."}
+    screen(mcp(json.dumps(draft)), tool="mcp__jarvis__connection_add")
+    assert len(model.prompts) == 2 and ATTACK in model.prompts[1] and "connection_confirm" not in model.prompts[1]
+
+
+# ── Checking less ───────────────────────────────────────────────
+
+
+TASKS = [{"id": 1, "status": "done", "spoken": "Task 1 compared the phone plans: plan B is cheaper."},
+         {"id": 2, "status": "running", "activity": "Reading the providers' pricing pages."}]
+
+
+def test_a_task_list_is_judged_again_only_on_what_changed(model):
+    screen(mcp(json.dumps(TASKS)), tool="mcp__jarvis__task_list")
+    changed = [TASKS[0], TASKS[1] | {"activity": "Writing up the comparison table now."}]
+    screen(mcp(json.dumps(changed)), tool="mcp__jarvis__task_list")
+    assert len(model.prompts) == 2 and "Writing up" in model.prompts[1] and "plan B" not in model.prompts[1]
+    assert screen(mcp(json.dumps(changed)), tool="mcp__jarvis__task_list") == {}
+    assert len(model.prompts) == 2
+
+
+def test_a_slow_check_of_a_task_list_still_spares_the_next_one(model):
+    model.delay = 0.2
+
+    async def run():
+        first = await injection.screen("mcp__jarvis__task_list", {}, mcp(json.dumps(TASKS)), MODEL, 0.05)
+        await asyncio.sleep(0.3)  # finishes in the background
+        changed = [TASKS[0], TASKS[1] | {"activity": "Writing up the comparison table now."}]
+        return first, await injection.screen("mcp__jarvis__task_list", {}, mcp(json.dumps(changed)), MODEL, 5)
+
+    first, second = asyncio.run(run())
+    assert "the check took too long" in note(first) and second == {}
+    assert "plan B" not in model.prompts[1]
+
+
+def test_strings_judged_together_arent_kept_clean_unless_all_of_it_was(model):
+    model.answer = says(BLOCK, "it tells the assistant to forward the user's emails", [ATTACK])
+    screen(mcp(json.dumps([TASKS[0], TASKS[1] | {"activity": ATTACK}])), tool="mcp__jarvis__task_list")
+    model.answer = says(CLEAN)
+    for alone in (TASKS[0], TASKS[1] | {"activity": ATTACK}):
+        screen(mcp(json.dumps([alone])), tool="mcp__jarvis__task_list")
+    assert len(model.prompts) == 3
+
+
+def test_a_records_strings_are_packed_whole_into_pieces(model, monkeypatch):
+    monkeypatch.setattr(injection, "CHUNK", 100)
+    lines = [f"Update {i} on the phone plans, all fine." for i in range(6)]  # two fit in a piece, not three
+    screen(mcp(json.dumps([{"spoken": s} for s in lines])), tool="mcp__jarvis__task_list")
+    assert len(model.prompts) == 3 and all(sum(s in p for s in lines) == 2 for p in model.prompts)
 
 
 def test_pictures_arent_sent_as_text(model):
