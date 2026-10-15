@@ -71,10 +71,12 @@ class Kept:
         if call.task.done():  # if kept meanwhile, the turn was talked over and the CLI won't use this
             return call.task.result()
         self._keep(call, f"still running after {self.seconds:g} s")
-        return (f"Still running after {self.seconds:g} seconds, so it carries on in the background. Its result comes "
-                f"back to you in a turn of your own as soon as it's in, to tell {profile.name()} and carry on with "
-                "anything that depends on it. Say in a few words that it's under way and carry on the conversation; "
-                f"don't call it again or wait for it. If {profile.name()} asks to stop it, background_stop does."), False
+        # JARVIS's own note in place of the result, so the injection check leaves it be
+        return injection.own(
+            f"Still running after {self.seconds:g} seconds, so it carries on in the background. Its result comes "
+            f"back to you in a turn of your own as soon as it's in, to tell {profile.name()} and carry on with "
+            "anything that depends on it. Say in a few words that it's under way and carry on the conversation; "
+            f"don't call it again or wait for it. If {profile.name()} asks to stop it, background_stop does."), False
 
     def keep_all(self) -> list[str]:
         """Keep every call of the turn still running (it was talked over); returns their tool names."""
