@@ -315,10 +315,13 @@ class GitOps(RunnerBase):
         finally:
             self.merges.pop(task_id, None)
         await self._forget_copy(task, project)
+        merged = self.store.update(task_id, merge_waits_on=None)  # a merge waiting to happen is done
+        self._settle(task_id)
         return merged
 
     async def _merge(self, task: dict) -> tuple[dict, projects.Project]:
-        """The merge itself; its outcome is recorded by the time it ends, stopped or not."""
+        """The merge itself; its outcome is recorded by the time it ends, stopped or not. When git fails on it or it's
+        stopped, what waits for it is held (chains)."""
         task_id = task["id"]
         try:
             async with self.projects_lock:
@@ -326,16 +329,21 @@ class GitOps(RunnerBase):
                 if busy := self._jobs_on(project.name, in_place=True):
                     raise ValueError(f"Task {' and '.join(map(str, busy))} is working in {project.name}'s folder; merge once it's finished.")
                 async with self._folder_lock(project.name):  # in-place tasks wait for the merge
-                    done = await self._op(project.node, "merge", {"repo": str(project.path), "branch": task["branch"],
-                                                                  "worktree": task["worktree"], "task": task_id,
-                                                                  "name": project.name, "title": task["title"],
-                                                                  "summary": task["summary"]})
+                    try:
+                        done = await self._op(project.node, "merge", {
+                            "repo": str(project.path), "branch": task["branch"], "worktree": task["worktree"],
+                            "task": task_id, "name": project.name, "title": task["title"], "summary": task["summary"]})
+                    except Exception as e:
+                        self._merge_failed(task_id, f"task {task_id}'s merge failed: {e}")
+                        raise
         except asyncio.CancelledError:
             spoken = (f"Task {task_id}, {task['title']}, wasn't merged: its merge was stopped, so nothing changed and "
                       "its branch is kept.")
             self.store.log(task_id, "merge stopped", spoken)
             bell.add(spoken, "warn", task_id)
             self.store.update(task_id, spoken=spoken)
+            if not self.closing:  # shutting down: left waiting, for settle_all at the next start
+                self._merge_failed(task_id, f"task {task_id}'s merge was stopped")
             raise
         spoken = f"Task {task_id}, {task['title']}, {done['did']}. {done['cleaned']}."
         self.store.log(task_id, "merged", spoken)
@@ -397,8 +405,10 @@ class GitOps(RunnerBase):
         self._close_approvals(task_id, "discarded")
         remembered.end_session(session_key(task_id))
         await self._forget_copy(task)
-        return self.store.update(task_id, status="discarded", spoken=spoken, activity=None, question=None,
-                                 wait_kind=None, seen=1)
+        task = self.store.update(task_id, status="discarded", spoken=spoken, activity=None, question=None,
+                                 wait_kind=None, seen=1, merge_waits_on=None)
+        self._settle(task_id)
+        return task
 
     async def init_git(self, name: str) -> dict:
         async with self.projects_lock:

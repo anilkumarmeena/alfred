@@ -68,6 +68,23 @@ Ask for anything that takes a while and JARVIS starts a task. Keep talking, star
 - **Stopping** a merge (`task_stop`, or the CLI's `stop`) kills its test run and removes the checkout made for it; a stop while git squashes and commits lets git end, then undoes it. Once merged it's too late: the cleanup finishes and the reply says so.
 - **Throw away** on an in-place task leaves its changes for you to undo.
 
+### One after another
+
+Work can wait for other work: say "once that's merged, start the rebuild" or "when the fix is done, merge it" and JARVIS sets it up there and then, rather than trying to remember it.
+
+| Say | What happens |
+|---|---|
+| "after the login fix, update the docs" | The docs task is **saved now** and starts by itself once the fix has finished |
+| "once the commits change is merged, start the two rebuilds" | Both wait for that **merge**, then start together |
+| "when both are done, write the summary" | Waits for **every** task it names |
+| "merge it when it's done" | The **merge** waits, then runs by itself in the background and says how it went |
+
+- **Nothing runs while it waits.** No model, no slot, no checking in: the runner settles waiting work at the moment it already announces a task ending or a merge, and once at start for anything that ended while it was down. Waits survive restarts.
+- **Chains of any length**, several tasks waiting for one, and one waiting for several all work. A wait that would make a loop (a merge waiting for a task that waits for that merge) is refused.
+- **When it starts by itself**, JARVIS says so in a sentence.
+- **When what it waited for goes wrong** (a task fails, is stopped or thrown away, or a merge fails), the waiting task **doesn't start**: it's held and you're asked whether to start it anyway ("go ahead" starts it, "stop it" drops it). A merge waiting on it is called off, and you're told. If the work it waited for comes right after all (you carry the failed task on and it finishes), a held task still starts by itself.
+- **Waiting tasks show** in the task list with what they still wait for, and stop like queued ones; stopping one holds whatever waited for it in turn. "Stop" on a finished task whose merge is waiting calls that merge off.
+
 ### Where code changes go
 
 | Mode | Behaviour |

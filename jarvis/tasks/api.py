@@ -47,7 +47,8 @@ def routes(r: "Runner") -> list[web.RouteDef]:
     async def create(req: web.Request) -> web.Response:
         b = await req.json()
         task = r.start(b["kind"], b.get("title", ""), b["instruction"], b.get("project"), grants=b.get("access"),
-                       order=b.get("order"), todo=b.get("todo"), machine=str(b.get("machine") or ""))
+                       order=b.get("order"), todo=b.get("todo"), machine=str(b.get("machine") or ""),
+                       after=b.get("after"), after_merge=b.get("after_merge"))
         return web.json_response(await r.where(task["id"]))
 
     async def reply(req: web.Request) -> web.Response:
@@ -91,7 +92,10 @@ def routes(r: "Runner") -> list[web.RouteDef]:
             b.get("in_place", projects.IN_PLACE_DEFAULT), str(b.get("machine") or "")))
 
     async def merge(req: web.Request) -> web.Response:
-        return web.json_response(await r.merge(int(req.match_info["id"])))
+        b, task_id = (await req.json() if req.can_read_body else {}), int(req.match_info["id"])
+        if b.get("after") or b.get("after_merge"):  # merges by itself once they're done
+            return web.json_response(r.merge_later(task_id, b.get("after"), b.get("after_merge")))
+        return web.json_response(await r.merge(task_id))
 
     async def discard(req: web.Request) -> web.Response:
         return web.json_response(await r.discard(int(req.match_info["id"])))

@@ -73,7 +73,8 @@ def facts(e: Ending) -> str:
     return "\n".join(parts)
 
 
-def _and(items: list[str]) -> str:
+def joined(items: list[str]) -> str:
+    """"a", "a and b", "a, b and c"."""
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
 
 
@@ -91,7 +92,7 @@ def plain(e: Ending) -> str:
     if len(e.suggested) > 2:
         parts.append(f"It has {len(e.suggested)} suggestions for your lists and my memory.")
     elif e.suggested:
-        parts.append(sentence(f"It'd also like to {_and([what for what, _ in e.suggested])}"))
+        parts.append(sentence(f"It'd also like to {joined([what for what, _ in e.suggested])}"))
     if e.undelivered:
         parts.append("Your message to it wasn't delivered; it goes with your next reply.")
     return " ".join(p for p in parts if p)

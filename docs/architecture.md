@@ -132,7 +132,7 @@ JARVIS runs on **macOS on Apple silicon** and **Linux** (x86_64 and aarch64, wit
 | `jarvis/safety/` | `commands.py`, `shell.py`, `draft_gate.py`, `mcp_gate.py` | Command risk rules, the voice shell's gate, its extensions for drafts and MCP writes |
 | | `consent.py`, `approvals.py`, `remembered.py` | Reading a spoken yes/no, voice side of task approvals, remembered rules |
 | | `host.py`, `scan.py`, `injection.py` | Host walls (Seatbelt on macOS, bubblewrap on Linux) and long jobs, hidden-instruction scan, tool-result injection screening |
-| `jarvis/tasks/` | `runner.py`, `runner_base.py` + mixins `approvals.py`, `command_tasks.py`, `git_ops.py`, `task_edits.py`, `events.py`, `api.py` | The runner service, split by concern; `runner_base.py` holds shared state |
+| `jarvis/tasks/` | `runner.py`, `runner_base.py` + mixins `approvals.py`, `command_tasks.py`, `git_ops.py`, `task_edits.py`, `events.py`, `chains.py`, `api.py` | The runner service, split by concern; `runner_base.py` holds shared state |
 | | `worker.py`, `gate.py`, `host_tools.py`, `reporting.py`, `subagents.py`, `briefs.py`, `access.py`, `project_claude.py` | One run of a task: session, gate, host commands, reporting, nudges, prompts, access grants |
 | | `goal.py`, `announce.py`, `data_edits.py`, `merge_check.py`, `stall.py` | Goal check, spoken endings, suggested data edits, tests before merging JARVIS's own branches, stall watchdog |
 | | `notices.py`, `scheduler.py`, `schedules.py`, `tool_watch.py`, `hold.py`, `learning.py` | Services that run inside the runner |
@@ -489,6 +489,7 @@ Each run resumes the task's own Claude session, so follow-ups keep everything it
 | 📂 | **In place** (default) | `git_ops.py` | **One in-place task per project at a time**; uncommitted work saved first |
 | 🌿 | **Worktrees** | `git_ops.py`, `projects.is_jarvis` | Committed to the task branch as a run ends. **Never pushed** |
 | 🔀 | **Merge / discard** | `POST /tasks/<id>/merge`, `/discard` | Squashed into **one commit** on the checked-out branch (title, summary, `Co-Authored-By`), so checkpoint commits stay off it; conflicts abort cleanly |
+| ⛓️ | **Waiting for other work** | `chains.py` (`waits_on`, `merge_waits_on`) | A task, or a merge, waits for tasks to finish or be merged, then **starts by itself**. Settled where an ending or merge is already announced, never polled; loops refused; one that can't go ahead is **held**, never started |
 | 💬 | **Nudges** | `reporting.py` `_nudge_hook` | Delivered after the task's next tool call by a `PostToolUse` hook |
 | 🎯 | **Goal loop** | `goal.py`, `Runner._check_goal` | A tool-less model call checks the result against the request and evidence |
 | 🤝 | **Subagents** | `subagents.py` | Same gate and sandbox; **they can't edit** |
