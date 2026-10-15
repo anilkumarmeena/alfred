@@ -507,10 +507,10 @@ Each run resumes the task's own Claude session, so follow-ups keep everything it
 - **Carrying on:** a run that hits `JARVIS_TASK_MAX_TURNS` is relaunched in its session (`Runner._carried_on`), up to `JARVIS_TASK_CONTINUES` (3) `continued` log entries since the user last asked or sent a message; watch checks aren't. A run the usage limit cut short is queued with `after` (its reset) in `interrupted`, so a restart or crash keeps the wait, and it holds no slot or folder (`_jobs_on`). It resumes once per reset (`limit_resumed`, in memory); a guessed reset (none reported) is tried once, a model family's own limit resumes at once on a lighter model, and a message wakes it early.
 - **Suggested data edits:** riskier edits and anything from research or flagged by the scan are `needs_yes`.
 
-**Command tasks** (`command_jobs.py`, `command_tasks.py`) run in a login shell (`/bin/zsh -lc` on macOS; the user's zsh or bash on Linux) in their own session under `data/commands/`, outside the sandbox but **without `.env` keys**. They're polled every 2 s and keep running across runner restarts.
+**Command tasks** (`command_jobs.py`, `command_tasks.py`) run in a login shell (`/bin/zsh -lc` on macOS; the user's zsh or bash on Linux) in their own session under `data/commands/`, outside the sandbox but **without `.env` keys**. They're polled every 2 s and keep running across runner restarts. Each runs on the Claude login JARVIS runs on (`claude_logins.active()`, passed as `CLAUDE_CONFIG_DIR`), so a `claude` it calls uses that login.
 
 - **On success** a fast model sums up the output.
-- **On failure** `command_jobs.triage` (Sonnet, JSON reply) picks `FIX` (start a `code_change` to fix it, then maybe re-run once), `ASK` (wait for the user's yes) or `REPORT`.
+- **On failure**, if the output tail has the CLI saying its login is signed out or used up (`command_jobs.pass_over`), that login is passed over and the command reruns on the next one; with every login tried, that's reported. Otherwise `command_jobs.triage` (Sonnet, JSON reply) picks `FIX` (start a `code_change` to fix it, then maybe re-run once), `ASK` (wait for the user's yes) or `REPORT`.
 
 ### What a task session can touch
 

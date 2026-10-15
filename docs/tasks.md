@@ -180,6 +180,7 @@ flowchart LR
 - The fix task **only fixes the code**: its walls hide the keys the command needs, so it never runs the command itself. When it finishes, **JARVIS reruns the command once**, as it always runs it (same folder, outside the walls, with its keys), and says how that went, unless the fix says the cause remains (an expired login, say).
 - A rerun that fails again is **only reported**, so it can't loop.
 - Jobs outside a project, or started with "don't fix it if it fails", are only explained.
+- A `claude` the command calls runs on **the Claude login JARVIS runs on** (Settings › Claude logins, in priority order). If the run fails because Claude says that login is signed out or its limit is used up, JARVIS passes the login over and **reruns the command on the next one**; with none left, it just says so.
 
 ## ✋ Approvals
 
