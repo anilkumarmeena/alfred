@@ -26,6 +26,8 @@ DRAFTED_BY = {"gmail_send": "gmail_draft_send or gmail_draft_reply", "chat_send"
               "calendar_send_invite": "calendar_draft_invite", "calendar_send_update": "calendar_draft_update",
               "calendar_send_response": "calendar_draft_respond", "calendar_delete_event": "calendar_draft_delete",
               "docs_delete": "docs_draft_delete", "sheets_delete_tab": "sheets_draft_delete_tab"}
+# Marked read-only, as nothing leaves before the yes, yet each call replaces the draft awaiting one
+DRAFTING = {t for said in DRAFTED_BY.values() for t in said.split(" or ")}
 # Description given to the consent model: from the kind, never the draft's text
 WHAT = {"gmail_send": "sending an email", "chat_send": "sending a Google Chat message",
         "calendar_send_invite": "sending calendar invites",

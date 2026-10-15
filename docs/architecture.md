@@ -135,7 +135,7 @@ JARVIS runs on **macOS on Apple silicon** and **Linux** (x86_64 and aarch64, wit
 | `jarvis/tasks/` | `runner.py`, `runner_base.py` + mixins `approvals.py`, `command_tasks.py`, `git_ops.py`, `task_edits.py`, `events.py`, `api.py` | The runner service, split by concern; `runner_base.py` holds shared state |
 | | `worker.py`, `gate.py`, `host_tools.py`, `reporting.py`, `subagents.py`, `briefs.py`, `access.py`, `project_claude.py` | One run of a task: session, gate, host commands, reporting, nudges, prompts, access grants |
 | | `goal.py`, `announce.py`, `data_edits.py`, `merge_check.py`, `stall.py` | Goal check, spoken endings, suggested data edits, tests before merging JARVIS's own branches, stall watchdog |
-| | `notices.py`, `scheduler.py`, `schedules.py`, `hold.py`, `learning.py` | Services that run inside the runner |
+| | `notices.py`, `scheduler.py`, `schedules.py`, `tool_watch.py`, `hold.py`, `learning.py` | Services that run inside the runner |
 | | `command_jobs.py`, `connection_jobs.py`, `projects.py`, `client.py` | Command and connection task kinds, the project list, the socket client |
 | `jarvis/integrations/` | `accounts.py`, `browser.py` | Google accounts, JARVIS's own Chrome |
 | | `mcp_servers.py`, `mcp_launch.py`, `mcp_relay.py`, `mcp_bridge.py`, `mcp_registry.py`, `mcp_oauth.py` | External MCP servers: list, launcher, relay, HTTP bridge, registry search, OAuth |
@@ -625,10 +625,11 @@ Monitors are ordinary scheduled jobs, listed with the rest in the panel's Tasks 
 |:-:|---|---|
 | ⏰ | `reminder` | Said, notified and pushed |
 | 🛠️ | `task` | Starts a task with a scheduled-run brief and the job's **notepad** from its last run |
-| 👀 | `watch` | A probe (`task`, `url`, `gmail`, `chat`) checks whether something happened; said once when it has |
+| 👀 | `watch` | A probe (`task`, `url`, `tool`) checks whether something happened; said once when it has |
 | ⌨️ | `command` | Starts a command task, weighed by `ShellGate` when created |
 
 - **`only_changes` task jobs** stay silent when a fast model judges nothing is new; **`only_changes` command jobs** stay silent when a successful run prints nothing.
+- **`tool` watches** (`jarvis/tasks/tool_watch.py`) call one reading tool with stored arguments and no model: a connection's tool marked `read`, or a Google or computer tool marked read-only (drafting ones left out). The result's items (its list, or its lines) are compared by content with the previous check's; the first check counts only items dated since the watch began. Only new items, filtered by `expect` if set, reach a fast model, which says whether they're it and words a lock-screen notice and a spoken line. Gmail and Chat watches are instances of it (`gmail_search`; `chat_unread` with the person as `expect`).
 
 **Invariants:**
 

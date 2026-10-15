@@ -94,7 +94,7 @@ _WHEN = {
                                                 "weekends, or days like mon,wed,fri. Leave out for once."},
     "every_minutes": {"type": "integer", "description": "Repeats every this many minutes instead. For a watch, how "
                                                        "often it checks (default 15 for a task check, 5 for a page, "
-                                                       "10 for Gmail and Chat)."},
+                                                       "10 for a tool)."},
     "until": {"type": "string", "description": "When a repeating job or watch stops: HH:MM or a local date and time. "
                                                f"A watch stops after {schedules.WATCH_HOURS} hours unless said, "
                                                f"{schedules.WATCH_MAX_DAYS} days at most."},
@@ -115,6 +115,14 @@ _COMMAND = {
                                                   "goes there rather than to the screen: a path inside its folder, a "
                                                   "pattern like logs/*-produce.log picking the newest."},
 }
+_WATCH = {
+    "target": {"type": "string", "description": "watch url: the page's address; tool: the reading tool it calls, e.g. "
+                                                "gmail_search or mcp__github__list_issues."},
+    "arguments": {"type": "object", "description": "watch tool: the tool's arguments, as you'd call it, e.g. "
+                                                   "{\"query\": \"from:sam@example.com subject:budget\"}."},
+    "expect": {"type": "string", "description": "watch url: text the page must show, e.g. a version number; tool: "
+                                                "text a new item must contain to be read, e.g. a person's name."},
+}
 
 
 @tool(
@@ -131,9 +139,15 @@ _COMMAND = {
     "Never set it for a brief or report the user wants each time. watch checks every few minutes whether text has "
     "happened and says so once it has, then stops (\"tell me when the deploy is live\", \"when Sam replies\"). How a "
     "watch checks (probe): task, a background task with web search and read-only mail, calendar, Chat and "
-    "connected tools (the default; costly, so every 15 minutes); or, much cheaper, url (target: a page; met once it answers "
-    "without an error, showing expect if given), gmail (target: a Gmail search; met when matching mail arrives) or chat "
-    "(target: a person's name; met when they write to the user on Chat). Prefer a cheap probe when one fits. command "
+    "connected tools (the default; costly, so every 15 minutes); or, much cheaper, url (target: a page; met once it "
+    "answers without an error, showing expect if given) or tool: JARVIS calls one reading tool (target) with "
+    "arguments, with no model, and only when its result has something new since the last check (with expect, a new "
+    "item containing that text) does a short model call read the new part and say it, if it's what the user is "
+    "waiting for. target is a reading tool of a connection (mcp__<server>__<tool>) or of the user's accounts, e.g. "
+    "gmail_search with {\"query\": \"from:sam@example.com\"} for mail from Sam, or chat_unread with "
+    "{\"mentions_only\": true, \"days\": 1} and expect the person's name for them writing on Chat; never a tool that "
+    "changes or drafts anything. Pick a tool and arguments whose result changes only when something happens: a "
+    "narrow search or list, not a whole inbox. Prefer a cheap probe when one fits. command "
     "runs text, a shell command or script the user wants run on a schedule (\"run the produce script every day at "
     "eight\"), in folder (or its project's folder) at the times given, on its own outside the sandbox like start_job, "
     "with no model while it runs, however many hours it takes; each run is a command task in the task list, as a "
@@ -181,9 +195,7 @@ _COMMAND = {
                                                      "where a task fixes it if it fails."},
         **_COMMAND,
         "probe": {"type": "string", "enum": list(schedules.PROBES), "description": "watch: how it checks (default task)."},
-        "target": {"type": "string", "description": "watch url: the page's address; gmail: the Gmail search, e.g. "
-                                                    "'from:sam@example.com subject:budget'; chat: the person's name."},
-        "expect": {"type": "string", "description": "watch url: text the page must show, e.g. a version number."},
+        **_WATCH,
         "only_changes": {"type": "boolean", "description": "task: stay silent unless there's something new to "
                                                           "tell since the last run (\"only tell me if a build failed\", "
                                                           "\"only if there's something new\"). Off: every run is "
@@ -211,10 +223,10 @@ def schedule_add(kind: str, title: str, text: str = "", when: str = "", in_minut
                  target: str = "", expect: str = "", only_changes: bool = False, folder: str = "",
                  timeout_minutes: int = 0, summarize: bool | None = None, auto_fix: bool | None = None,
                  log_file: str = "", tasks: list[int] | None = None, failed: bool = False,
-                 todos: list[str] | None = None, count: int = 0) -> dict:
+                 todos: list[str] | None = None, count: int = 0, arguments: dict | None = None) -> dict:
     job = schedules.add(kind, title, text, when, in_minutes, repeat, every_minutes, until, task_kind, project, probe,
                         target, expect, only_changes, folder, timeout_minutes, summarize, auto_fix, log_file, tasks,
-                        failed, todos, count)
+                        failed, todos, count, arguments)
     out = _brief(job) | _held()
     if kind == "watch" and (note := _quiet_note()):
         out["note"] = note
@@ -252,8 +264,7 @@ def schedule_list(finished: bool = False) -> list[dict] | dict:
         "text": {"type": "string", "description": "What a reminder says, a task's instruction, what a watch waits for, "
                                                   "or a command job's command."},
         **_WHEN,
-        "target": {"type": "string", "description": "url, gmail and chat watches: the new page, search or person."},
-        "expect": {"type": "string", "description": "url watches: the text the page must show."},
+        **_WATCH,
         "paused": {"type": "boolean"},
         "only_changes": {"type": "boolean", "description": "task: true stays silent unless there's something new "
                                                           "to tell since the last run; command: true stays silent "
@@ -270,9 +281,9 @@ def schedule_change(id: int, title: str = "", text: str = "", when: str = "", in
                     every_minutes: int = 0, until: str = "", target: str = "", expect: str = "",
                     paused: bool | None = None, only_changes: bool | None = None, folder: str = "",
                     timeout_minutes: int | None = None, summarize: bool | None = None, auto_fix: bool | None = None,
-                    log_file: str | None = None) -> dict:
+                    log_file: str | None = None, arguments: dict | None = None) -> dict:
     job = schedules.change(id, title, text, when, in_minutes, repeat, every_minutes, until, target, expect, paused,
-                           only_changes, folder, timeout_minutes, summarize, auto_fix, log_file)
+                           only_changes, folder, timeout_minutes, summarize, auto_fix, log_file, arguments)
     return _brief(job) | {"outcome": f"Changed {job['title']}."}
 
 

@@ -2,7 +2,8 @@
 
   reminder  say `text` (desktop notification, phone push, aloud in a live session)
   task      start a background task with `text` as instruction (`task_kind`, default research)
-  watch     every `every` minutes until `text` happens or `until`: probe task (model), or cheap url/gmail/chat probes
+  watch     every `every` minutes until `text` happens or `until`: probe task (model), or cheap url or tool probes
+            (a reading tool, `target`, called with `arguments`: jarvis.tasks.tool_watch)
   command   run shell `text` in `folder` as a model-free command task; a model only summarises or (auto_fix) fixes it.
             With only_changes, a successful run that prints nothing stays silent (how a monitor script reports)
   resume    carry on stopped (or failed) tasks, named ones or all, with `text` as an optional message to each
@@ -26,14 +27,14 @@ from jarvis.core import database, profile
 
 KINDS = ("reminder", "task", "watch", "command", "resume", "todo")
 WORK = ("resume", "todo")  # kinds that resume or start the user's own tasks
-PROBES = ("task", "url", "gmail", "chat")
+PROBES = ("task", "url", "tool")
 ACTIVE, PAUSED, DONE, CANCELLED, EXPIRED = "active", "paused", "done", "cancelled", "expired"
 LIVE = (ACTIVE, PAUSED)
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 REPEATS = {"daily": DAYS, "weekdays": DAYS[:5], "weekends": DAYS[5:]}
 # Watch check interval in minutes: minimum and default per probe. Task probes start a Claude session, so are sparser.
-MIN_EVERY = {"task": 10, "url": 1, "gmail": 5, "chat": 5}
-EVERY = {"task": 15, "url": 5, "gmail": 10, "chat": 10}
+MIN_EVERY = {"task": 10, "url": 1, "tool": 5}
+EVERY = {"task": 15, "url": 5, "tool": 10}
 MIN_TASK_EVERY = 30  # for task, resume and todo jobs repeating by interval
 MIN_REMINDER_EVERY = 5
 MIN_COMMAND_EVERY = 10
@@ -55,9 +56,9 @@ create table schedules (
     days text,                  -- e.g. mon,tue,wed,thu,fri
     every integer,              -- minutes between runs (all watches)
     until real,                 -- null: never
-    probe text,                 -- watch: task, url, gmail or chat
-    target text,                -- watch: URL, Gmail search or person
-    expect text,                -- watch url: required page text
+    probe text,                 -- watch: task, url or tool (gmail or chat before migration 4)
+    target text,                -- watch: URL or tool (a Gmail search or person before migration 4)
+    expect text,                -- watch: text the page, or a new item, must contain
     status text not null,       -- active, paused, done, cancelled, expired
     next_run real,              -- null: no further runs
     last_run real,
@@ -65,7 +66,7 @@ create table schedules (
     fails integer not null default 0,   -- consecutive failed checks
     last_task integer,          -- task id of the latest run
     last_result text,           -- one-sentence latest result
-    baseline text,              -- watch chat: JSON keys of messages present at first check
+    baseline text,              -- watch tool: JSON keys of items seen at earlier checks, latest first
     created real not null,
     updated real not null,
     notepad text,               -- task: JSON {at, text} for the next run
@@ -79,8 +80,33 @@ create table schedules (
     log_file text,              -- command: own log path/pattern in folder
     run text                    -- command: JSON of the latest run (see run_of)
 )"""
+
+
+def gmail_watch(search: str) -> tuple[str, dict, str | None]:
+    """(tool, arguments, expect) of a tool watch for mail matching a Gmail search."""
+    return "gmail_search", {"query": search, "max_results": 10}, None
+
+
+def chat_watch(person: str) -> tuple[str, dict, str | None]:
+    """(tool, arguments, expect) of a tool watch for someone writing to the user, or @mentioning them, on Chat."""
+    return "chat_unread", {"mentions_only": True, "days": 1}, person
+
+
+def _tool_watches(db: sqlite3.Connection) -> None:
+    """gmail and chat watches, live or finished, become tool watches. A live one's next check is a first one: a Gmail
+    watch still counts mail dated since it began (or was last changed), and a Chat one conversations active since."""
+    for row in db.execute("select id, probe, target from schedules where probe in ('gmail', 'chat')").fetchall():
+        tool, args, expect = (gmail_watch if row["probe"] == "gmail" else chat_watch)(row["target"] or "")
+        db.execute("update schedules set probe = 'tool', target = ?, arguments = ?, expect = ?, baseline = null "
+                   "where id = ?", (tool, json.dumps(args), expect, row["id"]))
+
+
 _MIGRATIONS = (
     "alter table schedules add column picks text",  # 2: resume and todo: JSON of what a run takes on (see picks)
+    # 3: a tool watch's arguments (JSON); its target is the tool, expect text a new item must contain, and baseline
+    # the keys of items seen at earlier checks
+    "alter table schedules add column arguments text",
+    _tool_watches,  # 4: gmail and chat watches, now tool watches
 )
 
 
@@ -176,8 +202,7 @@ def describe(job: dict, now: datetime | None = None) -> str:
     return said + (f", until {clock(job['until'], now)}" if job["until"] else "")
 
 
-CHECKS = {"task": "a background task checks", "url": "JARVIS checks the page", "gmail": "JARVIS searches Gmail",
-          "chat": "JARVIS looks at Google Chat"}
+CHECKS = {"task": "a background task checks", "url": "JARVIS checks the page", "tool": "JARVIS calls the tool"}
 
 
 def check_text(job: dict) -> str:
@@ -185,6 +210,8 @@ def check_text(job: dict) -> str:
     if job["kind"] != "watch":
         return ""
     said = CHECKS[job["probe"]] + (f": {job['target']}" if job["target"] else "")
+    if args := arguments(job):
+        said += f" with {json.dumps(args, ensure_ascii=False)}"
     return said + (f", for \"{job['expect']}\"" if job["expect"] else "")
 
 
@@ -242,8 +269,14 @@ def update(job_id: int, **fields) -> dict:
     return find(job_id)
 
 
-def baseline(job: dict) -> set[str]:
-    return set(json.loads(job["baseline"] or "[]"))
+def baseline(job: dict) -> list[str]:
+    """A tool watch's keys of items seen at earlier checks, latest check's first."""
+    return json.loads(job["baseline"] or "[]")
+
+
+def arguments(job: dict) -> dict:
+    """A tool watch's arguments; {} for other jobs."""
+    return json.loads(job.get("arguments") or "{}")
 
 
 def notepad(job: dict) -> dict | None:
@@ -323,9 +356,23 @@ def _end(job: dict, until: str, now: datetime, kept: float | None = None) -> flo
     return end.timestamp()
 
 
-def _what(kind: str, task_kind: str, project: str, probe: str, target: str, expect: str) -> dict:
-    """Validated task_kind, project, probe, target and expect."""
-    out = {"task_kind": None, "project": None, "probe": None, "target": None, "expect": None}
+def _arguments(given: dict | str | None) -> dict:
+    """A tool watch's arguments: an object, or its JSON; none is {}."""
+    if given is None:
+        return {}
+    try:
+        found = json.loads(given or "{}") if isinstance(given, str) else given
+    except ValueError:
+        found = None
+    if not isinstance(found, dict):
+        raise ValueError("arguments is the tool's arguments as an object, e.g. {\"query\": \"from:sam\"}.")
+    return found
+
+
+def _what(kind: str, task_kind: str, project: str, probe: str, target: str, expect: str,
+          arguments: dict | str | None = None) -> dict:
+    """Validated task_kind, project, probe, target, arguments and expect."""
+    out = {"task_kind": None, "project": None, "probe": None, "target": None, "arguments": None, "expect": None}
     if kind == "watch":
         probe = probe or "task"
         if probe not in PROBES:
@@ -335,11 +382,18 @@ def _what(kind: str, task_kind: str, project: str, probe: str, target: str, expe
             if not re.match(r"https?://\S+$", target.strip()):
                 raise ValueError("A url watch needs target: the page's full http(s) address.")
             out["target"], out["expect"] = target.strip(), _clean(expect) or None
-        elif probe in ("gmail", "chat"):
-            if not _clean(target):
-                raise ValueError("A gmail watch needs target: a Gmail search, e.g. from:sam@acme.com."
-                                 if probe == "gmail" else "A chat watch needs target: the person's name.")
-            out["target"] = _clean(target)
+        elif probe == "tool":
+            from jarvis.tasks import tool_watch
+
+            # The voice brain knows JARVIS's own tools by their full names
+            name, args = target.strip().removeprefix("mcp__jarvis__"), _arguments(arguments)
+            if not name:
+                raise ValueError("A tool watch needs target: the reading tool it calls, e.g. gmail_search.")
+            if why := tool_watch.problem(name) or tool_watch.wrong_arguments(name, args):
+                raise ValueError(why)
+            out["target"], out["arguments"], out["expect"] = name, json.dumps(args), _clean(expect) or None
+    if arguments and out["probe"] != "tool":
+        raise ValueError("arguments is only for tool watches.")
     if kind == "task" or out["probe"] == "task":
         allowed = TASK_KINDS if kind == "task" else WATCH_TASK_KINDS
         task_kind = task_kind or "research"
@@ -554,9 +608,9 @@ def add(kind: str, title: str, text: str, when: str = "", in_minutes: int = 0, r
         target: str = "", expect: str = "", only_changes: bool = False, folder: str = "", timeout_minutes: int = 0,
         summarize: bool | None = None, auto_fix: bool | None = None, log_file: str = "",
         tasks: list[int] | None = None, failed: bool = False, todos: list[str] | None = None, count: int = 0,
-        now: datetime | None = None) -> dict:
+        arguments: dict | str | None = None, now: datetime | None = None) -> dict:
     """Validate and save a new job; returns it. `tasks` and `failed` are for resume jobs, `todos` and `count` for
-    todo jobs (see picks)."""
+    todo jobs (see picks); `arguments` for tool watches."""
     now = _now(now)
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {', '.join(KINDS)}.")
@@ -569,7 +623,7 @@ def add(kind: str, title: str, text: str, when: str = "", in_minutes: int = 0, r
         raise ValueError(f"A {kind} job takes no task_kind or project: "
                          + ("each task carries on as it was." if kind == "resume" else "each item's task gets its own."))
     job = {"kind": kind, "picks": _picks(kind, tasks, failed, todos, count)}
-    job |= _what(kind, task_kind, project, probe, target, expect)
+    job |= _what(kind, task_kind, project, probe, target, expect, arguments)
     if kind == "command":
         job |= _command({}, folder, project, timeout_minutes, summarize, auto_fix, log_file)
     job |= _timing(job, when, in_minutes, repeat, every_minutes, until, now)
@@ -578,7 +632,7 @@ def add(kind: str, title: str, text: str, when: str = "", in_minutes: int = 0, r
         raise ValueError(f"There are already {len(live)} scheduled jobs; cancel some first.")
     if job["probe"] == "task" and sum(1 for j in live if j["probe"] == "task") >= MAX_TASK_WATCHES:
         raise ValueError(f"At most {MAX_TASK_WATCHES} watches can be checked by background tasks at once; cancel one, "
-                         "or use a url, gmail or chat probe.")
+                         "or use a url or tool probe.")
     said = text or work_text(job)
     job |= {"title": _clean(title)[:80] or _clean(said)[:60], "text": text, "status": ACTIVE,
             "only_changes": int(bool(only_changes)), "created": now.timestamp(), "updated": now.timestamp()}
@@ -592,11 +646,12 @@ def change(job_id: int, title: str = "", text: str = "", when: str = "", in_minu
            every_minutes: int = 0, until: str = "", target: str = "", expect: str = "", paused: bool | None = None,
            only_changes: bool | None = None, folder: str = "", timeout_minutes: int | None = None,
            summarize: bool | None = None, auto_fix: bool | None = None, log_file: str | None = None,
-           now: datetime | None = None) -> dict:
+           arguments: dict | str | None = None, now: datetime | None = None) -> dict:
     """Change a live job; given fields replace existing ones.
 
     Any new time (when, in_minutes, repeat, every_minutes) replaces the whole timing. `paused` pauses or resumes.
-    For commands: timeout_minutes 0 and log_file "" mean none.
+    For commands: timeout_minutes 0 and log_file "" mean none. A watch's new target, arguments or expect starts its
+    comparison afresh.
     """
     now, job = _now(now), find(job_id)
     if job["status"] not in LIVE:
@@ -612,11 +667,13 @@ def change(job_id: int, title: str = "", text: str = "", when: str = "", in_minu
         fields["title"] = _clean(title)[:80]
     if (text or "").strip():
         fields["text"] = text.strip()
-    if target or expect:
+    if target or expect or arguments is not None:
         if job["kind"] != "watch" or job["probe"] == "task":
-            raise ValueError("target and expect are only for url, gmail and chat watches.")
+            raise ValueError("target, arguments and expect are only for url and tool watches.")
+        given = arguments if arguments is not None else job["arguments"]
         fields |= {k: v for k, v in _what("watch", "", "", job["probe"], target or job["target"],
-                                           expect or job["expect"] or "").items() if k in ("target", "expect")}
+                                           expect or job["expect"] or "", given).items()
+                   if k in ("target", "arguments", "expect")}
         fields["baseline"] = None
     if when or in_minutes or repeat or every_minutes:
         fields |= _timing(job, when, in_minutes, repeat, every_minutes, until, now)

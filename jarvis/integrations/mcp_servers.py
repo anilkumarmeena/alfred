@@ -529,24 +529,34 @@ def offered(server: Server, read_only: bool = False, timeout: float = LIST_TIMEO
             for t in found]
 
 
-def check(server: Server, timeout: float = CHECK_TIMEOUT) -> str | None:
-    """Its sign-in check: `check_tool` called with no arguments, read-only. '' if it answered, the reason (its own
-    words, cut short) if it refused, or None if it never answered (it didn't start, or nothing came back)."""
+def call(server: Server, tool: str, arguments: dict | None = None, timeout: float = CHECK_TIMEOUT) -> dict | None:
+    """`tool` called once with `arguments`, the server started read-only and bare (no relay, so callers check its
+    access first). Its MCP result ({"content", "structuredContent"?, "isError"?}; a refusal is a result with isError
+    and its message), or None if it never answered (it didn't start, or nothing came back)."""
     with _Probe(server, read_only=True) as probe:
         probe.send(_HELLO)
         for reply in probe.replies(timeout):
             if error := reply.get("error"):
-                return str(error.get("message") or "an error")[:300]
+                return {"isError": True, "content": [{"type": "text", "text": str(error.get("message") or "")}]}
             if reply["id"] == 0:
                 probe.send(_READY, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                                    "params": {"name": server.check_tool, "arguments": {}}})
+                                    "params": {"name": tool, "arguments": arguments or {}}})
             elif reply["id"] == 1:
-                result = reply.get("result") or {}
-                if not result.get("isError"):
-                    return ""
-                said = " ".join(str(c.get("text", "")) for c in result.get("content") or [] if isinstance(c, dict))
-                return said.strip()[:300] or "an error"
+                return reply.get("result") or {}
     return None
+
+
+def text(result: dict) -> str:
+    """The text blocks of an MCP tool result, joined."""
+    return " ".join(str(c.get("text", "")) for c in result.get("content") or [] if isinstance(c, dict)).strip()
+
+
+def check(server: Server, timeout: float = CHECK_TIMEOUT) -> str | None:
+    """Its sign-in check: `check_tool` called with no arguments, read-only. '' if it answered, the reason (its own
+    words, cut short) if it refused, or None if it never answered (it didn't start, or nothing came back)."""
+    if (result := call(server, server.check_tool, timeout=timeout)) is None:
+        return None
+    return text(result)[:300] or "an error" if result.get("isError") else ""
 
 
 def changes(tool: dict) -> bool:

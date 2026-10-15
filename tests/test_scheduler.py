@@ -11,11 +11,12 @@ from test_approvals import drained, events, pushes  # noqa: F401  (fixture)
 from test_in_place import env  # noqa: F401  (fixture)
 from test_nudges import fake_run, finishes, settle
 
-from conftest import use_profile, use_task_cache
+from conftest import ACCOUNTS, use_profile, use_task_cache
 from jarvis import tools
 from jarvis.brain import retry
-from jarvis.core import config, profile
+from jarvis.core import config, database, profile
 from jarvis.core.database import Store
+from jarvis.integrations import accounts
 from jarvis.state import settings
 from jarvis.tasks import runner, schedules, scheduler, worker
 from jarvis.tasks.scheduler import Found, Reading, Scheduler
@@ -26,7 +27,10 @@ NOW = datetime(2026, 10, 6, 9, 15, tzinfo=profile.tz())
 
 @pytest.fixture
 def db(tmp_path, monkeypatch):
+    """A profile of its own, with the shared Google accounts, so tool watches can call their reading tools."""
     use_profile(monkeypatch, tmp_path)
+    with accounts.change() as found:
+        found.accounts, found.default = list(ACCOUNTS.accounts), ACCOUNTS.default
     return tmp_path / "tasks.db"
 
 
@@ -143,7 +147,8 @@ def test_a_watch_looks_now_every_few_minutes_for_a_day_unless_told(db):
     job = schedules.add("watch", "Priya's reply", "Priya replied about the budget", now=NOW)
     assert (job["probe"], job["task_kind"], job["every"]) == ("task", "research", 15)
     assert job["next_run"] == NOW.timestamp() and job["until"] == at(hours=24).timestamp()
-    cheap = schedules.add("watch", "Reply", "Priya replied", probe="gmail", target="from:priya@acme.example", now=NOW)
+    cheap = schedules.add("watch", "Reply", "Priya replied", probe="tool", target="gmail_search",
+                          arguments={"query": "from:priya@acme.example"}, now=NOW)
     assert cheap["every"] == 10 and cheap["task_kind"] is None
 
 
@@ -160,7 +165,15 @@ def test_a_watch_looks_now_every_few_minutes_for_a_day_unless_told(db):
     ({"kind": "watch", "text": "x", "every_minutes": 2}, "Every 10 minutes"),
     ({"kind": "watch", "text": "x", "until": "2026-10-20T09:00"}, "at most 7 days"),
     ({"kind": "watch", "text": "x", "probe": "url", "target": "app.example"}, "http"),
-    ({"kind": "watch", "text": "x", "probe": "chat"}, "person's name"),
+    ({"kind": "watch", "text": "x", "probe": "tool"}, "the reading tool it calls"),
+    ({"kind": "watch", "text": "x", "probe": "tool", "target": "gmail_modify"}, "isn't a reading tool"),
+    ({"kind": "watch", "text": "x", "probe": "tool", "target": "gmail_draft_send"}, "isn't a reading tool"),
+    ({"kind": "watch", "text": "x", "probe": "tool", "target": "mcp__acme__look"}, "switched on"),
+    ({"kind": "watch", "text": "x", "probe": "tool", "target": "gmail_search"}, "needs arguments query"),
+    ({"kind": "watch", "text": "x", "probe": "tool", "target": "gmail_search", "arguments": {"query": "x", "limit": 3}},
+     "takes no limit"),
+    ({"kind": "watch", "text": "x", "probe": "tool", "target": "gmail_search", "arguments": "from:x"}, "as an object"),
+    ({"kind": "reminder", "text": "x", "in_minutes": 5, "arguments": {"query": "x"}}, "only for tool watches"),
     ({"kind": "watch", "text": "x", "task_kind": "code_change", "project": "p"}, "research, code_question"),
 ])
 def test_bad_jobs_are_refused_saying_why(db, kwargs, error):
@@ -173,7 +186,7 @@ def test_bad_jobs_are_refused_saying_why(db, kwargs, error):
 def test_watches_checked_by_tasks_are_limited(db):
     for i in range(schedules.MAX_TASK_WATCHES):
         schedules.add("watch", f"w{i}", "x", now=NOW)
-    with pytest.raises(ValueError, match="url, gmail or chat"):
+    with pytest.raises(ValueError, match="url or tool probe"):
         schedules.add("watch", "one more", "x", now=NOW)
     schedules.add("watch", "cheap", "x", probe="url", target="https://a.example", now=NOW)
 
@@ -194,7 +207,7 @@ def test_change_retimes_pauses_resumes_and_keeps_the_rest(db):
     watch = schedules.add("watch", "Deploy", "live", probe="url", target="https://a.example", until="18:00", now=NOW)
     faster = schedules.change(watch["id"], every_minutes=2, now=NOW)
     assert faster["every"] == 2 and faster["until"] == watch["until"]  # a new timing keeps its end
-    with pytest.raises(ValueError, match="only for url, gmail and chat"):
+    with pytest.raises(ValueError, match="only for url and tool watches"):
         schedules.change(job["id"], target="https://b.example")
 
 
@@ -349,9 +362,10 @@ def test_a_watch_is_silent_until_met_then_says_so_once_and_stops(db):
 
 
 def test_failing_checks_are_said_once_and_the_watch_keeps_going(db):
-    job = schedules.add("watch", "Reply", "Priya replied", probe="gmail", target="from:priya", now=NOW)
+    job = schedules.add("watch", "Reply", "Priya replied", probe="tool", target="gmail_search",
+                        arguments={"query": "from:priya"}, now=NOW)
     probe, _ = probe_that(*[scheduler.ProbeFailed("every account failed")] * 4)
-    s, said, clock = make({"gmail": probe})
+    s, said, clock = make({"tool": probe})
     for i in range(4):
         clock.now = at(minutes=10 * i)
         tick(s)
@@ -475,39 +489,244 @@ def test_url_probe(monkeypatch):
     assert found[3].text == "https://app.example/version is up and shows \"2.4.0\"."
 
 
-def test_gmail_probe_counts_only_mail_since_the_watch_began(monkeypatch):
-    began = NOW.timestamp()
-    mail = [{"from": "Priya <priya@acme.example>", "subject": "Re: budget", "date": "Tue, 06 Oct 2026 03:00:00 +0000"}]
-
-    async def accounts(read):
-        return list(mail)
-
-    monkeypatch.setattr(scheduler, "each_account", accounts)
-    job = {"target": "from:priya", "created": began}
-    assert not asyncio.run(scheduler.probe_gmail(job)).met  # from before the watch
-    mail.append({"from": "Priya <priya@acme.example>", "subject": "Re: budget",
-                 "date": (NOW + timedelta(minutes=20)).strftime("%a, %d %b %Y %H:%M:%S %z")})
-    found = asyncio.run(scheduler.probe_gmail(job))
-    assert found.met and found.text == "New email from Priya: Re: budget."
+# ── Tool watches ────────────────────────────────────────────────
 
 
-def test_chat_probe_takes_what_is_there_at_first_as_old_news(db, monkeypatch):
-    news = [{"account": "work", "latest": "m1", "from": "Priya Shah", "kind": "dm", "name": "Priya Shah", "text": "old"}]
+@pytest.fixture
+def results(monkeypatch):
+    """Fake built-in tool calls: each answers `results.of[name]` as it is then (an exception: its text, as an
+    error), recording `results.calls`."""
+    fake = SimpleNamespace(of={}, calls=[])
 
-    async def accounts(read):
-        return list(news)
+    async def run(name, args):
+        fake.calls.append((name, args))
+        found = fake.of[name]
+        return (str(found), True) if isinstance(found, Exception) else (json.dumps(found), False)
 
-    monkeypatch.setattr(scheduler, "each_account", accounts)
-    job = schedules.add("watch", "Priya on Chat", "Priya writes", probe="chat", target="priya", now=NOW)
-    s, said, clock = make({"chat": scheduler.probe_chat})
+    monkeypatch.setattr(tools, "run", run)
+    return fake
+
+
+@pytest.fixture
+def judged(monkeypatch):
+    """Fake model reading a tool watch's new items: answers `judged.answers` in turn, then fails; records each
+    prompt in `judged.asked`."""
+    fake = SimpleNamespace(answers=[], asked=[])
+
+    async def ask_json(prompt, schema, system_prompt, model, **options):
+        fake.asked.append(prompt)
+        if not fake.answers:
+            raise RuntimeError("the model call failed")
+        return fake.answers.pop(0), 0.0
+
+    monkeypatch.setattr("jarvis.brain.sdk.ask_json", ask_json)
+    return fake
+
+
+def mail_from(who: str, subject: str, when: datetime, unread: bool = True) -> dict:
+    return {"account": "work", "id": f"{who}-{subject}", "from": f"{who} <{who.lower()}@acme.example>",
+            "subject": subject, "date": when.strftime("%a, %d %b %Y %H:%M:%S %z"), "unread": unread}
+
+
+def gmail_watch(search: str = "from:priya") -> dict:
+    tool, args, _ = schedules.gmail_watch(search)
+    return schedules.add("watch", "Priya's reply", "Priya replies about the budget", probe="tool", target=tool,
+                         arguments=args, now=NOW)
+
+
+def test_a_gmail_watch_says_new_mail_once_a_model_has_read_only_that(db, results, judged):
+    results.of["gmail_search"] = mail = [mail_from("Priya", "Old news", at(hours=-6))]
+    job = gmail_watch()
+    s, said, clock = make({"tool": scheduler.probe_tool})
     tick(s)
-    assert json.loads(schedules.get(job["id"])["baseline"]) == ["work:m1"] and said["notified"] == []
-    news.append({"account": "work", "latest": "m2", "from": "Priya Shah", "kind": "dm", "name": "Priya Shah",
-                 "text": "Budget looks fine, go ahead"})
+    assert results.calls == [("gmail_search", {"query": "from:priya", "max_results": 10})]
+    assert judged.asked == [] and said["notified"] == []  # mail from before the watch: no model call
+    assert schedules.get(job["id"])["last_result"] == "Nothing new (1 there already)."
     clock.now = at(minutes=10)
     tick(s)
+    assert judged.asked == []  # the same result: no model call
+    mail.insert(0, mail_from("Priya", "Re: budget", at(minutes=15)))
+    judged.answers = [{"met": True, "notice": "New email from Priya: Re: budget",
+                       "spoken": "Priya wrote back about the budget, saying it looks fine."}]
+    clock.now = at(minutes=20)
+    tick(s)
+    [prompt] = judged.asked
+    assert "Priya replies about the budget" in prompt and "Re: budget" in prompt and "Old news" not in prompt
+    assert said["notified"] == [("JARVIS · Priya's reply", "New email from Priya: Re: budget.")]
+    assert said["events"][0]["text"] == "Priya's reply: Priya wrote back about the budget, saying it looks fine."
+    assert schedules.get(job["id"])["status"] == schedules.DONE
+
+
+def test_a_late_first_check_still_counts_what_is_dated_since_the_watch_began(db, results, judged):
+    results.of["gmail_search"] = [mail_from("Priya", "Re: budget", at(minutes=30)),
+                                  mail_from("Priya", "Old news", at(hours=-6))]
+    job = gmail_watch()
+    judged.answers = [{"met": True, "notice": "New email from Priya: Re: budget"}]
+    s, said, clock = make({"tool": scheduler.probe_tool})
+    clock.now = at(hours=1)  # held back, say by quiet hours
+    tick(s)
+    assert "Re: budget" in judged.asked[0] and "Old news" not in judged.asked[0]
+    assert said["events"][0]["text"] == "Priya's reply: New email from Priya: Re: budget."
+    assert schedules.get(job["id"])["status"] == schedules.DONE
+
+
+def test_something_new_that_isnt_it_stays_quiet_and_isnt_read_again(db, results, judged):
+    results.of["gmail_search"] = mail = []
+    job = gmail_watch()
+    s, said, clock = make({"tool": scheduler.probe_tool})
+    tick(s)
+    mail.append(mail_from("Priya", "Out of office", at(minutes=5)))
+    judged.answers = [{"met": False, "notice": "An out-of-office reply from Priya"}]
+    clock.now = at(minutes=10)
+    tick(s)
+    after = schedules.get(job["id"])
+    assert after["status"] == schedules.ACTIVE and said["notified"] == [] and said["events"] == []
+    assert after["last_result"] == "Something new, not it yet: An out-of-office reply from Priya."
+    clock.now = at(minutes=20)
+    tick(s)
+    assert len(judged.asked) == 1
+
+
+def test_a_chat_watch_reads_only_new_messages_that_name_the_person(db, results, judged):
+    def dm(who: str, *texts: str) -> dict:
+        return {"account": "work", "space": f"spaces/{who}", "name": who, "kind": "dm", "unread": len(texts),
+                "latest": [{"from": who, "time": "Tue 06 Oct 08:00", "text": t} for t in texts]}
+
+    results.of["chat_unread"] = chat = {"unread": [dm("Priya Shah", "old")]}
+    tool, args, expect = schedules.chat_watch("priya")
+    job = schedules.add("watch", "Priya on Chat", "Priya writes to me", probe="tool", target=tool, arguments=args,
+                        expect=expect, now=NOW)
+    s, said, clock = make({"tool": scheduler.probe_tool})
+    tick(s)
+    assert results.calls == [("chat_unread", {"mentions_only": True, "days": 1})] and judged.asked == []
+    chat["unread"].append(dm("Build Bot", "deploy done"))
+    clock.now = at(minutes=10)
+    tick(s)
+    assert judged.asked == []  # new, but not from Priya
+    chat["unread"][0] = dm("Priya Shah", "old", "Budget looks fine, go ahead")
+    judged.answers = [{"met": True, "notice": "Priya Shah wrote to you on Chat",
+                       "spoken": "Priya Shah wrote to you on Chat: budget looks fine, go ahead."}]
+    clock.now = at(minutes=20)
+    tick(s)
+    [prompt] = judged.asked
+    assert "Budget looks fine" in prompt and "deploy done" not in prompt
     assert said["notified"] == [("JARVIS · Priya on Chat", "Priya Shah wrote to you on Chat.")]  # her words never pushed
-    assert said["events"][0]["text"] == "Priya on Chat: Priya Shah wrote to you on Chat: Budget looks fine, go ahead."
+    assert said["events"][0]["text"] == "Priya on Chat: Priya Shah wrote to you on Chat: budget looks fine, go ahead."
+    assert schedules.get(job["id"])["status"] == schedules.DONE
+
+
+def test_new_finds_that_cant_be_read_yet_wait_for_the_next_check(db, results, judged, usage_file):
+    results.of["gmail_search"] = mail = []
+    job = gmail_watch()
+    s, said, clock = make({"tool": scheduler.probe_tool})
+    tick(s)
+    mail.append(mail_from("Priya", "Re: budget", at(minutes=5)))
+    clock.now = at(minutes=10)
+    tick(s)  # the model call fails: a failed check
+    assert schedules.get(job["id"])["last_result"] == ("Couldn't check: something new turned up, but reading it "
+                                                       "failed")
+    limit_used_up(at(hours=1).timestamp())
+    clock.now = at(minutes=20)
+    tick(s)  # Claude's usage limit is used up: no model call, not a failed check
+    after = schedules.get(job["id"])
+    assert len(judged.asked) == 1 and after["fails"] == 0 and "usage limit resets" in after["last_result"]
+    usage_file.unlink()
+    judged.answers = [{"met": True, "notice": "New email from Priya: Re: budget"}]
+    clock.now = at(minutes=30)
+    tick(s)
+    assert "Re: budget" in judged.asked[-1] and schedules.get(job["id"])["status"] == schedules.DONE
+
+
+def test_a_tool_that_fails_is_a_failed_check_with_its_reason(db, results):
+    results.of["gmail_search"] = RuntimeError("The work account needs signing in again.")
+    job = gmail_watch()
+    s, said, clock = make({"tool": scheduler.probe_tool})
+    tick(s)
+    after = schedules.get(job["id"])
+    assert (after["fails"], after["last_result"]) == (1, "Couldn't check: gmail_search failed")  # its words: log only
+
+
+def test_old_mail_that_changes_or_comes_back_isnt_new(db, results, judged):
+    old = mail_from("Priya", "Re: budget", at(hours=-6))
+    other = {**mail_from("Priya", "Lunch?", at(minutes=5)), "account": "personal"}
+    results.of["gmail_search"] = [old]
+    gmail_watch()
+    s, said, clock = make({"tool": scheduler.probe_tool})
+    tick(s)
+    results.of["gmail_search"] = [old | {"unread": False}]  # read on the phone
+    clock.now = at(minutes=10)
+    tick(s)
+    assert judged.asked == []
+    results.of["gmail_search"] = [old, other]
+    judged.answers = [{"met": False, "notice": "Priya asked about lunch"}]
+    clock.now = at(minutes=20)
+    tick(s)
+    results.of["gmail_search"] = [old]  # the personal account failed this time
+    clock.now = at(minutes=30)
+    tick(s)
+    results.of["gmail_search"] = [old, other]  # and is back
+    clock.now = at(minutes=40)
+    tick(s)
+    assert len(judged.asked) == 1 and said["notified"] == []
+
+
+def test_expect_matches_what_an_item_says_not_its_field_names(db, results, judged):
+    results.of["chat_unread"] = chat = {"unread": []}
+    tool, args, _ = schedules.chat_watch("tim")
+    schedules.add("watch", "Tim on Chat", "Tim writes to me", probe="tool", target=tool, arguments=args, expect="Tim",
+                  now=NOW)
+    s, _, clock = make({"tool": scheduler.probe_tool})
+    tick(s)
+    chat["unread"].append({"name": "Build Bot", "kind": "dm", "latest": [{"from": "Build Bot", "time": "Tue 06 Oct 09:20",
+                                                                          "text": "deploy done"}]})
+    clock.now = at(minutes=10)
+    tick(s)
+    assert judged.asked == []
+
+
+def test_gmail_and_chat_watches_made_before_tool_watches_keep_working(db, results, judged):
+    def chat_with(*texts: str) -> dict:
+        return {"unread": [{"account": "work", "name": "Priya Shah", "kind": "dm", "unread": len(texts),
+                            "latest": [{"from": "Priya Shah", "text": t} for t in texts]}]}
+
+    # Made before migration 3, in a table migrated to 2 (resume and todo), as a live database has them
+    with database.table("schedules", schedules._SCHEMA, migrations=schedules._MIGRATIONS[:1]) as old:
+        for title, probe, target, baseline in (("Priya's reply", "gmail", "from:priya", None),
+                                               ("Priya on Chat", "chat", "Priya", '["work:m1"]')):
+            old.execute("insert into schedules (kind, title, text, every, until, probe, target, baseline, status, "
+                        "next_run, created, updated) values ('watch', ?, ?, 10, ?, ?, ?, ?, 'active', ?, ?, ?)",
+                        (title, f"{title} comes", at(hours=24).timestamp(), probe, target, baseline,
+                         *[at(minutes=-30).timestamp()] * 3))
+    results.of["gmail_search"] = mail = [mail_from("Priya", "Old news", at(hours=-6))]
+    results.of["chat_unread"] = chat_with("old")
+    s, said, clock = make({"tool": scheduler.probe_tool})
+    tick(s)
+    assert sorted(results.calls) == [("chat_unread", {"mentions_only": True, "days": 1}),
+                                     ("gmail_search", {"query": "from:priya", "max_results": 10})]
+    assert judged.asked == [] and said["notified"] == []  # what was there already isn't news
+    mail.insert(0, mail_from("Priya", "Re: budget", at(minutes=5)))
+    results.of["chat_unread"] = chat_with("old", "Budget looks fine")
+    judged.answers = [{"met": True, "notice": "Priya wrote"}, {"met": True, "notice": "Priya wrote"}]
+    clock.now = at(minutes=10)
+    tick(s)
+    assert any("Re: budget" in p for p in judged.asked) and any("Budget looks fine" in p for p in judged.asked)
+    assert schedules.get(1)["status"] == schedules.get(2)["status"] == schedules.DONE
+
+
+def test_a_check_that_ends_after_its_watch_changed_leaves_it_to_check_afresh(db, results, judged):
+    results.of["gmail_search"] = [mail_from("Priya", "Re: budget", at(minutes=-1))]
+    job = gmail_watch()
+    s, said, _ = make({"tool": scheduler.probe_tool})
+    judged.answers = [{"met": True, "notice": "New email from Priya: Re: budget"}]
+
+    async def check():
+        probing = schedules.update(job["id"], last_run=NOW.timestamp())
+        schedules.change(job["id"], arguments={"query": "from:sam"}, now=NOW)
+        await s._probe(probing)
+
+    asyncio.run(check())
+    after = schedules.get(job["id"])
+    assert (after["status"], after["baseline"], said["notified"]) == (schedules.ACTIVE, None, [])
 
 
 # ── Scheduled runs in the real runner ───────────────────────────
@@ -738,6 +957,22 @@ def test_a_new_watch_is_told_the_users_quiet_hours(db, monkeypatch):
     settings.set_preference("quiet_hours", "off")
     added, _ = call("schedule_add", watch)
     assert "note" not in added
+
+
+def test_a_tool_watch_is_set_up_and_changed_by_voice(db):
+    watch, error = call("schedule_add", {"kind": "watch", "title": "Priya on Chat", "text": "Priya writes to me",
+                                         "probe": "tool", "target": "mcp__jarvis__chat_unread",
+                                         "arguments": {"mentions_only": True, "days": 1}, "expect": "Priya"})
+    assert not error and watch["when"].startswith("every 10 minutes")
+    assert watch["check"] == 'JARVIS calls the tool: chat_unread with {"mentions_only": true, "days": 1}, for "Priya"'
+    schedules.update(watch["id"], baseline=json.dumps(["a1"]))
+    changed, error = call("schedule_change", {"id": watch["id"], "target": "gmail_search",
+                                              "arguments": {"query": "from:priya"}})
+    assert not error
+    assert changed["check"] == 'JARVIS calls the tool: gmail_search with {"query": "from:priya"}, for "Priya"'
+    assert schedules.get(watch["id"])["baseline"] is None  # compared afresh
+    refused, error = call("schedule_change", {"id": watch["id"], "target": "gmail_modify"})
+    assert error and "isn't a reading tool" in refused
 
 
 def test_schedule_tools_show_the_notepad_and_set_only_changes(db):
