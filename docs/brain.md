@@ -264,6 +264,7 @@ When the user speaks over a reply, `respond()` is cancelled. What happens next d
 | **"Take a pull"** | `git pull` / `fetch` / `clone` in `Bash` is **refused by the gate** and redirected to `start_job` | Runs as a command task; announced when done |
 | **"Research X"** | `background_lookup` (more than one search) or a `research` task | Answer announced when ready |
 | You **talk over** a reply mid-tool | The JARVIS tool call **carries on**; only the reply stops | Next turn is told it's still running |
+| **"Stop the merge"** | `background_stop` (or `task_stop` with the task's id): the runner stops the merge cleanly, and the kept call ends without a follow-up | JARVIS says it stopped and nothing was merged |
 
 ```mermaid
 sequenceDiagram
@@ -303,6 +304,8 @@ sequenceDiagram
 | Empty reply = **silence** | If the talk moved on, the brain can choose to say nothing |
 | Unspoken follow-ups go to the **phone** as a one-line summary | Same as other announcements |
 | Call still running at hang-up: **cancelled**. The runner still finishes a merge and lists it in the bell | The voice process ends with the call |
+
+**Stopping one:** `background_stop` stops a kept call, or a `background_lookup` / `file_lookup` still going, by its tool's name or the lookup's topic, when you ask. Nothing comes back from what it stops. A tool whose work runs elsewhere names how to stop that (`Tool.stop`): for `task_merge`, the runner's stop, which kills the test run and leaves the project's folder as it was.
 
 **Not kept:** tools registered with `stays=True`, today `voice_enroll` and `background_lookup` (they answer at once or start their own background work). Tasks never keep calls; only the voice brain does.
 

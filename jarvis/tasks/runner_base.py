@@ -15,6 +15,7 @@ class RunnerBase:
     store: Store
     jobs: dict[int, asyncio.Task]
     folders: dict[str, asyncio.Lock]
+    merges: dict[int, asyncio.Task]
     snapshots: dict[int, dict]
     projects_lock: asyncio.Lock
     listeners: set[asyncio.Queue]

@@ -339,12 +339,24 @@ def approval_rule_forget(rule: int) -> dict:
     return _rule(remembered.forget(rule)) | {"withdrawn": True}
 
 
-@tool("task_stop", "Stop a running, queued or waiting task. Code changes so far stay in the project's "
-      "folder (uncommitted, unless the user asked for a commit), or on its branch for worktree tasks. A command task's command stops, all of it, as stop_job "
-      "stops it; one waiting for a yes to fix it is left as it failed.", {"id": {"type": "integer"}}, ["id"],
-      screened=_TASK_TEXT)
+@tool("task_stop", "Stop a running, queued or waiting task, or a merge of a task under way (task_merge). Code changes "
+      "so far stay in the project's folder (uncommitted, unless the user asked for a commit), or on its branch for "
+      "worktree tasks. A command task's command stops, all of it, as stop_job stops it; one waiting for a yes to fix "
+      "it is left as it failed. A merge stops cleanly: its tests stop, nothing is merged, the project's folder is left "
+      "as it was and the task's branch is kept; spoken says how it ended (merged after all, if the stop came too "
+      "late).", {"id": {"type": "integer"}}, ["id"], screened=_TASK_TEXT)
 async def task_stop(id: int) -> dict:
-    return _brief(await client.stop(id))
+    stopping = client.stop(id)
+    if (kept := conversation.current().kept) is None:
+        return _brief(await stopping)
+    # A merge of it carrying on outside its turn ends with the stop: its result would only say so again
+    merging = [c for c in kept.going() if c.tool == "task_merge" and c.args.get("id") == id]
+    return _brief(await kept.stop(merging, stopping))
+
+
+async def _stop_merge(args: dict) -> str:
+    """Tool.stop for task_merge: the runner stops the merge itself."""
+    return (await client.stop(args["id"]))["spoken"]
 
 
 @tool(
@@ -353,12 +365,13 @@ async def task_stop(id: int) -> dict:
     "project's folder, then "
     "delete the task's branch and remove its worktree. A branch that's already merged is just cleaned up. JARVIS's "
     "own branches run its tests first, which takes a few minutes (the merge then carries on in the background and its "
-    "result comes back to you), and aren't merged if tests fail on them. Only "
+    "result comes back to you; task_stop with its id stops it), and aren't merged if tests fail on them. Only "
     "for tasks with a branch (in_place false); only when the user asks for it, and then without asking again. Use "
     "this, never git in the shell. Then say in one sentence which task went into which project.",
     {"id": {"type": "integer"}},
     ["id"],
     screened=_TASK_TEXT,
+    stop=_stop_merge,
 )
 async def task_merge(id: int) -> dict:
     return _brief(await client.merge(id))

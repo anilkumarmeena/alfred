@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from jarvis.brain.kept import Kept
 from jarvis.core import profile
 from jarvis.state import conversation
 from jarvis.tasks import client
@@ -30,6 +31,7 @@ class Brain:
         self.asking = False  # its shell's own question about a command
         self.ended = False
         self.background = None
+        self.kept = Kept()
 
     async def start(self) -> None:
         pass
@@ -469,13 +471,13 @@ class STT:
         self.speaker = Speaker()
 
 
-def test_the_call_lends_its_speaker_check_and_lookups_to_the_tools_through_its_conversation():
+def test_the_call_lends_its_speaker_check_lookups_and_kept_calls_to_the_tools_through_its_conversation():
     async def main():
         talk = conversation.begin()
         voice, session = call(talk=talk, stt=STT(), floor=Floor()), Session()
         voice.open()
         assert conversation.current() is talk
-        assert talk.speaker is voice.stt.speaker and talk.lookups is voice.lookups
+        assert talk.speaker is voice.stt.speaker and talk.lookups is voice.lookups and talk.kept is voice.brain.kept
         voice.stt.speaker.announce("Your voiceprint is saved.")
         voice.brain.background("Merged.", "[the merge ended]", "merge it")
         [*_, merged] = voice.announcements.queue
@@ -486,7 +488,7 @@ def test_the_call_lends_its_speaker_check_and_lookups_to_the_tools_through_its_c
         return voice, talk
 
     voice, talk = asyncio.run(main())
-    assert talk.speaker is None and talk.lookups is None and voice.stt.speaker.cancelled
+    assert talk.speaker is None and talk.lookups is None and talk.kept is None and voice.stt.speaker.cancelled
     assert conversation.current() is not talk  # the process goes back to its own conversation
     assert voice.brain.ended and voice.runner.ended
     assert all(loop.done() for loop in voice._loops)

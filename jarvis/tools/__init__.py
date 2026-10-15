@@ -11,7 +11,7 @@ import inspect
 import json
 import logging
 from dataclasses import dataclass
-from collections.abc import Iterable
+from collections.abc import Awaitable, Iterable
 from typing import Any, Callable
 
 import ai_armory
@@ -41,6 +41,9 @@ class Tool:
     before: Callable[[], None] | None = None  # AI Armory: refresh tool-set settings before each call
     # Answers at once or starts its own background work: never carried on outside the voice turn (jarvis.brain.kept)
     stays: bool = False
+    # Stops the work a call carrying on outside its turn started elsewhere (a merge in the task runner), given the
+    # call's args, and says how it ended; cancelling the call alone would only stop waiting for it
+    stop: Callable[[dict], Awaitable[str]] | None = None
     # What of its result the injection check screens: all of it (outside content, the default, so new tools are
     # covered), none (False: JARVIS's own data), or just the result's JSON fields named (task-written text; a reply
     # that isn't JSON, such as an error, is screened whole)
@@ -62,11 +65,12 @@ _REGISTRY: dict[str, Tool] = {}
 
 def tool(name: str, description: str, properties: dict[str, dict] | None = None, required: list[str] | None = None,
          gated: bool = False, changes: bool = False, said: str = "", enabled: Callable[[], bool] | None = None,
-         shell: bool = False, reads: bool = False, stays: bool = False, screened: bool | tuple[str, ...] = True):
+         shell: bool = False, reads: bool = False, stays: bool = False, screened: bool | tuple[str, ...] = True,
+         stop: Callable[[dict], Awaitable[str]] | None = None):
     def register(fn: Callable[..., Any]) -> Callable[..., Any]:
         _REGISTRY[name] = Tool(name, description, properties or {}, required or [], fn, gated,
                                changes=changes or bool(said), said=said, enabled=enabled, shell=shell, reads=reads,
-                               stays=stays, screened=screened)
+                               stays=stays, screened=screened, stop=stop)
         return fn
 
     return register

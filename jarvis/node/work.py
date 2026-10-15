@@ -177,6 +177,7 @@ class Work:
         self.aliases: dict[int, int] = {}  # task id -> the stand-in id its run began with here, while it was away
         self.stopped: set[int] = set()  # runs the main computer stopped (others cut off by a shutdown here resume)
         self.locks: dict[str, asyncio.Lock] = {}
+        self.merges: dict[int, asyncio.Task] = {}  # merges of projects living here under way, by task id
         self._sent = asyncio.Event()  # the journal is empty, as far as the sender knows
         self._sent.set()
         agent.handlers |= {
@@ -184,7 +185,7 @@ class Work:
             "copy.forget": self.copy_forget, "job.start": self.job_start, "job.poll": self.job_poll,
             "job.stop": self.job_stop, "task.run": self.task_run, "task.stop": self.task_stop,
             "task.running": self.task_running, "folder.check": self.folder_check, "schedule.sync": self.schedule_sync,
-            **{f"folder.{op}": self._folder_step(op) for op in git_ops.OPS}}
+            "folder.stop": self.folder_stop, **{f"folder.{op}": self._folder_step(op) for op in git_ops.OPS}}
         agent.busy = self.busy
         agent.on_link.append(self.on_link)
 
@@ -410,8 +411,26 @@ class Work:
                     body[key] = str(self.own_folder(body[key]))
             if body.get("worktree"):
                 body["worktree"] = str(self.own_folder(body["worktree"], worktrees=True))
-            return await git_ops.OPS[op](body)
+            if op != "merge":
+                return await git_ops.OPS[op](body)
+            # A merge runs apart, so folder.stop can stop it and this request still answers
+            task_id = int(body["task"])
+            merging = self.merges[task_id] = asyncio.ensure_future(git_ops.OPS[op](body))
+            try:
+                return await merging
+            except asyncio.CancelledError:
+                if (me := asyncio.current_task()) and me.cancelling():  # the link dropped
+                    raise
+                raise Refused(f"Task {task_id}'s merge was stopped.") from None
+            finally:
+                self.merges.pop(task_id, None)
         return step
+
+    async def folder_stop(self, body: dict) -> dict:
+        """Stop a merge under way here; the merge's own request answers how it ended."""
+        if merging := self.merges.get(int(body["task"])):
+            merging.cancel()
+        return {"stopped": bool(merging)}
 
     # ── Scheduled jobs of projects living here ───────────────────
     # The main computer sends the definitions (schedule.sync); this machine starts them on time whether or not the

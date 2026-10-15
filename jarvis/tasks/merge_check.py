@@ -1,8 +1,9 @@
-"""Run JARVIS's own test suite on a task branch before merging it (Runner._merge).
+"""Run JARVIS's own test suite on a task branch before merging it (git_ops.merge_op).
 
 Runs in the task's worktree (or a temporary checkout of the branch), using the main .venv unless the worktree has
 its own. Failures not in ENV_ONLY are re-run on the target branch in the main checkout (whole files); those that
-fail there too are pre-existing. Any remaining failure blocks the merge.
+fail there too are pre-existing. Any remaining failure blocks the merge. A stopped merge kills the run, pytest's
+children included, and removes the temporary checkout.
 """
 
 import os
@@ -32,7 +33,7 @@ async def failures(folder: Path, venv: Path, tests: Sequence[str] = ()) -> set[s
     """
     env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"} | {"UV_PROJECT_ENVIRONMENT": str(venv)}
     code, out = await proc.run_try("uv", "run", "--no-sync", "--with", "pytest", "pytest", "-q", "-rfE",
-                                   "-p", "no:cacheprovider", *tests, timeout=TIMEOUT, cwd=folder, env=env)
+                                   "-p", "no:cacheprovider", *tests, timeout=TIMEOUT, cwd=folder, env=env, group=True)
     failed = set(FAILED.findall(out))
     if code not in (0, 1, 5) and not failed:  # 5: nothing collected (e.g. all skipped)
         raise RuntimeError(" ".join(out.splitlines()[-3:])[:300] or f"pytest exited with {code}")

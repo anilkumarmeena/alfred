@@ -106,8 +106,8 @@ def test_other_projects_branches_merge_without_running_tests(env, suite, monkeyp
 def test_the_suite_runs_with_the_venv_given_and_its_failures_are_read(monkeypatch, tmp_path):
     ran = {}
 
-    async def run_try(*argv, timeout, cwd, env):
-        ran.update(argv=argv, cwd=cwd, env=env)
+    async def run_try(*argv, timeout, cwd, env, group):
+        ran.update(argv=argv, cwd=cwd, env=env, group=group)
         return 1, ("....F.E\n=== short test summary info ===\n"
                    "FAILED tests/test_a.py::test_one - AssertionError: assert 1 == 2\n"
                    "FAILED tests/test_a.py::test_two[a b]\n"
@@ -120,10 +120,11 @@ def test_the_suite_runs_with_the_venv_given_and_its_failures_are_read(monkeypatc
     assert failed == {"tests/test_a.py::test_one", "tests/test_a.py::test_two[a b]", "tests/test_b.py"}
     assert ran["argv"][:2] == ("uv", "run") and ran["argv"][-1] == "tests/test_a.py" and ran["cwd"] == tmp_path
     assert ran["env"]["UV_PROJECT_ENVIRONMENT"] == str(tmp_path / "venv") and "VIRTUAL_ENV" not in ran["env"]
+    assert ran["group"]  # a stop kills pytest too, not only uv
 
 
 def test_a_suite_that_wont_start_says_why(monkeypatch, tmp_path):
-    async def run_try(*argv, timeout, cwd, env):
+    async def run_try(*argv, timeout, cwd, env, group):
         return 4, "ERROR: usage: pytest [options]\nerror: unrecognized arguments: --bogus"
 
     monkeypatch.setattr(proc, "run_try", run_try)

@@ -79,7 +79,7 @@ class VoiceSession:
             # announce enrollment completion when the floor is free
             self.stt.speaker.announce = lambda text: self.announcements.add(Announcement(text))
             self.talk.speaker = self.stt.speaker
-        self.talk.lookups = self.lookups
+        self.talk.lookups, self.talk.kept = self.lookups, self.brain.kept  # for background_stop
         # slow tool calls that left their turn come back as follow-ups the brain speaks itself
         self.brain.on_background(self._background)
         for quick in self._quick_models:
@@ -117,7 +117,7 @@ class VoiceSession:
             loop.cancel()
         if self.stt is not None:
             self.stt.speaker.cancel_enrollment()
-        self.talk.speaker = self.talk.lookups = None
+        self.talk.speaker = self.talk.lookups = self.talk.kept = None
         self.timings.close()
         steps = [self.lookups.close(), self.announcements.leave(), self.brain.end(), self._ended(),
                  *(quick.close() for quick in self._quick_models)]
