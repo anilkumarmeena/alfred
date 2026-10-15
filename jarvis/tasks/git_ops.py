@@ -1,6 +1,7 @@
 """Runner mixin for git and project-list changes.
 
-  worktree tasks  own worktree + branch jarvis/<id>-<slug>; committed at run end, then merged or discarded
+  worktree tasks  own worktree + branch jarvis/<id>-<slug>; committed at run end, then merged or discarded; a
+                  merge under way stops cleanly (halt), leaving the folder as it was
   in-place tasks  user's uncommitted work saved under refs/jarvis/ before each run; changes reported after
                   (non-git folders: a file mtime/size snapshot instead)
   projects        register / git init, serialised by projects_lock
@@ -10,6 +11,7 @@ The git steps themselves are OPS, functions of folder paths: for a project that 
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
@@ -34,6 +36,7 @@ PATHSPEC = ["--", ".", *(f":(exclude,glob)**/{p}" for p in JUNK)]
 # Skipped when snapshotting a non-git folder
 SNAPSHOT_SKIP = {".git", *projects.CACHE_DIRS}
 SQUASH_BODY = 1200  # characters of a task's summary kept in its squashed commit
+MERGE_STOP_SECONDS = 60  # a stopped merge cleans up (its test run, a temporary checkout) before saying how it ended
 
 
 async def _git(cwd: str | Path, *args: str, timeout: float = 60) -> str:
@@ -161,7 +164,10 @@ def squash_message(title: str, summary: str, task: int) -> str:
 
 async def merge_op(body: dict) -> dict:
     """{"repo", "branch", "worktree", "task", "name", "title", "summary"}: squash the branch into one commit on what's
-    checked out, then remove it. Returns {"did", "cleaned"}; ValueError (nothing changed) if it can't."""
+    checked out, then remove it. Returns {"did", "cleaned"}; ValueError (nothing changed) if it can't.
+
+    Cancelling it stops the merge: its tests stop, a squash under way is undone, and CancelledError comes out with the
+    folder as it was and the branch kept. Once merged, it's too late: the cleanup finishes and it returns as usual."""
     task_id, name = body["task"], body["name"]
     repo, branch, wt = Path(body["repo"]), body["branch"], body.get("worktree")
     if wt and Path(wt).exists() and await _git(wt, "status", "--porcelain", *PATHSPEC):
@@ -182,15 +188,35 @@ async def merge_op(body: dict) -> dict:
         if tested and (why := await merge_check.refusal(repo, branch, wt, into)):
             raise ValueError(f"Task {task_id}'s branch {branch} wasn't merged, since {why}.")
         message = squash_message(body.get("title") or "", body.get("summary") or "", task_id)
-        if await _squash(repo, branch, into, message):
+        before = await _git(repo, "rev-parse", "HEAD")
+        squashing = asyncio.ensure_future(_squash(repo, branch, into, message))
+        try:
+            squashed = await asyncio.shield(squashing)
+        except asyncio.CancelledError:  # killing git mid-squash could leave the folder half-merged: let it end, undo it
+            with contextlib.suppress(ValueError):  # it failed, and put the folder back itself
+                if await squashing:
+                    await _git_try(repo, "reset", "-q", "--merge", before)
+            raise
+        if squashed:
             did = f"merged into {into} as one commit" + (", its tests passing" if tested else "")
         else:
             did = f"{branch} had no changes that weren't already in {into}"
+    cleaning = asyncio.ensure_future(_clean_up(repo, wt, branch if exists else None))
     try:
-        cleaned = await _remove_branch(repo, wt, branch if exists else None)
-    except RuntimeError as e:  # the merge itself is done, so it's still reported
-        cleaned = f"Its worktree and branch weren't removed: {e}"[:300]
+        cleaned = await asyncio.shield(cleaning)
+    except asyncio.CancelledError:  # merged already: too late to stop, so it finishes
+        cleaned = await cleaning
+        if task := asyncio.current_task():
+            task.uncancel()
     return {"did": did, "cleaned": cleaned}
+
+
+async def _clean_up(repo: Path, worktree: str | None, branch: str | None) -> str:
+    """_remove_branch after a merge, which is done whatever happens here, so a failure is only reported."""
+    try:
+        return await _remove_branch(repo, worktree, branch)
+    except RuntimeError as e:
+        return f"Its worktree and branch weren't removed: {e}"[:300]
 
 
 async def _squash(repo: Path, branch: str, into: str, message: str) -> bool:
@@ -272,7 +298,7 @@ class GitOps(RunnerBase):
     async def merge(self, task_id: int) -> dict:
         """Merge a worktree task's branch into the project's checked-out branch, then remove worktree and branch.
 
-        An already-merged branch is only cleaned up."""
+        An already-merged branch is only cleaned up. While it runs, stop_merge stops it: ValueError then says so."""
         task = self._get(task_id)
         if task["status"] == "discarded":
             raise ValueError(f"Task {task_id} was discarded, so there's nothing to merge.")
@@ -280,20 +306,55 @@ class GitOps(RunnerBase):
             raise ValueError(f"Task {task_id} has no branch of its own to merge; in-place changes are already in the project's folder.")
         if task_id in self.jobs or task["status"] in ACTIVE:
             raise ValueError(f"Task {task_id} isn't finished yet; merge it once it is.")
-        async with self.projects_lock:
-            project = projects.find(task["project"])
-            if busy := self._jobs_on(project.name, in_place=True):
-                raise ValueError(f"Task {' and '.join(map(str, busy))} is working in {project.name}'s folder; merge once it's finished.")
-            async with self._folder_lock(project.name):  # in-place tasks wait for the merge
-                done = await self._op(project.node, "merge", {"repo": str(project.path), "branch": task["branch"],
-                                                              "worktree": task["worktree"], "task": task_id,
-                                                              "name": project.name, "title": task["title"],
-                                                              "summary": task["summary"]})
+        if task_id in self.merges:
+            raise ValueError(f"Task {task_id} is being merged already.")
+        merging = self.merges[task_id] = asyncio.ensure_future(self._merge(task))
+        try:
+            merged, project = await merging
+        except asyncio.CancelledError:
+            if (me := asyncio.current_task()) and me.cancelling():  # the runner is stopping, not the merge
+                raise
+            raise ValueError(self._get(task_id)["spoken"]) from None
+        finally:
+            self.merges.pop(task_id, None)
+        await self._forget_copy(task, project)
+        return merged
+
+    async def _merge(self, task: dict) -> tuple[dict, projects.Project]:
+        """The merge itself; its outcome is recorded by the time it ends, stopped or not."""
+        task_id = task["id"]
+        try:
+            async with self.projects_lock:
+                project = projects.find(task["project"])
+                if busy := self._jobs_on(project.name, in_place=True):
+                    raise ValueError(f"Task {' and '.join(map(str, busy))} is working in {project.name}'s folder; merge once it's finished.")
+                async with self._folder_lock(project.name):  # in-place tasks wait for the merge
+                    done = await self._op(project.node, "merge", {"repo": str(project.path), "branch": task["branch"],
+                                                                  "worktree": task["worktree"], "task": task_id,
+                                                                  "name": project.name, "title": task["title"],
+                                                                  "summary": task["summary"]})
+        except asyncio.CancelledError:
+            spoken = (f"Task {task_id}, {task['title']}, wasn't merged: its merge was stopped, so nothing changed and "
+                      "its branch is kept.")
+            self.store.log(task_id, "merge stopped", spoken)
+            bell.add(spoken, "warn", task_id)
+            self.store.update(task_id, spoken=spoken)
+            raise
         spoken = f"Task {task_id}, {task['title']}, {done['did']}. {done['cleaned']}."
         self.store.log(task_id, "merged", spoken)
         bell.add(spoken, "ok", task_id)
-        await self._forget_copy(task, project)
-        return self.store.update(task_id, spoken=spoken)
+        return self.store.update(task_id, spoken=spoken), project
+
+    async def stop_merge(self, task_id: int) -> dict:
+        """Stop a merge under way and wait for it to end: the task, its spoken line saying how it ended (stopped, or
+        merged when the stop came too late)."""
+        merging = self.merges[task_id]
+        merging.cancel()
+        await asyncio.wait({merging}, timeout=MERGE_STOP_SECONDS)
+        task = self._get(task_id)
+        if not merging.done():
+            return task | {"spoken": f"Task {task_id}'s merge is stopping; the bell says how it ended once it has."}
+        return task
 
     async def _forget_copy(self, task: dict, project: projects.Project | None = None) -> None:
         """A task copied to a machine (not one whose project lives there): its copy has served its purpose."""

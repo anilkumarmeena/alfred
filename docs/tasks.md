@@ -59,11 +59,13 @@ Ask for anything that takes a while and JARVIS starts a task. Keep talking, star
 | "find out what changed in LiveKit 1.9" | Starts a **research** task |
 | "What is task 12 doing?" | Its latest steps: commands, files, subagents, progress |
 | "merge task 12" | After your yes: merges its branch, deletes the branch and worktree |
+| "stop the merge" | Stops a merge under way: its tests stop and nothing is merged, the folder left as it was and the branch kept |
 | "throw away task 12" | After your plain yes (checked in code, like a command's): discards it |
 | "start a new project called weather app" | A folder in `JARVIS_NEW_PROJECTS_DIR`, added as an in-place project, no git |
 | "set up git for weather app" | Puts it under git once the first version has settled |
 
 - **Merge** goes into the project's own checkout, as one commit: the task's title and the start of its summary. Its in-between commits ("… (unfinished)", catch-up merges) stay off your branch.
+- **Stopping** a merge (`task_stop`, or the CLI's `stop`) kills its test run and removes the checkout made for it; a stop while git squashes and commits lets git end, then undoes it. Once merged it's too late: the cleanup finishes and the reply says so.
 - **Throw away** on an in-place task leaves its changes for you to undo.
 
 ### Where code changes go

@@ -273,13 +273,38 @@ class Offload:
         return made | {"machine": found.name}
 
     async def folder_op(self, node: int, op: str, body: dict) -> dict:
-        """A git or folder step (git_ops.OPS) on the machine a project lives on. ValueError if it's away or says no."""
+        """A git or folder step (git_ops.OPS) on the machine a project lives on. ValueError if it's away or says no.
+
+        A merge cancelled (stopped) is stopped there too, and waited for: still CancelledError if it stopped, its
+        result if it was too late to. Other steps are short, and just stop being waited for."""
         try:
-            return await self.up(node).call(f"folder.{op}", body, timeout=900)
+            up = self.up(node)
+            asked = asyncio.ensure_future(up.call(f"folder.{op}", body, timeout=900))
+            try:
+                return await asyncio.shield(asked)
+            except asyncio.CancelledError:
+                if self.runner.closing or op != "merge":
+                    asked.cancel()
+                    raise
+                ended = await self._stop_merge_there(up, body["task"], asked)
+                if me := asyncio.current_task():
+                    me.uncancel()
+                return ended
         except LinkDown:
             raise ValueError(f"{self.name(node)}, where that project lives, isn't online.") from None
         except Refused as e:
             raise ValueError(str(e)) from None
+
+    @staticmethod
+    async def _stop_merge_there(up: Link, task_id: int, asked: asyncio.Future) -> dict:
+        """Stop the task's merge there and wait for its answer: its result if it was too late to stop, else
+        CancelledError."""
+        with contextlib.suppress(LinkDown, Refused, TimeoutError):  # a dropped link stops it there anyway
+            await up.call("folder.stop", {"task": task_id}, timeout=30)
+        try:
+            return await asked
+        except (LinkDown, Refused, TimeoutError):
+            raise asyncio.CancelledError from None
 
     # ── Scheduled jobs of projects that live on a machine ────────
     # That machine owns them: it keeps their times and starts each when due, so one never runs twice. A command it

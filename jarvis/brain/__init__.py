@@ -1,13 +1,17 @@
 """The brain: Claude with tools and memory, streaming its reply as text (cli.py, persona in persona.py)."""
 
 from collections.abc import AsyncIterator, Callable
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from jarvis.brain.kept import Kept
 
 
 class VoiceBrain(Protocol):
     """What a voice call (jarvis.voice.session) needs of its brain."""
 
     next_model: str | None  # a lighter model for the next turn alone (jarvis.brain.route)
+    kept: "Kept"  # its tool calls carrying on outside their turn
 
     async def start(self) -> None: ...
 

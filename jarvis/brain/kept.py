@@ -8,6 +8,9 @@ in a turn of its own (CliBrain.follow_up), telling the user and carrying on with
 `summary` is the line pushed to the phone if the conversation doesn't take it; `words` are the user's, of the turn
 that made the call. Tools flagged `stays` (they answer at once, or start background work themselves) never leave.
 
+background_stop (jarvis.tools.side) stops a kept call when the user asks; a tool whose work goes on elsewhere (a merge
+in the task runner) names how to stop that (Tool.stop). Nothing comes back from a stopped call.
+
 With no `finished` (no voice session), calls just run. Kept calls still running when the conversation ends are
 cancelled; the task runner finishes what it was already asked (a merge) and lists the outcome in the panel's bell.
 """
@@ -16,8 +19,9 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from jarvis import tools
 from jarvis.core import profile
@@ -39,6 +43,7 @@ class Call:
     task: asyncio.Task
     started: float = field(default_factory=time.monotonic)
     kept: bool = False  # left its turn: the result goes to `finished`
+    stopping: bool = False  # being stopped: its result goes nowhere
 
 
 class Kept:
@@ -69,7 +74,7 @@ class Kept:
         return (f"Still running after {self.seconds:g} seconds, so it carries on in the background. Its result comes "
                 f"back to you in a turn of your own as soon as it's in, to tell {profile.name()} and carry on with "
                 "anything that depends on it. Say in a few words that it's under way and carry on the conversation; "
-                "don't call it again or wait for it."), False
+                f"don't call it again or wait for it. If {profile.name()} asks to stop it, background_stop does."), False
 
     def keep_all(self) -> list[str]:
         """Keep every call of the turn still running (it was talked over); returns their tool names."""
@@ -78,6 +83,29 @@ class Kept:
             self._keep(call, "its turn was cut off")
         return [c.tool for c in running]
 
+    def going(self) -> list[Call]:
+        """Calls carrying on outside their turn, oldest first."""
+        return sorted((c for c in self.calls if c.kept and not c.task.done()), key=lambda c: c.started)
+
+    async def stop(self, calls: list[Call], first: Awaitable[Any] | None = None) -> Any:
+        """Stop `calls`; nothing comes back from them. `first` (awaited, its result returned) stops the work they
+        started elsewhere: if it fails, they carry on and its error comes out."""
+        for call in calls:
+            call.stopping = True
+        try:
+            done = await first if first is not None else None
+        except BaseException:
+            for call in calls:
+                call.stopping = False
+                if call.task.done():  # ended meanwhile: its result goes out after all
+                    self._ended(call)
+            raise
+        for call in calls:
+            call.task.cancel()
+            log.info("%s stopped", call.tool)
+        await asyncio.gather(*(c.task for c in calls), return_exceptions=True)
+        return done
+
     def _keep(self, call: Call, why: str) -> None:
         if not call.kept:
             call.kept = True
@@ -85,7 +113,7 @@ class Kept:
 
     def _ended(self, call: Call) -> None:
         self.calls.discard(call)
-        if not call.kept or self.closed or call.task.cancelled():
+        if not call.kept or self.closed or call.task.cancelled() or call.stopping:
             return
         try:
             content, failed = call.task.result()

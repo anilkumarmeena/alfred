@@ -58,8 +58,8 @@ Say so when adding it ("the film project lives on the studio Mac at ~/projects/f
 `project_register`, and that machine checks the folder (in its home, not hidden, never a secrets folder or JARVIS's
 own) and makes it if missing. From then on its tasks and long commands always run there, in its own folder, whatever
 the placement setting: in place, or on a branch in a worktree there. The git steps (saving uncommitted work under
-`refs/jarvis/`, worktrees, commits, merge and discard) run on that machine (`git_ops.OPS`, sent over the link). Nothing
-is copied. If the machine is away, the task waits for it (`JARVIS_NODE_WAIT_MINUTES`); it never runs here.
+`refs/jarvis/`, worktrees, commits, merge and discard) run on that machine (`git_ops.OPS`, sent over the link). A
+merge stopped here is stopped there too (`folder.stop`), and its request answers how it ended. Nothing is copied. If the machine is away, the task waits for it (`JARVIS_NODE_WAIT_MINUTES`); it never runs here.
 
 ## Scheduled jobs of projects that live on a machine
 

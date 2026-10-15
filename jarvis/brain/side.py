@@ -7,7 +7,7 @@ Two kinds, both short read-only sessions that need no approval:
                      otherwise it carries on in the background like the other kind.
 Background answers are announced via the floor, said as at most SAID_SENTENCES plain sentences (`spoken`); the
 whole answer goes to the brain unsaid, for follow-up questions. Per conversation, at most MAX_JOBS at once, each
-capped at SIDE_MINUTES; stopped when the session ends.
+capped at SIDE_MINUTES; stopped when the session ends, or by background_stop when the user asks.
 """
 
 import asyncio
@@ -249,6 +249,11 @@ class Jobs:
         said, detail = await spoken(found)
         return self._tell(f"On {about}: {said}" if said else f"The lookup on {about} is back; ask me for the details.",
                           f"Not said aloud, for follow-up questions: {detail}" if detail else "")  # sent as <private>
+
+    async def stop(self, job: asyncio.Task) -> None:
+        """Stop one job; nothing is announced."""
+        job.cancel()
+        await asyncio.gather(job, return_exceptions=True)
 
     async def close(self) -> None:
         """Cancel all jobs."""

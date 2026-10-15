@@ -148,6 +148,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         self.in_line: set[int] = set()  # tasks holding or next in line for a slot
         self.begun: set[int] = set()  # runs in progress: new grants apply from the next turn
         self.folders: dict[str, asyncio.Lock] = {}  # per project folder
+        self.merges: dict[int, asyncio.Task] = {}  # merges under way, by task id; halt() stops one
         self.snapshots: dict[int, dict] = {}  # pre-run file snapshot for in-place tasks without git
         self.projects_lock = asyncio.Lock()  # project list and project git setup
         self.listeners: set[asyncio.Queue] = set()
@@ -450,7 +451,10 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         return self.store.get(task_id)
 
     async def halt(self, task_id: int) -> dict:
-        """Stop any task: running command tasks via stop_command, others via stop."""
+        """Stop any task: a merge of it under way via stop_merge, running command tasks via stop_command, others via
+        stop."""
+        if task_id in self.merges:
+            return await self.stop_merge(task_id)
         task = self._get(task_id)
         if task["kind"] == COMMAND and task["status"] == "running":
             return await self.stop_command(task_id)

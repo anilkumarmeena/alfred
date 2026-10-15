@@ -1,4 +1,5 @@
-"""Per-conversation voice state: profile, this turn's words (`heard`), pending rule offer, speaker check, lookups.
+"""Per-conversation voice state: profile, this turn's words (`heard`), pending rule offer, speaker check, lookups and
+the brain's tool calls carrying on in the background (`kept`).
 
 begin() makes it current in this context and also process-wide, since a voice process holds one conversation and
 LiveKit callbacks may run outside the context. Outside a conversation (task runner, tests) current() returns a
@@ -15,6 +16,7 @@ from jarvis.core import profile
 from jarvis.safety.approvals import Heard, RuleOffer
 
 if TYPE_CHECKING:
+    from jarvis.brain.kept import Kept
     from jarvis.brain.side import Jobs
     from jarvis.voice.speaker import SpeakerCheck
 
@@ -26,6 +28,7 @@ class Conversation:
     offer: RuleOffer = field(default_factory=RuleOffer)
     speaker: SpeakerCheck | None = None
     lookups: Jobs | None = None
+    kept: Kept | None = None
 
 
 _current: ContextVar[Conversation | None] = ContextVar("jarvis_conversation", default=None)
