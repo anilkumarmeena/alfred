@@ -15,6 +15,7 @@ from pathlib import Path
 
 from claude_agent_sdk import HookMatcher, PermissionResultAllow, PermissionResultDeny, ToolPermissionContext
 
+from jarvis.brain.sdk import deny
 from jarvis.core import profile
 from jarvis.core.config import CLAUDE_CONFIG_DIR, ROOT, SECRETS_DIR
 from jarvis.safety import commands
@@ -242,8 +243,7 @@ class TaskGate:
         else:
             decision = await answer(self.decide(name, args, ToolPermissionContext(tool_use_id=tool_use_id, agent_id=agent)))
         if isinstance(decision, PermissionResultDeny):
-            return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                           "permissionDecisionReason": decision.message}}
+            return deny(decision.message)
         if name in HOST_COMMANDS and tool_use_id:
             self.decided[tool_use_id] = decision  # reused by can_use_tool if it gets called
         return {}  # no opinion: deny rules and can_use_tool still apply

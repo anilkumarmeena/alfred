@@ -1,5 +1,5 @@
-"""background_lookup and file_lookup: hand slow reading to a side job (jarvis.brain.side). background_stop stops one,
-or a tool call carrying on outside its turn (jarvis.brain.kept)."""
+"""background_lookup, file_lookup and computer_lookup: hand slow reading and checks to a side job
+(jarvis.brain.side). background_stop stops one, or a tool call carrying on outside its turn (jarvis.brain.kept)."""
 
 from __future__ import annotations
 
@@ -66,6 +66,31 @@ async def file_lookup(brief: str, about: str) -> str:
     return await _jobs().ask(brief, about)
 
 
+@tool(
+    "computer_lookup",
+    "Check something on this computer with shell commands, done by a fast helper so the conversation carries on: how "
+    "it's doing (uptime, memory, disk, load, battery, whether it needs a restart), what's running, whether a service "
+    "or port is up, what's installed and which version, a project's git status. Use it for every such check, even "
+    "one that looks like a single command, instead of running commands yourself. It only looks, in a sandbox without "
+    "the network: anything that changes, installs, restarts or fixes something is a command you run on the user's "
+    "word, or a task. A quick check comes back in this turn; a longer one carries on in the background and its "
+    "answer is announced when ready.",
+    {
+        "brief": {"type": "string", "description": "What to find out, and which project folder if it's about one; "
+                                                   "it doesn't see this conversation."},
+        "about": {"type": "string", "description": "What it's about, in a few words, as you'd say it: \"the "
+                                                   "computer's health\", \"the web server\"."},
+    },
+    ["brief", "about"],
+    reads=True,
+    stays=True,
+    screened=False,
+)
+async def computer_lookup(brief: str, about: str) -> str:
+    jobs = _jobs()
+    return await jobs.ask(brief, about, jobs.check)
+
+
 def _call_name(call: Call) -> str:
     """"task_merge (id 5)": the tool and its short arguments, as the brain made the call."""
     args = ", ".join(f"{k} {v}" for k, v in call.args.items() if isinstance(v, int | str) and len(str(v)) <= 40)
@@ -90,7 +115,7 @@ def _stop_lookup(jobs: Jobs, job, about: str) -> Callable[[], Awaitable[str]]:
 @tool(
     "background_stop",
     "Stop something of yours still going in the background, when the user asks: a tool call that carries on after "
-    "its turn (a merge and its test run, say) or a background_lookup or file_lookup. which names it: the tool's name "
+    "its turn (a merge and its test run, say) or a background_lookup, file_lookup or computer_lookup. which names it: the tool's name "
     "or the lookup's topic, or a word of either; leave it out when only one thing is going. A merge stops cleanly: "
     "its tests stop, nothing is merged, the project's folder is left as it was and the task's branch is kept (if it "
     "had already merged, the result says so). Nothing it stops comes back with a result, and what it already did "

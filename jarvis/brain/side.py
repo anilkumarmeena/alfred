@@ -1,10 +1,13 @@
-"""Side jobs: slow reading (searches, long pages, files) done in the background so the conversation carries on.
+"""Side jobs: slow reading and checking (searches, long pages, files, the computer's state) done in the background so
+the conversation carries on.
 
-Two kinds, both short read-only sessions that need no approval:
+Three kinds, all short read-only sessions that need no approval:
   background_lookup  web search/fetch and read-only JARVIS tools on SIDE_MODEL; always in the background.
-  file_lookup        Read, Glob and Grep on LOOKUP_MODEL, at most LOOKUP_READS reads. Its answer comes back in the
-                     turn if it's in within the turn's LOOKUP_WAIT budget (shared by every file lookup in that turn);
-                     otherwise it carries on in the background like the other kind.
+  file_lookup        Read, Glob and Grep on LOOKUP_MODEL, at most LOOKUP_READS reads.
+  computer_lookup    shell commands on LOOKUP_MODEL, held in the sandbox (no network, no writes outside the scratch
+                     dir, no secrets), at most LOOKUP_READS commands of CHECK_SECONDS each.
+The last two answer in the turn if they're in within the turn's LOOKUP_WAIT budget (shared by every such lookup in
+that turn); otherwise they carry on in the background like the first.
 Background answers are announced via the floor, said as at most SAID_SENTENCES plain sentences (`spoken`); the
 whole answer goes to the brain unsaid, for follow-up questions. Per conversation, at most MAX_JOBS at once, each
 capped at SIDE_MINUTES; stopped when the session ends, or by background_stop when the user asks.
@@ -31,7 +34,7 @@ from jarvis.core.config import (
     SIDE_MINUTES,
     SIDE_MODEL,
 )
-from jarvis.safety.commands import names_secret
+from jarvis.safety.commands import names_secret, reads_environment
 from jarvis.voice.speakable import speakable
 
 log = logging.getLogger("jarvis.brain.side")
@@ -42,6 +45,8 @@ WEB = ["WebSearch", "WebFetch"]
 FILE_READS = ["Read", "Glob", "Grep"]
 LOOKUP_READS = 12  # a file lookup's reads; then it's told to answer with what it has
 LOOKUP_TURNS = LOOKUP_READS + 4  # backstop, leaving it turns to answer
+CHECK_SECONDS = 20  # one command of a computer lookup; a hung one (a network wait) mustn't spend the whole job
+OUT_OF_STEPS = "You're out of steps. Stop and answer now with what you found."
 SAID_SENTENCES = 3  # of an announced answer
 SAID_MOST = 400  # chars of an announced answer
 ANSWER_MOST = 4000  # chars of an answer the wording model reads
@@ -67,6 +72,10 @@ def lookup_system() -> str:
     return prompts.load("lookup_agent", user_name=profile.name(), root=ROOT,
                         data_dir=data.relative_to(ROOT) if data.is_relative_to(ROOT) else data,
                         new_projects_dir=NEW_PROJECTS_DIR)
+
+
+def check_system() -> str:
+    return prompts.load("computer_lookup", user_name=profile.name(), seconds=CHECK_SECONDS)
 
 
 def spoken_system() -> str:
@@ -121,10 +130,34 @@ class Reads:
         if names_secret(" ".join(str(v) for v in args.values())):
             return PermissionResultDeny(message="Secrets stay out of reach.")
         if self.left <= 0:
-            return PermissionResultDeny(message="You're out of steps. Stop searching and answer now with what you "
-                                                "found, and where you looked.")
+            return PermissionResultDeny(message=f"{OUT_OF_STEPS} Say where you looked.")
         self.left -= 1
         return PermissionResultAllow()
+
+
+class Commands:
+    """What a computer lookup's PreToolUse hook refuses: anything but Bash, a command naming a secret or reading
+    another process's environment, and commands past `limit`. A hook, not can_use_tool, since sandboxed Bash never
+    reaches that; the sandbox holds what commands can reach."""
+
+    def __init__(self, limit: int = LOOKUP_READS) -> None:
+        self.left = limit
+
+    def refused(self, name: str, args: dict) -> str:
+        command = str(args.get("command") or "")
+        if name != "Bash":
+            return f"{name} isn't available."
+        if names_secret(command) or reads_environment(command):
+            return "Secrets stay out of reach."
+        if self.left <= 0:
+            return OUT_OF_STEPS
+        self.left -= 1
+        return ""
+
+
+async def _refuse(name: str, _args: dict, _ctx) -> PermissionResultDeny:
+    """A computer lookup's can_use_tool: what the sandbox doesn't allow by itself never runs."""
+    return PermissionResultDeny(message=f"Not run: {name} needs more than the sandbox allows.")
 
 
 async def _answer(brief: str, options) -> str:
@@ -171,14 +204,36 @@ async def find(brief: str) -> str:
     ))
 
 
+async def check(brief: str) -> str:
+    """Run one computer_lookup job; returns its answer. RuntimeError on failure."""
+    from jarvis.brain import usage
+    from jarvis.brain.sdk import refusing, sdk_options
+    from jarvis.safety import shell
+
+    (scratch := shell.scratch_dir()).mkdir(parents=True, exist_ok=True)
+    timeout = str(CHECK_SECONDS * 1000)
+    return await _answer(brief, sdk_options(
+        env={"BASH_DEFAULT_TIMEOUT_MS": timeout, "BASH_MAX_TIMEOUT_MS": timeout},
+        model=usage.available(LOOKUP_MODEL), system_prompt=check_system(), cwd=str(scratch),
+        max_turns=LOOKUP_TURNS, tools=["Bash"], allowed_tools=[], permission_mode="default",
+        sandbox=shell.SANDBOX | {"allowUnsandboxedCommands": False},  # never leaves it, even when asked to
+        settings=shell.SETTINGS,  # secrets unreadable in the sandbox
+        can_use_tool=_refuse, hooks={"PreToolUse": refusing(Commands().refused)},
+    ))
+
+
+Run = Callable[[str], Awaitable[str]]
+
+
 class Jobs:
     """One conversation's side jobs. `announce(text, note)` speaks a result when the floor allows."""
 
-    def __init__(self, announce: Callable[[str, str], object],
-                 run: Callable[[str], Awaitable[str]] = look, find: Callable[[str], Awaitable[str]] = find) -> None:
+    def __init__(self, announce: Callable[[str, str], object], run: Run = look, find: Run = find,
+                 check: Run = check) -> None:
         self.announce = announce
         self.run = run
         self.find = find
+        self.check = check
         self.running: dict[asyncio.Task, str] = {}  # job -> topic
         self.heard: set[asyncio.Task] = set()  # jobs a turn waits on: their answer goes back to it, unannounced
         self.waited = 0.0  # seconds this turn has waited on file lookups
@@ -192,7 +247,7 @@ class Jobs:
                     f"Say it'll follow once one is done.")
         return None
 
-    def _spawn(self, run: Callable[[str], Awaitable[str]], brief: str, about: str) -> asyncio.Task:
+    def _spawn(self, run: Run, brief: str, about: str) -> asyncio.Task:
         job = asyncio.get_running_loop().create_task(self._do(run, brief, about))
         self.running[job] = about
         job.add_done_callback(self.running.pop)
@@ -207,11 +262,12 @@ class Jobs:
         return (f"Started looking into {about} in the background. Say so in a few words and carry on; the answer is "
                 f"announced when it's ready.")
 
-    async def ask(self, brief: str, about: str) -> str:
-        """Run a file lookup: its answer if in within what's left of the turn's LOOKUP_WAIT, else it carries on."""
+    async def ask(self, brief: str, about: str, run: Run | None = None) -> str:
+        """Run a file lookup, or `run`: its answer if in within what's left of the turn's LOOKUP_WAIT, else it
+        carries on."""
         if busy := self._busy():
             return busy
-        job = self._spawn(self.find, brief, about)
+        job = self._spawn(run or self.find, brief, about)
         self.heard.add(job)
         began = time.monotonic()
         try:
@@ -221,7 +277,7 @@ class Jobs:
             self.heard.discard(job)  # cut off or still running: announced when done
         if job.done():
             return job.result()
-        log.info("file lookup carries on in the background: %s", about)
+        log.info("lookup carries on in the background: %s", about)
         return (f"Still looking into {about}, so it carries on in the background and the answer is announced when "
                 f"it's ready. Say so in a few words and carry on; don't look for it another way meanwhile.")
 
@@ -231,7 +287,7 @@ class Jobs:
             self.announce(text, note)
         return text
 
-    async def _do(self, run: Callable[[str], Awaitable[str]], brief: str, about: str) -> str:
+    async def _do(self, run: Run, brief: str, about: str) -> str:
         try:
             async with asyncio.timeout(SIDE_MINUTES * 60):
                 found = await run(brief)

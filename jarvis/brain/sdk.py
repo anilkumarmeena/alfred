@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    HookMatcher,
     RateLimitEvent,
     RateLimitInfo,
     ToolAnnotations,
@@ -81,6 +82,21 @@ def jarvis_server(names: list[str] | Callable[[tools.Tool], bool] | None = None,
     chosen = [t for t in tools.all_tools() if picks(t) and t.on()]
     server = create_sdk_mcp_server("jarvis", tools=[_sdk_tool(t, kept) for t in chosen])
     return server, [f"mcp__jarvis__{t.name}" for t in chosen if not (t.gated or t.shell)]
+
+
+def deny(reason: str) -> dict:
+    """A PreToolUse hook's answer refusing the call, `reason` going to the model."""
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                   "permissionDecisionReason": reason}}
+
+
+def refusing(refused: Callable[[str, dict], str]) -> list[HookMatcher]:
+    """A PreToolUse hook refusing each call for which `refused(tool name, input)` gives a reason."""
+
+    async def hook(data: dict, _tool_use_id, _ctx) -> dict:
+        return deny(why) if (why := refused(data.get("tool_name", ""), data.get("tool_input") or {})) else {}
+
+    return [HookMatcher(hooks=[hook])]
 
 
 def on_demand(options: dict) -> dict:

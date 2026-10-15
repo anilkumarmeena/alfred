@@ -136,7 +136,7 @@ class Voice:
             self.clis.append(FakeCli(self.turns, **cli))
             return self.clis[-1]
 
-        monkeypatch.setattr(brain_cli, "_options", lambda gate, jobs, kept=None: type("Options", (), {"model": "claude-opus-5-5"}))
+        monkeypatch.setattr(brain_cli, "_options", lambda gate, jobs, kept=None, budget=None: type("Options", (), {"model": "claude-opus-5-5"}))
         monkeypatch.setattr(brain_cli, "ClaudeSDKClient", started)
         monkeypatch.setattr(memory, "log_exchange", lambda user, assistant, approved=(), interrupted=False:
                             self.logged.append((user, assistant, interrupted)))
