@@ -7,6 +7,7 @@ utilization. Never queries Claude; a window past its reset is treated as fresh.
   windows()    known state by window
   out()        a window used up for every model, or None
   available()  the model to use (lighter while its family's weekly window is used up)
+  used_up_until() when a window used up for every model resets
   hold_until() when scheduled model runs should wait until (used-up window, or five-hour past USAGE_HOLD)
   said()       a one- or two-sentence summary, for usage_left
   of(login)    a login's windows as stored, for said(kept=...)
@@ -117,6 +118,11 @@ def available(model: str, now: float | None = None) -> str:
     return model
 
 
+def used_up_until(now: float | None = None) -> float | None:
+    """When the window used up for every model resets (latest if several), or None if none is."""
+    return _ends(found[1]) if (found := out(now)) else None
+
+
 def hold_until(now: float | None = None) -> float | None:
     """Timestamp scheduled model runs should wait until, or None to run now.
 
@@ -124,8 +130,8 @@ def hold_until(now: float | None = None) -> float | None:
     manual tasks).
     """
     now = now or time.time()
-    if found := out(now):
-        return _ends(found[1])
+    if found := used_up_until(now):
+        return found
     five = windows(now).get("five_hour")
     if five and five.get("resets_at") and (five.get("utilization") or 0) >= USAGE_HOLD:
         return float(five["resets_at"])

@@ -23,6 +23,7 @@ class RunnerBase:
     ending: dict[int, asyncio.Task]
     closing: bool
     placing: dict[int, asyncio.Task]
+    limit_waits: dict[int, float]
     if TYPE_CHECKING:
         from jarvis.node.hub import Hub
         from jarvis.node.offload import Offload
@@ -35,7 +36,7 @@ class RunnerBase:
         def start(self, kind: str, title: str, instruction: str, project: str | None = None, job: int | None = None,
                   hidden: bool = False, grants: list[str] | None = None, order: str | None = None,
                   fixes: int | None = None, todo: str | None = None) -> dict: ...
-        def _launch(self, task_id: int, prompt: str) -> dict: ...
+        def _launch(self, task_id: int, prompt: str, after: float | None = None) -> dict: ...
         def _placed(self, task_id: int, place: "Place") -> None: ...
         # jarvis.tasks.approvals
         def _close_approvals(self, task_id: int, why: str = "stopped") -> None: ...

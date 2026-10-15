@@ -63,6 +63,7 @@ create table tasks (
     todo integer,               -- to-do item it serves, settled on finish
     interrupted text            -- JSON {at, on_mac, prompt}: cut off by shutdown, to resume
 )"""
+# interrupted also holds {prompt, after} while a task waits for a usage limit's reset (Runner._launch)
 _TASKS_MIGRATIONS = (
     "alter table tasks add column node integer",  # 2: the machine it runs on (jarvis.node); null = this computer
 )

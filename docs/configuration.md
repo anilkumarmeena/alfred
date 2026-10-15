@@ -278,6 +278,7 @@ Answers only your enrolled voice. What each case means is in **[🗣️ Voice](v
 | `JARVIS_RESUME_TASKS` | `3` | Tasks cut off by a runner restart that resume by themselves (0–12) |
 | `JARVIS_TASK_MODEL`<br>`JARVIS_TASK_EFFORT` | Opus<br>`high` | Model and effort for background tasks |
 | `JARVIS_TASK_MAX_TURNS` | `150` | Most model turns in one task run |
+| `JARVIS_TASK_CONTINUES` | `3` | Times a task that runs out of turns carries on by itself before it stops and says so (0–20, `0` never) |
 | `JARVIS_TASK_SEARCH_MODEL` | Haiku | A task's read-only code-search subagent |
 | `JARVIS_TASK_HELPER_MODEL` | Sonnet | A task's test-runner and web-research subagents |
 | `JARVIS_NEW_PROJECTS_DIR` | Folder this checkout is in | Where a project made by voice gets its folder |

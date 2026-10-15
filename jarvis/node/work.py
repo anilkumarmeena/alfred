@@ -700,7 +700,7 @@ class Work:
         self.reporters.pop(run, None)
         self._run_file(own_id).unlink(missing_ok=True)
         ended = None if outcome is None else {"result": outcome.result, "error": outcome.error, "cost": outcome.cost,
-                                              "kind": outcome.kind}
+                                              "kind": outcome.kind, "resets": outcome.resets}
         self.journal.add("ended", reporter.task_id, run, {"outcome": ended})
 
     def _adopted(self, stand_in: int, task_id: int, run: str) -> None:

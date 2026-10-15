@@ -618,8 +618,9 @@ class Offload:
         if outcome is None:
             return Outcome("", f"it was cut off on {self.name(node)}, which stopped or restarted; reply to carry on",
                            0, "passing")
+        resets = outcome.get("resets")  # a machine on an older JARVIS doesn't send it
         return Outcome(str(outcome.get("result") or ""), str(outcome.get("error") or ""), float(outcome.get("cost") or 0),
-                       str(outcome.get("kind") or ""))
+                       str(outcome.get("kind") or ""), float(resets) if isinstance(resets, (int, float)) else None)
 
     @staticmethod
     def folder(task: dict) -> Path:
@@ -748,10 +749,10 @@ class Offload:
     # ── Watching over it ─────────────────────────────────────────
 
     def working(self) -> dict[int, list[int]]:
-        """Machine -> its active tasks and commands."""
+        """Machine -> its active tasks and commands. One waiting here for a usage limit's reset isn't work there."""
         found: dict[int, list[int]] = {}
         for task in self.runner.store.active():
-            if task.get("node") and task["status"] in ("queued", "running"):
+            if task.get("node") and task["status"] in ("queued", "running") and task["id"] not in self.runner.limit_waits:
                 found.setdefault(task["node"], []).append(task["id"])
         return found
 

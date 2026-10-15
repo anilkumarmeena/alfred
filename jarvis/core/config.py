@@ -205,6 +205,8 @@ MAX_TASKS = int(_number(preference("max_tasks"), float(DEFAULTS["max_tasks"]), *
 TASK_MODEL = os.environ.get("JARVIS_TASK_MODEL", "") or DEFAULT_MODEL
 TASK_EFFORT = os.environ.get("JARVIS_TASK_EFFORT", "") or "high"
 TASK_MAX_TURNS = int(os.environ.get("JARVIS_TASK_MAX_TURNS", "") or "150")
+# Times a run that ran out of turns is carried on by itself per user ask (jarvis.tasks.runner); 0 = never
+TASK_CONTINUES = int(_number(os.environ.get("JARVIS_TASK_CONTINUES", ""), 3, 0, 20))
 # Task subagents: read-only code search; test runner / web research
 TASK_SEARCH_MODEL = os.environ.get("JARVIS_TASK_SEARCH_MODEL", "") or FAST_MODEL
 TASK_HELPER_MODEL = os.environ.get("JARVIS_TASK_HELPER_MODEL", "") or HELPER_MODEL
