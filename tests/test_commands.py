@@ -1,5 +1,8 @@
 """Tests for shared command rules: what's risky, how it's described, task-forbidden commands, secret-naming text."""
 
+import fnmatch
+import re
+
 import pytest
 
 from jarvis.core.config import ROOT
@@ -435,6 +438,58 @@ def test_on_linux_other_systemd_and_make_commands_are_not_refused_for_the_bus(co
 def test_linux_credential_stores_are_secrets(text):
     assert names_secret(text), text
     assert "secrets" in refused(text)
+
+
+REAL_ENVS = [".env", ".env.local", ".env.production", ".env.staging", ".env.test", ".env.", ".env.e", ".env.exampl",
+             ".env.examples", ".env.example.local", ".env.sampled", ".env.tem", ".env.Local"]
+ENV_TEMPLATES = [".env.example", ".env.sample", ".env.template"]
+
+
+@pytest.mark.parametrize("text", [
+    "sed -i '/HEARTBEAT/d' .env.example", "cat app/.env.sample", f"cat {ROOT / '.env.example'}",
+    "cp templates/.env.template ./x", 'grep -n JARVIS "config/.env.example"',
+])
+def test_env_templates_are_not_secrets(text):
+    assert not names_secret(text), text
+    assert not refused(text), text
+
+
+@pytest.mark.parametrize("text", [
+    *(f"cat app/{name}" for name in REAL_ENVS),
+    f"cat {ROOT / '.env'}", "cp .env.example .env", "cat .env.example>.env", "diff .env.example .env.local",
+    "cat .env.example-old",
+])
+def test_real_env_files_are_still_secrets_beside_a_template(text):
+    assert names_secret(text), text
+
+
+def test_secret_paths_leave_out_env_templates_only(tmp_path):
+    from pathlib import Path
+
+    for name in REAL_ENVS:
+        assert commands.secret_path(tmp_path / name) and commands.SECRET_FILES.fullmatch(name), name
+    for name in ENV_TEMPLATES:
+        assert not commands.secret_path(tmp_path / name), name
+    assert commands.secret_path(Path.home() / ".ssh" / ".env.example")  # a secrets folder hides everything in it
+
+
+def _sandbox_regex(glob: str) -> re.Pattern:
+    """A glob as Claude Code's sandbox turns it into a Seatbelt regex (sandbox-runtime's globToRegex)."""
+    rx = re.sub(r"[.^$+{}()|\\]", lambda m: "\\" + m[0], glob)
+    rx = re.sub(r"\[([^\]]*?)$", r"\\[\1", rx).replace("**/", "\0").replace("**", "\1").replace("*", "[^/]*")
+    return re.compile("^" + rx.replace("?", "[^/]").replace("\0", "(.*/)?").replace("\1", ".*") + "$")
+
+
+@pytest.mark.parametrize("match", [
+    lambda glob, path: fnmatch.fnmatchcase(path.rsplit("/", 1)[-1], glob.removeprefix("**/")),  # as git and gitignore
+    lambda glob, path: bool(_sandbox_regex("/p/" + glob).match(path)),
+], ids=["glob", "sandbox"])
+def test_the_deny_globs_hide_every_real_env_file_and_no_template(match):
+    for name in REAL_ENVS:
+        assert any(match(g, f"/p/app/{name}") for g in commands.SECRET_PATTERNS), name
+    for name in ENV_TEMPLATES:
+        assert not [g for g in commands.SECRET_PATTERNS if match(g, f"/p/app/{name}")], name
+    assert all("^" not in g and "[!" not in g for g in commands.SECRET_PATTERNS)  # neither negates in the sandbox
 
 
 def test_linux_credential_stores_are_secret_paths_wherever_home_is():

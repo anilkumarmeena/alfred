@@ -17,11 +17,11 @@ def tree(root: Path, files: dict[str, str]) -> Path:
 
 def test_a_manifest_leaves_out_secrets_git_and_caches_that_cant_move(tmp_path):
     folder = tree(tmp_path / "p", {"app.py": "x", "src/a.js": "y", ".env": "KEY=1", ".env.local": "K=2",
-                                   "config/credentials.json": "{}", "secrets/token": "t", "keys/server.pem": "k",
-                                   ".git/config": "[remote]", ".venv/bin/python": "py", "__pycache__/a.pyc": "c",
-                                   "node_modules/lib/index.js": "m", ".DS_Store": ""})
+                                   ".env.example": "KEY=", "config/credentials.json": "{}", "secrets/token": "t",
+                                   "keys/server.pem": "k", ".git/config": "[remote]", ".venv/bin/python": "py",
+                                   "__pycache__/a.pyc": "c", "node_modules/lib/index.js": "m", ".DS_Store": ""})
     found = sync.manifest(folder)
-    assert sorted(found) == ["app.py", "node_modules/lib/index.js", "src/a.js"]
+    assert sorted(found) == [".env.example", "app.py", "node_modules/lib/index.js", "src/a.js"]  # a template isn't secret
     assert found["app.py"][0] == 1 and len(found["app.py"][1]) == 64
 
 

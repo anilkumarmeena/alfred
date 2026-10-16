@@ -349,6 +349,7 @@ def test_the_scan_flags_what_matters_whatever_a_model_says(tmp_path):
     ("secret-tool lookup service github", "reads secrets or credentials"),
     ("cat ~/.password-store/x.gpg", "reads secrets or credentials"),
     ("nmcli --show-secrets connection show home", "reads secrets or credentials"),
+    ("cp .env.example .env.local", "reads secrets or credentials"),
     ("pkexec cp x /usr/local/bin", "uses sudo"),
 ])
 def test_the_scan_knows_linux_persistence_installs_and_keychains(tmp_path, script, label):
@@ -357,7 +358,7 @@ def test_the_scan_knows_linux_persistence_installs_and_keychains(tmp_path, scrip
 
 
 @pytest.mark.parametrize("script", ["cat /etc/os-release", "print(user.profile)", "import cProfile",
-                                    "uname -a && free -h", "ls ~/.config"])
+                                    "uname -a && free -h", "ls ~/.config", "cat .env.example"])
 def test_reading_linux_system_files_is_no_flag(tmp_path, script):
     manual(tmp_path, "plain", files={"scripts/run.sh": script + "\n"})
     assert review.scan(tmp_path / "plain") == []

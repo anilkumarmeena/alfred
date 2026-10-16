@@ -907,6 +907,7 @@ def _ssh_checks() -> list[tuple[str, str, bool]]:
 def _mac_checks() -> list[tuple[str, str, bool]]:  # (what, command, should succeed)
     return [
         ("reads JARVIS's .env", f"head -c1 {ROOT / '.env'}", False),
+        ("reads JARVIS's .env.example (a template)", f"head -c1 {ROOT / '.env.example'}", True),
         ("reads secrets/", f"ls {JARVIS_SECRETS[0]}", False),
         ("lists ~/.ssh", "ls ~/.ssh", False),
         ("reads an SSH key file", "head -c1 ~/.ssh/id_ed25519 || head -c1 ~/.ssh/id_rsa || head -c1 ~/.ssh/id_ecdsa", False),
@@ -932,6 +933,7 @@ def _linux_checks() -> list[tuple[str, str, bool]]:  # (what, command, should su
                f"sqlite3.connect(\"file:\" + sys.argv[1] + \"?mode=ro\", uri=True).execute(\"select count(*) from tasks\")' {DB_FILE}")
     return [
         ("reads JARVIS's .env", f"head -c1 {ROOT / '.env'} | grep -q ''", False),
+        ("reads JARVIS's .env.example (a template)", f"head -c1 {ROOT / '.env.example'} | grep -q ''", True),
         # The voice logs are bound back inside the hidden secrets/, so their parent folders show (empty): files count
         ("sees a file in secrets/", f"find {JARVIS_SECRETS[0]} -type f -not -path "
                                     f"'{_real(profiles.current().voice_logs)}/*' | grep -q .", False),

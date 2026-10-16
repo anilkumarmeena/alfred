@@ -15,7 +15,7 @@ from jarvis import prompts
 from jarvis.core import profile
 from jarvis.core.config import SKILL_REVIEW_MODEL
 from jarvis.safety import scan as scan_text
-from jarvis.safety.commands import names_secret
+from jarvis.safety.commands import ENV_TEMPLATES, names_secret
 from jarvis.skills import home
 
 MAX_CHARS = 60_000  # total chars sent; beyond this files are omitted and marked partial
@@ -31,7 +31,8 @@ PATTERNS: list[tuple[str, re.Pattern]] = [(label, re.compile(rx, re.IGNORECASE))
     ("deletes files", r"\brm\s+-[a-z]*[rf]|\brmdir\b|shutil\.rmtree|os\.(remove|unlink|rmdir)|\.unlink\(|unlinkSync|"
                       r"rmSync|fs\.rm\b|\bshred\b|find\s.*-delete"),
     ("reads secrets or credentials", r"security\s+(find|dump|export)-|Keychains?\b|\.aws/|\.ssh/|\bid_(rsa|ed25519)\b|"
-                                     r"\.netrc|\.git-credentials|\bkeyring\b|\.env\b|\bsecret-tool\b|kwallet|"
+                                     r"\.netrc|\.git-credentials|\bkeyring\b|\bsecret-tool\b|kwallet|"
+                                     rf"\.env\b(?!\.({'|'.join(ENV_TEMPLATES)})(?![\w.-]))|"  # not .env.example
                                      r"\.password-store|\bpass\s+show\b|\.local/share/keyrings|org\.freedesktop\.secrets|"
                                      r"\bSecret\.Service\b|\blibsecret\b|--show-secrets"),
     ("reads environment variables, which can hold keys", r"os\.environ|\bgetenv\(|process\.env|\bENV\[|"

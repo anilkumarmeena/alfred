@@ -14,10 +14,12 @@ The secret lists here are the single source for the shell deny rules, task file 
 import fnmatch
 import functools
 import hashlib
+import itertools
 import os
 import re
 import shlex
 import stat
+import string
 import sys
 import tempfile
 from collections.abc import Callable
@@ -40,21 +42,45 @@ HOME_SECRETS = ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/gh", "~/.netrc", "~/.
 JARVIS_SECRETS = [SECRETS_DIR, Path(CLAUDE_CONFIG_DIR), ROOT / ".env", DATA_DIR / "browser/profile"]
 # Secret wherever they appear
 SECRET_DIRS = {"secrets", ".ssh", ".aws", ".gnupg", "Keychains"}
+# .env.example and the like hold placeholders, not secrets: every check here leaves them out, while .env, .env.local,
+# .env.production and any other .env.* stay secret. Neither Seatbelt's regexes nor globs can say "but not these", so
+# the rest is spelled out from where a name leaves every template's path (_ENV_RESTS).
+ENV_TEMPLATES = ("example", "sample", "template")
+# What follows '.env.' in a name that isn't a template: (a prefix of one, characters that can't come next, whether the
+# prefix alone counts). Any other character after a prefix, or a prefix that's no template itself, is secret.
+_ENV_RESTS = [(p, "".join(sorted({w[len(p)] for w in ENV_TEMPLATES if len(w) > len(p) and w.startswith(p)})),
+               p not in ENV_TEMPLATES)
+              for p in sorted({w[:i] for w in ENV_TEMPLATES for i in range(len(w) + 1)})]
+# Glob classes can't be negated (Claude Code's sandbox escapes ^ in them): file-name characters, spelled out
+_NAME_CHARS = set(string.ascii_letters + string.digits + "._~+@")
 
 
 def secret_file_names(char: str = ".", pem: bool = True) -> str:
-    """Secret file names as one regex alternation.
+    """Secret file names as one regex alternation, env templates left out.
 
     `char` is what a wildcard matches ('[^/]' stays within one path component). `pem=False` omits .pem files.
     """
+    slash = "" if char == "." else "/"
+    rests = "|".join(re.escape(p) + (f"([^{after}{slash}]{char}*)" if after else f"({char}+)") + "?" * alone
+                     for p, after, alone in _ENV_RESTS)
     keys = "pem|key" if pem else "key"
-    return (rf"\.env(\.{char}*)?|{char}+\.({keys}|p8|p12|pfx|jks|keystore)|id_(rsa|dsa|ecdsa|ed25519)|\.netrc|\.npmrc"
-            rf"|\.pypirc|\.git-credentials|credentials(\.json)?|{char}*client_secret{char}*\.json|tokens?\.json")
+    return (rf"\.env(\.({rests}))?|{char}+\.({keys}|p8|p12|pfx|jks|keystore)|id_(rsa|dsa|ecdsa|ed25519)|\.netrc"
+            rf"|\.npmrc|\.pypirc|\.git-credentials|credentials(\.json)?|{char}*client_secret{char}*\.json|tokens?\.json")
+
+
+def _glob_class(but: str) -> str:
+    """Glob class of the file-name characters except `but`, with runs as ranges and '-' first (so it's literal)."""
+    chars = sorted(_NAME_CHARS - set(but))
+    runs = [[c for _, c in run] for _, run in itertools.groupby(enumerate(chars), lambda ic: ord(ic[1]) - ic[0])]
+    return "[-" + "".join("".join(r) if len(r) < 3 else f"{r[0]}-{r[-1]}" for r in runs) + "]"
 
 
 SECRET_FILES = re.compile(secret_file_names(), re.IGNORECASE)
 # Same files as globs, for Claude Code's Read deny rules
-SECRET_PATTERNS = ["**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/*.p8", "**/*.p12", "**/*.pfx", "**/id_rsa",
+SECRET_PATTERNS = ["**/.env",
+                   *(g for p, after, alone in _ENV_RESTS
+                     for g in [f"**/.env.{p}"] * alone + [f"**/.env.{p}{_glob_class(after)}*"]),
+                   "**/*.pem", "**/*.key", "**/*.p8", "**/*.p12", "**/*.pfx", "**/id_rsa",
                    "**/id_dsa", "**/id_ecdsa", "**/id_ed25519", "**/.netrc", "**/.npmrc", "**/.pypirc",
                    "**/.git-credentials", "**/credentials", "**/credentials.json", "**/*client_secret*.json",
                    "**/token.json", "**/tokens.json"]
@@ -66,11 +92,13 @@ _SECRET_NAMES = re.compile(
     + r"|\.env(?!\w)|secrets/|\bid_(rsa|dsa|ecdsa|ed25519)\b(?!\.pub)|\.(pem|key|p8|p12|pfx)\b|client_secret"
     + r"|JARVIS_MASTER_KEY"
 )
+# A template's whole name, blanked before the search so neither .env nor ROOT/.env matches inside it
+_ENV_TEMPLATE_NAMES = re.compile(rf"(?<![\w.-])\.env\.({'|'.join(ENV_TEMPLATES)})(?![\w.-])")
 
 
 def names_secret(text: str) -> bool:
-    """Whether text names a secret: a secrets folder, .env file, key or login."""
-    return bool(_SECRET_NAMES.search(text))
+    """Whether text names a secret: a secrets folder, .env file (not a template), key or login."""
+    return bool(_SECRET_NAMES.search(_ENV_TEMPLATE_NAMES.sub(" ", text)))
 
 
 # Other processes' environments hold keys (MCP servers get tokens there). On macOS only setuid /bin/ps can read

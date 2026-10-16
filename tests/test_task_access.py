@@ -10,7 +10,7 @@ from test_in_place import NullReporter, worker_task
 
 from conftest import use_task_cache
 from jarvis.core import platform, profile
-from jarvis.safety import shell
+from jarvis.safety import commands, shell
 from jarvis.tasks import access, briefs, gate, worker
 
 
@@ -76,6 +76,14 @@ def test_secrets_stay_hidden_from_the_file_tools(mac, name):
     assert isinstance(denied, PermissionResultDeny) and "secrets" in denied.message
 
 
+def test_env_templates_are_readable_and_editable(mac):
+    template = mac["worktree"] / ".env.example"
+    template.write_text("KEY=")
+    opts = worker._options(worker_task(worktree=str(mac["worktree"])), NullReporter())
+    for tool in ("Read", "Edit"):
+        assert isinstance(call(opts, tool, file_path=str(template)), PermissionResultAllow), tool
+
+
 def test_secrets_folders_cant_be_searched(mac):
     opts = worker._options(worker_task(worktree=str(mac["worktree"])), NullReporter())
     assert isinstance(call(opts, "Grep", pattern="token", path=str(mac["token"].parent)), PermissionResultDeny)
@@ -93,7 +101,8 @@ def test_deny_rules_hide_secrets_from_the_sandbox_too(mac):
     for name in ("token", "login", "settings", "other_session"):
         assert any(mac[name].resolve().is_relative_to(p) for p in literal), name
     projects = str(mac["projects"].resolve())
-    assert f"{projects}/**/.env" in rules and f"{projects}/**/.env.*" in rules and f"{projects}/**/*.pem" in rules
+    assert f"{projects}/**/.env" in rules and f"{projects}/**/*.pem" in rules
+    assert {f"{projects}/{p}" for p in commands.SECRET_PATTERNS} <= set(rules)
     assert f"{projects}/video/**/secrets/**" in rules
     assert "~/.ssh/**" in rules
 

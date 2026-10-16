@@ -47,7 +47,7 @@ def test_secrets_are_unreadable_but_the_voice_session_logs_are_readable():
     home = os.path.realpath(os.path.expanduser("~"))
     for secret in [str(ROOT / "secrets"), str(ROOT / ".env"), *(p.replace("~", home, 1) for p in HOME_SECRETS)]:
         assert f'(subpath "{os.path.realpath(secret)}")' in reads, secret
-    assert all(re.escape(d) in reads for d in SECRET_DIRS) and r"\.env(\.[^/]*)?" in reads and "client_secret" in reads
+    assert all(re.escape(d) in reads for d in SECRET_DIRS) and r"\.env(\.(([^est/][^/]*)?|e([^x/][^/]*)?|" in reads and "client_secret" in reads
     assert f'(require-not (require-any (subpath "{os.path.realpath(profiles.current().voice_logs)}")' in reads
 
 
@@ -163,7 +163,8 @@ def linux_home(tmp_path, monkeypatch):
     """A home with logins, start-up files, a project and a runtime folder with a session bus."""
     home = tmp_path / "home"
     for path, text in {".bashrc": "x", ".ssh/id_ed25519": "KEY", ".ssh/known_hosts": "h", ".ssh/config": "c",
-                       ".netrc": "n", "proj/.env": "S=1", "proj/certs/ca.pem": "ca", "proj/server.pem": "k",
+                       ".netrc": "n", "proj/.env": "S=1", "proj/.env.example": "S=", "proj/certs/ca.pem": "ca",
+                       "proj/server.pem": "k",
                        "proj/node_modules/pkg/.env": "e", "proj/src/app.py": "", "dotfiles/zshrc": "z",
                        ".config/app/settings": "", ".config/systemd/user/a.service": "", ".ssh/agent.sock": ""}.items():
         (home / path).parent.mkdir(parents=True, exist_ok=True)
@@ -208,6 +209,7 @@ def test_bwrap_mounts_everything_then_hides_and_locks_what_seatbelt_denies(linux
     for secret in (".netrc", "proj/.env", "proj/server.pem"):
         assert where(ops, f"{home}/{secret}") == [("--ro-bind", "/dev/null", f"{home}/{secret}")], secret
     assert not where(ops, f"{home}/proj/certs/ca.pem")  # CA bundles stay readable for TLS
+    assert not where(ops, f"{home}/proj/.env.example")  # as do env templates
     # The session bus (Secret Service, systemd-run) is left out; the rest of the runtime folder stays
     assert where(ops, run) == [("--tmpfs", run)]  # writable: sockets get made there
     assert ("--bind", f"{run}/pipewire-0", f"{run}/pipewire-0") in ops and ("--bind", f"{run}/gcr", f"{run}/gcr") in ops
