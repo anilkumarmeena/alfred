@@ -14,6 +14,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -63,9 +64,18 @@ async def failures(folder: Path, venv: Path, tests: Sequence[str] = ()) -> set[s
 def code_tree(folder: Path) -> str | None:
     """The git tree a task's commit of `folder` as it is now would have (projects.PATHSPEC); None if there's none."""
     with tempfile.TemporaryDirectory() as tmp:
-        env = os.environ | {"GIT_INDEX_FILE": str(Path(tmp) / "index")}  # leaves the folder's own index alone
+        index = Path(tmp) / "index"
+        env = os.environ | {"GIT_INDEX_FILE": str(index)}  # leaves the folder's own index alone
         try:
-            for args in (("read-tree", "HEAD"), ("add", "-A", *projects.PATHSPEC), ("write-tree",)):
+            own = subprocess.run(["git", "-C", str(folder), "rev-parse", "--path-format=absolute", "--git-path",
+                                  "index"], capture_output=True, text=True, check=True, timeout=30).stdout.strip()
+            # A copy of the folder's own index, as commit_op adds to: its stat cache spares hashing every file again
+            steps = [("add", "-A", *projects.PATHSPEC), ("write-tree",)]
+            if own and Path(own).is_file():
+                shutil.copyfile(own, index)
+            else:
+                steps.insert(0, ("read-tree", "HEAD"))
+            for args in steps:
                 out = subprocess.run(["git", "-C", str(folder), *args], env=env, capture_output=True, text=True,
                                      check=True, timeout=60).stdout
         except (OSError, subprocess.SubprocessError):
@@ -74,9 +84,12 @@ def code_tree(folder: Path) -> str | None:
 
 
 def _records(folder: Path) -> Path | None:
-    """The folder of records of suite runs for `folder`'s repo, shared by all its worktrees."""
-    done = subprocess.run(["git", "-C", str(folder), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                          capture_output=True, text=True, check=False, timeout=30)
+    """The folder of records of suite runs for `folder`'s repo, shared by all its worktrees; None if git can't say."""
+    try:
+        done = subprocess.run(["git", "-C", str(folder), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                              capture_output=True, text=True, check=False, timeout=30)
+    except (OSError, subprocess.SubprocessError):  # a timeout, too
+        return None
     return Path(done.stdout.strip()) / RECORDS if done.returncode == 0 and done.stdout.strip() else None
 
 

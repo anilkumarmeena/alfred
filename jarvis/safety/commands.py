@@ -1110,9 +1110,16 @@ def orders(said: str) -> set[str]:
     return _acts(_order_words(said) or [])
 
 
+# Words that hold a commit back ("don't commit yet", "I'll commit it myself"), unlike one merely named ("the last
+# commit", "did it commit?")
+_HOLDS_COMMIT = set("no not don't dont never without hold wait stop skip myself i'll".split())
+
+
 def holds_commit(said: str) -> bool:
-    """Whether the words speak of committing without ordering it ("don't commit yet"): a commit ordered before lapses."""
-    return "commit" in _words(said) and "commit" not in orders(said)
+    """Whether the words hold a commit back without ordering one ("don't commit yet"): a commit ordered before lapses.
+    A commit only named or asked about ("note the commit hash", "did it commit?") leaves an order as it was."""
+    words = _words(said)
+    return "commit" in words and "commit" not in orders(said) and not _HOLDS_COMMIT.isdisjoint(words)
 
 
 def _named(word: str, said: set[str]) -> bool:

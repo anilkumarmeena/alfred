@@ -79,7 +79,6 @@ from jarvis.core.database import (
 from jarvis.node import machines, placement
 from jarvis.node.hub import Hub
 from jarvis.node.offload import Offline, Offload
-from jarvis.notify.push import task_target
 from jarvis.safety import host
 from jarvis.state import activity as bell, todo as todos
 from jarvis.tasks import (
@@ -90,7 +89,6 @@ from jarvis.tasks import (
     command_jobs,
     data_edits,
     goal,
-    hold,
     learning,
     notices,
     projects,
@@ -841,8 +839,8 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
         if (reported and task_id not in self.limit_resumed and not task["node"] and not usage.used_up_until()
                 and usage.available(TASK_MODEL) != TASK_MODEL):
             self.limit_resumed[task_id] = now
-            after, said = now, (f"Task {task_id}, {task['title']}, hit Claude's usage limit for its model, so it "
-                                "carries on with a lighter one.")
+            after, said = None, (f"Task {task_id}, {task['title']}, hit Claude's usage limit for its model, so it "
+                                 "carries on with a lighter one.")  # at once: no reset to wait for
         else:
             self.limit_resumed[task_id] = resets
             after, said = resets, (f"Task {task_id}, {task['title']}, hit Claude's usage limit. It carries on by itself "
@@ -851,10 +849,10 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
         self._launch(task_id, prompt, after=after)
         if task["hidden"]:
             return
-        self._emit("status", self.store.update(task_id, spoken=said, seen=0), said)
-        if after > time.time() and not hold.held():
-            self._background(self._notify(f"JARVIS · task {task_id}", said))
-            self._background(self._push(f"Task {task_id} waits for the usage limit", said, *task_target(task_id)))
+        if after is not None and after > time.time():  # a wait: also a notification and push
+            self._tell(task_id, said, f"Task {task_id} waits for the usage limit")
+        else:
+            self._emit("status", self.store.update(task_id, spoken=said, seen=0), said)
 
     async def _wait_for_reset(self, task_id: int, after: float) -> None:
         """Sleep until `after`, and any limit still used up on this computer, has reset, or a message comes. Wakes

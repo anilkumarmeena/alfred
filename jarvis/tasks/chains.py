@@ -156,8 +156,9 @@ class Chains(RunnerBase):
         ended while the runner was down (a run cut off by the restart is stopped, say)."""
         for found in self.store.waiting():
             for field, settle in ((START, self._settle_start), (MERGE, self._settle_merge)):
-                # Fresh: settling one can hold or call off another
-                if ended is None or any(d["task"] == ended for d in waits(found, field)):
+                # Fresh: settling one can hold or call off another. Every merge is looked at again: one whose waits
+                # were met may have been put off while a task worked in its project's folder (_merge_now)
+                if ended is None or field == MERGE or any(d["task"] == ended for d in waits(found, field)):
                     settle(self.store.get(found["id"]))
 
     def _settle_start(self, task: dict) -> None:
@@ -210,7 +211,13 @@ class Chains(RunnerBase):
             self._call_off(task, bad)
 
     async def _merge_now(self, task_id: int) -> None:
-        """Run a waiting merge whose waits are met, and say how it went."""
+        """Run a waiting merge whose waits are met, and say how it went. While a task works in the project's folder
+        it's put off, not called off: settle_all tries it again when a task ends."""
+        if busy := self._jobs_on(self.store.get(task_id)["project"], in_place=True):
+            self.merging.discard(task_id)
+            self.store.log(task_id, "merge waits", f"put off while task {joined([str(i) for i in busy])} works in "
+                                                   "the project's folder")
+            return
         try:
             task = await self.merge(task_id)  # settles what waits for the merge, or holds it when the merge fails
             said, title = task["spoken"], f"Task {task_id} is merged"
