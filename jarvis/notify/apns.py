@@ -21,8 +21,8 @@ from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
 from jarvis.core import credentials, profile
 from jarvis.core.config import APNS_KEY_FILE, APNS_TEAM_ID
-from jarvis.core.files import write_atomic
-from jarvis.notify.push import MAX_DEVICES, SEND_TIMEOUT, TTL, _locked
+from jarvis.core.files import locked, write_atomic
+from jarvis.notify.push import MAX_DEVICES, SEND_TIMEOUT, TTL
 
 log = logging.getLogger("jarvis.notify.apns")
 HOSTS = {"production": "https://api.push.apple.com", "development": "https://api.sandbox.push.apple.com"}
@@ -83,13 +83,13 @@ class Devices:
     def add(self, info: object, device: str = "") -> dict:
         """Store a device's token, replacing any earlier entry with the same token."""
         dev = self.validate(info) | {"device": device[:40], "added": time.time()}
-        with _locked(self.path):
+        with locked(self.path):
             devices = [d for d in self.all() if d["token"] != dev["token"]]
             write_atomic(self.path, json.dumps((devices + [dev])[-MAX_DEVICES:], indent=1), mode=0o600)
         return dev
 
     def remove(self, tokens: set[str]) -> int:
-        with _locked(self.path):
+        with locked(self.path):
             devices = self.all()
             keep = [d for d in devices if d["token"] not in tokens]
             if len(keep) != len(devices):

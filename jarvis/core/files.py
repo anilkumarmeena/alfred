@@ -1,7 +1,14 @@
-"""File helpers for state kept in data/ and secrets/."""
+"""File helpers for state kept in data/ and secrets/.
 
+write_atomic stops a reader seeing a half-written file; update (and locked, for callers that read and write in
+steps) also stops two processes that each read, change and rewrite the same file from losing one another's change.
+"""
+
+import fcntl
 import os
 import tempfile
+from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -21,3 +28,23 @@ def write_atomic(file: Path, data: str | bytes, mode: int | None = None) -> None
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+
+
+@contextmanager
+def locked(file: Path):
+    """Hold `file`'s cross-process lock: an exclusive flock on a hidden sidecar, since `file` itself is replaced by
+    renames. Every process that changes `file` must take it; reads need not, as writes are atomic."""
+    with open(file.with_name(f".{file.name}.lock"), "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield  # released when the lock file closes
+
+
+def update(file: Path, change: Callable[[str], str], mode: int | None = None) -> str:
+    """Rewrite `file` as `change(its text)` ("" if missing) under its lock, atomically; returns the new text.
+
+    Unchanged text isn't rewritten; if `change` raises, nothing is."""
+    with locked(file):
+        old = file.read_text() if file.exists() else ""
+        if (new := change(old)) != old:
+            write_atomic(file, new, mode)
+        return new

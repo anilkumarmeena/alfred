@@ -1,15 +1,17 @@
 """Long-term memory, recent-conversation log and full daily conversation log.
 
 Plain Markdown in the profile's data folder, editable by hand. memory.md holds '- fact (YYYY-MM-DD)' lines under
-'## User' and '## Environment', each section size-limited; writes re-render the file in that shape.
+'## User' and '## Environment', each section size-limited; writes re-render the file in that shape. The voice tools,
+the control panel and task edits all change it, so each change happens under its file lock (files.locked).
 """
 
 import re
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from jarvis.core import profile
-from jarvis.core.files import write_atomic
+from jarvis.core.files import locked, update, write_atomic
 from jarvis.safety import scan
 
 RECENT_MAX_CHARS = 6000
@@ -107,10 +109,18 @@ def check_text(text: str, before: str | None = None) -> None:
                        "shorten or drop some of them, keeping what still matters, then save again.", short)
 
 
-def _write(found: dict[str, list[str]], before: str) -> None:
-    text = render(found)
-    check_text(text, before)
-    write_atomic(profile.current().memory_file, text)
+@contextmanager
+def _changing():
+    """Yield memory.md's facts by section for editing, under its lock; saved on exit if within the limits (check_text).
+    An exception in the block saves nothing."""
+    path = profile.current().memory_file
+    with locked(path):
+        before = read_memory()
+        found = parse(before)
+        yield found
+        text = render(found)
+        check_text(text, before)
+        write_atomic(path, text)
 
 
 def _saved(lead: str, section: str, lines: list[str]) -> str:
@@ -146,10 +156,8 @@ def _line(fact: str) -> str:
 def remember(fact: str, section: str) -> str:
     """Append a fact to a section. Raises Full (listing the facts) if there's no room."""
     section, line = _section(section), _line(fact)
-    before = read_memory()
-    found = parse(before)
-    found[section].append(line)
-    _write(found, before)
+    with _changing() as found:
+        found[section].append(line)
     return _saved("Saved to", section, found[section])
 
 
@@ -158,40 +166,35 @@ def replace(old: str, fact: str) -> str:
     if not (needle := " ".join(old.split()).lower()):
         raise ValueError("Say which memory to replace: text found in that line only.")
     line = _line(fact)
-    before = read_memory()
-    found = parse(before)
-    hits = [(s, i) for s in SECTIONS for i, have in enumerate(found[s]) if needle in " ".join(have.split()).lower()]
-    if not hits:
-        raise ValueError(f"No memory line contains '{old}'.")
-    if len(hits) > 1:
-        listed = "\n".join(found[s][i] for s, i in hits)
-        raise ValueError(f"'{old}' is in {len(hits)} memory lines; quote text found only in the one meant:\n{listed}")
-    (section, i), = hits
-    found[section][i] = line
-    _write(found, before)
+    with _changing() as found:
+        hits = [(s, i) for s in SECTIONS for i, have in enumerate(found[s]) if needle in " ".join(have.split()).lower()]
+        if not hits:
+            raise ValueError(f"No memory line contains '{old}'.")
+        if len(hits) > 1:
+            listed = "\n".join(found[s][i] for s, i in hits)
+            raise ValueError(f"'{old}' is in {len(hits)} memory lines; quote text found only in the one meant:\n{listed}")
+        (section, i), = hits
+        found[section][i] = line
     return _saved("Replaced in", section, found[section])
 
 
 def forget(text: str) -> str:
-    found = parse(read_memory())
     removed = 0
-    for s in SECTIONS:
-        kept = [line for line in found[s] if text.lower() not in line.lower()]
-        removed += len(found[s]) - len(kept)
-        found[s] = kept
-    write_atomic(profile.current().memory_file, render(found))
+    with _changing() as found:
+        for s in SECTIONS:
+            kept = [line for line in found[s] if text.lower() not in line.lower()]
+            removed += len(found[s]) - len(kept)
+            found[s] = kept
     return f"Removed {removed} matching line(s)."
 
 
 def replace_fact(line: str, new: str = "") -> str:
     """Replace the line exactly equal to `line` with `new` (dated), or delete it if `new` is empty. Control panel."""
-    before = read_memory()
-    found = parse(before)
-    if not (section := next((s for s in SECTIONS if line in found[s]), None)):
-        raise ValueError("That memory has changed or gone since the list was shown; refresh and try again.")
-    i = found[section].index(line)
-    found[section][i : i + 1] = [_line(new)] if new.strip() else []
-    _write(found, before)
+    with _changing() as found:
+        if not (section := next((s for s in SECTIONS if line in found[s]), None)):
+            raise ValueError("That memory has changed or gone since the list was shown; refresh and try again.")
+        i = found[section].index(line)
+        found[section][i : i + 1] = [_line(new)] if new.strip() else []
     return f"Changed: {' '.join(new.split())}" if new.strip() else "Forgotten."
 
 
@@ -226,13 +229,17 @@ def log_exchange(user: str, assistant: str, approved: list[str] | tuple[str, ...
     now = datetime.now(profile.tz())
     reply = _reply(assistant, interrupted)
     entry = f"[{now:%Y-%m-%d %H:%M}] {profile.name()}: {user.strip()}\nJARVIS: {reply}\n\n"
-    text = read_recent() + entry
-    if len(text) > RECENT_MAX_CHARS:
-        text = text[-RECENT_MAX_CHARS:]
-        text = text[text.find("\n[") + 1 :] if "\n[" in text else text
-    profile.current().recent_file.write_text(text)
+    update(profile.current().recent_file, lambda before: _trimmed(before + entry))
     yes = "".join(f"(Approved: {c.strip()})\n" for c in approved)
     _log_day(now, f"{profile.name()}: {user.strip()}\n{yes}JARVIS: {reply}\n\n")
+
+
+def _trimmed(text: str) -> str:
+    """The last RECENT_MAX_CHARS of the recent log, from the start of an entry."""
+    if len(text) <= RECENT_MAX_CHARS:
+        return text
+    text = text[-RECENT_MAX_CHARS:]
+    return text[text.find("\n[") + 1 :] if "\n[" in text else text
 
 
 def log_announcement(text: str) -> None:

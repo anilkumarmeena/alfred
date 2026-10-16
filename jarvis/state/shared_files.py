@@ -4,7 +4,6 @@ Tokens map to paths in the profile's shared_files.json for SHARE_DAYS. Links are
 only shared paths are reachable, and unknown or expired tokens find nothing.
 """
 
-import fcntl
 import json
 import secrets
 import time
@@ -13,7 +12,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from jarvis.core import profile
-from jarvis.core.files import write_atomic
+from jarvis.core.files import locked, write_atomic
 
 SHARE_DAYS = 7
 TOKEN = r"[A-Za-z0-9_-]{32,64}"  # must match the server route
@@ -23,8 +22,7 @@ TOKEN = r"[A-Za-z0-9_-]{32,64}"  # must match the server route
 def _changing(file: Path):
     """Yield the live share map for editing, saved on exit. File-locked: multiple processes write it."""
     file.parent.mkdir(parents=True, exist_ok=True)
-    with open(file.with_name(f".{file.name}.lock"), "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with locked(file):
         shared = _live(_load(file))
         yield shared
         write_atomic(file, json.dumps(shared, indent=1), mode=0o600)

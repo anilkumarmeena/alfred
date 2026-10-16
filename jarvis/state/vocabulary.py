@@ -8,17 +8,19 @@ Stored as hand-editable Markdown in the profile's vocabulary.md (SEED until firs
 load() = entries + project names. Terms bias Whisper via initial_prompt; Vocabulary.correct() rewrites listed
 mishearings (whole words only); echo() drops transcripts that are just the prompt echoed back. The learning review
 adds entries unasked, but keeps a mishearing only if the user said it and it isn't an everyday word. At MAX_ENTRIES
-the stalest learned entry is evicted; user-added entries are never evicted.
+the stalest learned entry is evicted; user-added entries are never evicted. The voice tools, the control panel and
+the learning review all change the file, so each change happens under its file lock (files.locked).
 """
 
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import cache
 from pathlib import Path
 
 from jarvis.core import profile
-from jarvis.core.files import write_atomic
+from jarvis.core.files import locked, write_atomic
 from jarvis.safety import scan
 
 MAX_ENTRIES = 60
@@ -99,8 +101,14 @@ def entries() -> list[Entry]:
     return parse(path.read_text())
 
 
-def _write(found: list[Entry]) -> None:
-    write_atomic(profile.current().vocabulary_file, render(found))
+@contextmanager
+def _changing():
+    """Yield the entries for editing, under the file's lock; saved on exit. An exception in the block saves nothing."""
+    path = profile.current().vocabulary_file
+    with locked(path):
+        found = entries()
+        yield found
+        write_atomic(path, render(found))
 
 
 def find(found: list[Entry], word: str) -> Entry | None:
@@ -136,38 +144,34 @@ def add(word: str, heard: list[str] | tuple[str, ...] = (), learned: bool = Fals
 
     A user add (learned=False) converts a learned entry to user-owned."""
     word, heard = _tidied(word, heard)
-    found = entries()
-    if have := find(found, word):
-        new = _merged(have.heard, heard, have.word)
-        added = [h for h in new if h not in have.heard]
-        have.heard, have.date, have.learned = new, _today(), have.learned and learned
-        _write(found)
-        return f"{have.word} was already in the vocabulary" + (f"; added heard as {', '.join(added)}." if added else ".")
-    _room(found)
-    found.append(Entry(word, _merged([], heard, word), _today(), learned))
-    _write(found)
+    with _changing() as found:
+        if have := find(found, word):
+            new = _merged(have.heard, heard, have.word)
+            added = [h for h in new if h not in have.heard]
+            have.heard, have.date, have.learned = new, _today(), have.learned and learned
+            return f"{have.word} was already in the vocabulary" + (f"; added heard as {', '.join(added)}." if added else ".")
+        _room(found)
+        found.append(Entry(word, _merged([], heard, word), _today(), learned))
     return f"Added {word} to the vocabulary" + (f", heard as {', '.join(found[-1].heard)}." if found[-1].heard else ".")
 
 
 def save(old: str, word: str, heard: list[str]) -> str:
     """Control-panel edit: replace entry `old` with `word` and exactly `heard`, as user-owned."""
     word, heard = _tidied(word, heard)
-    found = entries()
-    if not (have := find(found, old)):
-        raise ValueError(f"'{old}' isn't in the vocabulary any more; refresh and try again.")
-    if (other := find(found, word)) and other is not have:
-        raise ValueError(f"{other.word} is already in the vocabulary.")
-    have.word, have.heard, have.date, have.learned = word, _merged([], heard, word), _today(), False
-    _write(found)
+    with _changing() as found:
+        if not (have := find(found, old)):
+            raise ValueError(f"'{old}' isn't in the vocabulary any more; refresh and try again.")
+        if (other := find(found, word)) and other is not have:
+            raise ValueError(f"{other.word} is already in the vocabulary.")
+        have.word, have.heard, have.date, have.learned = word, _merged([], heard, word), _today(), False
     return f"Saved {word}."
 
 
 def remove(word: str) -> str:
-    found = entries()
-    if not (have := find(found, word)):
-        raise ValueError(f"'{word}' isn't in the vocabulary.")
-    found.remove(have)
-    _write(found)
+    with _changing() as found:
+        if not (have := find(found, word)):
+            raise ValueError(f"'{word}' isn't in the vocabulary.")
+        found.remove(have)
     return f"Removed {have.word} from the vocabulary."
 
 

@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 
 from jarvis.core import config
-from jarvis.core.files import write_atomic
+from jarvis.core.files import locked, write_atomic
 
 MAC = ""  # this Mac's own Claude Code sign-in
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
@@ -180,9 +180,10 @@ def remove(name: str) -> None:
     """Forget a login's folder (sign it out first); the order closes up around it. Never the Mac's."""
     removable(name)
     shutil.rmtree(folder(name), ignore_errors=True)
-    found = checks()
-    if found.pop(name, None):
-        write_atomic(_root() / "checks.json", json.dumps(found))
+    with locked(file := _root() / "checks.json"):  # services and the panel both note checks
+        found = checks()
+        if found.pop(name, None):
+            write_atomic(file, json.dumps(found))
 
 
 def holding(session_id: str | None) -> str | None:
@@ -218,4 +219,5 @@ def checks() -> dict[str, dict]:
 def note(name: str, ok: bool, said: str) -> None:
     """Keep a login's check result for the panel."""
     _root().mkdir(mode=0o700, parents=True, exist_ok=True)
-    write_atomic(_root() / "checks.json", json.dumps(checks() | {name: {"ok": ok, "said": said, "at": time.time()}}))
+    with locked(file := _root() / "checks.json"):  # each process notes its own logins' checks
+        write_atomic(file, json.dumps(checks() | {name: {"ok": ok, "said": said, "at": time.time()}}))

@@ -13,9 +13,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from jarvis.core import profile
+from jarvis.core import files, profile
 from jarvis.core.database import edits
-from jarvis.core.files import write_atomic
 from jarvis.safety import scan
 from jarvis.skills import home as skills
 from jarvis.state import memory, todo, vocabulary
@@ -146,10 +145,12 @@ def _scanned(edit: dict) -> list[str]:
     return flagged
 
 
-def _replaced(name: str, old: str, new: str) -> str:
-    """File text with the single occurrence of `old` replaced; ValueError if not unique or memory limits break."""
+def _replaced(name: str, old: str, new: str, text: str | None = None) -> str:
+    """`text` (else the file's) with the single occurrence of `old` replaced; ValueError if not unique or memory limits
+    break."""
     path = _file(name)
-    text = path.read_text() if path.exists() else ""
+    if text is None:
+        text = path.read_text() if path.exists() else ""
     if (count := text.count(old)) != 1:
         raise ValueError(f"The old text appears {count} times in {name}; it must match exactly one place. "
                          f"Read {path} and quote it exactly.")
@@ -270,6 +271,6 @@ def _apply(edit: dict) -> str:
             return (f"Saved the {'new skill' if new else 'new version of the skill'} {skill.name}, {state}, from the "
                     "next conversation.")
         case _:
-            path = _file(edit["file"])
-            write_atomic(path, _replaced(edit["file"], edit["old"], edit["new"]))
+            # Under the file's lock, which the voice tools and control panel take too, so no change of theirs is lost
+            files.update(_file(edit["file"]), lambda text: _replaced(edit["file"], edit["old"], edit["new"], text))
             return f"Edited {edit['file']}."

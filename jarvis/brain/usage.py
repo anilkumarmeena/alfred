@@ -22,7 +22,7 @@ from pathlib import Path
 
 from jarvis.core import claude_logins, profile
 from jarvis.core.config import FAST_MODEL, HELPER_MODEL, USAGE_FILE, USAGE_HOLD
-from jarvis.core.files import write_atomic
+from jarvis.core.files import locked, write_atomic
 
 log = logging.getLogger("jarvis.brain.usage")
 
@@ -64,11 +64,12 @@ def record(info, now: float | None = None, login: str | None = None) -> None:
     now = now or time.time()
     try:
         login = claude_logins.active(now) if login is None else login
-        data = _read(login)
-        data[info.rate_limit_type or "unknown"] = {
-            "status": info.status, "resets_at": info.resets_at, "utilization": info.utilization,
-            "overage": info.overage_status, "seen": now}
-        write_atomic(_file(login), json.dumps(data))
+        with locked(file := _file(login)):  # the voice agent and tasks both record calls on the same login
+            data = _read(login)
+            data[info.rate_limit_type or "unknown"] = {
+                "status": info.status, "resets_at": info.resets_at, "utilization": info.utilization,
+                "overage": info.overage_status, "seen": now}
+            write_atomic(file, json.dumps(data))
     except Exception as e:
         log.warning("couldn't record Claude usage: %s", type(e).__name__)
 

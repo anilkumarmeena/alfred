@@ -8,14 +8,12 @@ Callers skip sending when JARVIS_PUSH=off.
 """
 
 import asyncio
-import fcntl
 import functools
 import json
 import logging
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterable
-from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
@@ -28,7 +26,7 @@ from pywebpush import WebPushException, webpush_async
 
 from jarvis.core import profile
 from jarvis.core.config import PUSH_CONTACT, VAPID_KEY_FILE
-from jarvis.core.files import write_atomic
+from jarvis.core.files import locked, write_atomic
 
 if TYPE_CHECKING:
     from jarvis.notify import apns, fcm
@@ -42,14 +40,6 @@ SEND_TIMEOUT = 20
 _KEY = re.compile(r"^[A-Za-z0-9_-]{16,200}={0,2}$")  # base64url p256dh/auth
 
 Push = Callable[[str, str, str, str], Awaitable[object]]  # title, body, url, tag
-
-
-@contextmanager
-def _locked(path: Path):
-    """Cross-process exclusive lock (web app adds, runner drops)."""
-    with open(path.with_name(path.name + ".lock"), "a") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        yield  # released when the file closes
 
 
 def _host(endpoint: str) -> str:
@@ -102,7 +92,7 @@ class Subscriptions:
     def add(self, info: object, device: str = "") -> dict:
         """Store a subscription, replacing any earlier one with the same endpoint."""
         sub = validate(info) | {"device": device[:40], "added": time.time()}
-        with _locked(self.path):
+        with locked(self.path):
             subs = [s for s in self.all() if s["endpoint"] != sub["endpoint"]]
             self._save((subs + [sub])[-MAX_DEVICES:])
         return sub
@@ -110,7 +100,7 @@ class Subscriptions:
     def remove(self, endpoints: Iterable[str]) -> int:
         """Forget these endpoints; returns how many were removed."""
         gone = set(endpoints)
-        with _locked(self.path):
+        with locked(self.path):
             subs = self.all()
             keep = [s for s in subs if s["endpoint"] not in gone]
             if len(keep) != len(subs):
@@ -129,7 +119,7 @@ def vapid(path: Path | None = None) -> Vapid:
 @functools.cache  # constant for the process lifetime
 def _vapid(path: Path) -> Vapid:
     if not path.exists():
-        with _locked(path):
+        with locked(path):
             if not path.exists():  # re-check: another process may have created it
                 key = Vapid()
                 key.generate_keys()
