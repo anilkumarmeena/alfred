@@ -347,7 +347,7 @@ def test_voice_brain_has_no_subagent_or_file_read_that_could_hold_a_turn(voice_o
     assert not opts.agents and not {"Agent", "Task", "Read", "Glob", "Grep"} & set(opts.tools)
     assert not EDITS & set(opts.tools)
     assert opts.disallowed_tools == BUILTIN_AGENTS_DENIED  # no MCP server is on in the tests' database
-    assert "mcp__jarvis__file_lookup" in opts.allowed_tools
+    assert {"mcp__jarvis__file_lookup", "mcp__jarvis__computer_lookup"} <= set(opts.allowed_tools)
     assert "file_lookup" in opts.system_prompt and "code_question background task" in opts.system_prompt
     assert {"jarvis", "shell"} <= set(opts.mcp_servers) and shell.JOB_STATUS in opts.allowed_tools  # long jobs kept
 
@@ -357,9 +357,12 @@ def test_voice_prompt_hands_multi_step_work_to_background_tasks(voice_options):
     for words in ("Anything with several steps goes to a background task", "installing or setting something up",
                   "fixing what a build or test run turned up", "stop after your second step"):
         assert words in prompt
-    # single builds, test runs and renders stay in the shell (long ones as jobs)
-    assert "single everyday commands such as a build, a test run, a render" in shell.prompt()
-    assert "Keep to one or two commands per request" in shell.prompt() and "start_job" in shell.prompt()
+    # the shell does one thing the user asks for; checks go to computer_lookup, long work to start_job
+    assert "only to do one thing" in shell.prompt() and "never a chain of several" in shell.prompt()
+    assert "use computer_lookup, even when it's one command" in shell.prompt() and "start_job" in shell.prompt()
+    for words in ("You talk; helpers and tasks do the work", "computer_lookup for anything about this computer",
+                  "JARVIS refuses more"):
+        assert words in prompt
 
 
 def test_voice_gate_refuses_subagents_and_file_reads():

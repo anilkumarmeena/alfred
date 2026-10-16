@@ -127,7 +127,7 @@ JARVIS runs on **macOS on Apple silicon** and **Linux** (x86_64 and aarch64, wit
 | | `denoise.py`, `speech_gate.py`, `speaker.py`, `barge_in.py`, `cutoff.py`, `clauses.py`, `quiet.py` | Noise filter, phantom gate, speaker check, voice-only barge-in, where a reply was cut off, sentence splits, speaker-off |
 | | `timing.py`, `ram.py`, `audio_file.py` | Per-turn latency log, memory footprints, text into audio files |
 | `jarvis/brain/` | `cli.py`, `sdk.py`, `persona.py` | `CliBrain` on the Claude Agent SDK, options shared with tasks, the persona |
-| | `quick.py`, `route.py`, `side.py`, `usage.py`, `retry.py` | Warm fast-model judgements, quick-model routing, background lookups, usage limits, retries |
+| | `quick.py`, `route.py`, `side.py`, `budget.py`, `usage.py`, `retry.py` | Warm fast-model judgements, quick-model routing, background lookups, the turn budget, usage limits, retries |
 | `jarvis/tools/` | `__init__.py` (registry), one module per group (`mac.py` on macOS, `desktop.py` on Linux) | Every tool the brain can call (see [Tools](#-tools)) |
 | `jarvis/safety/` | `commands.py`, `shell.py`, `draft_gate.py`, `mcp_gate.py` | Command risk rules, the voice shell's gate, its extensions for drafts and MCP writes |
 | | `consent.py`, `approvals.py`, `remembered.py` | Reading a spoken yes/no, voice side of task approvals, remembered rules |
@@ -267,20 +267,24 @@ sequenceDiagram
 | 🤖 | **Model** | `JARVIS_CLI_MODEL` (default `claude-opus-5-5`), effort `low`, `max_turns` 8 |
 | 🔒 | **Lockdown** | `setting_sources=[]`, `strict_mcp_config=True`, **no file editing** |
 | 🧰 | **Tool servers** | In-process MCP `jarvis` (`sdk.jarvis_server`), `shell` (long jobs), enabled external MCP servers |
-| 🧵 | **Side jobs** | `background_lookup` and `file_lookup` (`jarvis/brain/side.py`): slow reading while the talk goes on |
+| 🧵 | **Side jobs** | `background_lookup`, `file_lookup` and `computer_lookup` (`jarvis/brain/side.py`): slow reading and checks while the talk goes on |
+| ⏱️ | **Turn budget** | `jarvis/brain/budget.py`: past `JARVIS_TURN_TOOLS` (3) calls or `JARVIS_TURN_SECONDS` (15 s) in a turn, more are refused and handed off |
 | ⏳ | **Kept calls** | `jarvis/brain/kept.py`: a JARVIS tool still running after `JARVIS_TOOL_WAIT` (8 s) leaves the turn; the brain follows up on its result |
 | ⚡ | **Quick routing** | Optional (`JARVIS_VOICE_QUICK_MODEL`): `jarvis/brain/route.py` sends small talk to a lighter model |
 | 📊 | **Usage limits** | `jarvis/brain/usage.py` records each `rate_limit_event` in `data/usage.json` |
 | 🔂 | **Retries** | `jarvis/brain/retry.py`: failures are `LIMIT`, `PASSING` or `ERROR` |
 
 - **Lockdown:** built-ins are `WebSearch`, `WebFetch`, `Bash` and `Skill` when skills are on; no subagents (`sdk.BUILTIN_AGENTS_DENIED`). Everything else meets `ShellGate`.
-- **Side jobs** run in a read-only session; the answer comes back through the floor. The brain can't read files itself: `file_lookup` searches with `Read`, `Glob` and `Grep` on `JARVIS_LOOKUP_MODEL` (Haiku), never secrets, a dozen reads at most. Its answer comes back in the turn only within `JARVIS_LOOKUP_WAIT` seconds a turn; after that it carries on in the background, so no lookup holds a spoken reply for long.
+- **Side jobs** run in a read-only session; the answer comes back through the floor. The brain can't read files itself: `file_lookup` searches with `Read`, `Glob` and `Grep` on `JARVIS_LOOKUP_MODEL` (Haiku), never secrets, a dozen reads at most. Its answer comes back in the turn only within `JARVIS_LOOKUP_WAIT` seconds a turn; after that it carries on in the background, so no lookup holds a spoken reply for long. `computer_lookup` works the same way for the computer's state, with `Bash` held in the sandbox (`allowUnsandboxedCommands` off) and each command stopped after 20 s.
 - **Kept calls** (a merge running the tests, a slow read) carry on in the voice process. Their result is screened, queued on the floor, and taken up in a **follow-up turn** the brain starts itself (`CliBrain.follow_up`), so it can finish what depended on it (push after a merge). `background_stop` stops one when the user asks; a merge is stopped in the runner itself (`Runner.halt` → `stop_merge`), on the project's machine too, leaving its folder as it was. The user's own turn always comes first and stops a follow-up under way. Side-job tools (`stays`) manage their own background work and never become kept calls.
 - **Quick routing** stays in the same CLI session.
 - **Usage limits:** `usage.available` steps down a model when one model's weekly window is spent; `usage.hold_until` holds scheduled runs.
 - **Retries** are classified from what the SDK reports, **never from error text**.
 
-**Hand-off rule:** a spoken turn does at most one or two quick tool calls. Installs, fixes, code changes and codebase digging go to a [background task](#-background-tasks); anything over a minute becomes a `start_job` command task.
+**Hand-off rule:** the brain talks; helpers do the work. A spoken turn does at most one or two quick tool calls; checks on the computer go to `computer_lookup`, file questions to `file_lookup`, slow reading to `background_lookup`. Installs, fixes, code changes and codebase digging go to a [background task](#-background-tasks); anything over a minute becomes a `start_job` command task.
+
+- **Held in code:** a PreToolUse hook (`jarvis/brain/budget.py`) refuses a turn's calls past `JARVIS_TURN_TOOLS` or `JARVIS_TURN_SECONDS`, and any `Bash` line chaining more than two programs, telling the brain to hand the rest off. Hand-offs themselves always run.
+- **No long commands:** voice `Bash` is stopped after two minutes, since a running command holds the next turn.
 
 ### The voice shell
 
@@ -347,7 +351,7 @@ Tools are Python functions registered with `@tool(name, description, properties,
 | 🔊 | Audio files | `jarvis/tools/audio.py` → `jarvis/voice/audio_file.py` | No |
 | 🖥️ | Screen | `jarvis/tools/screen.py` | Only when the user's own words mention the screen |
 | 🌍 | Web browser (`browser_*`) | `jarvis/tools/browser.py`, `jarvis/integrations/browser.py` | No: open, read, links, screenshot, back, close only |
-| 🔎 | Background lookup | `jarvis/tools/side.py` | No (read-only session) |
+| 🔎 | Background, file and computer lookups | `jarvis/tools/side.py` | No (read-only session) |
 | 🧩 | Skills | `jarvis/tools/skills.py` | `skill_confirm` |
 | 🔌 | Connections (MCP servers) | `jarvis/tools/connections.py` | `connection_confirm` |
 | 🔗 | External MCP tools (`mcp__<server>__*`) | Servers listed in `data/tasks.db` | **Writes** |

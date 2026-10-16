@@ -415,6 +415,64 @@ def test_the_file_lookup_tool_uses_the_conversation_s_jobs(monkeypatch):
     assert asyncio.run(main()) == ("On the port: The port is in config.py.", False)
 
 
+# ── Computer lookups: checks run beside the conversation ──────────
+
+
+def test_a_computer_lookup_runs_only_sandboxed_commands_on_the_lookup_model(monkeypatch, tmp_path):
+    seen = {}
+
+    async def query(prompt, options):
+        seen["prompt"], seen["options"] = prompt, options
+        yield ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=2,
+                            session_id="s", result=" It's been up three days, with plenty of memory free. ")
+
+    monkeypatch.setattr("claude_agent_sdk.query", query)
+    monkeypatch.setattr(shell, "scratch_dir", lambda: tmp_path / "scratch")
+    assert asyncio.run(side.check("Does the computer need a restart?")) == ("It's been up three days, with plenty "
+                                                                             "of memory free.")
+    options = seen["options"]
+    assert options.model == LOOKUP_MODEL and options.tools == ["Bash"] and options.allowed_tools == []
+    assert options.sandbox["enabled"] and options.sandbox["allowUnsandboxedCommands"] is False
+    assert options.sandbox["network"] == {"allowedDomains": []} and options.cwd == str(tmp_path / "scratch")
+    assert options.env["BASH_MAX_TIMEOUT_MS"] == str(side.CHECK_SECONDS * 1000)  # a hung command can't spend it all
+    assert "Read(" in options.settings and options.max_turns == side.LOOKUP_TURNS
+    denied = asyncio.run(options.can_use_tool("Bash", {"command": "ls", "dangerouslyDisableSandbox": True}, None))
+    assert isinstance(denied, PermissionResultDeny)
+    assert "network" in side.check_system() and "never change, install" in side.check_system()
+
+
+def test_a_computer_lookup_runs_only_so_many_commands_and_none_naming_secrets():
+    commands = side.Commands(limit=2)
+    for name, args in (("Edit", {"file_path": "/Users/x/a.py"}), ("Read", {"file_path": "/Users/x/a.py"}),
+                       ("Bash", {"command": f"cat {SECRETS_DIR}/google.json"}), ("Bash", {"command": "cat ~/.ssh/id_rsa"})):
+        assert commands.refused(name, args), (name, args)
+    assert commands.refused("Bash", {"command": "uptime"}) == commands.refused("Bash", {"command": "df -h /"}) == ""
+    assert "answer now" in commands.refused("Bash", {"command": "vm_stat"})
+
+
+def test_the_computer_lookup_tool_answers_in_the_turn_when_quick_and_else_carries_on(monkeypatch):
+    monkeypatch.setattr(side, "LOOKUP_WAIT", 0.2)
+    said: list[tuple[str, str]] = []
+
+    async def check(brief: str) -> str:
+        await asyncio.sleep(0.01 if brief == "uptime" else 0.5)
+        return "Up three days." if brief == "uptime" else "Memory is fine."
+
+    j = side.Jobs(lambda text, note: said.append((text, note)), check=check)
+
+    async def main():
+        monkeypatch.setattr(conversation.current(), "lookups", j)
+        quick = await tools.run("computer_lookup", {"brief": "uptime", "about": "uptime"})
+        slow = await tools.run("computer_lookup", {"brief": "memory", "about": "the memory"})
+        await asyncio.sleep(0.6)
+        return quick, slow
+
+    quick, slow = asyncio.run(main())
+    assert quick == ("On uptime: Up three days.", False)
+    assert "carries on in the background" in slow[0] and said == [("On the memory: Memory is fine.", "")]
+    assert tools.get("computer_lookup").stays  # never kept as a slow call: it manages its own wait
+
+
 class OneTurnClient:
     async def query(self, prompt) -> None: ...
 

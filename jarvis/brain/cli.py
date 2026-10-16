@@ -10,8 +10,9 @@ the background.
 Photos sent from the page ride along with the next turn as image blocks. Talking over JARVIS stops the reply,
 except while a shell command runs: then the reply finishes unheard and the next turn waits for it.
 
-Slow JARVIS tool calls carry on outside the turn (jarvis.brain.kept); their results come back as follow-up turns the
-brain starts itself, spoken through the floor. The user's own turn always comes first: it stops a follow-up under way.
+A turn does only a little work itself (jarvis.brain.budget): past a few calls or seconds, further calls are refused
+so the brain hands the rest to a lookup or a task. Slow JARVIS tool calls carry on outside the turn
+(jarvis.brain.kept); their results come back as follow-up turns the brain starts itself, spoken through the floor. The user's own turn always comes first: it stops a follow-up under way.
 """
 
 import asyncio
@@ -38,6 +39,7 @@ from claude_agent_sdk import (
 
 from jarvis import prompts, tools
 from jarvis.brain import usage
+from jarvis.brain.budget import Budget
 from jarvis.brain.kept import Kept
 from jarvis.brain.persona import Notes, system_prompt
 from jarvis.brain.sdk import BUILTIN_AGENTS_DENIED, LimitWatch, jarvis_server, sdk_options
@@ -95,7 +97,8 @@ def _bell_hook(gate: mcp_gate.Gate) -> list[HookMatcher]:
     return [HookMatcher(hooks=[noted])]
 
 
-def _options(gate: mcp_gate.Gate, jobs: shell.Jobs, kept: Kept | None = None) -> ClaudeAgentOptions:
+def _options(gate: mcp_gate.Gate, jobs: shell.Jobs, kept: Kept | None = None,
+             budget: Budget | None = None) -> ClaudeAgentOptions:
     server, allowed = jarvis_server(kept=kept)
     # Read per session; a slow server goes to the background after CONNECTION_WAIT seconds
     mcp = mcp_servers.session(mcp_servers.for_voice(), wait=CONNECTION_WAIT)
@@ -124,7 +127,7 @@ def _options(gate: mcp_gate.Gate, jobs: shell.Jobs, kept: Kept | None = None) ->
         # Everything else: unsandboxed Bash and start_job (risky ones need a yes), Google sends/deletes and MCP
         # writes (always need a yes)
         can_use_tool=gate,
-        hooks={"PostToolUse": _bell_hook(gate)},
+        hooks={"PreToolUse": (budget or Budget()).hook, "PostToolUse": _bell_hook(gate)},
         screen_seconds=INJECTION_VOICE_SECONDS,  # the reply waits on each tool-result injection check
         sandbox=shell.SANDBOX,
         settings=json.dumps(json.loads(shell.SETTINGS) | skills.FLAGS),  # no skill's hooks or !`commands` run
@@ -161,6 +164,7 @@ class CliBrain(Notes):
         self.shell = mcp_gate.Gate()
         self.jobs = shell.Jobs()  # command tasks; announced on end like any task update
         self.kept = Kept()  # slow JARVIS tool calls, carried on outside the turn
+        self.budget = Budget()  # how much work a turn does itself before handing the rest off
         self.next_model: str | None = None  # lighter model for the next turn only (jarvis.brain.route)
         self._main = self._model = ""  # session model, current model
         self._accounts = accounts.load()  # Google accounts the CLI started with
@@ -175,7 +179,7 @@ class CliBrain(Notes):
                 await self.close()
             if self.client is None:
                 self._accounts = google.ACCOUNTS
-                options = self.limits.runs_on(_options(self.shell, self.jobs, self.kept))
+                options = self.limits.runs_on(_options(self.shell, self.jobs, self.kept, self.budget))
                 client = ClaudeSDKClient(options)
                 await client.connect()
                 self.client = client
@@ -294,8 +298,8 @@ class CliBrain(Notes):
         self._unheard.clear()
         if self._cut:
             prompt += (f"\n[They spoke while you were still working on \"{self._cut}\", so that work stopped. If it's "
-                       f"still wanted and will take more than a moment, hand it to background_lookup now, so you can "
-                       f"answer them meanwhile.]")
+                       f"still wanted and will take more than a moment, hand it to computer_lookup (if it's about this "
+                       f"computer) or background_lookup now, so you can answer them meanwhile.]")
             self._cut = ""
         if self._carried:
             prompt += (f"\n[They spoke while {_listed(self._carried)} was still running, so it carries on in the "
@@ -350,6 +354,7 @@ class CliBrain(Notes):
                 log.exception("couldn't take the photos sent")
             await self.start()
             await self._use_model()
+            self.budget.new_turn()
             await self.client.query(self._message(self._prompt(text, agreed, len(photos)), photos))
             timing.mark("sent")
             async for msg in self.client.receive_response():
@@ -402,6 +407,7 @@ class CliBrain(Notes):
             try:
                 await self.start()
                 await self._set_model(self._main)  # next_model is for the user's next turn
+                self.budget.new_turn()
                 await self.client.query("\n".join([self.head(), prompt]))
                 async for msg in self.client.receive_response():
                     chunk = self._chunk(msg, spoken, timed=False)

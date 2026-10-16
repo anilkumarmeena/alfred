@@ -170,6 +170,10 @@ CONNECTION_WAIT = _number(os.environ.get("JARVIS_CONNECTION_WAIT", ""), 20.0, 0.
 # background, its result coming back in a brain turn of its own (jarvis.brain.kept). 0 = always wait. Tasks always wait.
 TOOL_WAIT = _number(os.environ.get("JARVIS_TOOL_WAIT", ""), 8.0, 0.0, 600.0)
 MAX_TOOL_ROUNDS = int(os.environ.get("JARVIS_MAX_TOOL_ROUNDS", "") or "8")
+# A spoken turn's own work (jarvis.brain.budget): past this many tool calls, or this many seconds, further calls are
+# refused and the brain hands the rest to a lookup or a task, so the user can keep talking
+TURN_TOOLS = max(1, int(os.environ.get("JARVIS_TURN_TOOLS", "") or "3"))
+TURN_SECONDS = _number(os.environ.get("JARVIS_TURN_SECONDS", ""), 15.0, 1.0, 600.0)
 # How long a risky command awaits a spoken yes, and how long that yes stays valid
 APPROVAL_MINUTES = max(1, int(os.environ.get("JARVIS_APPROVAL_MINUTES", "") or "5"))
 # Replies the yes/no word lists can't read go to CONSENT_MODEL (jarvis.safety.consent); unclear after CONSENT_SECONDS.

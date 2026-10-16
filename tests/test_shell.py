@@ -402,13 +402,14 @@ def test_prompt_says_what_needs_a_yes_and_how_long_jobs_run():
     assert "deleting files" in shell.prompt() and "a few minutes later" in shell.prompt()
 
 
-def test_the_brain_offers_jobs_and_long_bash_timeouts():
+def test_the_brain_offers_jobs_and_a_command_can_t_hold_the_conversation_for_long():
     brain = cli.CliBrain()
     opts = cli._options(brain.shell, brain.jobs)
     assert set(opts.mcp_servers) == {"jarvis", "shell"}
     assert shell.JOB_STATUS in opts.allowed_tools and shell.START_JOB not in opts.allowed_tools  # start_job goes through the gate
     assert shell.STOP_JOB in opts.allowed_tools  # stops only start_job's own jobs, on the user's word
-    assert int(opts.env["BASH_DEFAULT_TIMEOUT_MS"]) >= 600000
+    assert opts.env["BASH_DEFAULT_TIMEOUT_MS"] == opts.env["BASH_MAX_TIMEOUT_MS"] == "120000"  # longer: start_job
+    assert "stops a command after 2 minutes" in shell.prompt()
     assert opts.max_buffer_size >= 20 * 1024 * 1024  # the SDK's 1 MB default is too small for big tool results
 
 
