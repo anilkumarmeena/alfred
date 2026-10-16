@@ -154,6 +154,11 @@ def call_minutes(args: dict) -> float:
         return MAX_MINUTES
 
 
+def text(body: str, error: bool = False) -> dict:
+    """An in-process tool's result: `body` as text, marked as an error if `error`."""
+    return {"content": [{"type": "text", "text": body}]} | ({"is_error": True} if error else {})
+
+
 def _host_server(task: dict, cwd: Path, jobs: TaskJobs):
     return create_sdk_mcp_server("host", tools=_host_tools(task, cwd, jobs))
 
@@ -167,9 +172,6 @@ def _host_tools(task: dict, cwd: Path, jobs: TaskJobs) -> list:
 
     def folder(args: dict) -> Path:
         return _resolve(args.get("folder") or str(cwd), cwd)
-
-    def text(body: str, error: bool = False) -> dict:
-        return {"content": [{"type": "text", "text": body}]} | ({"is_error": True} if error else {})
 
     def changed(args: dict) -> str:
         if jobs.changed(task_id, args.get("command", "").strip(), folder(args)):

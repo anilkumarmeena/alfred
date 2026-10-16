@@ -387,14 +387,15 @@ def test_servers_whose_program_or_secret_is_missing_are_left_out(fresh, monkeypa
     assert mcp_servers.session(mcp_servers.for_voice()).configs == {}
 
 
-def test_research_tasks_get_research_servers_read_only_with_only_reads(fresh):
+def test_research_tasks_get_research_servers_with_only_reads_allowed_outright(fresh):
     seeded()
     mcp_servers.save(Server("acme", "Acme", command="acme-mcp", tools={"look": Tool("read")}), new=True)
     opts = worker._options(worker_task(kind="research", project=None), NullReporter())
     assert set(opts.mcp_servers) >= {"github", "gitlab"} and "acme" not in opts.mcp_servers
-    assert opts.mcp_servers["github"]["args"][-1] == "--read-only"
+    assert "--read-only" not in opts.mcp_servers["github"]["args"]  # changes are offered, each held for a yes
     changes = {s.tool(t) for s in mcp_servers.load() for t in s.named("write", "own")}
     assert not changes & set(opts.allowed_tools) and "mcp__gitlab__get_merge_request" in opts.allowed_tools
+    assert "mcp__github__delete_repository" in opts.disallowed_tools
     assert opts.env[vault.VAR] == ""
 
 
@@ -405,8 +406,9 @@ def test_every_server_goes_through_the_launcher_and_the_voice_brains_wait_with_i
     got = mcp_servers.session(mcp_servers.for_voice(), wait=20)
     assert got.configs["docs"]["args"] == ["-m", "jarvis.integrations.mcp_launch", "docs", "--wait=20"]
     assert got.configs["github"]["args"][-1] == "--wait=20" and "mcp__docs__search" in got.allowed
-    research = mcp_servers.session(mcp_servers.for_research(), read_only=True)
-    assert research.configs["github"]["args"][-1] == "--read-only"  # tasks wait for their calls
+    research = mcp_servers.session(mcp_servers.for_research(), ask_own=True)
+    assert research.configs["github"]["args"][-1] == "github"  # tasks wait for their calls
+    assert "mcp__github__dismiss_notification" not in research.allowed
     opts = cli._options(cli.CliBrain().shell, shell.Jobs())
     assert opts.mcp_servers["docs"]["args"][-1] == f"--wait={config.CONNECTION_WAIT:g}"
 
@@ -427,8 +429,8 @@ def test_the_voice_brain_loads_connections_tools_on_demand_and_its_own_up_front(
 def test_research_tasks_load_connections_on_demand_and_their_own_tools_up_front(fresh):
     seeded()
     opts = worker._options(worker_task(kind="research", project=None), NullReporter())
-    assert opts.mcp_servers["github"]["alwaysLoad"] is False and opts.mcp_servers["github"]["args"][-1] == "--read-only"
-    assert opts.mcp_servers["task"]["alwaysLoad"] is True and opts.mcp_servers["jarvis"]["alwaysLoad"] is True
+    assert opts.mcp_servers["github"]["alwaysLoad"] is False
+    assert all(opts.mcp_servers[s]["alwaysLoad"] is True for s in ("task", "jarvis", "repo"))
     assert "ToolSearch" in opts.tools and "ToolSearch" in opts.allowed_tools
     assert "ToolSearch" in opts.system_prompt
 

@@ -126,7 +126,7 @@ function Card({ s }: { s: Server }) {
       {s.problem && <p class="hint warn">{cap(s.problem)}.</p>}
       {s.tool_list.length > 0 && (
         <button class="srv-tools" aria-expanded={tools.value} onClick={() => { tools.value = !tools.value; }}>
-          <ChevronIcon /> {s.tool_list.length} tools{counts ? `: ${counts}` : ""}{s.research ? " · research tasks get its reads" : ""}
+          <ChevronIcon /> {s.tool_list.length} tools{counts ? `: ${counts}` : ""}{s.research ? " · tasks get it, changes with your yes" : ""}
         </button>
       )}
       {tools.value && (

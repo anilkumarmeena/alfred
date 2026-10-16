@@ -3,6 +3,7 @@
   reads   task folders, the user's projects (TASK_READ_DIRS), voice session logs
   writes  the task's own folder (plus `more_writes` with the projects grant)
   host    host_run / start_job go to the host gate (jarvis.tasks.host_tools)
+  calls   a connection's changing tools go to the connection gate (jarvis.tasks.connection_calls)
   images  docs_insert_image uploads only local files the task may read or write
 Secrets are hidden from file tools (`_secret`) and from the sandbox via Read deny rules (`_secret_rules`).
 """
@@ -19,6 +20,7 @@ from jarvis.brain.sdk import deny
 from jarvis.core import profile
 from jarvis.core.config import CLAUDE_CONFIG_DIR, ROOT, SECRETS_DIR
 from jarvis.safety import commands
+from jarvis.tasks.connection_calls import ConnectionGate
 from jarvis.tasks.host_tools import HOST_COMMANDS, _inside, _resolve, answer
 from jarvis.tasks.subagents import _AGENT_TOOLS
 
@@ -117,7 +119,7 @@ class TaskGate:
     """The session's can_use_tool; denies anything it doesn't handle.
 
     `bash` approves unsandboxed Bash (None: deny all). `agents`: allowed subagents; `editors`: those that may edit
-    (project ones only). `host_gate` decides host_run/start_job. `more_writes`: extra write roots from the projects
+    (project ones only). `host_gate` decides host_run/start_job, `connections` a connection's changing tools. `more_writes`: extra write roots from the projects
     grant, never secrets or JARVIS's files. `commit_ordered` (the user's own checkout, in place): whether they ordered
     a commit, which sandboxed Bash may then make (`checkout`).
 
@@ -125,19 +127,21 @@ class TaskGate:
 
     def __init__(self, cwd: Path, read_roots: list[Path], write_roots: list[Path], bash: Callable[[str], bool] | None = None,
                  agents: Iterable[str] = (), host_gate: Callable | None = None, editors: Iterable[str] = (),
-                 more_writes: Iterable[Path] = (), commit_ordered: Callable[[], bool | Awaitable[bool]] | None = None) -> None:
+                 more_writes: Iterable[Path] = (), commit_ordered: Callable[[], bool | Awaitable[bool]] | None = None,
+                 connections: ConnectionGate | None = None) -> None:
         self.cwd, self.read_roots, self.write_roots, self.more_writes = cwd, read_roots, write_roots, list(more_writes)
         self.bash, self.agents, self.host_gate, self.editors = bash, set(agents), host_gate, set(editors)
-        self.commit_ordered = commit_ordered
+        self.commit_ordered, self.connections = commit_ordered, connections
+        # Decided once per call: looking again would ask the user twice or spend a one-time yes twice
+        self.once = (set(HOST_COMMANDS) if host_gate is not None else set()) | (connections.tools if connections else set())
         # Tools `hook` checks: all the gate decides, plus sandboxed Bash in the user's own checkout
-        self.checked = (_AGENT_TOOLS | set(_FILE_ARG) | {ARTIFACT, DOC_IMAGES}
-                        | ({"Bash"} if bash is not None or commit_ordered is not None else set())
-                        | (set(HOST_COMMANDS) if host_gate is not None else set()))
+        self.checked = (_AGENT_TOOLS | set(_FILE_ARG) | {ARTIFACT, DOC_IMAGES} | self.once
+                        | ({"Bash"} if bash is not None or commit_ordered is not None else set()))
         self.kinds: dict[str, str] = {}  # subagent id -> type, from PreToolUse
-        self.decided: dict[str, Decision] = {}  # host-command decisions made by `hook`, by tool_use_id
+        self.decided: dict[str, Decision] = {}  # decisions on `once` tools made by `hook`, by tool_use_id
 
     async def __call__(self, name: str, args: dict, ctx) -> Decision:
-        if name in HOST_COMMANDS and (done := self.decided.pop(getattr(ctx, "tool_use_id", None) or "", None)):
+        if name in self.once and (done := self.decided.pop(getattr(ctx, "tool_use_id", None) or "", None)):
             return done  # don't ask the user twice or spend a one-time approval again
         return await answer(self.decide(name, args, ctx))
 
@@ -146,6 +150,8 @@ class TaskGate:
         cwd = self.cwd
         if name in HOST_COMMANDS and self.host_gate is not None:
             return self.host_gate(name, args, ctx)
+        if self.connections and name in self.connections.tools:
+            return self.connections(name, args, ctx)
         if name in _AGENT_TOOLS:
             if args.get("subagent_type") in self.agents:
                 return PermissionResultAllow()
@@ -244,7 +250,7 @@ class TaskGate:
             decision = await answer(self.decide(name, args, ToolPermissionContext(tool_use_id=tool_use_id, agent_id=agent)))
         if isinstance(decision, PermissionResultDeny):
             return deny(decision.message)
-        if name in HOST_COMMANDS and tool_use_id:
+        if name in self.once and tool_use_id:
             self.decided[tool_use_id] = decision  # reused by can_use_tool if it gets called
         return {}  # no opinion: deny rules and can_use_tool still apply
 

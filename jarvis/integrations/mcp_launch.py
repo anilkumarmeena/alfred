@@ -2,7 +2,7 @@
 
 Usage: python -m jarvis.integrations.mcp_launch NAME [--read-only] [--wait=SECONDS] [--probe]
 
-  --read-only    add the server's read-only args and settings (research tasks)
+  --read-only    add the server's read-only args and settings (sign-in checks and watches)
   --wait=SECONDS voice brain: a call still running after SECONDS continues in the background as a task
   --probe        start a disabled or unsorted server bare (no relay) just to list its tools
 

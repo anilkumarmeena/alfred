@@ -1,4 +1,5 @@
-"""Runner mixin for approval requests: a task asking to run a risky command on the computer.
+"""Runner mixin for approval requests: a task asking to run a risky command on the computer, or to change something
+through a connection (jarvis.tasks.connection_calls).
 
 Requests live in tasks.db and are batched, announced (push, desktop notification, voice), answered (push, panel, voice,
 assistant, CLI), turned into remembered rules, auto-approved by the user's own orders, lapsed, or withdrawn.
@@ -49,11 +50,27 @@ def _hash(nonce: str) -> str:
     return hashlib.sha256(nonce.encode()).hexdigest()
 
 
+def _what(item: dict) -> str:
+    """'a command that ...', or for a connection's call 'a GitLab call to comment on ...'."""
+    if item.get("connection"):
+        return f"a {item['connection']} call to {item['command']}"
+    return f"a command that {item['why']}"
+
+
 def approval_summary(commands: list[dict]) -> str:
-    """'a command that ...' or '2 commands: one that ..., one that ...'."""
+    """'a command that ...' or '2 commands: one that ..., one that ...'; each in full once a call is among them."""
     if len(commands) == 1:
-        return f"a command that {commands[0]['why']}"
+        return _what(commands[0])
+    if any(c.get("connection") for c in commands):
+        return f"{len(commands)} things: " + ", ".join(_what(c) for c in commands)
     return f"{len(commands)} commands: " + ", ".join(f"one that {c['why']}" for c in commands)
+
+
+def _exactly(item: dict) -> str:
+    """The exact command, or connection call, a yes allows."""
+    if item.get("connection"):
+        return f"{item['tool']} with exactly these arguments: {json.dumps(item['args'], sort_keys=True, ensure_ascii=False)}"
+    return f"with {item['tool']}, in {item['folder']}: {item['command']}"
 
 
 def approval_question(pending: list[dict]) -> str:
@@ -70,7 +87,7 @@ def approval_result(approval: dict) -> str:
     """Message to the task once a request is answered, withdrawn or lapsed."""
     n, state, via = approval["id"], approval["state"], _VIA.get(approval["via"] or "", "")
     if state == APPROVED:
-        listed = [f"with {c['tool']}, in {c['folder']}: {c['command']}" for c in approval["commands"]]
+        listed = [_exactly(c) for c in approval["commands"]]
         exactly = listed[0] if len(listed) == 1 else " ".join(f"({i}) {c}" for i, c in enumerate(listed, 1))
         return f"{profile.name()} approved request {n} {via}. Run exactly this, once, {exactly}"
     if state == DENIED:
@@ -142,7 +159,10 @@ class Approvals(RunnerBase):
         return [o for o in kept if time.time() - o["at"] < ORDER_HOURS * 3600]
 
     def _ordering(self, task_id: int, items: list[dict]) -> str:
-        """The first order covering every one of `items`, or ''."""
+        """The first order covering every one of `items`, or ''. A connection's call is never covered: each one waits
+        for a yes to it."""
+        if any(i.get("connection") for i in items):
+            return ""
         return next((o["said"] for o in self._orders(task_id)
                      if all(ordered(o["said"], i["command"]) for i in items)), "")
 
@@ -180,8 +200,8 @@ class Approvals(RunnerBase):
         expires = time.time() + TASK_APPROVAL_HOURS * 3600
         approval, new = self.store.ask_approval(task_id, item, expires, APPROVAL_BATCH_SECONDS)
         if new:
-            self.store.log(task_id, "approval", f"request {approval['id']} asks to run a command that {item['why']}, "
-                                                f"in {item['folder']}: {item['command']}")
+            where = "" if item.get("connection") else f", in {item['folder']}: {item['command']}"
+            self.store.log(task_id, "approval", f"request {approval['id']} asks to run {_what(item)}{where}")
             if len(approval["commands"]) == 1:  # first of the batch: announce after the window
                 self._background(self._announce_approval(approval["id"], APPROVAL_BATCH_SECONDS))
         return approval

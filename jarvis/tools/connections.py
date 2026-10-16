@@ -277,7 +277,7 @@ def _sorted_said(server: Server, tools: list[dict], sorted_: dict[str, Tool], ov
     trust = "its own markings" if server.verified else "its own markings, and it's unverified"
     parts.append(f"That's from {trust}" + (f", except {_said(overridden)}, as you asked." if overridden else "."))
     if not server.reviewed:
-        parts.append("Saying yes switches it on" + (", and background research tasks get its reading tools."
+        parts.append("Saying yes switches it on" + (", and background tasks get it too, its changes each waiting for your yes."
                                                     if server.for_research else "."))
     return " ".join(parts)
 
@@ -413,7 +413,7 @@ def impact(server: Server) -> str:
 
     n = len(server.tools)
     parts = [f"Remove {server.label}: its {_plural(n, 'tool')} {'goes' if n == 1 else 'go'} from my conversations"
-             + (" and from background research tasks" if server.for_research else "") + "."]
+             + (" and from background tasks" if server.for_research else "") + "."]
     keys = [var for var, secret in server.secret_env.items() if vault.has(secret)]
     if keys:
         parts.append(f"Its {'key' if len(keys) == 1 else 'keys'} ({', '.join(keys)}) {'is' if len(keys) == 1 else 'are'} "

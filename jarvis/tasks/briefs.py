@@ -9,7 +9,7 @@ from jarvis.core import profile
 from jarvis.core.config import ROOT, TASK_CACHE_DIR, TASK_READ_DIRS
 from jarvis.skills import home as skills
 from jarvis.state import todo
-from jarvis.tasks import access, project_claude
+from jarvis.tasks import access, project_claude, repo_files
 from jarvis.tasks.host_tools import task_temp
 from jarvis.tasks.subagents import _agents
 
@@ -35,6 +35,20 @@ def _google_limits() -> str:
     """What account tools leave to the user (their deletes and sends need a spoken yes)."""
     return ("You can't send mail or Chat messages, send calendar invites, delete sheet tabs or delete doc content: "
             f"leave those for {profile.name()}, and say so in your summary.")
+
+
+def _connections_brief() -> str:
+    """How a connection's reading and changing tools work in a task, and the GitLab download tools."""
+    name = profile.name()
+    return (f"\n- With the tools {name} has connected, reading is free. A tool that changes something there or reaches "
+            "other people (a comment, an inline review note, an issue, a merge) waits for their yes to that exact call: "
+            "just make the call. It's refused for now, and JARVIS reads out what it would do and asks them, so don't ask "
+            "them yourself. Carry on with anything that doesn't depend on it; if nothing's left, end your turn with one "
+            "short line. When they answer you'll get a message; if it's a yes, make the identical call again, with "
+            "exactly the same arguments, once. A tool refused as not available can't be used here."
+            f"\n- To read a GitLab file whole, or a whole project, use {' or '.join(repo_files.TOOLS)} where they're "
+            "offered: they fetch with the connection's own key, which you never need. Never look for keys or tokens, or "
+            "post or fetch another way round (glab, curl, git clone, the API).")
 
 
 def _artifact_brief(folder: Path) -> str:
@@ -86,6 +100,8 @@ def _grants_brief(task: dict, cwd: Path, own: Path, can: set[str]) -> str:
         lines.append(f"- You can read {profile.name()}'s mail, calendar, Google Chat, Google Sheets, Docs, Slides and Drive, "
                      "and the tools they've connected (mcp__<server>__<tool>, loaded with ToolSearch when you need "
                      f"one), and edit their Google Sheets and Docs. {_google_limits()}")
+    if "accounts" in can:
+        lines.append(_connections_brief().lstrip("\n"))
     if lack := access.missing(task):
         lines.append(f"- If {profile.name()} asked for something that needs access you don't have, ask for it with "
                      f"request_access rather than giving up or working around it: {access.listing(lack)}. Then end "
@@ -147,6 +163,8 @@ def _system_prompt(task: dict, cwd: Path, setup: project_claude.Setup | None = N
         else:
             limits = "You can't contact anyone, or change anything beyond their Google Sheets and Docs" + (
                 ", and writing pages in your own folder and publishing them as artifacts" if pages else "")
+        if "accounts" in can:
+            limits += ", except through their connected tools, each change with their yes as below"
         return f"""You research and gather information for {profile.name()}, using web search and their tools: you can read their mail, calendar, Google Chat, the tools they've connected (mcp__<server>__<tool>, loaded with ToolSearch when you need one), their Google Sheets, Docs and Slides, and search Google Drive, and you can edit their Google Sheets and Docs when the work calls for it. {_google_limits()} {limits}.
 
 {brief()}{pages}{granted}"""

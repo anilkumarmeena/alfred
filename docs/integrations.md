@@ -225,8 +225,8 @@ A changing call is read out from the tool's own title and arguments ("On Notion,
 | Who | Gets |
 |---|---|
 | 🎙️ The voice brain | Every enabled, sorted server, with its keys or sign-in |
-| 🔬 Research tasks | Servers marked for research (all made by voice are), reading tools only |
-| 💻 Code tasks | None |
+| 🔬 Tasks with the accounts access (research tasks have it) | Servers marked for research (all made by voice are): reading tools at once, **each change waiting for your yes** ([how](tasks.md#changes-through-a-connection)); a GitLab one also lets them download whole files and projects with its key |
+| 💻 Other tasks | None |
 
 - **The relay.** Each server runs behind a small relay (`jarvis/integrations/mcp_relay.py`) that runs reading calls **side by side** and follows MCP's long-running tasks.
 - **Slow calls** still running after `JARVIS_CONNECTION_WAIT` (20 s) move into the **background**, so the conversation carries on.

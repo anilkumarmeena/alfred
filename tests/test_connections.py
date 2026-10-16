@@ -460,7 +460,7 @@ def test_removing_says_what_goes_with_it_and_waits_for_the_yes(gate):
     vault.put("notes.t", "n-1")
     draft, _ = run("connection_remove", {"name": "notes"})
     assert draft["summary"].startswith("Remove Notes: its 2 tools go from my conversations and from background "
-                                       "research tasks. Its key (T) is deleted.")
+                                       "tasks. Its key (T) is deleted.")
     assert mcp_servers.get("notes")  # still there until the yes
     _, done = confirm(gate, draft["draft_id"])
     assert done == "Removed Notes and its 1 secret." and mcp_servers.get("notes") is None and not vault.has("notes.t")

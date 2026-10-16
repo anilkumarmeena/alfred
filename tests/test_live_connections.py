@@ -169,7 +169,7 @@ class Client:
 
 def watching() -> Watch:
     live = Watch()
-    live.use(mcp_servers.session(mcp_servers.for_research(), read_only=True).servers)
+    live.use(mcp_servers.session(mcp_servers.for_research(), ask_own=True).servers)
     return live
 
 
@@ -221,6 +221,18 @@ def test_a_tool_sorted_away_from_reading_mid_task_is_refused(fresh):
     assert live.refused("mcp__jarvis__memory_read", {}) == "" and live.refused("WebSearch", {}) == ""
 
 
+def test_a_changing_tool_still_reaches_its_yes_unless_blocked_and_a_reading_one_sorted_as_changing_is_refused(fresh):
+    seeded()
+    live = watching()
+    gitlab = mcp_servers.need("gitlab")
+    assert live.refused("mcp__gitlab__create_merge_request_note", {}) == ""  # connection_calls asks about it
+    mcp_servers.save(replace(gitlab, tools=gitlab.tools | {"create_merge_request_note": Tool("blocked"),
+                                                           "get_merge_request": Tool("write")}))
+    asyncio.run(live.check(Client()))
+    assert live.refused("mcp__gitlab__create_merge_request_note", {}) == "create_merge_request_note isn't available."
+    assert live.refused("mcp__gitlab__get_merge_request", {}) == "get_merge_request isn't available."  # allowed unasked
+
+
 def test_the_task_hears_once_which_connection_was_restarted(fresh):
     seeded()
     live = watching()
@@ -251,6 +263,29 @@ def test_research_tasks_watch_their_connections_and_refuse_calls_to_one_switched
     call = {"hook_event_name": "PreToolUse", "tool_name": "mcp__github__list_notifications", "tool_input": {}}
     said = [asyncio.run(hook(call, "t1", None)) for m in opts.hooks["PreToolUse"] for hook in m.hooks]
     assert any(s.get("hookSpecificOutput", {}).get("permissionDecision") == "deny" for s in said)
+
+
+class Asking(NullReporter):
+    def __init__(self) -> None:
+        self.asked: list[dict] = []
+
+    def cleared(self, *a): return False
+
+    def request_approval(self, task_id, item):
+        self.asked.append(item)
+        return {"id": len(self.asked)}
+
+
+def test_a_watched_tasks_comment_is_held_for_a_yes_not_refused_as_unavailable(fresh):
+    seeded()
+    live, reporter = Watch(), Asking()
+    opts = worker._options(worker_task(kind="research", project=None), reporter, live)
+    call = {"hook_event_name": "PreToolUse", "tool_name": "mcp__gitlab__create_merge_request_note",
+            "tool_input": {"project_id": "web/player"}}
+    said = [asyncio.run(hook(call, "t2", None)) for m in opts.hooks["PreToolUse"] for hook in m.hooks]
+    denials = [s["hookSpecificOutput"]["permissionDecisionReason"] for s in said if s.get("hookSpecificOutput")]
+    assert len(denials) == 1 and "JARVIS has asked them" in denials[0]
+    assert [i["tool"] for i in reporter.asked] == ["mcp__gitlab__create_merge_request_note"]
 
 
 def test_a_session_without_connections_has_nothing_to_watch():

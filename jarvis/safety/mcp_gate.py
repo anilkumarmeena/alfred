@@ -40,6 +40,9 @@ def _text(value: str) -> str:
 def _value(key: str, value) -> str:
     if key == "content" and isinstance(value, str):
         return f"{len(value)} characters"
+    if key == "position" and isinstance(value, dict) and (path := value.get("new_path") or value.get("old_path")):
+        line = value.get("new_line") or value.get("old_line")  # a diff comment's place, not its commit hashes
+        return f"at {path}" + (f" line {line}" if line else "")
     if isinstance(value, bool):
         return "yes" if value else "no"
     if isinstance(value, list) and value and all(isinstance(v, dict) for v in value):
@@ -58,7 +61,12 @@ def _filled(value) -> bool:
 
 
 def describe(server: Server, tool: str, args: dict) -> str:
-    """Spoken description of a write from its `says` phrase; args the phrase omits are appended so none go unsaid."""
+    """Spoken description of a write: 'On GitLab, ' plus its `action`."""
+    return f"On {server.label}, {action(server, tool, args)}."
+
+
+def action(server: Server, tool: str, args: dict) -> str:
+    """What a write does, from its `says` phrase; args the phrase omits are appended so none go unsaid."""
     says = server.tools[tool].says if tool in server.tools else ""
     says = _OPTIONAL.sub(lambda m: m.group(1) if all(_filled(args.get(f)) for f in _FIELD.findall(m.group(1)))
                          else "", says or tool.replace("_", " "))
@@ -67,7 +75,7 @@ def describe(server: Server, tool: str, args: dict) -> str:
     said = re.sub(r"\s+([,.])", r"\1", re.sub(r"\s{2,}", " ", said)).strip()
     rest = [f"{k.replace('_', ' ')} {_value(k, v)}" if v is not True else k.replace("_", " ")
             for k, v in args.items() if k not in used and k not in QUIET and _filled(v)]
-    return f"On {server.label}, {said}" + (", " + ", ".join(rest) if rest else "") + "."
+    return said + (", " + ", ".join(rest) if rest else "")
 
 
 def key(name: str, args: dict) -> str:

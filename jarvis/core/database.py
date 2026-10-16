@@ -87,7 +87,8 @@ create table approvals (
     task integer not null,
     created real not null,
     expires real not null,
-    commands text not null,     -- JSON list of {tool, command, folder, why}, answered together
+    commands text not null,     -- JSON list of {tool, command, folder, why}, answered together; a connection's
+                                -- call also has its args and connection label (jarvis.tasks.connection_calls)
     state text not null,        -- pending, approved, denied, expired, cancelled; spent after its run
     announced integer not null default 0,  -- 1 once push and voice were notified
     nonce_hash text,            -- sha256 of the push's one-time answer nonce
@@ -197,9 +198,9 @@ def edits(task: dict) -> list[dict]:
 
 
 def same_command(a: dict, b: dict) -> bool:
-    """Same tool, command and folder, running the same scripts unchanged (their fingerprints, commands.seen). `why`
-    is ignored: it varies with the running processes."""
-    return all(a.get(k) == b.get(k) for k in ("tool", "command", "folder")) and (a.get("scripts") or {}) == (
+    """Same tool, command and folder, running the same scripts unchanged (their fingerprints, commands.seen), and for
+    a connection's call the same arguments. `why` is ignored: it varies with the running processes."""
+    return all(a.get(k) == b.get(k) for k in ("tool", "command", "folder", "args")) and (a.get("scripts") or {}) == (
         b.get("scripts") or {})
 
 
@@ -413,12 +414,13 @@ class Store:
     def use_approved(self, task_id: int, item: dict) -> dict | None:
         """If this exact command was approved, mark it used and return its request, else None.
 
-        Approval lasts for the resumed run, so a retry within it isn't asked again."""
+        Approval lasts for the resumed run, so a retry within it isn't asked again; a connection's call, which may
+        post the same comment twice, goes through once per yes."""
         for a in self.approvals(task_id, (APPROVED,)):
             same = [i for i, c in enumerate(a["commands"]) if same_command(c, item)]
             if fresh := [i for i in same if i not in a["used"]]:
                 return self.set_approval(a["id"], used=json.dumps([*a["used"], fresh[0]]))
-            if same:
+            if same and not item.get("connection"):
                 return a
         return None
 

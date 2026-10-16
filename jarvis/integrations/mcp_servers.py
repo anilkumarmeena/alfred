@@ -12,9 +12,10 @@ the only settings the control panel changes.
 
 Sessions read the tables at start, and changes need no restart: a conversation compares `stamps` at each turn and
 reloads its connections when they changed (jarvis.brain.cli), and a running task restarts a changed server in place
-(jarvis.tasks.connection_watch). Voice gets every enabled server; research tasks get the for_research ones,
-read-only; code tasks none. Servers missing their program or secrets are skipped. With tool
-search on, their tools are deferred until looked up via ToolSearch.
+(jarvis.tasks.connection_watch). Voice gets every enabled server; tasks with the accounts access get the for_research
+ones, their changes each held for the user's yes (jarvis.tasks.connection_calls); other tasks none. Sign-in checks
+and watches start a server read-only (its read_only args and env). Servers missing their program or secrets are
+skipped. With tool search on, their tools are deferred until looked up via ToolSearch.
 
     uv run python -m jarvis.integrations.mcp_servers                         list (same as make servers)
     uv run python -m jarvis.integrations.mcp_servers add NAME --label L --command C [--arg A ...] [--env K=V ...]
@@ -60,7 +61,7 @@ from jarvis.safety import host
 log = logging.getLogger("jarvis.integrations.mcp_servers")
 
 NAME = re.compile(r"[a-z][a-z0-9_]{0,31}")  # tools are mcp__<name>__<tool>, so no "__" either
-RESERVED = {"jarvis", "shell", "task", "host"}  # JARVIS's in-process servers
+RESERVED = {"jarvis", "shell", "task", "host", "repo"}  # JARVIS's in-process servers
 TRANSPORTS = ("stdio", "http")
 ACCESS = ("read", "own", "write", "blocked")
 TOOL = re.compile(r"[A-Za-z0-9_.-]{1,64}")
@@ -85,10 +86,10 @@ create table mcp_servers (
     transport text not null default 'stdio',   -- stdio or http
     command text not null default '',    -- stdio: program on PATH
     args text not null default '[]',     -- JSON list, versions pinned
-    read_only_args text not null default '[]',  -- appended for research tasks
+    read_only_args text not null default '[]',  -- appended for sign-in checks and watches
     url text not null default '',        -- http
     env text not null default '{}',      -- JSON: non-secret settings
-    read_only_env text not null default '{}',   -- JSON: env overrides for research tasks
+    read_only_env text not null default '{}',   -- JSON: env overrides for sign-in checks and watches
     secret_env text not null default '{}',      -- JSON: variable -> vault secret name
     for_research integer not null default 0,
     prompt text not null default '',     -- extra guidance for the brain
@@ -207,8 +208,8 @@ def host_of(url: str) -> str:
 
 
 def readdress(server: Server, var: str, url: str) -> Server:
-    """`server` pointed at `url` by its address setting `var` ('' for the package's default), for research tasks
-    too. Raises ValueError if it has no such setting or `url` isn't an address."""
+    """`server` pointed at `url` by its address setting `var` ('' for the package's default), for its sign-in
+    checks too. Raises ValueError if it has no such setting or `url` isn't an address."""
     if var not in addresses(server):
         raise ValueError(f"{server.label} has no server address {var}.")
     if url and (why := bad_address(url)):
@@ -425,11 +426,11 @@ class Session:
     blocked: list[str] = field(default_factory=list)
 
 
-def session(servers: list[Server], read_only: bool = False, wait: float = 0.0) -> Session:
-    """Session config for the startable `servers`. Reads are allowed (plus `own` unless `read_only`), writes go
+def session(servers: list[Server], wait: float = 0.0, ask_own: bool = False) -> Session:
+    """Session config for the startable `servers`. Reads are allowed (plus `own` unless `ask_own`), writes go
     through the gate, blocked are denied. `wait` > 0 moves calls running longer than that to the background."""
     got = Session()
-    flags = [*(["--read-only"] if read_only else []), *([f"--wait={wait:g}"] if wait else [])]
+    flags = [f"--wait={wait:g}"] if wait else []
     for server in servers:
         if why := missing(server):
             log.warning("MCP server %s left out: %s", server.name, why)
@@ -438,7 +439,7 @@ def session(servers: list[Server], read_only: bool = False, wait: float = 0.0) -
         if ON_DEMAND:  # defer even tools the server marks to load up front
             got.configs[server.name]["alwaysLoad"] = False
         got.servers.append(server)
-        got.allowed += [server.tool(t) for t in server.named("read", *(() if read_only else ("own",)))]
+        got.allowed += [server.tool(t) for t in server.named("read", *(() if ask_own else ("own",)))]
         got.blocked += [server.tool(t) for t in server.named("blocked")]
     return got
 
@@ -678,7 +679,7 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--label")
         p.add_argument("--command", dest="program")
         p.add_argument("--arg", action="append", help="an argument, once each; replaces them all when changing")
-        p.add_argument("--read-only-arg", action="append", help="added for research tasks")
+        p.add_argument("--read-only-arg", action="append", help="added for sign-in checks and watches")
         p.add_argument("--url")
         p.add_argument("--env", action="append", metavar="K=V")
         p.add_argument("--unset-env", action="append", metavar="K")
@@ -686,7 +687,7 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--secret-env", action="append", metavar="VAR=SECRET", help="VAR gets the vault's SECRET")
         p.add_argument("--header", action="append", metavar="NAME=VALUE",
                        help="an HTTP server's header, with {VAR} for a secret: 'Authorization=Bearer {API_KEY}'")
-        p.add_argument("--research", action=argparse.BooleanOptionalAction, help="research tasks get it, read-only")
+        p.add_argument("--research", action=argparse.BooleanOptionalAction, help="tasks get it; changes wait for a yes")
         p.add_argument("--prompt", help="what the brain is told about it")
         if name == "add":
             p.add_argument("--disabled", action="store_true")

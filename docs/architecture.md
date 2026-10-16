@@ -389,7 +389,7 @@ Doc deletions are pinned to a revision and calendar changes to an etag. Skills a
 Servers live in the `mcp_servers` and `mcp_tools` tables (`jarvis/integrations/mcp_servers.py`) and are read as each session starts, so changes need no restart. They reach live sessions too:
 
 - **The voice brain** compares `mcp_servers.stamps` (each server's settings, tool sorting, whether it can start, and when each key was last set, never the keys) and `skills.stamp()` at the start of every turn. If either changed, like the Google accounts, it restarts the CLI with `resume` on the same session, so the conversation carries on with the new servers, allowed tools, prompt and skills, and the next turn says they were reloaded.
-- **Research tasks** run `jarvis/tasks/connection_watch.py`: every 5 s a server whose stamp changed is restarted in place (`reconnect_mcp_server`), one switched off or removed is dropped (`toggle_mcp_server`), and a `PreToolUse` hook refuses tools no longer sorted as reading. One added mid-run comes with the task's next run.
+- **Tasks with the `accounts` access** run `jarvis/tasks/connection_watch.py`: every 5 s a server whose stamp changed is restarted in place (`reconnect_mcp_server`), one switched off or removed is dropped (`toggle_mcp_server`), and a `PreToolUse` hook refuses tools now blocked or unsorted, and reading tools sorted as changing since (they were allowed without a yes). Changing tools the session started with still go to `ConnectionGate`. One added mid-run comes with the task's next run.
 
 ```mermaid
 flowchart TB
@@ -421,7 +421,7 @@ flowchart TB
 | `blocked` | In `disallowed_tools` |
 | not listed | Refused |
 
-The voice brain gets every enabled, reviewed server. Research tasks get only servers marked `for_research`, started read-only, with only reads allowed. **Code tasks get none.**
+The voice brain gets every enabled, reviewed server. Tasks with the `accounts` access get only servers marked `for_research`: reads in `allowed_tools`, and every `write` or `own` call through `connection_calls.ConnectionGate`, which turns it into a task approval request (read out from `mcp_gate.action`, answered by voice or the phone's buttons) and lets that identical call through once per yes; orders and remembered rules never cover one. GitLab ones also get the in-process `repo` server (`jarvis/tasks/repo_files.py`), which fetches whole files and project archives with the connection's key from the vault, sent only to its own address, into the task's downloads folder. **Other tasks get none.** Sign-in checks and watches start a server read-only (its `read_only_args` and `read_only_env`).
 
 A server's row may name a **sign-in check** (`check_tool`): a reading tool, chosen by the model during review, that [notices](#notices) call read-only with no arguments at most hourly, warning once when it's refused.
 
@@ -468,12 +468,12 @@ The runner is a **separate always-on service** because a call's job process dies
 |---|---|---|---|
 | `code_change` | Project folder **in place** (uncommitted), or a worktree on `jarvis/<id>-<title>` | Read/edit its folder, sandboxed shell, host commands, Artifact publishing | Commit (in place, unless the user ordered one), switch branches, read secrets, edit JARVIS's files |
 | `code_question` | Live checkout, read-only | Read and search, single read-only git commands | Edit, other commands |
-| `research` | `data/tasks/<id>/` | Web, accounts (reads, plus Sheets and Docs edits) and research MCP servers | Delete or send anything on Google, contact anyone, change anything else |
+| `research` | `data/tasks/<id>/` | Web, accounts (reads, plus Sheets and Docs edits) and research MCP servers (changes each after a yes) | Delete or send anything on Google, contact anyone without a yes, change anything else |
 | `command` | Any folder | A shell command, **no model, no task slot** | |
 | `connection` | | A slow MCP call carried on by the relay, no task slot | |
 | `review` | | The learning review's suggested edits, hidden | |
 
-**Access grants** (`jarvis/tasks/access.py`): `artifacts`, `shell`, `mac` (run commands on the computer itself, on either OS), `projects`, `accounts` (Google reads, and the same Sheets and Docs edits the voice has; deleting tabs or doc content and sending stay voice-only, behind a spoken yes). They're granted in `task_start` / `task_reply` when the user asks, or after the task calls `request_access`. **Secrets, JARVIS's own files and approvals never change with a grant.**
+**Access grants** (`jarvis/tasks/access.py`): `artifacts`, `shell`, `mac` (run commands on the computer itself, on either OS), `projects`, `accounts` (Google reads, and the same Sheets and Docs edits the voice has; deleting tabs or doc content and sending stay voice-only, behind a spoken yes; connections, their changes each behind a yes). They're granted in `task_start` / `task_reply` when the user asks, or after the task calls `request_access`. **Secrets, JARVIS's own files and approvals never change with a grant.**
 
 ```mermaid
 stateDiagram-v2

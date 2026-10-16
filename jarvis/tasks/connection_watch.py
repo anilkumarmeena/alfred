@@ -1,4 +1,4 @@
-"""Keeps a running task's connections current (research tasks, jarvis.tasks.worker).
+"""Keeps a running task's connections current (tasks with the accounts access, jarvis.tasks.worker).
 
 A task's CLI starts its research servers once, so without this a key, address or tool sorting changed mid-run would
 wait for its next run. Every WATCH_SECONDS `Watch` compares each server's `mcp_servers.stamps` with the one it runs
@@ -8,7 +8,9 @@ under:
             start (its key cleared, say)
   back      switched on again, which starts it afresh
 The session's allowed tools are fixed at start, so calls are also checked against the current sorting (`hook`): a
-reading tool sorted as changing or blocked since is refused. The task hears of a restart with its next tool result.
+reading tool sorted as changing since is refused (it was let through without asking), as is any tool now blocked or
+unsorted. Changing tools the session started with still each wait for a yes (connection_calls). The task hears of a
+restart with its next tool result.
 A connection added mid-run comes with the task's next run.
 """
 
@@ -33,11 +35,13 @@ class Watch:
         self.servers: dict[str, Server] = {}  # as now set up; only those switched on
         self.running: dict[str, str] = {}  # name -> stamp it runs under, '' while switched off
         self.news: list[str] = []  # restarts the task hasn't heard of yet
+        self.asking: set[str] = set()  # full names of the changing tools the session started with, each asked about
 
     def use(self, servers: list[Server]) -> None:
         """The servers the session starts with."""
         self.servers = {s.name: s for s in servers}
         self.running = mcp_servers.stamps(servers)
+        self.asking = {s.tool(t) for s in servers for t in s.named("write", "own")}
 
     def _now(self) -> dict[str, tuple[Server, str]]:
         """The session's servers that can run now, with their stamps."""
@@ -84,7 +88,9 @@ class Watch:
             return ""
         if (server := self.servers.get(server_name)) is None:
             return f"The {server_name} connection is switched off now."
-        return "" if tool in server.named("read") else f"{tool} isn't available."
+        sorted_as = server.tools[tool].access if tool in server.tools else ""
+        ok = sorted_as == "read" or (name in self.asking and sorted_as in ("write", "own"))
+        return "" if ok else f"{tool} isn't available."
 
     @property
     def hook(self) -> list[HookMatcher]:

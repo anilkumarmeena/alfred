@@ -2,13 +2,14 @@
 
   code_change    edits the project folder in place (uncommitted), or a worktree + branch when in_place=false
   code_question  reads the live checkout; shell is read-only git only
-  research       web plus account tools (reads, Sheets and Docs edits) and research MCP servers (read-only); works in
-                 data/tasks/ID
+  research       web plus account tools (reads, Sheets and Docs edits) and connections; works in data/tasks/ID
 
 Safety: every tool call passes TaskGate (also as a PreToolUse hook, since skills' allowed-tools become allow rules).
 Reads stay in task folders, TASK_READ_DIRS and voice logs; writes in the worktree. Secrets are hidden from file tools
 and the sandbox. code_change shell runs sandboxed (writes: worktree + cache; network: open); escaping is denied.
 Host-level work goes through host tools (host_tools), gated by `_host_gate`. The CLI's env has .env values blanked.
+Connections (the accounts access) read freely; each change waits for the user's yes (connection_calls). GitLab ones
+also get repo_files, which fetches whole files and projects with the connection's key, out of the task's sight.
 Tasks never write JARVIS's data files; they propose edits. Extra access (jarvis.tasks.access) shapes `_options`.
 Code tasks load the project's Claude setup (project_claude); JARVIS's enabled skills load as a plugin. JARVIS's
 helper subagents win name clashes. A run doesn't end while background subagents run, nor without a final report.
@@ -55,8 +56,9 @@ from jarvis.core import claude_logins, platform, profile
 from jarvis.integrations import mcp_servers
 from jarvis.safety import host
 from jarvis.skills import home as skills
-from jarvis.tasks import access, project_claude, projects
+from jarvis.tasks import access, project_claude, projects, repo_files
 from jarvis.tasks.briefs import _system_prompt
+from jarvis.tasks.connection_calls import ConnectionGate
 from jarvis.tasks.connection_watch import Watch
 from jarvis.tasks.gate import (
     _FILE_ARG,
@@ -171,6 +173,7 @@ def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> Claud
     can = access.has(task)
     own = DATA_DIR / "tasks" / str(task["id"]) if kind == "code_question" else cwd
     more_writes, edit_denied = [], []  # extra edit roots; sandbox write denials
+    connections = None
     if kind != "code_change":  # code_change already has shell and host tools
         if can & {"artifacts", "shell", "mac"}:
             own.mkdir(parents=True, exist_ok=True)
@@ -201,12 +204,18 @@ def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> Claud
     if "accounts" in can:
         # docs_insert_image's local paths are checked by TaskGate.doc_images
         mcp["jarvis"], jarvis_allowed = jarvis_server(READ_ONLY_TOOLS + GOOGLE_EDIT_TOOLS)
-        # Research MCP servers, read-only
-        servers = mcp_servers.session(mcp_servers.for_research(), read_only=True)
+        # Connections: reading is free, each change waits for the user's yes (connection_calls)
+        servers = mcp_servers.session(mcp_servers.for_research(), ask_own=True)
         live.use(servers.servers)
         mcp |= servers.configs
         allowed += jarvis_allowed + servers.allowed
         denied = denied + servers.blocked
+        connections = ConnectionGate(task["id"], servers.servers, reporter)
+        if found := repo_files.gitlab(servers.servers):  # whole files and projects, with the connection's own key
+            mcp[repo_files.NAME] = repo_files.repo_server(task["id"], found)
+            allowed += repo_files.TOOLS
+            builtins += [t for t in ("Read", "Glob", "Grep") if t not in builtins]
+            read_roots = [*read_roots, repo_files.downloads(task["id"])]
     if "artifacts" in can:
         env |= ARTIFACT_ENV
         builtins, allowed = builtins + [ARTIFACT], allowed + [ARTIFACT]  # each call still checked by TaskGate.artifact
@@ -239,7 +248,8 @@ def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> Claud
     in_place = kind == "code_change" and task["in_place"]
     gate = TaskGate(cwd, read_roots, write_roots, bash, agents, host_gate,
                     editors=set(setup.agents) - set(helpers) if setup else (), more_writes=more_writes,
-                    commit_ordered=functools.partial(reporter.commit_ordered, task["id"]) if in_place else None)
+                    commit_ordered=functools.partial(reporter.commit_ordered, task["id"]) if in_place else None,
+                    connections=connections)
     model, effort = _model(task)
     # After each call: the user's nudges, and connections restarted since
     after = _nudge_hook(task["id"], reporter) + (live.told if live.running else [])
