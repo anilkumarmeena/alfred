@@ -21,10 +21,10 @@ _ACCESS = {"type": "array", "items": {"type": "string", "enum": list(access.GRAN
                           "research has artifacts and accounts; code_question has none of them (so it needs artifacts "
                           "to publish a page or document as a claude.ai link). Secrets stay out of reach, and risky "
                           "commands still wait for the user's go-ahead, whatever is granted."}
-_NOW = ("The result's now says how the task stands: started, queued (not started yet, and what it waits on), or "
-        "already running and getting the message after its current step. Say just that, in a few words (\"It's "
-        "started.\", \"It's queued and will start shortly.\"), never that it started when it's queued, and what it "
-        "waits on only when asked. When the result has where, say that too: it names the machine the task runs on, or "
+_NOW = ("The result's now says how the task stands: started, queued (not started yet, and what it waits on), saved to "
+        "start by itself after other work, or already running and getting the message after its current step. Say just "
+        "that, in a few words (\"It's started.\", \"It's queued and will start shortly.\", \"It'll start once the merge "
+        "is done.\"), never that it started when it's queued, and what it waits on only when asked. When the result has where, say that too: it names the machine the task runs on, or "
         "why it runs on this computer instead.")
 # Screened in a task's record (Tool.screened): what the task wrote, which can quote what it read (a research summary
 # quoting an email), and a command's raw output, which no model has seen, wherever they show: its summary and
@@ -34,6 +34,17 @@ _TASK_TEXT = ("summary", "question", "output_tail", "spoken", "log", "activity",
 _MACHINE = {"type": "string", "description": "Only when the user says where this one should run: \"here\" for this "
                                              "computer, or the name of one of their machines (see machines). Leave it "
                                              "out to follow their setting."}
+_TASKS = {"type": "array", "items": {"type": "integer"}}
+_AFTER = _TASKS | {"description": "Numbers of the tasks this one waits for (from task_list). Whenever the user says to "
+                                  "do it after other work (\"once that's done, start…\", \"then…\"), pass them here "
+                                  "rather than promising to remember: it's saved now, waits without costing anything, "
+                                  "and starts by itself once every one has finished, saying so. If one fails, is "
+                                  "stopped or discarded, it's held and the user is asked whether to start it anyway."}
+_AFTER_MERGE = _TASKS | {"description": "Numbers of code_change tasks with their own branch whose merge this waits for "
+                                        "(\"once that's merged, …\"), as after does for finishing. Use it for work in "
+                                        "the same project that builds on theirs: a new branch starts from what's "
+                                        "merged. Their merges happen when the user asks, or by themselves through "
+                                        "task_merge's after; if one fails, this is held as for after."}
 
 
 def _brief(t: dict, requests: list[dict] = ()) -> dict:
@@ -41,7 +52,8 @@ def _brief(t: dict, requests: list[dict] = ()) -> dict:
            "minutes_since_update": minutes_since_update(t)}
     if t.get("machine"):
         out["runs_on"] = t["machine"]
-    for key in ("project", "activity", "question", "spoken", "changes", "branch", "error"):
+    for key in ("project", "activity", "question", "spoken", "changes", "branch", "error", "waits_for",
+                "merge_waits_for"):
         if t.get(key):
             out[key] = t[key]
     if t.get("in_place"):
@@ -84,6 +96,8 @@ def _launched(t: dict) -> dict:
         out["where"] = t["where"]
     if t["status"] == "running":  # undelivered message = nudge, delivered after the current step
         out["now"] = "running: it gets the message after its current step" if nudges(t) else "started: it's running"
+    elif t["status"] == "queued" and t.get("waits_for"):
+        out["now"] = "saved, not started yet: it starts by itself once what it waits for is done (waits_for)"
     elif t["status"] == "queued":
         out["now"] = f"queued, not started yet: {t.get('activity') or 'waiting for a free slot'}; it starts by itself"
     return out
@@ -136,6 +150,8 @@ async def _mark_seen(tasks: list[dict]) -> None:
     "When the user explicitly asks for something beyond the kind's tools (a claude.ai link to a page or document, "
     "shell commands or ones on the computer itself, edits in another project, reading their mail or editing their Sheets and Docs), grant it in access."
     "When the task works on an item of the user's to-do list, name it in todo. "
+    "When it's to start only after other tasks finish or are merged, name them in after or after_merge: it then starts "
+    "by itself, so start it now rather than later. "
     "The task can't see this conversation, so the instruction must carry everything it needs. " + _NOW,
     {
         "kind": {"type": "string", "enum": list(KINDS)},
@@ -153,13 +169,17 @@ async def _mark_seen(tasks: list[dict]) -> None:
                                                   "announcement says so. Leave it out otherwise: a task without one "
                                                   "is still checked against the open items as it ends."},
         "machine": _MACHINE,
+        "after": _AFTER,
+        "after_merge": _AFTER_MERGE,
     },
     ["kind", "title", "instruction"],
     screened=_TASK_TEXT,
 )
 async def task_start(kind: str, title: str, instruction: str, project: str = "", access: list[str] | None = None,
-                     todo: str = "", machine: str = "") -> dict:
-    return _launched(await client.start(kind, title, instruction, project or None, access, _order(), todo, machine))
+                     todo: str = "", machine: str = "", after: list[int] | None = None,
+                     after_merge: list[int] | None = None) -> dict:
+    return _launched(await client.start(kind, title, instruction, project or None, access, _order(), todo, machine,
+                                        after=after, after_merge=after_merge))
 
 
 @tool("task_list", "Background tasks: every active one, plus any that changed in the last day, newest first. Kind "
@@ -168,7 +188,10 @@ async def task_start(kind: str, title: str, instruction: str, project: str = "",
       "it (fix_task), and a rerun after a fix says so. waiting_for_approval lists a task's requests to run risky commands that wait for the user's answer, with their "
       "exact commands: when asked what one will do, say it in a sentence from those commands, without reading them "
       "out character by character. stalled marks a running task that has shown no progress for a while and may be "
-      "stuck.", reads=True, screened=_TASK_TEXT)
+      "stuck. waits_for lists what a task not started yet still waits for (it starts by itself after), and "
+      "merge_waits_for what a merge set to happen by itself still waits for. A task held because what it waited for "
+      "failed is waiting with a question: task_reply starts it anyway, task_stop drops it.", reads=True,
+      screened=_TASK_TEXT)
 async def task_list() -> list[dict]:
     tasks = await client.tasks()
     await _mark_seen(tasks)
@@ -179,7 +202,8 @@ async def task_list() -> list[dict]:
 @tool(
     "task_detail",
     "One task in full: its summary, question, changes, branch (or in_place note), requests waiting for approval, "
-    "whether it seems stuck (stalled), and progress log. task_log has its every step.",
+    "whether it seems stuck (stalled), what it or its merge still waits for (waits_for, merge_waits_for), and "
+    "progress log. task_log has its every step.",
     {"id": {"type": "integer"}},
     ["id"],
     reads=True,
@@ -233,7 +257,9 @@ async def task_log(id: int, lines: int = 0) -> dict:
     "Send a task a message; it carries on with everything it did before. A waiting task takes it as the "
     "answer to its question; a finished, failed or stopped one, as a follow-up. A running task can be nudged "
     "mid-flight (\"also check X\", \"skip Y\") without stopping it: it gets the message after its current step "
-    "and keeps going, adjusted. A queued task gets it with its instruction when it starts. Several messages arrive in order. "
+    "and keeps going, adjusted. A queued task, or one waiting for other tasks, gets it with its instruction when it "
+    "starts; one held because what it waited for failed starts at once with it, on the user's say-so. Several "
+    "messages arrive in order. "
     "access grants it more than it has, keeping all it did so far: for a task waiting with access_requested, or a "
     "finished or stopped one's follow-up that needs more (\"now publish that as a link\"). When the user turns a "
     "task's request for access down, tell the task so, with no access. When the user's own words this turn order "
@@ -342,9 +368,11 @@ def approval_rule_forget(rule: int) -> dict:
 @tool("task_stop", "Stop a running, queued or waiting task, or a merge of a task under way (task_merge). Code changes "
       "so far stay in the project's folder (uncommitted, unless the user asked for a commit), or on its branch for "
       "worktree tasks. A command task's command stops, all of it, as stop_job stops it; one waiting for a yes to fix "
-      "it is left as it failed. A merge stops cleanly: its tests stop, nothing is merged, the project's folder is left "
-      "as it was and the task's branch is kept; spoken says how it ended (merged after all, if the stop came too "
-      "late).", {"id": {"type": "integer"}}, ["id"], screened=_TASK_TEXT)
+      "it is left as it failed. A task waiting for other tasks stops before it starts; tasks waiting for it are then "
+      "held. A merge stops cleanly: its tests stop, nothing is merged, the project's folder is left as it was and the "
+      "task's branch is kept; spoken says how it ended (merged after all, if the stop came too late). On a finished "
+      "task whose merge waits to happen by itself (merge_waits_for), it calls that merge off.",
+      {"id": {"type": "integer"}}, ["id"], screened=_TASK_TEXT)
 async def task_stop(id: int) -> dict:
     stopping = client.stop(id)
     if (kept := conversation.current().kept) is None:
@@ -367,14 +395,20 @@ async def _stop_merge(args: dict) -> str:
     "own branches run its tests first, which takes a few minutes (the merge then carries on in the background and its "
     "result comes back to you; task_stop with its id stops it), and aren't merged if tests fail on them. Only "
     "for tasks with a branch (in_place false); only when the user asks for it, and then without asking again. Use "
-    "this, never git in the shell. Then say in one sentence which task went into which project.",
-    {"id": {"type": "integer"}},
+    "this, never git in the shell. Then say in one sentence which task went into which project. To merge later "
+    "(\"merge it once it's done\", \"merge them in order\"), pass after or after_merge: the merge is set up now, "
+    "happens by itself in the background once they're done (said when it is), and anything waiting for it follows; "
+    "say in a few words that it will be merged then.",
+    {"id": {"type": "integer"},
+     "after": _TASKS | {"description": "Only to merge later: tasks to finish first, this one's own number included "
+                                       "when it hasn't finished yet."},
+     "after_merge": _TASKS | {"description": "Only to merge later: tasks whose merges go first."}},
     ["id"],
     screened=_TASK_TEXT,
     stop=_stop_merge,
 )
-async def task_merge(id: int) -> dict:
-    return _brief(await client.merge(id))
+async def task_merge(id: int, after: list[int] | None = None, after_merge: list[int] | None = None) -> dict:
+    return _brief(await client.merge(id, after, after_merge))
 
 
 @tool(

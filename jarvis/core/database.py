@@ -21,8 +21,9 @@ KINDS = ("code_change", "code_question", "research")  # model-driven kinds
 COMMAND = "command"  # shell command, no model (jarvis.tasks.command_jobs)
 CONNECTION = "connection"  # backgrounded MCP call (jarvis.tasks.connection_jobs)
 ACTIVE = ("queued", "running", "waiting")
-# wait_kind values: approval of commands, requested access, or an answer
-WAIT_APPROVAL, WAIT_ACCESS, WAIT_QUESTION = "approval", "access", "question"
+# wait_kind values: approval of commands, requested access, an answer, or whether to start a task held because work
+# it waited for failed (jarvis.tasks.chains)
+WAIT_APPROVAL, WAIT_ACCESS, WAIT_QUESTION, WAIT_AFTER = "approval", "access", "question", "after"
 _IN_ACTIVE = f"status in ({', '.join('?' * len(ACTIVE))})"
 # Seconds to wait on another process's write before "database is locked" (runner, voice and web share the file)
 BUSY_SECONDS = 10
@@ -66,6 +67,9 @@ create table tasks (
 # interrupted also holds {prompt, after} while a task waits for a usage limit's reset (Runner._launch)
 _TASKS_MIGRATIONS = (
     "alter table tasks add column node integer",  # 2: the machine it runs on (jarvis.node); null = this computer
+    # 3, 4: JSON lists of {task, merged} its start, or its merge, waits for (jarvis.tasks.chains)
+    "alter table tasks add column waits_on text",
+    "alter table tasks add column merge_waits_on text",
 )
 _LOG = """
 create table log (
@@ -344,6 +348,17 @@ class Store:
             self.db.execute(f"delete from tasks where id in ({marks})", ids)
             self.db.execute("commit")
         return ids
+
+    def waiting(self) -> list[dict]:
+        """Tasks whose start waits for other work (still waiting, or held), or that have a merge waiting; oldest
+        first."""
+        return self._rows("select * from tasks where (waits_on is not null and status in ('queued', 'waiting'))"
+                          " or merge_waits_on is not null order by id")
+
+    def merged(self, task_id: int) -> bool:
+        """Whether the task's branch has been merged (GitOps.merge logs it)."""
+        return self.db.execute("select 1 from log where task = ? and kind = 'merged' limit 1",
+                               (task_id,)).fetchone() is not None
 
     def mark_seen(self, ids: list[int]) -> None:
         self.db.executemany("update tasks set seen = 1 where id = ?", [(i,) for i in ids])

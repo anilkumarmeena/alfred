@@ -779,10 +779,12 @@ class Offload:
     # ── Watching over it ─────────────────────────────────────────
 
     def working(self) -> dict[int, list[int]]:
-        """Machine -> its active tasks and commands. One waiting here for a usage limit's reset isn't work there."""
+        """Machine -> its active tasks and commands. One waiting here for a usage limit's reset, or for other tasks,
+        isn't work there."""
         found: dict[int, list[int]] = {}
         for task in self.runner.store.active():
-            if task.get("node") and task["status"] in ("queued", "running") and task["id"] not in self.runner.limit_waits:
+            if task.get("node") and task["status"] in ("queued", "running") and task["id"] not in self.runner.limit_waits \
+                    and not task.get("waits_on"):
                 found.setdefault(task["node"], []).append(task["id"])
         return found
 

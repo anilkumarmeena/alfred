@@ -41,15 +41,19 @@ async def call(method: str, path: str, body: dict | None = None, timeout: float 
 
 
 async def start(kind: str, title: str, instruction: str, project: str | None = None,
-                access: list[str] | None = None, order: str = "", todo: str = "", machine: str = "") -> dict:
+                access: list[str] | None = None, order: str = "", todo: str = "", machine: str = "",
+                after: list[int] | None = None, after_merge: list[int] | None = None) -> dict:
     """Start a task with extra `access`.
 
     `order`: the user's words authorising risky actions without asking ("and push it"). `todo`: linked to-do id.
     `machine`: where the user said it runs ("here" or a machine's name). The reply's `where` says where it runs, when
-    that's worth saying."""
+    that's worth saying. `after` / `after_merge`: tasks to finish / be merged first; it waits for them, then starts
+    by itself."""
     return await call("POST", "/tasks", {"kind": kind, "title": title, "instruction": instruction, "project": project,
                                          "access": access or []} | ({"order": order} if order else {})
-                      | ({"todo": todo} if todo else {}) | ({"machine": machine} if machine else {}), timeout=60)
+                      | ({"todo": todo} if todo else {}) | ({"machine": machine} if machine else {})
+                      | ({"after": after} if after else {}) | ({"after_merge": after_merge} if after_merge else {}),
+                      timeout=60)
 
 
 async def start_command(command: str, title: str, folder: str, timeout_minutes: int | None = None,
@@ -116,7 +120,10 @@ async def stop(task_id: int) -> dict:
     return await call("POST", f"/tasks/{int(task_id)}/stop")
 
 
-async def merge(task_id: int) -> dict:
+async def merge(task_id: int, after: list[int] | None = None, after_merge: list[int] | None = None) -> dict:
+    """Merge now, or, with `after` / `after_merge` (tasks to finish / be merged first), by itself once they are."""
+    if after or after_merge:
+        return await call("POST", f"/tasks/{int(task_id)}/merge", {"after": after or [], "after_merge": after_merge or []})
     # JARVIS's own branches run its tests first, up to twice
     return await call("POST", f"/tasks/{int(task_id)}/merge", timeout=2 * merge_check.TIMEOUT + 360)
 

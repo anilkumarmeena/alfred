@@ -1,6 +1,6 @@
 """Runner mixin for telling the user about tasks: GET /events (voice), the panel bell, desktop notifications and pushes.
 
-`_finish` records a run's end and announces it through all of these.
+`_finish` records a run's end and announces it through all of these, then settles what waits for it (chains).
 """
 
 import logging
@@ -64,12 +64,14 @@ class Events(RunnerBase):
         if status != "waiting":  # only an answered question resumes from the same snapshot
             self.snapshots.pop(task_id, None)
             self._close_approvals(task_id, status)
-        if quiet:
-            return
-        self._emit("status", task, spoken)
-        if status in PUSH_TITLES and alert and not hold.held():
-            self._background(self._notify(f"JARVIS · {title or f'task {task_id}'}", spoken))
-            self._background(self._push(title or PUSH_TITLES[status].format(id=task_id), spoken, *task_target(task_id)))
+        if not quiet:
+            self._emit("status", task, spoken)
+            if status in PUSH_TITLES and alert and not hold.held():
+                self._background(self._notify(f"JARVIS · {title or f'task {task_id}'}", spoken))
+                self._background(self._push(title or PUSH_TITLES[status].format(id=task_id), spoken,
+                                            *task_target(task_id)))
+        if status != "waiting":  # after its own announcement: what waited for it starts, or is held
+            self._settle(task_id)
 
     async def _notify(self, title: str, text: str) -> None:
         """A Mac notification, or notify-send's on a Linux desktop; skipped where there's neither."""

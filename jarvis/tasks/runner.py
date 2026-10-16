@@ -24,12 +24,14 @@ Concepts:
   goal check  a "finished" run is checked against its ask (jarvis.tasks.goal) and may be sent back; settles to-dos
   approvals   risky host commands wait for a yes (voice, panel, push with a hashed one-time nonce); first answer wins;
               may be remembered as rules; user `orders` from this turn's speech pre-approve what they name
+  waiting     a task may start, or a merge go ahead, by itself once other tasks finish or are merged (chains)
   access      extra grants at start, on reply, or via request_access (task waits)
   shutdown    SIGTERM marks queued/running tasks `interrupted`; next start resumes up to RESUME_TASKS (_after_restart)
   carrying on a run out of turns carries on in its session, up to TASK_CONTINUES times per user ask (_carried_on);
               one the usage limit cut short waits queued for the reset, then resumes, once per reset (_limit_reset)
 Also runs notices, the scheduler and the learning review. API: Unix socket in data/ (mode 600), unreachable from
-browsers and from tasks' host commands. Mixins: approvals, command_tasks, git_ops, task_edits, events; HTTP in api.
+browsers and from tasks' host commands. Mixins: approvals, command_tasks, git_ops, task_edits, events, chains; HTTP
+in api.
 """
 
 import asyncio
@@ -67,6 +69,7 @@ from jarvis.core.database import (
     CONNECTION,
     KINDS,
     WAIT_ACCESS,
+    WAIT_AFTER,
     WAIT_APPROVAL,
     WAIT_QUESTION,
     Store,
@@ -95,6 +98,7 @@ from jarvis.tasks import (
     stall,
 )
 from jarvis.tasks.approvals import ACCESS_QUESTION, Approvals, approval_question, approval_summary
+from jarvis.tasks.chains import Chains, on_all
 from jarvis.tasks.command_tasks import CommandTasks
 from jarvis.tasks.events import Events
 from jarvis.tasks.git_ops import GitOps
@@ -137,7 +141,7 @@ def _waits_for_reset(task: dict) -> float | None:
     return (json.loads(task["interrupted"] or "null") or {}).get("after")
 
 
-class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
+class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
     """The task runner: mixins plus task start/reply/stop, the run loop, restart and shutdown."""
 
     def __init__(self, capacity: int = MAX_TASKS) -> None:
@@ -171,6 +175,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         self.limit_waits: dict[int, float] = {}  # tasks queued until a usage limit resets -> its reset time
         self.wakes: dict[int, asyncio.Event] = {}  # set to end a task's wait for the reset early (a message came)
         self.limit_resumed: dict[int, float] = {}  # the reset each task last resumed after by itself
+        self.merging: set[int] = set()  # tasks whose merge, which waited for other tasks, is under way (chains)
         self.resuming = self._after_restart()
 
     def _after_restart(self) -> list[tuple[int, str]]:
@@ -182,7 +187,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
         for t in self.store.active():
             if t["kind"] in (COMMAND, CONNECTION):  # tracked separately
                 continue
-            if t["status"] != "waiting":
+            if t["status"] != "waiting" and not t["waits_on"]:  # one waiting for other tasks never began
                 cut.append(t)
         for t in sorted(cut, key=lambda t: t["status"] != "running"):
             why, prompt = self._resumable(t)
@@ -308,6 +313,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             bell.add(f"Resumed task {task_id} after JARVIS restarted: {task['title']}", "run", task_id)
             self._launch(task_id, prompt)
         self.resuming = []
+        self.settle_all()
 
     def service(self, coro) -> None:
         """Run a self-starting loop (notices, scheduler, learning); cancelled first on shutdown."""
@@ -338,7 +344,8 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
 
     def start(self, kind: str, title: str, instruction: str, project: str | None = None, job: int | None = None,
               hidden: bool = False, grants: list[str] | None = None, order: str | None = None,
-              fixes: int | None = None, todo: str | None = None, machine: str = "") -> dict:
+              fixes: int | None = None, todo: str | None = None, machine: str = "", after: list[int] | None = None,
+              after_merge: list[int] | None = None) -> dict:
         """Create and launch a task (command tasks use start_command).
 
           job      scheduled job id; `hidden` keeps watch checks out of lists and the bell until relevant
@@ -347,6 +354,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
           fixes    failed command task this task fixes
           todo     open to-do item it works on (text or unique substring), settled at the end
           machine  where the user said it should run ("here" or a machine's name); else Settings › Machines decides
+          after    tasks to finish first, and `after_merge` tasks to be merged first: it waits till then (chains)
         """
         self._open()
         if kind not in KINDS:
@@ -364,6 +372,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             if kind == "code_change" and not in_place and not lives and (problem := projects.worktree_problem(found)):
                 raise ValueError(problem)
         item = todos.find(todo) if todo else None
+        needs = self._needed(after, after_merge)
         title = " ".join(title.split())[:80] or instruction[:60]
         placeable = kind != "research" and not access.has({"kind": kind, "grants": json.dumps(grants)}) & access.LOCAL
         if lives and not placeable:
@@ -388,9 +397,10 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             self.store.log(task["id"], "access", f"granted {', '.join(grants)} from the start")
         self._order(task["id"], order)
         if not hidden:
-            started = "Started scheduled task" if job is not None else "Started task"
-            bell.add(f"{started} {task['id']}: {title}" + (f", on {name}" if name else ""), "run", task["id"])
-        return self._launch(task["id"], instruction)
+            started = "Added task" if needs else "Started scheduled task" if job is not None else "Started task"
+            bell.add(f"{started} {task['id']}: {title}" + (f", on {name}" if name else "")
+                     + (f", to start once {on_all(needs)}" if needs else ""), "run", task["id"])
+        return self._wait(task["id"], needs) if needs else self._launch(task["id"], instruction)
 
     def take_up(self, task_id: int) -> dict:
         """Follow a run already going on (or ended on) the task's machine, as after a restart: one a machine began on
@@ -441,6 +451,8 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             return self.store.get(task_id)
         lead = "Answer" if task["status"] == "waiting" else "Follow-up"
         prompt = f"{lead} from {profile.name()}: {message}{note}"
+        if task["wait_kind"] == WAIT_AFTER:  # held: starts on their word, without what it waited for
+            prompt = f"{task['question']}\n\n{prompt}"
         if not task["session_id"]:  # never started: include the original instruction
             prompt = f"{task['instruction']}\n\n{prompt}"
         self.store.log(task_id, "reply", message)
@@ -474,9 +486,11 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             self.store.log(task_id, "declined", f"{profile.name()} said to leave it unfixed")
             self._finish(task_id, "failed", f"Task {task_id}, {task['title']}, is left as it failed: no fix started.",
                          seen=1, question=None, wait_kind=None)
-        elif task["status"] == "waiting":
+        elif task["status"] == "waiting" or (task["status"] == "queued" and task["waits_on"]):  # never began
             self._finish(task_id, "stopped", announce.plain(announce.Ending(task["title"], announce.STOPPED,
                                                                            suggested=announce.suggestions(task))))
+        elif task["merge_waits_on"]:
+            self._call_off(task, f"{profile.name()} called it off")
         else:
             raise ValueError(f"Task {task_id} isn't running.")
         return self.store.get(task_id)
@@ -485,9 +499,11 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
 
     def view(self, task: dict, now: float | None = None) -> dict:
         """Task as the API shows it, with `stalled` set if it seems stuck; command tasks add their `command` view.
-        One on another machine names it (`machine`)."""
+        One on another machine names it (`machine`); one waiting for other tasks says for what (`waits_for`,
+        `merge_waits_for`)."""
         if task.get("node"):
             task = task | {"machine": self.offload.name(task["node"])}
+        task = task | self.waits_for(task)
         if task["kind"] == COMMAND:
             return task | command_jobs.view(task, self.commands, now) | {"stalled": None}
         if task["kind"] == CONNECTION:  # no pulse kept here
@@ -556,7 +572,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events):
             status, activity = ("running", STARTING) if self._slot_free(task_id) else ("queued", self._slot_wait())
             self.in_line.add(task_id)
         task = self.store.update(task_id, status=status, question=None, wait_kind=None, wants=None, error=None,
-                                 spoken=None, activity=activity, interrupted=cut)
+                                 spoken=None, activity=activity, interrupted=cut, waits_on=None)
         self.prompts[task_id] = prompt
         job = self.jobs[task_id] = asyncio.create_task(self._job(task_id, prompt))
         job.add_done_callback(lambda _: self._never_began(task_id, job))
