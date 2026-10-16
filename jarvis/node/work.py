@@ -556,7 +556,7 @@ class Work:
             except Refused as e:
                 log.warning("scheduled job %s can't run here: %s", key, e)
                 continue
-            if why := self.refusal(job["text"], "made through the gate"):  # weighed when it was made: secrets never
+            if why := self.refusal(job["text"], "made through the gate", folder):  # weighed when made: secrets never
                 log.warning("scheduled job %s refused: %s", key, why)
                 continue
             record = self.scheduled.launch(job["text"], job["title"], folder, extra={"schedule": job["id"]})
@@ -577,12 +577,12 @@ class Work:
     # ── Command jobs ─────────────────────────────────────────────
 
     @staticmethod
-    def refusal(command: str, approved: str) -> str:
+    def refusal(command: str, approved: str, folder: Path | None = None) -> str:
         """Why the main computer couldn't have let this run (secrets, environment reads, or a risky command without
-        the user's yes), or ""."""
-        if commands.names_secret(command) or commands.reads_environment(command):
+        the user's yes), or "". The scripts it runs are read here, in `folder`, as they are on this machine."""
+        if commands.names_secret(command) or commands.reads_environment(command) or commands.seen(command, folder).secret:
             return "it touches secrets, which stay out of reach even with a yes"
-        if (why := commands.risky(command)) and not approved:
+        if (why := commands.risky(command, cwd=folder)) and not approved:
             return f"it {why}, and the main computer didn't say the user agreed to it"
         return ""
 
@@ -590,14 +590,14 @@ class Work:
         """{"task", "key", "rel", "command", "title", "approved"} -> {"started"}, or {"refused": why}. Runs as the
         main computer runs a job: outside the sandbox in a login shell, without JARVIS's keys."""
         task, command = int(body["task"]), str(body["command"]).strip()
-        if why := self.refusal(command, str(body.get("approved") or "")):
-            return {"refused": why}
         if body.get("path"):  # in a project living here
             folder = self.own_folder(body["path"])
             if not folder.is_dir():
                 raise Refused(f"{folder} isn't a folder here")
         else:
             folder = self._inside(str(body["key"]), str(body.get("rel") or ""))
+        if why := self.refusal(command, str(body.get("approved") or ""), folder):
+            return {"refused": why}
         if (old := self.jobs.get(task)) is not None:
             if self.jobs.how(old) is None:
                 raise Refused(f"job {task} is already running here")

@@ -918,6 +918,9 @@ def call(gate: ShellGate, tool: str, **args):
 def test_the_gate_weighs_a_command_job_as_the_command_itself(env):
     gate = ShellGate()
     gate.new_turn("run my produce script every morning at eight")
+    script = env["project"] / "scripts" / "autopilot" / "run.sh"  # read by the gate: it's harmless
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("#!/bin/sh\necho \"producing $1\"\n")
     plain = {"kind": "command", "title": "Produce", "text": "scripts/autopilot/run.sh main produce",
              "project": "video-agent", "when": "08:00", "repeat": "daily"}
     assert isinstance(call(gate, "schedule_add", **plain), PermissionResultAllow)

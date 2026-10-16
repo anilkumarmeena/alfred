@@ -709,9 +709,11 @@ class Offload:
         command = str(item.get("command") or "").strip()
         if not command or (why := commands.refused(command, bool(task["in_place"]))):
             raise Refused(f"not asked: {why or 'there is no command'}")
+        scripts = item.get("scripts") if isinstance(item.get("scripts"), dict) else {}
+        kept = {str(k)[:1000]: str(v)[:64] for k, v in list(scripts.items())[:64]}  # its files' fingerprints there
         return {"tool": item["tool"], "command": command, "folder": str(item.get("folder") or ""),
                 "why": commands.describe(command) or str(item.get("why") or "needs a go-ahead")[:200],
-                "remember": remembered.pieces(command), "machine": self.name(node)}
+                "remember": remembered.pieces(command), "machine": self.name(node)} | ({"scripts": kept} if kept else {})
 
     async def _report(self, node: int, body: dict) -> dict:
         """One journal event from a machine, applied once, in order."""

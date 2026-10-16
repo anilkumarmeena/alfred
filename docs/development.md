@@ -75,7 +75,7 @@ docs/                these pages
 
 - **`VoiceSession`** routes each turn and speaks tasks' requests.
 - **`ask_json`** (in the brain) is the one way a short model call gives a verdict: JSON checked against a schema.
-- **The guards:** `commands.py` (what's risky), `shell.py` / `draft_gate.py` (spoken yes), `host.py` (the host walls: Seatbelt on macOS, bubblewrap on Linux), `injection.py` / `scan.py`.
+- **The guards:** `commands.py` (what's risky) and `scripts.py` (what a script's code does), `shell.py` / `draft_gate.py` (spoken yes), `host.py` (the host walls: Seatbelt on macOS, bubblewrap on Linux), `injection.py` / `scan.py`.
 - **The Google and Mac tools** come from **[AI Armory](https://github.com/anilkumarmeena/ai-armory)**, a git dependency pinned to a commit in `pyproject.toml`, registered in `jarvis/tools/google.py` and `jarvis/tools/mac.py`. The Linux desktop tools are JARVIS's own: `jarvis/tools/desktop.py` on top of `jarvis/core/desktop.py`.
 - **OS differences** stay behind `platform.MAC` / `platform.LINUX` checks; speech goes through `jarvis/core/whisper.py`, which hides whether MLX Whisper or faster-whisper runs.
 

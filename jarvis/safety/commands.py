@@ -12,15 +12,22 @@ The secret lists here are the single source for the shell deny rules, task file 
 """
 
 import fnmatch
+import functools
+import hashlib
 import os
 import re
 import shlex
+import stat
+import sys
+import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from jarvis.core import platform
 from jarvis.core.config import CLAUDE_CONFIG_DIR, DATA_DIR, ROOT, SECRETS_DIR
+from jarvis.safety import scripts
+from jarvis.safety.scripts import UNSEEN
 
 # ── Secrets ─────────────────────────────────────────────────────
 
@@ -317,8 +324,9 @@ def tells_deny(said: str) -> bool:
 
 # ── What counts as risky ────────────────────────────────────────
 
-# A line is split into simple commands at ; & | && || ( ) and newlines, each judged by program and args.
-# Code run from a string (shell -c, eval, interpreters) can't be judged, so it is risky itself.
+# A line is split into simple commands at ; & | && || ( ) and newlines, each judged by program and args. Shell code
+# a command runs (bash -c, a heredoc fed to a shell) is split the same way. Scripts and inline code are read and
+# judged by what they do (`_code`); code the check can't read (eval, a download piped to a shell) is risky itself.
 _PREFIXES = {"nohup", "time", "exec", "command", "builtin", "env", "nice", "caffeinate", "xargs", "timeout", "gtimeout",
              "stdbuf", "then", "do", "else", "elif", "if", "while", "until", "!", "noglob", "{", "}"}
 _PREFIX_VALUES = {"-I", "-J", "-L", "-n", "-P", "-R", "-s", "-E", "-d", "-u", "-t", "-w"}  # xargs -I {}, nice -n 5
@@ -340,7 +348,8 @@ _ALWAYS = {
     "csrutil": "changes the system",
     "spctl": "changes the system", "tccutil": "changes the system", "dscl": "changes the system",
     "tmutil": "changes the system", "osascript": "controls apps",
-    "eval": "runs code it can't see", "watch": "runs code it can't see", "script": "runs code it can't see",
+    "eval": UNSEEN, "watch": UNSEEN, "script": UNSEEN, "parallel": UNSEEN,
+    "at": "changes the system", "batch": "changes the system",  # run commands later, as crontab does
     # Linux
     "poweroff": "stops the computer", "pkexec": "runs as root", "run0": "runs as root",
     "chattr": "changes permissions", "setfacl": "changes permissions", "setcap": "changes permissions",
@@ -462,8 +471,11 @@ _GIT_CONFIG_READS = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "--
                      "--list"}
 _GIT_CONFIG_WRITES = {"--add", "--replace-all", "--unset", "--unset-all", "--rename-section", "--remove-section"}
 _SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "fish"}
-_INLINE_CODE = {"python": {"-c", "-"}, "node": {"-e", "--eval", "-p", "--print"}, "perl": {"-e", "-E"}, "ruby": {"-e"},
-                "php": {"-r"}, "deno": {"eval"}}
+_JS = {"node", "nodejs", "bun", "deno", "tsx", "ts-node"}
+# Interpreters whose code the check doesn't read: whatever they're given to run is unseen
+_OPAQUE = {"perl", "ruby", "php", "lua", "luajit", "Rscript", "R", "julia", "tclsh", "wish", "expect", "groovy",
+           "escript", "pwsh", "powershell", "runghc", "guile", "racket"}
+_INFO = {"-v", "-V", "-VV", "--version", "-version", "-h", "--help"}
 _CLOBBER_DOTFILE = re.compile(r"(?<![0-9&])>>?\s*(?!/dev/)(\S*/)?\.[A-Za-z]")  # > ~/.zshrc, >> .env
 # devicectl/simctl subcommands that are risky (installing a build is not)
 _DEVICE_CHANGES = {"uninstall", "terminate", "reboot", "shutdown", "unpair", "erase", "signal", "delete"}
@@ -802,14 +814,27 @@ def _writes_startup(program: str, args: list[str]) -> str:
     return next((why for t in targets if (why := _starts_up(t))), "")
 
 
+# `uv run` options taking a value; what follows them is the command it runs
+_UV_RUN_VALUES = {"--with", "--with-editable", "--with-requirements", "-p", "--python", "--project", "--directory",
+                  "--package", "--extra", "--group", "--only-group", "--no-group", "--index", "--default-index",
+                  "--index-url", "--extra-index-url", "-f", "--find-links", "--env-file", "--exclude-newer",
+                  "--config-file", "--cache-dir", "--color", "-P", "--upgrade-package", "--reinstall-package",
+                  "--refresh-package", "--resolution", "--prerelease", "--link-mode", "--python-preference"}
+
+
 def _strip_prefixes(argv: list[str]) -> list[str]:
-    """argv minus wrappers (nohup, env, VAR=value, xargs -I {}, timeout 5, xcrun)."""
+    """argv minus wrappers (nohup, env, VAR=value, xargs -I {}, timeout 5, xcrun, uv run)."""
     while argv and (argv[0] in _PREFIXES or re.fullmatch(r"\w+=.*", argv[0])):
         argv = argv[1:]
         while argv and (argv[0].startswith("-") or re.fullmatch(r"\d+(\.\d+)?[smhd]?", argv[0])):
             argv = argv[2:] if argv[0] in _PREFIX_VALUES else argv[1:]
     if argv and Path(argv[0]).name == "xcrun":  # the tool xcrun finds is the command
         return _strip_prefixes(_options_then(argv[1:], _XCRUN_VALUES))
+    if argv and (Path(argv[0]).name, *argv[1:2]) in (("uv", "run"), ("poetry", "run"), ("pipenv", "run")):
+        inner = _options_then(argv[2:], _UV_RUN_VALUES)
+        if inner[:1] == ["--"]:
+            inner = inner[1:]
+        return _strip_prefixes(["python", *inner] if inner[:1] and inner[0].endswith(".py") else inner)
     return argv
 
 
@@ -873,78 +898,820 @@ def _piece(argv: list[str]) -> str:
         if "-delete" in flags:
             return "deletes files"
         runs = [i for i, a in enumerate(args) if a in ("-exec", "-execdir", "-ok", "-okdir")]
-        return next((why for i in runs if (why := _piece(args[i + 1 :]))), "")
-    if program in _SHELLS and (not _options_then(args) or any(re.fullmatch(r"-\w*c\w*", a) for a in args)):
-        return "runs code it can't see"
-    if program in _INLINE_CODE and (not args or flags & _INLINE_CODE[program]):
-        return "runs code it can't see"
+        return next((why for i in runs if (why := _argv_risk(args[i + 1 :]))), "")
     return ""
 
 
-def _simple_commands(command: str) -> list[list[str]] | None:
-    """Every simple command as argv, including those in $(...) and `...`; None on unbalanced quotes.
+def _argv_risk(argv: list[str]) -> str:
+    """Why a command another runs (find -exec) is risky: its program, or the code it runs, wherever it runs."""
+    pieces = _parse(shlex.join(argv)) if argv else []
+    if pieces is None:
+        return "can't be checked"
+    return next((why for p in pieces if (why := _piece(p.argv) or _code(p, None, _Reader()))), "")
 
-    Redirection targets are dropped, not treated as arguments.
-    """
-    found: list[list[str]] = []
-    command = _FD_NUMBER.sub(" ", command)  # the 2 in 2>/dev/null isn't an argument
-    for inner in _SUBSTITUTIONS.findall(command):  # these run even inside double quotes
-        if (more := _simple_commands("".join(inner))) is None:
+
+# ── Reading a line: pieces, heredocs, pipes and folders ─────────
+
+
+@dataclass
+class _Piece:
+    """One simple command, with what the line shows of where it runs and what it reads."""
+
+    argv: list[str]
+    raw: str = ""  # the shell code it came from: tells literal inline code from code the shell builds
+    stdin: tuple[str, str, bool] | None = None  # (kind, value, literal): "text" (a heredoc, echo |), "file", "pipe"
+    dirs: tuple[str, ...] | None = ()  # cd targets in effect, in order; None once one can't be read
+    writes: list[str] = field(default_factory=list)  # redirect targets
+    unseen: bool = False  # a shell here runs code the check can't read
+
+
+@dataclass
+class _Scan:
+    text: str  # the line with its heredoc bodies cut out and backslash-newlines joined
+    bodies: list[tuple[str, bool]]  # each heredoc the line's own commands read, and whether the shell expands it
+    inner: list[str]  # the code of each $(...) and `...`, which runs wherever it appears, even in double quotes
+
+
+_HEREDOC_OP = re.compile(r"""<<(-?)[ \t]*(?:'([^'\n]*)'|"([^"\n]*)"|(\\?)([^\s;&|()<>'"`]+))""")
+_OPERATORS = re.compile(r"\|\||&&|\|&|;;&?|[;&|()]")
+_MAX_DEPTH = 8  # code within code (bash -c in a heredoc in a script...) this deep, and no deeper, is read
+_SUBSTITUTED = "$_SUB_"  # stands in for a $(...) in the line around it: a word known only at run time
+
+
+def _heredoc_body(command: str, i: int, delim: str, strip: bool) -> tuple[str, int]:
+    """The heredoc body starting at `i`, up to its delimiter alone on a line, and where the line after it starts."""
+    lines = []
+    while i < len(command):
+        end = command.find("\n", i)
+        end = len(command) if end == -1 else end
+        line, i = command[i:end], end + 1
+        if (line.lstrip("\t") if strip else line) == delim:
+            break
+        lines.append(line.lstrip("\t") if strip else line)
+    return "".join(line + "\n" for line in lines), min(i, len(command))
+
+
+def _scan(command: str) -> _Scan | None:
+    """Split a line's heredoc bodies and command substitutions from it, quote-aware: a << inside quotes is text, and
+    inside $(...) quoting starts afresh. Each substitution leaves a placeholder word, so the line reads as the shell
+    sees it after expanding them. None if a quote or substitution never closes."""
+    out: list[str] = []
+    bodies: list[tuple[str, bool]] = []
+    inner: list[str] = []
+    pending: list[tuple[bool, str, bool, bool]] = []  # (strip tabs, delimiter, quoted, the line's own)
+    frames: list[list] = []  # [kind, start, out index or depth]: ' " $( ` ( ((
+    i, n = 0, len(command)
+
+    def substituted(frame: list) -> None:
+        """Close a $(...) or `...`: its code is read on its own; the line keeps a word that isn't a literal."""
+        if not any(f[0] in ("$(", "`") for f in frames):
+            inner.append(command[frame[1] : i])
+            del out[frame[2] :]
+            out.append(_SUBSTITUTED)
+
+    while i < n:
+        c, kind = command[i], frames[-1][0] if frames else ""
+        if c == "\n" and pending and kind not in ("'", '"'):
+            out.append(c)
+            i += 1
+            for strip, delim, quoted, own in pending:
+                start = i
+                body, i = _heredoc_body(command, i, delim, strip)
+                if own:
+                    bodies.append((body, not quoted))
+                else:
+                    out.append(command[start:i])  # inside $(...): read with it
+                if not quoted and own:  # the shell expands it: $(...) in it runs
+                    found = _SUBSTITUTIONS.findall(body)
+                    if body.count("$(") + body.count("`") // 2 > len(found):
+                        return None
+                    inner += ["".join(f) for f in found]
+            pending = []
+            continue
+        if kind == "'":
+            out.append(c)
+            i += 1
+            if c == "'":
+                frames.pop()
+            continue
+        if c == "\\" and i + 1 < n:
+            if command[i + 1] != "\n":  # a backslash-newline joins lines
+                out.append(command[i : i + 2])
+            i += 2
+            continue
+        if kind == "((" and not command.startswith("$(", i):  # arithmetic: << is a shift, not a heredoc
+            frame = frames[-1]
+            if command.startswith("))", i) and not frame[3]:
+                frames.pop()  # a number at run time, or (( )) as a command: true or false
+                del out[frame[2] :]
+                out.append(_SUBSTITUTED if frame[4] else "true")
+                i += 2
+                continue
+            if c in "()":
+                frame[3] += 1 if c == "(" else -1
+            out.append(c)
+            i += 1
+            continue
+        step = 1
+        if c == '"':
+            if kind == '"':
+                frames.pop()
+            else:
+                frames.append(['"', i, 0])
+        elif command.startswith("$((", i) or command.startswith("((", i) and kind not in ('"', "(("):
+            step = 3 if c == "$" else 2
+            frames.append(["((", i, len(out), 0, c == "$"])
+        elif command.startswith("$(", i):
+            step = 2
+            frames.append(["$(", i + 2, len(out)])
+        elif c == "`":
+            if kind == "`":
+                substituted(frames.pop())
+                i += 1
+                continue
+            frames.append(["`", i + 1, len(out)])
+        elif kind == '"':
+            pass  # only $( ) and ` ` are special inside double quotes
+        elif c == "'":
+            frames.append(["'", i, 0])
+        elif c == "#" and (i == 0 or command[i - 1] in " \t\n;&|()"):
+            end = command.find("\n", i)
+            i = n if end == -1 else end  # a comment, to the end of the line: dropped, as the lines are joined
+            continue
+        elif c == "(":
+            frames.append(["(", i, 0])
+        elif c == ")" and kind in ("$(", "("):
+            frame = frames.pop()
+            if kind == "$(":
+                substituted(frame)
+                i += 1
+                continue
+        elif command.startswith("<<<", i):
+            step = 3
+        elif command.startswith("<<", i) and (m := _HEREDOC_OP.match(command, i)):
+            quoted = m.group(2) is not None or m.group(3) is not None or bool(m.group(4))
+            delim = next(g for g in (m.group(2), m.group(3), m.group(5)) if g is not None)
+            pending.append((m.group(1) == "-", delim, quoted, all(f[0] == "(" for f in frames)))
+            step = m.end() - i
+        out.append(command[i : i + step])
+        i += step
+    if frames:
+        return None
+    bodies += [("", not quoted) for _, _, quoted, own in pending if own]  # never given a line: empty
+    return _Scan("".join(out), bodies, inner)
+
+
+def _literal(code: str, raw: str) -> bool:
+    """Whether inline code is as written: nothing the shell expands, or single-quoted where it was written."""
+    return not set(code) & set("$`") or f"'{code}'" in raw
+
+
+def _cd(dirs: tuple[str, ...] | None, argv: list[str]) -> tuple[str, ...] | None:
+    """The folders in effect after a cd/pushd/popd; None once they can't be read."""
+    args = [a for a in argv[1:] if not re.fullmatch(r"-[LPqse@]+", a)]
+    if dirs is None or argv[0] == "popd" or len(args) > 1 or args and (args[0] == "-" or _NOT_LITERAL & set(args[0])):
+        return None
+    return (*dirs, args[0] if args else "~")
+
+
+def _piped(prev: _Piece) -> tuple[str, str, bool]:
+    """What a piece piped from `prev` reads: echo's or printf's words, cat's heredoc or file, else another program."""
+    argv = _strip_prefixes(prev.argv)
+    name, args = (Path(argv[0]).name, argv[1:]) if argv else ("", [])
+    if name in ("echo", "printf"):
+        words = args[1:] if name == "echo" and args[:1] and re.fullmatch(r"-[neE]+", args[0]) else args
+        text = " ".join(words) + "\n"
+        return "text", text, "\\" not in text and all(_literal(w, prev.raw) for w in words)  # no escapes: no hiding
+    if name == "cat" and not _operands(args) and prev.stdin:
+        return prev.stdin
+    if name == "cat" and len(_operands(args)) == 1:
+        return "file", _operands(args)[0], True
+    return "pipe", "", False
+
+
+def _shell_code(piece: _Piece, depth: int) -> list[_Piece]:
+    """The pieces of shell code a shell piece runs (bash -c, a heredoc), read as part of the line; marks the piece
+    unseen when that code is built by the shell or can't be read."""
+    argv = _strip_prefixes(piece.argv)
+    if not argv or Path(argv[0].lstrip("\\")).name not in _SHELLS:
+        return []
+    run = _shell_run(argv[1:])
+    if run.code is not None:
+        code, literal = run.code, _literal(run.code, piece.raw)
+    elif run.stdin and piece.stdin and piece.stdin[0] == "text":
+        code, literal = piece.stdin[1], piece.stdin[2]
+    else:
+        return []  # a script file, or stdin from elsewhere: judged in _code
+    inner = _parse(code, depth + 1, piece.dirs) if literal else None
+    piece.unseen = inner is None
+    return inner or []
+
+
+def _parse(command: str, depth: int = 0, dirs: tuple[str, ...] | None = ()) -> list[_Piece] | None:
+    """Every simple command in a line, with its stdin, folders and redirects: those in $(...) and `...`, and the shell
+    code a shell in it runs. None on unbalanced quotes, or code nested too deep."""
+    if depth > _MAX_DEPTH or (scan := _scan(command)) is None:
+        return None
+    found: list[_Piece] = []
+    for inner in scan.inner:
+        if (more := _parse(inner, depth + 1, dirs)) is None:
             return None
         found += more
-    lexer = shlex.shlex(command.replace("\n", " ; ").replace("`", " ; "), posix=True, punctuation_chars=True)
+    text = _FD_NUMBER.sub(" ", scan.text)  # the 2 in 2>/dev/null isn't an argument
+    lexer = shlex.shlex(text.replace("\n", " ; "), posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
+    lexer.commenters = ""  # _scan dropped them, line by line
     try:
         tokens = list(lexer)
     except ValueError:  # unbalanced quotes
         return None
-    argv: list[str] = []
-    redirect = False
+    bodies = iter(scan.bodies)
+    used = 0
+    cur = _Piece([], command, dirs=dirs)
+    frames: list[tuple[str, _Piece | None, tuple[str, ...] | None]] = []  # ( ) subshells and <( ) substitutions
+    redirect = ""
+
+    def end() -> _Piece | None:
+        nonlocal cur, dirs
+        piece, cur = cur, _Piece([], command, dirs=dirs)
+        if not piece.argv:
+            return None
+        found.append(piece)
+        argv = _strip_prefixes(piece.argv)
+        if argv and argv[0] in ("cd", "pushd", "popd", "chdir"):
+            dirs = cur.dirs = _cd(dirs, argv)
+        found.extend(_shell_code(piece, depth))
+        return piece
+
     for token in tokens + [";"]:
         if redirect:
-            redirect = False
-        elif token and set(token) <= set("<>") | set(";&|()") and set(token) & set("<>"):
-            redirect = True  # next word is a redirect target
+            op, redirect = redirect, ""
+            if op == "<<<":
+                cur.stdin = ("text", token + "\n", _literal(token, command))
+            elif op.startswith("<<"):
+                body, expanded = next(bodies, ("", False))
+                used += 1
+                cur.stdin = ("text", body, not expanded or not set(body) & set("$`"))
+            elif op == "<":
+                cur.stdin = ("file", token, True)
+            elif ">" in op and not (op.endswith("&") and (token.isdigit() or token == "-")):
+                cur.writes.append(token)
+        elif token in ("<(", ">("):  # process substitution: the outer command reads a pipe
+            cur.argv.append(f"{token})")
+            frames.append(("<(", cur, dirs))
+            cur = _Piece([], command, dirs=dirs)
+        elif token and set(token) <= set(";&|()<>") and set(token) & set("<>"):
+            redirect = token  # next word is a redirect target
         elif token and set(token) <= set(";&|()"):
-            if argv:
-                found.append(argv)
-            argv = []
+            for op in _OPERATORS.findall(token):
+                prev = end()
+                if op == "(":
+                    frames.append(("(", None, dirs))
+                elif op == ")" and frames:
+                    kind, outer, dirs = frames.pop()
+                    cur.dirs = dirs
+                    if kind == "<(" and outer is not None:
+                        cur = outer
+                elif op in ("|", "|&") and prev is not None:
+                    cur.stdin = _piped(prev)
         else:
-            argv.append(token)
+            cur.argv.append(token)
+    if used != len(scan.bodies):
+        return None  # a heredoc no command reads: the line isn't what it seems
     return found
 
 
-def risky_pieces(command: str, own: "Own | None" = None) -> list[tuple[list[str], str]]:
+@functools.lru_cache(maxsize=256)
+def _line(command: str) -> tuple[_Piece, ...] | None:
+    """_parse of a whole line, kept: one gate decision reads the same line several times. Never changed after."""
+    pieces = _parse(command)
+    return None if pieces is None else tuple(pieces)
+
+
+def _simple_commands(command: str) -> list[list[str]] | None:
+    """Every simple command as argv, including those in $(...) and `...` and shell code a shell in it runs; None on
+    unbalanced quotes. Redirection targets and heredoc bodies are dropped, not treated as arguments."""
+    pieces = _line(command)
+    return None if pieces is None else [list(p.argv) for p in pieces]
+
+
+# ── The code a piece runs ───────────────────────────────────────
+# A script or inline code (python x.py, node -e, bash x.sh, ./x.sh, source x) is read and judged like the commands
+# it holds (jarvis.safety.scripts). Unseen, it asks: downloaded and run on the spot, missing, too large, written
+# earlier in the same line, built at run time, or in a language the check doesn't read.
+
+_MAX_SCRIPT_BYTES = 256 * 1024  # one file
+_MAX_READ_BYTES = 2 * 1024 * 1024  # all the files one check reads
+_MAX_FILES = 64
+_LIBRARIES = {"node_modules", "site-packages", "dist-packages", ".venv", "venv"}  # installed tools, trusted like programs
+_BINARY_MAGIC = (b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xfe\xed\xfa")
+# Settings that make a program load code from elsewhere first
+_CODE_ENV = re.compile(r"\b(NODE_OPTIONS|BASH_ENV|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_INSERT_LIBRARIES|DYLD_LIBRARY_PATH"
+                       r"|PERL5OPT|RUBYOPT|PYTHONSTARTUP|PYTHONHOME)=")
+_PY_VALUES = set("WX")  # python options taking a value
+_NODE_LOADS = {"-r", "--require", "--import", "--loader", "--experimental-loader"}
+_NODE_VALUES = {"-C", "--conditions", "--inspect-port", "--title", "--input-type", "--env-file", "--disable-warning",
+                "--watch-path", "--redirect-warnings", "--test-reporter", "--test-reporter-destination", "--config",
+                "-c", "--import-map", "--lock", "--cert", "--location", "--seed", "--v8-flags", "--unhandled-rejections"}
+_BUN_COMMANDS = {"install", "i", "add", "remove", "rm", "update", "link", "unlink", "publish", "x", "test", "build",
+                 "init", "create", "upgrade", "pm", "outdated", "patch", "repl", "exec", "info", "audit", "why"}
+_GIT_WRITES = {"checkout", "switch", "restore", "reset", "pull", "merge", "rebase", "cherry-pick", "revert", "am",
+               "apply", "stash", "clone", "mv", "rm", "worktree", "submodule"}
+
+
+@dataclass
+class _Run:
+    """What code an interpreter command runs."""
+
+    language: str  # shell, python, javascript; '' for one the check doesn't read
+    code: str | None = None  # given inline (-c, -e)
+    file: str | None = None  # a script, as written
+    module: str | None = None  # python -m
+    stdin: bool = False  # code read from stdin
+    loads: tuple[str, ...] = ()  # files loaded first (node -r, bash --rcfile)
+
+
+def _shell_run(args: list[str]) -> _Run:
+    run, i, inline = _Run("shell"), 0, False
+    while i < len(args):
+        a = args[i]
+        if a in ("-", "--"):
+            i += 1
+            break
+        if a in ("--rcfile", "--init-file"):
+            run.loads += tuple(args[i + 1 : i + 2])
+            i += 2
+        elif a.startswith("--command=") or a == "--command":  # fish
+            inline = True
+            if "=" in a:
+                run.code = a.split("=", 1)[1]
+                return run
+            i += 1
+        elif a[:1] in "-+" and len(a) > 1 and not a.startswith("--"):
+            inline = inline or "c" in a
+            run.stdin = run.stdin or "s" in a
+            i += 1 + a.count("o") + a.count("O")  # -o pipefail: o takes the next word
+        elif a.startswith("--"):
+            i += 1
+        else:
+            break
+    rest = args[i:]
+    if inline:
+        run.code = rest[0] if rest else ""
+    elif rest and not run.stdin:
+        run.file = rest[0]
+    else:
+        run.stdin = True
+    return run
+
+
+def _python_run(args: list[str]) -> _Run:
+    run, i = _Run("python"), 0
+    while i < len(args):
+        a = args[i]
+        if a == "-":
+            run.stdin = True
+            return run
+        if a == "--":
+            i += 1
+            break
+        if a.startswith("--"):
+            i += 2 if a == "--check-hash-based-pycs" else 1
+            continue
+        if not a.startswith("-") or len(a) == 1:
+            break
+        i += 1
+        for j, letter in enumerate(a[1:], 2):
+            if letter in "cm" or letter in _PY_VALUES:
+                value = a[j:] or (args[i] if i < len(args) else "")
+                i += 0 if a[j:] else 1
+                if letter == "c":
+                    run.code = value
+                    return run
+                if letter == "m":
+                    run.module = value
+                    return run
+                break
+    if i < len(args):
+        run.file = args[i]
+    else:
+        run.stdin = True
+    return run
+
+
+def _node_run(args: list[str], stdin: bool = True) -> _Run:
+    """node's (and tsx's, bun's, deno run's) options, then the script. `stdin`: with no script, code comes from
+    stdin (node), rather than nothing running (bun, deno)."""
+    run, i = _Run("javascript"), 0
+    while i < len(args):
+        a = args[i]
+        name, eq, value = a.partition("=")
+        if a == "-":
+            run.stdin = True
+            return run
+        if a == "--":
+            i += 1
+            break
+        if not a.startswith("-"):
+            break
+        if name in ("-e", "--eval", "-p", "--print", "-pe"):
+            run.code = value if eq else (args[i + 1] if i + 1 < len(args) else "")
+            return run
+        if name in _NODE_LOADS:
+            run.loads += (value,) if eq else tuple(args[i + 1 : i + 2])
+        i += 2 if not eq and (name in _NODE_LOADS or name in _NODE_VALUES) else 1
+    if i < len(args):
+        run.file = args[i]
+    else:
+        run.stdin = stdin
+    return run
+
+
+def _js_run(program: str, args: list[str]) -> _Run | None:
+    if program in ("node", "nodejs", "tsx", "ts-node"):
+        return _node_run(args)
+    if program == "deno":
+        if args[:1] == ["eval"]:
+            code = _options_then(args[1:])
+            return _Run("javascript", code=code[0] if code else "")
+        if args[:1] == ["run"] or args and args[0].endswith(scripts.JS_EXTENSIONS):
+            return _node_run(args[1:] if args[0] == "run" else args, stdin=False)
+        return None  # deno task, fmt, test...: deno's own
+    if args[:1] == ["run"]:  # bun run x.ts, or a package.json script
+        args = args[1:]
+    elif args[:1] and args[0] in _BUN_COMMANDS:
+        return None
+    run = _node_run(args, stdin=False)
+    if run.file is not None and not run.file.endswith(scripts.JS_EXTENSIONS) and "/" not in run.file:
+        run.file = None  # bun run dev: a package.json script, like npm run
+    return run
+
+
+def _interpreter(program: str, args: list[str]) -> _Run | None:
+    """The code an interpreter runs, or None if `program` isn't one."""
+    if program in _SHELLS:
+        return _shell_run(args)
+    if re.fullmatch(r"python[\d.]*|pypy[\d.]*", program):
+        return _python_run(args)
+    if program in _JS:
+        return _js_run(program, args)
+    if program in _OPAQUE:
+        return _Run("")
+    return None
+
+
+def _shebang(head: bytes) -> str | None:
+    """The language a #! line names, '' for one the check doesn't read; None if there's no #! line."""
+    if not head.startswith(b"#!"):
+        return None
+    words = head[2:].split(b"\n", 1)[0].decode(errors="replace").split()
+    if words and Path(words[0]).name == "env":
+        words = [w for w in words[1:] if not w.startswith("-") and "=" not in w]
+    name = Path(words[0]).name if words else ""
+    run = _interpreter(name, [])
+    return run.language if run is not None else ""
+
+
+def _where(piece: _Piece, cwd: Path | None) -> Path | None:
+    """The folder a piece runs in, from `cwd` and the line's cds; None if unknown."""
+    if piece.dirs is None:
+        return None
+    where = cwd
+    for d in piece.dirs:
+        path = Path(d).expanduser()
+        where = path if path.is_absolute() else where / path if where is not None else None
+    return where
+
+
+def _script_path(word: str, where: Path | None) -> Path | None:
+    """The file a word names, or None if the shell would expand it or the folder is unknown."""
+    if (path := _Mine._literal(word)) is None:
+        return None
+    return path if path.is_absolute() else where / path if where is not None else None
+
+
+@dataclass(frozen=True)
+class Seen:
+    """The script files one check read: each one's fingerprint, to tell later whether it changed, and whether any of
+    them touches secrets."""
+
+    files: dict[str, str]  # resolved path -> sha256 of its bytes, or why it wasn't read ('missing', 'too large'...)
+    secret: bool
+
+
+class _Reader:
+    """Reads and judges the scripts one check meets, within a budget, keeping each file's fingerprint."""
+
+    def __init__(self) -> None:
+        self.files: dict[str, str] = {}
+        self.judged: dict[tuple[str, str], str] = {}
+        self.bytes = 0
+        self.depth = 0
+        self.secret = False
+        self.written: list[tuple[Path, str | None]] = []  # paths lines write (with the text, from a heredoc)
+
+    def seen(self) -> Seen:
+        return Seen(dict(self.files), self.secret)
+
+    def _bytes(self, path: Path, head_only: bool = False) -> bytes | None:
+        """A regular file's bytes (or first 4 KB), or None, noting why in `files`. Never a secret, a pipe or a device."""
+        try:
+            real = path.resolve(strict=True)
+        except (OSError, RuntimeError):
+            self.files[str(path)] = "missing"
+            return None
+        key = str(real)
+        if secret_path(real):
+            self.secret, self.files[key] = True, "secret"
+            return None
+        try:
+            fd = os.open(real, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError:
+            self.files[key] = "unreadable"
+            return None
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                self.files[key] = "not a file"
+                return None
+            if head_only:
+                return os.read(fd, 4096)
+            if (info.st_size > _MAX_SCRIPT_BYTES or self.bytes + info.st_size > _MAX_READ_BYTES
+                    or len(self.files) >= _MAX_FILES):
+                self.files[key] = "too large"
+                return None
+            data = b""
+            while len(data) <= _MAX_SCRIPT_BYTES and (chunk := os.read(fd, 65536)):
+                data += chunk
+        except OSError:
+            self.files[key] = "unreadable"
+            return None
+        finally:
+            os.close(fd)
+        if len(data) > _MAX_SCRIPT_BYTES:
+            self.files[key] = "too large"
+            return None
+        self.bytes += len(data)
+        self.files[key] = hashlib.sha256(data).hexdigest()
+        return data
+
+    def file(self, path: Path, language: str, roots: tuple[Path, ...] | None = None) -> str:
+        """Why a local script file needs a yes; UNSEEN if it can't be read or was written earlier in the line."""
+        key = (str(path), language)
+        if key in self.judged:
+            return self.judged[key]
+        if written := [text for w, text in self.written if path == w or path.is_relative_to(w)]:
+            # cat > x.py <<EOF ... python x.py: the heredoc is the script
+            return self.code(written[0], language, path, roots) if len(written) == 1 and written[0] is not None \
+                else UNSEEN
+        if _LIBRARIES & set(path.parts):
+            return ""
+        self.judged[key] = ""  # a cycle back here adds nothing
+        data = self._bytes(path)
+        try:
+            text = None if data is None else data.decode()
+        except UnicodeDecodeError:
+            text = None
+        why = (scripts.SECRETS if self.files.get(str(path.resolve())) == "secret" else UNSEEN) if text is None \
+            else self.code(text, language, path, roots)
+        self.judged[key] = why
+        return why
+
+    def executable(self, path: Path) -> str:
+        """Why a file run by its path (./x.sh) needs a yes: its #! line says how to read it; a program is trusted."""
+        if _LIBRARIES & set(path.parts):
+            return ""
+        if any(path == w or path.is_relative_to(w) for w, _ in self.written):
+            return UNSEEN
+        if (head := self._bytes(path, head_only=True)) is None:
+            return scripts.SECRETS if self.files.get(str(path.resolve())) == "secret" else UNSEEN
+        if head.startswith(_BINARY_MAGIC) or b"\0" in head:
+            return ""  # a built program, like any other
+        language = _shebang(head)
+        return self.file(path, "shell" if language is None else language) if language != "" else UNSEEN
+
+    def code(self, text: str, language: str, path: Path | None, roots: tuple[Path, ...] | None,
+             where: Path | None = None) -> str:
+        """Why code in `language` needs a yes. `where`: the folder it runs in (a file's spawned commands resolve
+        there too: the caller's, or its own folder if unknown)."""
+        if self.depth >= _MAX_DEPTH:
+            return UNSEEN
+        where = where if where is not None else path.parent if path else None
+        self.depth += 1
+        try:
+            ctx = _Context(self, where)
+            if language == "shell":
+                why = scripts.SECRETS if ctx.secret(text) else ctx.shell(text)
+            elif language == "python":
+                why = scripts.python(text, path, roots if roots is not None else (path.parent,) if path else None, ctx)
+            elif language == "javascript":
+                why = scripts.javascript(text, path, where, ctx)
+            else:
+                why = UNSEEN
+        finally:
+            self.depth -= 1
+        self.secret = self.secret or why == scripts.SECRETS
+        return why
+
+
+class _Context:
+    """scripts.Context for one script: its spawned commands go back through the check, in the folder it runs in."""
+
+    def __init__(self, reader: _Reader, where: Path | None) -> None:
+        self.reader, self.where = reader, where
+
+    def shell(self, line: str) -> str:
+        found = _check(line, None, self.where, self.reader)
+        why = next((why for _, why in found), "")
+        return UNSEEN if why == "can't be checked" else why
+
+    def secret(self, text: str) -> bool:
+        return (names_secret(text) or reads_environment(text) or bool(_CONTROLS.search(text))
+                or bool(_SECRET_SERVICE.search(text)))
+
+    def startup(self, text: str) -> str:
+        return _starts_up(text) or _names_startup(text)
+
+    def follow(self, path: Path, language: str, roots: tuple[Path, ...] | None) -> str:
+        return self.reader.file(path, language, roots)
+
+
+_STARTUP_NAMES = re.compile(r"(^|/)(" + "|".join(re.escape(d) for d in _STARTUP_DOTFILES) + r")$")
+_STARTUP_PARTS = re.compile("|".join(re.escape(d) for d in _STARTUP_HOME) + r"|^(/private)?/etc(/|$)|^/Library/Launch")
+
+
+def _names_startup(text: str) -> str:
+    """Why a path a script builds (Path.home() / '.zshrc') is a login item or settings file, or ''."""
+    if _STARTUP_NAMES.search(text):
+        return "overwrites a settings file"
+    return "changes the system" if _STARTUP_PARTS.search(text) else ""
+
+
+def _script_why(why: str) -> str:
+    """A script's risk, as said of the command that runs it."""
+    if why in ("", UNSEEN) or why.startswith("runs a script that "):
+        return why
+    return f"runs a script that {why}"
+
+
+def _code(piece: _Piece, cwd: Path | None, reader: _Reader) -> str:
+    """Why the code a piece runs needs a yes: its script or inline code, read and judged; UNSEEN if it can't be."""
+    argv = _strip_prefixes(piece.argv)
+    if not argv:
+        return ""
+    word = argv[0].lstrip("\\")
+    if set(word) & set("$`") or piece.unseen:
+        return UNSEEN  # a program named at run time, or shell code built at run time
+    program, args = Path(word).name, argv[1:]
+    if args and set(args) <= _INFO:
+        return ""
+    where = _where(piece, cwd)
+    if program in ("source", "."):
+        return _script_why(reader.file(path, "shell") if (path := _script_path(args[0], where)) else UNSEEN) \
+            if args else ""
+    if (run := _interpreter(program, args)) is None:
+        if "/" not in word:
+            return ""  # a program on the PATH
+        if (path := _script_path(word, where)) is None:
+            return UNSEEN
+        if Path(word).expanduser().is_absolute() and not any(
+                path.is_relative_to(d) for d in (*_TEMP_DIRS, *([where] if where else []))):
+            return ""  # a program installed elsewhere on the computer
+        return _script_why(reader.executable(path))
+    if not run.language:
+        return UNSEEN
+    lead = piece.argv[: len(piece.argv) - len(argv)]
+    if any(_CODE_ENV.match(w) for w in lead):
+        return UNSEEN
+    roots = _python_roots(lead, where)
+    whys = [reader.file(p, run.language) if (p := _script_path(f, where)) else UNSEEN for f in run.loads
+            if run.language == "shell" or f.startswith((".", "/", "~"))]  # node -r a-package: a library
+    if run.code is not None:
+        if run.language != "shell":  # shell code was read as part of the line
+            whys.append(reader.code(run.code, run.language, None, roots, where) if _literal(run.code, piece.raw)
+                        else UNSEEN)
+    elif run.module is not None:
+        whys.append(_module(run.module, roots, reader))
+    elif run.file is not None:
+        path = _script_path(run.file, where)
+        file_roots = None if roots is None or path is None else (path.parent, *roots[1:])
+        whys.append(reader.file(path, run.language, file_roots) if path else UNSEEN)
+    elif run.stdin:
+        kind, value, literal = piece.stdin or ("pipe", "", False)
+        if kind == "file":
+            whys.append(reader.file(p, run.language, roots) if (p := _script_path(value, where)) else UNSEEN)
+        elif kind == "text" and literal:
+            if run.language != "shell":
+                whys.append(reader.code(value, run.language, None, roots, where))
+        else:
+            whys.append(UNSEEN)  # a download, a terminal, another program's output
+    return _script_why(scripts.first(whys))
+
+
+# Where a script run by its full path is the line's own, not an installed program
+_TEMP_DIRS = {p for d in (tempfile.gettempdir(), "/tmp") for p in (Path(d), Path(d).resolve())}
+
+
+def _python_roots(lead: list[str], where: Path | None) -> tuple[Path, ...] | None:
+    """Where Python finds local modules: the working folder (a script's own folder replaces it), then PYTHONPATH.
+    None if unknown."""
+    roots = [where] if where is not None else None
+    for word in lead:
+        if word.startswith("PYTHONPATH="):
+            for part in word.split("=", 1)[1].split(":"):
+                if (path := _script_path(part or ".", where)) is None or roots is None:
+                    return None
+                roots.append(path)
+    return tuple(roots) if roots is not None else None
+
+
+def _module(module: str, roots: tuple[Path, ...] | None, reader: _Reader) -> str:
+    """Why python -m MODULE needs a yes: a local module or package is read; an installed one is a library."""
+    if roots is None:
+        return "" if module.split(".")[0] in sys.stdlib_module_names else UNSEEN
+    parts = module.split(".")
+    for root in roots:
+        base = root.joinpath(*parts)
+        for path in (base.with_suffix(".py"), base / "__main__.py"):
+            if path.is_file():
+                return reader.file(path, "python", roots)
+    return ""
+
+
+def _line_writes(pieces: tuple[_Piece, ...], cwd: Path | None) -> list[tuple[Path, str | None]]:
+    """Files and folders a line writes (redirects, copies, downloads, git checkouts), each with its text when a
+    heredoc gives it (cat > x.py <<EOF): a script among them can't be read before it runs."""
+    found = []
+    for piece in pieces:
+        where = _where(piece, cwd)
+        argv = _strip_prefixes(piece.argv)
+        program, args = (Path(argv[0]).name, argv[1:]) if argv else ("", [])
+        text = piece.stdin[1] if piece.stdin and piece.stdin[0] == "text" and piece.stdin[2] else None
+        targets = [(t, text if program == "cat" and not _operands(args) else None) for t in piece.writes]
+        operands = _operands(args)
+        if program in _COPIERS:
+            targets += [(t, None) for t in operands[-1:] + [b for a, b in zip(args, args[1:]) if a in ("-t", "--target-directory")]]
+        elif program in _WRITERS or program in ("sed", "dd", "perl"):
+            targets += [(t.removeprefix("of="), text if program == "tee" else None) for t in operands]
+        elif program in _OUTPUT_FLAGS:
+            given = [b for a, b in zip(args, args[1:]) if a in _OUTPUT_FLAGS[program]]
+            targets += [(t, None) for t in given or (["."] if program != "curl" or {"-O", "--remote-name"} & set(args)
+                                                     or "-OJ" in args else [])]
+        elif program == "git" and (sub := _options_then(args, {"-C", "-c"})) and sub[0] in _GIT_WRITES:
+            targets.append((".", None))
+        for target, given in targets:
+            if (path := _script_path(target, where)) is not None:
+                found.append((path, given))
+    return found
+
+
+def risky_pieces(command: str, own: "Own | None" = None, cwd: Path | None = None) -> list[tuple[list[str], str]]:
     """[(unwrapped argv, why)] for each risky simple command, in order; [] if safe.
 
     With `own`, a task's own deletes/kills are exempt. Whole-line risks (dotfile clobber, unparsable) come as ([], why).
+    `cwd` (default: own's folder) is where the line runs, for reading the scripts it runs; unknown, relative ones are
+    unseen.
     """
+    return _check(command, own, cwd if cwd is not None or own is None else own.folder, _Reader())
+
+
+def seen(command: str, cwd: Path | None = None) -> Seen:
+    """The script files the check reads for this line, fingerprinted, and whether any touches secrets."""
+    reader = _Reader()
+    _check(command, None, cwd, reader)
+    return reader.seen()
+
+
+def _check(command: str, own: "Own | None", cwd: Path | None, reader: _Reader) -> list[tuple[list[str], str]]:
     if _CLOBBER_DOTFILE.search(command):
         return [([], "overwrites a settings file")]
-    if (pieces := _simple_commands(command)) is None:
+    if (pieces := _line(command)) is None:
         return [([], "can't be checked")]
     if why := next((why for t in _REDIRECT_TARGETS.findall(command) if (why := _starts_up(t))), ""):
         return [([], why)]  # > /etc/hosts
+    argvs = [p.argv for p in pieces]
     # cd ~/.config/systemd/user && cp x.service .: every write there counts
-    there = any(p[0] in ("cd", "pushd") and len(p) > 1 and _starts_up(p[1]) for p in map(_strip_prefixes, pieces) if p)
+    there = any(p[0] in ("cd", "pushd") and len(p) > 1 and _starts_up(p[1]) for p in map(_strip_prefixes, argvs) if p)
     if there and _REDIRECT_TARGETS.search(command):
         return [([], "changes the system")]
+    reader.written += _line_writes(pieces, cwd)
     found, mine = [], None
-    for argv in pieces:
-        why = _piece(argv)
+    for piece in pieces:
+        argv = piece.argv
+        why = _piece(argv) or _code(piece, cwd, reader)
         if not why and there and Path((_strip_prefixes(argv) or argv)[0]).name in _WRITES_THERE:
             why = "changes the system"
         if not why:
             continue
-        if own and (mine := mine or _Mine(command, pieces, own)).covers(argv):
+        if own and (mine := mine or _Mine(command, argvs, own)).covers(argv):
             continue
-        found.append((_strip_prefixes(argv) or argv, why))
+        found.append((list(_strip_prefixes(argv) or argv), why))
     return found
 
 
-def _risk(command: str, own: "Own | None" = None) -> tuple[str, str]:
+def _risk(command: str, own: "Own | None" = None, cwd: Path | None = None) -> tuple[str, str]:
     """(why, program) for the first risky piece; ('', '') if safe."""
-    if not (found := risky_pieces(command, own)):
+    if not (found := risky_pieces(command, own, cwd)):
         return "", ""
     argv, why = found[0]
     if not argv:
@@ -986,12 +1753,13 @@ def slow(command: str) -> str:
     return ""
 
 
-def risky(command: str, own: "Own | None" = None) -> str:
+def risky(command: str, own: "Own | None" = None, cwd: Path | None = None) -> str:
     """Why a command needs a yes ('deletes files', ...), or ''. Errs toward asking: unreadable means risky.
 
-    `own`: a background task's deletes in its folders and kills of its processes need no yes.
+    `own`: a background task's deletes in its folders and kills of its processes need no yes. `cwd`: where it runs
+    (default: own's folder), for reading the scripts it runs.
     """
-    return _risk(command, own)[0]
+    return _risk(command, own, cwd)[0]
 
 
 def same_risk(a: str, b: str) -> bool:
@@ -1009,9 +1777,9 @@ def same_risk(a: str, b: str) -> bool:
     return (mine := risk(a)) is not None and mine == risk(b)
 
 
-def describe(command: str, own: "Own | None" = None) -> str:
+def describe(command: str, own: "Own | None" = None, cwd: Path | None = None) -> str:
     """'installs software (brew install)', from the command itself (never a model's summary); '' if safe."""
-    why, what = _risk(command, own)
+    why, what = _risk(command, own, cwd)
     return f"{why} ({what})" if why else ""
 
 
@@ -1397,10 +2165,13 @@ IN_PLACE_GIT = ("commit", "push", "reset", "checkout", "switch", "restore", "sta
 _HEREDOC_BODY = re.compile(r"(\bcat[ \t]+<<-?[ \t]*(['\"]?)([A-Za-z_]\w*)\2[^\n]*)\n.*?\n[ \t]*\3[ \t]*(?=\n|\)|$)", re.S)
 
 
-def refused(command: str, in_place: bool = False) -> str:
-    """Why a task may never run this on the computer, even with a yes, or ''. `in_place`: git writes are the user's."""
+def refused(command: str, in_place: bool = False, cwd: Path | None = None) -> str:
+    """Why a task may never run this on the computer, even with a yes, or ''. `in_place`: git writes are the user's.
+    `cwd`: where it runs, for reading the scripts it runs."""
     if names_secret(command):
         return "it touches secrets, which stay out of reach even with a yes"
+    if seen(command, cwd).secret:
+        return "it runs a script that touches secrets, which stay out of reach even with a yes"
     if reads_environment(command):
         return "it reads other processes' environments, where their keys are, which stay out of reach even with a yes"
     if _CONTROLS.search(command):

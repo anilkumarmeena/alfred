@@ -63,12 +63,13 @@ def _words(argv: list[str], why: str) -> list[str] | None:
     return [ANY_NUMBER if why in _NUMBERED and w.isdigit() else w for w in words]
 
 
-def pieces(command: str, own: Own | None = None) -> dict:
+def pieces(command: str, own: Own | None = None, cwd: Path | None = None) -> dict:
     """{"pieces": [{program, why, words}], "never": reason it can't be remembered, or ''}.
 
-    Stored with the request by whoever checked it. A safe command has no pieces.
+    Stored with the request by whoever checked it. A safe command has no pieces. A risk found in a script's code is
+    never remembered: the script can change.
     """
-    found = risky_pieces(command, own)
+    found = risky_pieces(command, own, cwd)
     if names_secret(command) or reads_environment(command):
         return {"pieces": [], "never": "anything touching secrets asks every time"}
     never = next((why for argv, why in found if why not in REMEMBERABLE or not argv), "")

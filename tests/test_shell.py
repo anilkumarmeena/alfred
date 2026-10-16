@@ -142,7 +142,7 @@ def test_risky_commands_need_a_yes(command):
         "git pull", "git fetch --all", "git diff HEAD~1", "git branch", "git restore --staged app.py",
         "npm run render -- src/index.ts Main out/video.mp4", "npm run build", "npm test", "make test", "go test ./...",
         "cargo build --release", "pytest -q", "uv run pytest", "ffmpeg -y -i in.mov -c:v libx264 out.mp4 2>&1 | tail -5",
-        "cd ~/Desktop/projects/video-agent && npm run render", "python3 render.py --fast", "ps aux | grep ffmpeg",
+        "cd ~/Desktop/projects/video-agent && npm run render", "python3 -c 'print(1)'", "ps aux | grep ffmpeg",
         "pgrep -fl remotion", "lsof -i :8787", "launchctl list | grep jarvis", "brew services list", "brew list",
         "docker ps", "curl -s https://api.github.com/zen", "curl -fsSL -o setup.sh https://x.sh", "open out.mp4",
         "tail -n 50 ~/Desktop/projects/jarvis/logs/agent.log", "echo done > out/status.txt", "du -sh * | sort -h",
@@ -285,6 +285,23 @@ def test_the_model_is_told_what_was_agreed():
     hint = shell.agreed_hint([COMMAND])
     assert COMMAND in hint and "exactly as before" in hint
     assert "(1) a (2) b" in shell.agreed_hint(["a", "b"])
+
+
+def test_scripts_are_read_where_the_shell_runs_and_a_yes_covers_them_as_they_were(tmp_path, monkeypatch):
+    monkeypatch.setattr(shell, "scratch_dir", lambda: tmp_path)
+    (tmp_path / "report.py").write_text("print('report')\n")
+    (tmp_path / "clean.py").write_text("import shutil\nshutil.rmtree('old')\n")
+    gate = ShellGate()
+    gate.new_turn("tidy up the renders")
+    assert isinstance(ask(gate, "python3 report.py"), PermissionResultAllow)
+    assert isinstance(ask(gate, "python3 clean.py"), PermissionResultDeny)
+    assert gate.question("")
+    gate.new_turn("Yes.")
+    (tmp_path / "clean.py").write_text("import shutil, os\nshutil.rmtree(os.path.expanduser('~'))\n")
+    assert isinstance(ask(gate, "python3 clean.py"), PermissionResultDeny)  # not what the yes was to
+    (tmp_path / "clean.py").write_text("import shutil\nshutil.rmtree('old')\n")
+    assert isinstance(ask(gate, "python3 clean.py"), PermissionResultAllow)  # as it was: the yes covers it
+    assert "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR" in shell.BASH_ENV  # each command starts where it's read
 
 
 def test_secrets_are_refused_even_with_a_yes():

@@ -4,7 +4,8 @@
   start_job    long command that runs detached; follow with job_status / job_wait
 They run in the runner inside the host walls (Seatbelt on macOS, bubblewrap on Linux), without JARVIS's keys.
 host_run and start_job pass `_host_gate` first: refused, allowed, allowed by a prior yes or rule, or sent to the user
-for approval.
+for approval. The gate reads the scripts a command runs; the tool runs it only if they're unchanged since
+(`TaskJobs.vet`), and a yes covers them only as they were when asked.
 TaskJobs tracks each task's jobs and host_run sessions so processes they leave behind count as the task's own.
 """
 
@@ -49,6 +50,19 @@ class TaskJobs(host.Jobs):
         # host_run commands in flight per task. A task cut off mid-command isn't auto-resumed on restart, since the
         # command's effect is unknown. Long jobs survive restarts and aren't tracked here.
         self.on_mac: dict[int, list[str]] = {}
+        self.vetted: dict[tuple[int, str, str], dict[str, str]] = {}  # (task, command, folder) -> scripts as read
+
+    def vet(self, task_id: int, command: str, folder: Path) -> None:
+        """Note the scripts a command the gate let through runs, as it read them."""
+        self.vetted[(task_id, command, str(folder))] = commands.seen(command, folder).files
+        while len(self.vetted) > KEEP_VETTED:
+            del self.vetted[next(iter(self.vetted))]
+
+    def changed(self, task_id: int, command: str, folder: Path) -> bool:
+        """Whether a script the command runs changed since the gate read it. The check and the run are a moment apart:
+        a change in that moment still slips through."""
+        files = self.vetted.get((task_id, command, str(folder)))
+        return files is not None and files != commands.seen(command, folder).files
 
     def ended(self, job: dict, code: int) -> None:
         if self.on_end:
@@ -77,6 +91,7 @@ class TaskJobs(host.Jobs):
 
 
 KEEP_SESSIONS = 200  # host_run sessions remembered per task
+KEEP_VETTED = 200  # gate decisions kept for the tools to re-check
 
 # What host commands are for, beyond the task sandbox, as the tool descriptions say it
 MACHINE = "this computer"
@@ -156,6 +171,12 @@ def _host_tools(task: dict, cwd: Path, jobs: TaskJobs) -> list:
     def text(body: str, error: bool = False) -> dict:
         return {"content": [{"type": "text", "text": body}]} | ({"is_error": True} if error else {})
 
+    def changed(args: dict) -> str:
+        if jobs.changed(task_id, args.get("command", "").strip(), folder(args)):
+            return ("a script it runs changed after it was checked. Run the identical command again to have it checked "
+                    "as it is now")
+        return ""
+
     def temp_env() -> dict[str, str]:
         temp = task_temp(task_id)
         temp.mkdir(parents=True, exist_ok=True)
@@ -174,7 +195,7 @@ def _host_tools(task: dict, cwd: Path, jobs: TaskJobs) -> list:
     )
     async def host_run(args: dict) -> dict:
         command = args.get("command", "").strip()
-        if why := commands.refused(command, in_place):
+        if why := commands.refused(command, in_place, folder(args)) or changed(args):
             return text(f"Not run: {why}.", error=True)
         walls = not unwalled(command)
         log.warning("task %s runs on %s%s, in %s: %s", task_id, MACHINE, "" if walls else " outside the host walls",
@@ -207,7 +228,7 @@ def _host_tools(task: dict, cwd: Path, jobs: TaskJobs) -> list:
     )
     async def start_job(args: dict) -> dict:
         command = args.get("command", "").strip()
-        if why := commands.refused(command, in_place):
+        if why := commands.refused(command, in_place, folder(args)) or changed(args):
             return text(f"Not started: {why}.", error=True)
         try:
             job = jobs.launch(command, args.get("title") or command[:40], folder(args), task=task_id, env=temp_env(),
@@ -264,10 +285,12 @@ def _own(task: dict, cwd: Path, folder: Path, jobs: TaskJobs) -> commands.Own:
 
 
 def approval_item(tool: str, args: dict, cwd: Path, why: str, own: commands.Own | None = None) -> dict:
-    """Approval request for a host command: exact command, tool, folder, risk reason and rememberable pieces."""
-    command = args.get("command", "").strip()
-    return {"tool": tool, "command": command, "folder": str(_resolve(args.get("folder") or str(cwd), cwd)), "why": why,
-            "remember": remembered.pieces(command, own)}
+    """Approval request for a host command: exact command, tool, folder, risk reason, rememberable pieces and the
+    fingerprints of the scripts it runs (a yes covers them as they are now)."""
+    command, folder = args.get("command", "").strip(), _resolve(args.get("folder") or str(cwd), cwd)
+    item = {"tool": tool, "command": command, "folder": str(folder), "why": why,
+            "remember": remembered.pieces(command, own, folder)}
+    return item | ({"scripts": files} if (files := commands.seen(command, folder).files) else {})
 
 
 def _host_gate(task: dict, cwd: Path, reporter: "Reporter"):
@@ -283,22 +306,28 @@ def _host_gate(task: dict, cwd: Path, reporter: "Reporter"):
         command = args.get("command", "").strip()
         if not command:
             return PermissionResultDeny(message="Give the command to run.")
-        if why := commands.refused(command, in_place):
+        folder = _resolve(args.get("folder") or str(cwd), cwd)
+        if why := commands.refused(command, in_place, folder):
             log.warning("task %s refused on %s (%s): %s", task_id, MACHINE, why, command)
             return PermissionResultDeny(message=f"Not run: {why}. If the work needs it, end with the exact command "
                                                 f"for {profile.name()} to run themselves.")
         if not _inside(args.get("folder") or str(cwd), cwd, roots):
             return PermissionResultDeny(message=f"{tool} runs in {cwd} or a folder inside it (or {TASK_CACHE_DIR}).")
-        if not commands.risky(command):
+
+        def allow() -> PermissionResultAllow:
+            reporter.host_jobs.vet(task_id, command, folder)
             return PermissionResultAllow()
-        own = _own(task, cwd, _resolve(args.get("folder") or str(cwd), cwd), reporter.host_jobs)
+
+        if not commands.risky(command, cwd=folder):
+            return allow()
+        own = _own(task, cwd, folder, reporter.host_jobs)
         if not (why := commands.describe(command, own)):
             log.warning("task %s runs on %s, deleting or stopping only its own: %s", task_id, MACHINE, command)
-            return PermissionResultAllow()
+            return allow()
         item = approval_item(tool, args, cwd, why, own)
         if await answer(reporter.cleared(task_id, item)):  # a prior yes to exactly this, or a remembered rule
             log.warning("task %s runs on %s, as agreed (%s): %s", task_id, MACHINE, item["why"], command)
-            return PermissionResultAllow()
+            return allow()
         if getattr(ctx, "agent_id", None):
             return PermissionResultDeny(message=f"Not run: it {item['why']}, so it needs {profile.name()}'s go-ahead, and only "
                                                 "the task's own agent can ask for that. Report the exact command back instead.")

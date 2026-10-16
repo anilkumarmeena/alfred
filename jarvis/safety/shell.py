@@ -36,6 +36,7 @@ from jarvis.safety.commands import (
     risky,
     said_breadth,
     same_risk,
+    seen,
     slow,
 )
 from jarvis.safety.consent import Verdict
@@ -60,7 +61,9 @@ SANDBOX = {
 # A command holds the conversation while it runs (talking over it waits for it), so none may run past BASH_SECONDS;
 # longer work goes to start_job
 BASH_SECONDS = 120
-BASH_ENV = {"BASH_DEFAULT_TIMEOUT_MS": str(BASH_SECONDS * 1000), "BASH_MAX_TIMEOUT_MS": str(BASH_SECONDS * 1000)}
+# Each command starts in the scratch dir, so the gate knows where the scripts it reads are
+BASH_ENV = {"BASH_DEFAULT_TIMEOUT_MS": str(BASH_SECONDS * 1000), "BASH_MAX_TIMEOUT_MS": str(BASH_SECONDS * 1000),
+            "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1"}
 
 # Unreadable from the sandbox, so no secret can leak via web search or a draft. "//" = absolute path in rules.
 _RULE_PATHS = [f"/{p}" for p in JARVIS_SECRETS] + HOME_SECRETS
@@ -106,6 +109,8 @@ class ShellGate:
         self.agreed: dict[str, float] = {}  # approved, not yet run -> when
         self.ran: list[str] = []  # run on a yes this turn; may rerun without asking
         self.offered: dict[str, dict] = {}  # command -> remembered.pieces()
+        self.scripts: dict[str, dict[str, str]] = {}  # command asked about -> its scripts' fingerprints then
+        self.covered: dict[str, dict[str, str]] = {}  # agreed or run command -> the scripts its yes covers
         self.what: dict[str, str] = {}  # key -> description for the consent model
         self.kept: list[dict] = []  # session rules kept this turn, to tell the model
         # After an "always": RuleOffer.put args (rules, request, breadth, example), or why not
@@ -144,6 +149,8 @@ class ShellGate:
         self.agreed = {c: t for c, t in self.agreed.items() if now - t < APPROVAL_MINUTES * 60}
         self.offered = {c: o for c, o in self.offered.items() if c in self.pending or c in self.agreed}
         self.what = {c: w for c, w in self.what.items() if c in self.pending or c in self.agreed}
+        self.scripts = {c: f for c, f in self.scripts.items() if c in self.pending}
+        self.covered = {c: f for c, f in self.covered.items() if c in self.agreed}
         verdict = verdict or consent.words(text, later=later) or consent.UNCLEAR
         if verdict.no:
             self.pending.clear()
@@ -153,6 +160,7 @@ class ShellGate:
             return []
         yes = list(self.pending)
         self.agreed.update(dict.fromkeys(yes, now))
+        self.covered.update({c: self.scripts.get(c, {}) for c in yes})
         self.pending.clear()
         if verdict.scope != "once" and (mine := [c for c in yes if c in self.offered]):
             self._remember(mine, verdict.scope, said_breadth(text))
@@ -180,24 +188,27 @@ class ShellGate:
             again = "run the identical command again"
         else:
             return PermissionResultDeny(message=f"{name} isn't available.")
-        if names_secret(command) or reads_environment(command):
+        folder = _folder(name, args)
+        scripts = seen(command, folder)
+        if names_secret(command) or reads_environment(command) or scripts.secret:
             return PermissionResultDeny(message="Not run: it touches secrets, which stay out of reach even with a yes.")
         if name == "Bash" and (why := slow(command)):
             return PermissionResultDeny(
                 message=f"Not run here: it {why}, which can take minutes and would hold up the conversation. Start the "
                 f"identical command with start_job instead, with the project's folder, say in a few words that it's "
                 f"under way and carry on; JARVIS tells {profile.name()} when it finishes.")
-        if not (why := risky(command)):
+        if not (why := risky(command, cwd=folder)):
             log.warning("running %s: %s", where, command)
             return PermissionResultAllow()
-        if (yes := self._yes(command)) is not None or await self._told(command, why):
+        if (yes := self._yes(command, scripts.files)) is not None or await self._told(command, why):
             if yes is not None:
                 self.agreed.pop(yes, None)
             self.ran.append(command)
+            self.covered[command] = scripts.files
             how = "as agreed" if yes is not None else f"as {profile.name()} said this turn ({self.said!r})"
             log.warning("running %s, %s (%s): %s", where, how, why, command)
             return PermissionResultAllow()
-        offered = remembered.pieces(command)
+        offered = remembered.pieces(command, cwd=folder)
         if used := remembered.covering(offered, [self.session]):
             log.warning("running %s, under %s: %s", where, remembered.told(used), command)
             return PermissionResultAllow()
@@ -205,6 +216,7 @@ class ShellGate:
             self.asked.append(command)
             self.offered[command] = offered
             self.what[command] = what(why)
+            self.scripts[command] = scripts.files
             log.warning("asking to run %s (%s): %s", where, why, command)
         return PermissionResultDeny(
             message=f"Not run: it {why}, so it needs {profile.name()}'s go-ahead, and JARVIS asks them for you. Don't read "
@@ -212,9 +224,11 @@ class ShellGate:
             f"minutes later, {again}."
         )
 
-    def _yes(self, command: str) -> str | None:
-        """The approved (or already-run-this-turn) command this one matches via same_risk, else None."""
-        return next((c for c in [*self.agreed, *self.ran] if c == command or same_risk(c, command)), None)
+    def _yes(self, command: str, scripts: dict[str, str]) -> str | None:
+        """The approved (or already-run-this-turn) command this one matches via same_risk, running the same scripts
+        unchanged, else None."""
+        return next((c for c in [*self.agreed, *self.ran]
+                     if (c == command or same_risk(c, command)) and self.covered.get(c, {}) == scripts), None)
 
     async def _told(self, command: str, why: str) -> bool:
         """Whether the user's own words this turn (`heard`) order the command or say yes to JARVIS's proposal of it."""
@@ -265,6 +279,13 @@ class ShellGate:
         return hint
 
 
+def _folder(name: str, args: dict) -> Path:
+    """Where a gated command runs: start_job's folder (as Jobs.start places it), else the scratch dir."""
+    folder = str(args.get("folder") or "").strip() if name == START_JOB else ""
+    path = Path(folder).expanduser() if folder else scratch_dir()
+    return path if path.is_absolute() else scratch_dir() / path
+
+
 def what(why: str) -> str:
     """Consent-model description of a risky command: what it does, never the command."""
     return f"a command that {why}"
@@ -303,11 +324,11 @@ class Jobs:
                     fix: bool = True, machine: str = "") -> str:
         """Start a long job. It may run on one of the user's machines (their setting, or `machine` where they said);
         a risky one reached here only with their yes (the gate), which that machine is told."""
-        path = Path(folder).expanduser() if folder.strip() else scratch_dir()
+        path = _folder(START_JOB, {"folder": folder})
         try:
-            task = await client.start_command(command, title, str(path if path.is_absolute() else scratch_dir() / path),
-                                              timeout_minutes or None, auto_fix=fix, placeable=True, machine=machine,
-                                              approved="voice" if risky(command) else "")
+            task = await client.start_command(command, title, str(path), timeout_minutes or None, auto_fix=fix,
+                                              placeable=True, machine=machine,
+                                              approved="voice" if risky(command, cwd=path) else "")
         except client.RunnerUnavailable:
             return "Not started: JARVIS's task runner isn't running, so no job can start right now."
         except ValueError as e:

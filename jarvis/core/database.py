@@ -197,8 +197,10 @@ def edits(task: dict) -> list[dict]:
 
 
 def same_command(a: dict, b: dict) -> bool:
-    """Same tool, command and folder. `why` is ignored: it varies with the running processes."""
-    return all(a.get(k) == b.get(k) for k in ("tool", "command", "folder"))
+    """Same tool, command and folder, running the same scripts unchanged (their fingerprints, commands.seen). `why`
+    is ignored: it varies with the running processes."""
+    return all(a.get(k) == b.get(k) for k in ("tool", "command", "folder")) and (a.get("scripts") or {}) == (
+        b.get("scripts") or {})
 
 
 def _approval(row: sqlite3.Row) -> dict:

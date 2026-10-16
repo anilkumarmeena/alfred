@@ -341,3 +341,31 @@ def test_the_tools_name_the_computer_and_shell_they_run_on(folder):
 def test_the_task_log_says_what_ran_on_the_mac():
     block = SimpleNamespace(name=worker.HOST_RUN, input={"command": "xcodebuild -scheme App build"})
     assert worker._describe(block) == "running on the computer: xcodebuild -scheme App build"
+
+
+# ── Scripts it runs ─────────────────────────────────────────────
+
+
+def test_a_harmless_script_runs_and_a_risky_one_is_put_to_the_user(folder):
+    (folder / "report.py").write_text("print('report')\n")
+    (folder / "clean.py").write_text("import shutil\nshutil.rmtree('/elsewhere')\n")
+    reporter = Asking()
+    opts = options(folder, reporter)
+    assert isinstance(call(opts, worker.HOST_RUN, command="python3 report.py"), PermissionResultAllow)
+    assert isinstance(call(opts, worker.HOST_RUN, command="python3 clean.py"), PermissionResultDeny)
+    [item] = reporter.asked
+    assert item["why"] == "runs a script that deletes files (python3)"
+    assert list(item["scripts"]) == [str((folder / "clean.py").resolve())]  # a yes covers it as it is now
+    assert item["remember"]["never"]  # the script can change, so no standing rule covers it
+
+
+def test_a_script_changed_after_the_gate_read_it_isnt_run(folder, unwalled):
+    script = folder / "report.py"
+    script.write_text("print('report')\n")
+    unwalled.vet(9, "python3 report.py", folder.resolve())
+    script.write_text("import os\nos.remove('x')\n")
+    run = tools(folder, unwalled)["host_run"]
+    done = asyncio.run(run({"command": "python3 report.py"}))
+    assert done["is_error"] and "changed after it was checked" in text(done)
+    unwalled.vet(9, "python3 report.py", folder.resolve())  # checked again, as it is now
+    assert not unwalled.changed(9, "python3 report.py", folder.resolve())

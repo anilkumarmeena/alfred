@@ -282,7 +282,9 @@ A yes can go:
 Only some kinds can be remembered: **installing software, stopping processes, changing permissions, installing onto an iPhone (`devicectl`, macOS) or a simulator**. What a rule would cover is always read out or shown before an "always" is saved.
 
 > [!WARNING]
-> These **always ask**, every time, and can never be remembered: **deleting**, **pushing**, **sending data off the computer**, **system settings** and **secrets**.
+> These **always ask**, every time, and can never be remembered: **deleting**, **pushing**, **sending data off the computer**, **system settings** and **secrets**, plus anything risky found **inside a script**, and code the check can't see.
+
+Scripts a command runs (`python x.py`, `bash -c '…'`, a heredoc, `./x.sh`) are read and judged by what they do, so a harmless one just runs. A yes covers a script **as it was when asked**: change it and the identical command is checked, and if need be asked about, again; `host_run` and `start_job` also refuse a script that changed between the check and the run.
 
 ## ⏰ Scheduler
 
