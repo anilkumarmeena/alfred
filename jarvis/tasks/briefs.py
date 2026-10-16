@@ -7,6 +7,7 @@ from jarvis import prompts
 from jarvis.brain.sdk import ATTRIBUTION
 from jarvis.core import profile
 from jarvis.core.config import ROOT, TASK_CACHE_DIR, TASK_READ_DIRS
+from jarvis.integrations import mcp_servers
 from jarvis.skills import home as skills
 from jarvis.state import todo
 from jarvis.tasks import access, project_claude, repo_files
@@ -48,10 +49,14 @@ def _connections_brief(read_only: bool = False) -> str:
                "them yourself. Carry on with anything that doesn't depend on it; if nothing's left, end your turn with one "
                "short line. When they answer you'll get a message; if it's a yes, make the identical call again, with "
                "exactly the same arguments, once. A tool refused as not available can't be used here.")
+    inline = "" if read_only else (
+        f" An inline comment on a merge request's diff line is GitLab's {mcp_servers.GITLAB_THREAD}, with a position: "
+        "position_type text, base_sha, start_sha and head_sha from the merge request's diff_refs, and new_path and "
+        "new_line (old_path and old_line for a removed line).")
     return (f"\n- With the tools {name} has connected, {changes}"
             f"\n- To read a GitLab file whole, or a whole project, use {' or '.join(repo_files.TOOLS)} where they're "
             "offered: they fetch with the connection's own key, which you never need. Never look for keys or tokens, or "
-            "post or fetch another way round (glab, curl, git clone, the API).")
+            f"post or fetch another way round (glab, curl, git clone, the API).{inline}")
 
 
 def _artifact_brief(folder: Path) -> str:

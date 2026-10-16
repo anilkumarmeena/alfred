@@ -109,9 +109,29 @@ create table mcp_tools (
     says text not null default '',       -- write: phrase read out, with {argument} placeholders
     primary key (server, tool)
 )""")
+# GitLab's inline comment on a diff line, one of its own default tools: read out by file and line (mcp_gate.action)
+GITLAB_THREAD = "create_merge_request_thread"
+GITLAB_THREAD_SAYS = "comment on {project_id} merge request {merge_request_iid}[ {position}], saying {body}"
+
+
+def _gitlab_threads(db: sqlite3.Connection) -> None:
+    """GitLab connections offer inline diff comments as a changing tool: added to a GITLAB_TOOLS allow-list that left
+    it out, and sorted as write unless the user already sorted it (blocked, say)."""
+    for row in db.execute("select name, command, args, env from mcp_servers").fetchall():
+        if "mcp-gitlab" not in row["command"] + row["args"]:
+            continue
+        env = json.loads(row["env"])
+        if (listed := env.get("GITLAB_TOOLS")) and GITLAB_THREAD not in (t.strip() for t in listed.split(",")):
+            env["GITLAB_TOOLS"] = f"{listed},{GITLAB_THREAD}"
+            db.execute("update mcp_servers set env = ? where name = ?", (json.dumps(env), row["name"]))
+        db.execute("insert or ignore into mcp_tools values (?, ?, 'write', ?)",
+                   (row["name"], GITLAB_THREAD, GITLAB_THREAD_SAYS))
+
+
 _MIGRATIONS = (
     # 2: its sign-in check, a reading tool taking no arguments called now and then (check()); '' for none
     "alter table mcp_servers add column check_tool text not null default ''",
+    _gitlab_threads,  # 3: GitLab's inline diff comments, left out of its first tool list
 )
 
 

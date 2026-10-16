@@ -172,6 +172,7 @@ def test_a_task_with_accounts_gets_its_connections_changes_held_and_gitlab_downl
     assert set(repo_files.TOOLS) <= set(opts.allowed_tools) and "repo" in opts.mcp_servers
     assert {"Read", "Glob", "Grep"} <= set(opts.tools) and repo_files.downloads(9) in gate.read_roots
     assert "waits for their yes to that exact call" in opts.system_prompt
+    assert "is GitLab's create_merge_request_thread, with a position" in opts.system_prompt
     assert "mcp__repo__download" in opts.system_prompt and "except through their connected tools" in opts.system_prompt
     code = worker._options(worker_task(worktree=str(fresh)), NullReporter())
     assert code.can_use_tool.connections is None and "repo" not in code.mcp_servers  # no accounts, no connections
@@ -188,6 +189,7 @@ def test_a_read_only_task_reads_its_connections_but_cant_change_anything_through
     assert gate.connections is None and changes <= set(opts.disallowed_tools)  # not even asked about
     assert isinstance(asyncio.run(gate("mcp__gitlab__create_merge_request_note", {}, ctx())), PermissionResultDeny)
     assert "only reading" in opts.system_prompt and "waits for their yes" not in opts.system_prompt
+    assert "create_merge_request_thread" not in opts.system_prompt
     assert set(repo_files.TOOLS) <= set(opts.allowed_tools)  # whole files still come: that only reads
 
 

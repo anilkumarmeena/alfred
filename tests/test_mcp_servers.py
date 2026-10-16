@@ -6,14 +6,16 @@ import re
 import subprocess
 import sys
 import textwrap
+from contextlib import closing
 from dataclasses import replace
 
 import pytest
+from conftest import use_profile
 from test_in_place import NullReporter, worker_task
 
 from jarvis import tools
 from jarvis.brain import cli, sdk
-from jarvis.core import config, vault
+from jarvis.core import config, database, vault
 from jarvis.integrations import mcp_launch, mcp_relay, mcp_servers
 from jarvis.integrations.mcp_servers import Server, Tool
 from jarvis.safety import shell
@@ -93,6 +95,22 @@ def test_nothing_is_put_in_on_a_first_start(fresh):
         db.execute("drop table mcp_servers")
         db.execute("drop table mcp_tools")
     assert mcp_servers.load() == []  # no built-in servers are seeded
+
+
+def test_gitlab_connections_saved_before_inline_comments_get_them_as_a_changing_tool(monkeypatch, tmp_path):
+    use_profile(monkeypatch, tmp_path)
+    listed = replace(gitlab(), env=gitlab().env | {"GITLAB_TOOLS": "get_merge_request,create_merge_request_note"})
+    blocked = replace(gitlab(), name="lab2", tools={"create_merge_request_thread": Tool("blocked")})
+    for server in (listed, blocked, github()):
+        mcp_servers.save(server, new=True)
+    with closing(database.connect()) as db:  # as a live database has them: migrated to 2
+        db.execute("update schema_versions set version = 2 where name = 'mcp_servers'")
+    servers = {s.name: s for s in mcp_servers.load()}
+    assert servers["gitlab"].env["GITLAB_TOOLS"] == "get_merge_request,create_merge_request_note,create_merge_request_thread"
+    assert servers["gitlab"].tools["create_merge_request_thread"] == Tool("write", mcp_servers.GITLAB_THREAD_SAYS)
+    assert servers["lab2"].env == gitlab().env  # no allow-list: GitLab's own defaults already offer it
+    assert servers["lab2"].tools["create_merge_request_thread"] == Tool("blocked")  # as the user sorted it
+    assert (servers["github"].env, servers["github"].tools) == (github().env, github().tools)
 
 
 def test_setting_a_secret_makes_the_master_key_when_theres_none(fresh, monkeypatch):

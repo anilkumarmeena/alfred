@@ -241,6 +241,7 @@ A task with the **accounts** access uses your [connections](integrations.md#-con
 - **A yes covers that exact call once**, with exactly the same arguments: posting the same comment again asks again.
 - **Never remembered**, and never covered by your words ordering something ("push it"): each call needs its own yes.
 - Tools you **blocked**, or never sorted, are refused.
+- **Inline review notes** on a GitLab diff line go through the connection's own `create_merge_request_thread`, read out by file and line. GitLab connections saved with their own tool list (`GITLAB_TOOLS`) get it added, sorted as changing, unless you'd already sorted it yourself.
 
 A task with a **GitLab** connection also gets two reading tools that use the connection's own key, which the task never sees: `mcp__repo__file` saves one file **whole**, however long (the connection's own reader cuts long files off), and `mcp__repo__download` unpacks a project, or one folder of it, at a branch, tag or commit (the files, without git history). Both save into the task's `downloads` folder in its temp folder, for `Read` and `Grep`, and send the key only to the connection's own `https://` address.
 
