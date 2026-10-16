@@ -262,18 +262,10 @@ def connection_notices(every: int = CONNECTION_MINUTES, call: Callable | None = 
     return check
 
 
-def _carry_over(path: Path) -> None:
-    """Migration: keep the keys data/heartbeat.json recorded, so nothing it already said is said again."""
-    if not path.exists() and (old := path.with_name("heartbeat.json")).exists():
-        old.replace(path)
-
-
 def make(store, notify: Notify, announce: Callable[[dict], None] | None = None, push: Push | None = None,
          stalls: Callable[[float], list[dict]] | None = None, lost: Callable[[float], list[dict]] | None = None,
          **settings) -> Notices:
     """The runner's Notices. `stalls` is Runner.stalls, `lost` Offload.lost; `settings` override Notices kwargs."""
-    if "state_file" not in settings:
-        _carry_over(profile.current().notices_file)
     checks = {"tasks": task_notices(store, stalls, lost=lost), "usage": usage_notices,
               "connections": connection_notices()}
     return Notices(checks, notify, announce, push=push, **settings)

@@ -34,7 +34,7 @@ create table settings (
     value text not null
 )"""
 _MIGRATIONS = (
-    "delete from settings where key = 'heartbeat_sources'",  # 2: the retired heartbeat's per-user sources
+    "select 1",  # 2: dropped the retired heartbeat's sources; kept as a no-op so later versions keep their numbers
 )
 
 

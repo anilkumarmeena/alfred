@@ -203,17 +203,6 @@ def test_an_unreadable_state_file_starts_afresh(tmp_path):
     assert len(notify.sent) == 1
 
 
-def test_what_was_already_said_before_is_kept(tmp_path, monkeypatch):
-    use_profile(monkeypatch, tmp_path)
-    data = profile.current().data
-    data.mkdir(parents=True, exist_ok=True)
-    (data / "heartbeat.json").write_text(json.dumps({"started": ["email"], "seen": {WAITING.key: 1.0}}))
-    n = notices.make(None, Notifier(), clock=lambda: AFTERNOON)
-    n.checks = {"tasks": check(WAITING)}
-    assert asyncio.run(n.check()) == []
-    assert not (data / "heartbeat.json").exists() and profile.current().notices_file.exists()
-
-
 # ── Push to the phone ───────────────────────────────────────────
 
 
