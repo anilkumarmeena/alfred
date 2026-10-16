@@ -187,6 +187,13 @@ def has(name: str) -> bool:
         return db.execute("select 1 from secrets where name = ?", (name,)).fetchone() is not None
 
 
+def updated(wanted: list[str]) -> dict[str, float]:
+    """{secret name: when it was last set} for those of `wanted` that are set; never their values."""
+    with _db() as db:
+        return dict(db.execute(f"select name, updated from secrets where name in ({', '.join('?' * len(wanted))})",
+                               wanted).fetchall())
+
+
 def names() -> dict[str, str]:
     """{secret name: key id}."""
     with _db() as db:

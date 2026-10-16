@@ -148,7 +148,8 @@ export function ConnectionsPage() {
       {!all.length && <Empty>No connections yet.</Empty>}
       <div class="note"><div>New tools are connected by voice: "connect Notion" finds it in the official MCP registry, and
         it's set up after your yes. Paste keys here, never out loud, and change the server one reaches (a company's own
-        GitLab, say). Tools that change things always ask first. Changes apply from the next conversation or task.</div></div>
+        GitLab, say). Tools that change things always ask first. Changes apply right away: from the next thing you say, and to tasks
+        already running.</div></div>
     </>
   );
 }

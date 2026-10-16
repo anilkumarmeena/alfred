@@ -13,6 +13,10 @@ except while a shell command runs: then the reply finishes unheard and the next 
 A turn does only a little work itself (jarvis.brain.budget): past a few calls or seconds, further calls are refused
 so the brain hands the rest to a lookup or a task. Slow JARVIS tool calls carry on outside the turn
 (jarvis.brain.kept); their results come back as follow-up turns the brain starts itself, spoken through the floor. The user's own turn always comes first: it stops a follow-up under way.
+
+The CLI's prompt and tools are fixed when it starts, so a turn that finds the connections (their keys, addresses,
+tool sorting, which are on), the skills or the Google accounts changed restarts it on the same conversation
+(`resume`), and tells the brain they were reloaded.
 """
 
 import asyncio
@@ -43,7 +47,7 @@ from jarvis.brain.budget import Budget
 from jarvis.brain.kept import Kept
 from jarvis.brain.persona import Notes, system_prompt
 from jarvis.brain.sdk import BUILTIN_AGENTS_DENIED, LimitWatch, jarvis_server, sdk_options
-from jarvis.core import profile
+from jarvis.core import claude_logins, profile
 from jarvis.core.config import (
     CLI_MODEL,
     CONNECTION_WAIT,
@@ -69,6 +73,8 @@ ALLOWED_BUILTINS = ["WebSearch", "WebFetch"]
 INTERRUPT_SECONDS = 15  # wait for an interrupted reply to end, then restart the CLI
 
 LOOKUP_PROMPT = "\n\n" + prompts.load("voice_lookups")
+RELOADED = ("[The connections, skills or Google accounts changed since your last turn, and you now have them with the "
+            "latest settings: a tool that failed before, say refusing its key, may work now.]")
 
 
 def _result_text(response) -> str:
@@ -97,8 +103,16 @@ def _bell_hook(gate: mcp_gate.Gate) -> list[HookMatcher]:
     return [HookMatcher(hooks=[noted])]
 
 
-def _options(gate: mcp_gate.Gate, jobs: shell.Jobs, kept: Kept | None = None,
-             budget: Budget | None = None) -> ClaudeAgentOptions:
+def _setup() -> tuple[dict[str, str], str]:
+    """The connections and skills as a session would take them now; a CLI started under another is out of date."""
+    return mcp_servers.stamps(mcp_servers.for_voice()), skills.stamp()
+
+
+def _options(gate: mcp_gate.Gate, jobs: shell.Jobs, kept: Kept | None = None, budget: Budget | None = None,
+             resume: str | None = None) -> ClaudeAgentOptions:
+    """The voice CLI's options; with `resume`, carrying on that session's conversation on the login holding it (a
+    fresh one if no login does)."""
+    login = claude_logins.resume_on(resume)
     server, allowed = jarvis_server(kept=kept)
     # Read per session; a slow server goes to the background after CONNECTION_WAIT seconds
     mcp = mcp_servers.session(mcp_servers.for_voice(), wait=CONNECTION_WAIT)
@@ -134,6 +148,8 @@ def _options(gate: mcp_gate.Gate, jobs: shell.Jobs, kept: Kept | None = None,
         max_turns=MAX_TOOL_ROUNDS,
         include_partial_messages=True,
         stderr=lambda line: log.debug("claude: %s", line),
+        resume=resume if login is not None else None,
+        login=login,
     )
 
 
@@ -168,22 +184,37 @@ class CliBrain(Notes):
         self.next_model: str | None = None  # lighter model for the next turn only (jarvis.brain.route)
         self._main = self._model = ""  # session model, current model
         self._accounts = accounts.load()  # Google accounts the CLI started with
+        self._setup = _setup()  # connections and skills the CLI started with
+        self._session: str | None = None  # the CLI's session id, to carry the conversation on after a restart
 
     async def start(self) -> None:
-        """Start the CLI, or restart it when the Google accounts changed since it started: its prompt and tool list
-        are fixed then, so an account signed in mid-conversation is only taken by a new one."""
+        """Start the CLI, or restart it on the same conversation when the Google accounts, connections or skills
+        changed since it started: its prompt and tool list are fixed then."""
         async with self._lock:
             google.fresh()
-            if self.client is not None and google.ACCOUNTS != self._accounts:
-                log.info("Google accounts changed; restarting the CLI to take them")
+            setup = _setup()
+            resume = None
+            if self.client is not None and (google.ACCOUNTS != self._accounts or setup != self._setup):
+                log.info("Google accounts, connections or skills changed; restarting the CLI on the same conversation")
                 await self.close()
+                resume = self._session
+                self.note("", unsaid=RELOADED)  # heads its next message
             if self.client is None:
-                self._accounts = google.ACCOUNTS
-                options = self.limits.runs_on(_options(self.shell, self.jobs, self.kept, self.budget))
-                client = ClaudeSDKClient(options)
-                await client.connect()
-                self.client = client
-                self._main = self._model = options.model
+                self._accounts, self._setup = google.ACCOUNTS, setup
+                try:
+                    await self._connect(resume)
+                except ClaudeSDKError:
+                    if resume is None:
+                        raise
+                    log.exception("couldn't carry the conversation on; starting a new one")
+                    await self._connect(None)
+
+    async def _connect(self, resume: str | None) -> None:
+        options = self.limits.runs_on(_options(self.shell, self.jobs, self.kept, self.budget, resume))
+        client = ClaudeSDKClient(options)
+        await client.connect()
+        self.client = client
+        self._main = self._model = options.model
 
     async def _use_model(self) -> None:
         """Switch to next_model for this turn if set, else the session model; same session keeps history."""
@@ -243,8 +274,10 @@ class CliBrain(Notes):
             self._running.clear()
 
     def _track(self, msg) -> None:
-        """Track in-flight tool calls."""
-        if isinstance(msg, AssistantMessage) and msg.parent_tool_use_id is None:
+        """Track in-flight tool calls, and the session id."""
+        if isinstance(msg, ResultMessage) and msg.session_id:
+            self._session = msg.session_id
+        elif isinstance(msg, AssistantMessage) and msg.parent_tool_use_id is None:
             self._running |= {b.id: b.name for b in msg.content if isinstance(b, ToolUseBlock)}
         elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
             for b in msg.content:

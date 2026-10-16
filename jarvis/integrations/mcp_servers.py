@@ -10,8 +10,10 @@ name a sign-in check (`check_tool`), which the notices service calls now and the
 working (jarvis.tasks.notices). Its `addresses` are the settings naming the server it reaches (a self-hosted GitLab),
 the only settings the control panel changes.
 
-Sessions read the tables at start, so changes need no restart. Voice gets every enabled server; research tasks get
-the for_research ones, read-only; code tasks none. Servers missing their program or secrets are skipped. With tool
+Sessions read the tables at start, and changes need no restart: a conversation compares `stamps` at each turn and
+reloads its connections when they changed (jarvis.brain.cli), and a running task restarts a changed server in place
+(jarvis.tasks.connection_watch). Voice gets every enabled server; research tasks get the for_research ones,
+read-only; code tasks none. Servers missing their program or secrets are skipped. With tool
 search on, their tools are deferred until looked up via ToolSearch.
 
     uv run python -m jarvis.integrations.mcp_servers                         list (same as make servers)
@@ -32,6 +34,7 @@ Kept import-light (no SDK): the launcher imports it every time a server starts.
 
 import argparse
 import getpass
+import hashlib
 import json
 import logging
 import os
@@ -45,7 +48,7 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import AbstractContextManager
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from shutil import which
 from urllib.parse import urlsplit
@@ -69,7 +72,7 @@ _REACHABLE = re.compile(r"https://|http://(localhost|127\.0\.0\.1)[:/]")  # an a
 # Settings naming the server a package talks to, by a piece of its command line: shown even while unset (its default)
 KNOWN_ADDRESSES = {"mcp-gitlab": "GITLAB_API_URL", "server-gitlab": "GITLAB_API_URL", "github-mcp-server": "GITHUB_HOST"}
 _ADDRESS_VAR = re.compile(r"[A-Z0-9_]*_(URL|HOST)")
-APPLIES = "It applies from the next conversation or task; no restart needed."
+APPLIES = "It applies from the conversation's next turn, and to running tasks; no restart needed."
 # Defer MCP tools to ToolSearch. Only when search is on: deferred tools with search off could never load.
 ON_DEMAND = TOOL_SEARCH != "false"
 
@@ -385,6 +388,18 @@ def missing(server: Server, reviewed: bool = True) -> str:
     if reviewed and not server.reviewed:
         return "its tools haven't been sorted into reading and changing yet (connection_review)"
     return ""
+
+
+def stamps(servers: list[Server]) -> dict[str, str]:
+    """{name: digest of what its running copy depends on}: its settings and tool sorting, whether its program is
+    installed, and when each key was last set (never the keys). The OAuth record counts only while missing, since the
+    bridge reads it at every call and refreshes it itself. A running server whose stamp changed is out of date."""
+    set_at = vault.updated([s for server in servers for s in server.secrets])
+    return {server.name: hashlib.sha256(json.dumps(
+        [asdict(server), server.transport != "stdio" or bool(which(server.command)),
+         [set_at.get(secret) for secret in server.secret_env.values()],
+         server.sign_in and server.oauth_secret in set_at], sort_keys=True).encode()).hexdigest()
+        for server in servers}
 
 
 def for_voice() -> list[Server]:

@@ -181,6 +181,8 @@ The system prompt is built **once per session** and then **frozen** so the promp
 | 7 | **Long-term memory** | `<long_term_memory>` from `data/memory.md`, with fill levels |
 | 8 | **Recent conversation** | `<recent_conversation>` from `data/recent.md` (last ~6,000 chars) |
 
+**When the setup changes mid-call:** each turn starts by comparing the Google accounts, the connections (`mcp_servers.stamps`: settings, tool sorting, when each key was last set) and the skills (`skills.stamp()`) with those the CLI started with. If any changed (say, a new GitLab key saved in the control panel), the CLI restarts **resuming the same session** (`resume`, on the login holding its transcript), so the prompt, tools and skills are rebuilt and the conversation carries on. That turn's prompt says they were reloaded, so a tool that failed before is tried again. If resuming fails, a fresh session starts.
+
 **What the persona sets:**
 
 | | Rule area | Highlights |

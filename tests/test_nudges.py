@@ -182,7 +182,7 @@ def result(text: str, cost: float, error: bool = False) -> ResultMessage:
 
 def worker_run(monkeypatch, client: FakeClient, reporter) -> Outcome:
     monkeypatch.setattr(worker, "ClaudeSDKClient", client)
-    monkeypatch.setattr(worker, "_options", lambda task, reporter: None)
+    monkeypatch.setattr(worker, "_options", lambda task, reporter, live=None: None)
     return asyncio.run(worker.run(worker_task(), "Do it", reporter))
 
 

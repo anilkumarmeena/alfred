@@ -456,7 +456,7 @@ def test_writing_a_skill_together_reads_a_summary_and_saves_only_after_a_yes(ski
     assert home.all_skills() == []  # nothing saved yet
     asked, done = confirm(gate, draft["draft_id"])
     assert asked == "A new skill, standup notes: Writes Alex's standup. Use when asked. It has 3 steps. Saving switches it on. Shall I go ahead?"
-    assert done == "Saved the new skill standup-notes, switched on from the next conversation."
+    assert done == "Saved the new skill standup-notes, switched on from the next turn."
     assert home.get("standup-notes").usable and pending(draft["draft_id"]) is None  # used once
 
 
@@ -467,7 +467,7 @@ def test_editing_a_skill_says_what_changes(skills_home, gate):
     assert draft["summary"] == ("A new version of the skill standup notes: in its instructions, 1 line added and 0 lines "
                                 "taken out, 4 steps in all.")
     _, done = confirm(gate, draft["draft_id"])
-    assert done == "Saved the new version of the skill standup-notes, switched on from the next conversation."
+    assert done == "Saved the new version of the skill standup-notes, switched on from the next turn."
     same, error = run("skill_draft", {"name": "standup-notes", "description": "Writes the standup.",
                                       "instructions": STANDUP + "\n4. Post it in the team chat."})
     assert error and "nothing would change" in same
@@ -510,10 +510,10 @@ def test_switching_on_a_skill_with_scripts_reads_its_review_first(skills_home, g
     assert draft["summary"].endswith("Approving its scripts switches it on.")
     assert not home.get("pdf").enabled
     _, done = confirm(gate, draft["draft_id"], "switch on the pdf skill")
-    assert done == "Approved the skill pdf's scripts and switched it on, from the next conversation."
+    assert done == "Approved the skill pdf's scripts and switched it on, from the next turn."
     assert home.get("pdf").usable
-    assert run("skill_disable", {"name": "pdf"}) == ("Switched off the skill pdf, from the next conversation.", False)
-    assert run("skill_enable", {"name": "pdf"}) == ("Switched on the skill pdf, from the next conversation.", False)
+    assert run("skill_disable", {"name": "pdf"}) == ("Switched off the skill pdf, from the next turn.", False)
+    assert run("skill_enable", {"name": "pdf"}) == ("Switched on the skill pdf, from the next turn.", False)
 
 
 def test_deleting_by_voice_needs_a_yes(skills_home, gate):
@@ -569,7 +569,7 @@ def test_a_long_skill_is_drafted_from_a_tasks_file_and_saved_after_a_yes(skills_
     assert tools.get("skill_draft").screened == ("from_file",)
     asked, done = confirm(gate, draft["draft_id"], "save task 12's skill as my review skill")
     assert asked == draft["from_file"]["summary"] + " Shall I go ahead?"
-    assert done == "Saved the new skill review, switched on from the next conversation."
+    assert done == "Saved the new skill review, switched on from the next turn."
     meta, body = home.split((skills_home / "review" / "SKILL.md").read_text())
     assert meta == {"name": "review", "description": "Reviews a pull request. Use when asked to review one.",
                     "when_to_use": "Asked for a review.", "license": "MIT"}
@@ -721,7 +721,7 @@ def test_only_the_review_suggests_skills_and_always_for_a_yes(skills_home):
     assert edit["name"] == "standup-notes" and data_edits.needs_yes(edit, "review")
     assert data_edits.describe(edit) == "save a new skill standup-notes: Writes the standup."
     said = asyncio.run(data_edits.apply(edit))
-    assert said == "Saved the new skill standup-notes, switched on, from the next conversation."
+    assert said == "Saved the new skill standup-notes, switched on, from the next turn."
     assert home.get("standup-notes").source == home.LEARNED
     assert data_edits.describe(edit) == "update the skill standup-notes: Writes the standup."
     with pytest.raises(ValueError, match="!`command`"):

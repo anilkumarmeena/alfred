@@ -136,7 +136,7 @@ JARVIS runs on **macOS on Apple silicon** and **Linux** (x86_64 and aarch64, wit
 | | `worker.py`, `gate.py`, `host_tools.py`, `reporting.py`, `subagents.py`, `briefs.py`, `access.py`, `project_claude.py` | One run of a task: session, gate, host commands, reporting, nudges, prompts, access grants |
 | | `goal.py`, `announce.py`, `data_edits.py`, `merge_check.py`, `stall.py` | Goal check, spoken endings, suggested data edits, tests before merging JARVIS's own branches, stall watchdog |
 | | `notices.py`, `scheduler.py`, `schedules.py`, `tool_watch.py`, `hold.py`, `learning.py` | Services that run inside the runner |
-| | `command_jobs.py`, `connection_jobs.py`, `projects.py`, `client.py` | Command and connection task kinds, the project list, the socket client |
+| | `command_jobs.py`, `connection_jobs.py`, `connection_watch.py`, `projects.py`, `client.py` | Command and connection task kinds, keeping a running task's connections current, the project list, the socket client |
 | `jarvis/integrations/` | `accounts.py`, `browser.py` | Google accounts, JARVIS's own Chrome |
 | | `mcp_servers.py`, `mcp_launch.py`, `mcp_relay.py`, `mcp_bridge.py`, `mcp_registry.py`, `mcp_oauth.py` | External MCP servers: list, launcher, relay, HTTP bridge, registry search, OAuth |
 | `jarvis/state/` | `memory.py`, `todo.py`, `settings.py`, `vocabulary.py`, `voiceprints.py`, `conversation.py`, `activity.py`, `history.py`, `pictures.py`, `shared_files.py` | What JARVIS keeps for the user |
@@ -386,7 +386,10 @@ Doc deletions are pinned to a revision and calendar changes to an etag. Skills a
 
 ### External MCP servers
 
-Servers live in the `mcp_servers` and `mcp_tools` tables (`jarvis/integrations/mcp_servers.py`) and are read as each session starts, so changes need no restart.
+Servers live in the `mcp_servers` and `mcp_tools` tables (`jarvis/integrations/mcp_servers.py`) and are read as each session starts, so changes need no restart. They reach live sessions too:
+
+- **The voice brain** compares `mcp_servers.stamps` (each server's settings, tool sorting, whether it can start, and when each key was last set, never the keys) and `skills.stamp()` at the start of every turn. If either changed, like the Google accounts, it restarts the CLI with `resume` on the same session, so the conversation carries on with the new servers, allowed tools, prompt and skills, and the next turn says they were reloaded.
+- **Research tasks** run `jarvis/tasks/connection_watch.py`: every 5 s a server whose stamp changed is restarted in place (`reconnect_mcp_server`), one switched off or removed is dropped (`toggle_mcp_server`), and a `PreToolUse` hook refuses tools no longer sorted as reading. One added mid-run comes with the task's next run.
 
 ```mermaid
 flowchart TB
@@ -445,7 +448,7 @@ Chrome (else Playwright's Chromium) on `data/browser/profile`, one page at a tim
 
 ### Skills
 
-Claude Code-format skills in `data/skills/<name>/SKILL.md`. Each session gets a generated plugin linking only usable skills (`jarvis/skills/home.py`).
+Claude Code-format skills in `data/skills/<name>/SKILL.md`. Each session gets a generated plugin linking only usable skills (`jarvis/skills/home.py`); the voice brain rebuilds it at the next turn after a change (see [External MCP servers](#external-mcp-servers)).
 
 | | Wall | Rule |
 |:-:|---|---|

@@ -269,7 +269,7 @@ def _apply(edit: dict) -> str:
             skill, new = skills.save(edit["name"], edit["description"], edit["instructions"], skills.LEARNED)
             state = "switched on" if skill.usable else skill.state
             return (f"Saved the {'new skill' if new else 'new version of the skill'} {skill.name}, {state}, from the "
-                    "next conversation.")
+                    "next turn.")
         case _:
             # Under the file's lock, which the voice tools and control panel take too, so no change of theirs is lost
             files.update(_file(edit["file"]), lambda text: _replaced(edit["file"], edit["old"], edit["new"], text))

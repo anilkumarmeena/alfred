@@ -121,7 +121,8 @@ export function SkillsPage() {
       <ul class="list">{all.map((s) => <Row key={s.name} s={s} />)}</ul>
       {!all.length && <Empty>No skills yet.</Empty>}
       <p class="hint">Skills are added by voice: "let's make that a skill", or "install the skill at github.com/…". One with
-        scripts stays off until its review is read and approved. Changes apply from the next conversation.</p>
+        scripts stays off until its review is read and approved. Changes apply from the next thing you say, and to tasks
+        from their next start.</p>
     </>
   );
 }

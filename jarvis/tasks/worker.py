@@ -57,6 +57,7 @@ from jarvis.safety import host
 from jarvis.skills import home as skills
 from jarvis.tasks import access, project_claude, projects
 from jarvis.tasks.briefs import _system_prompt
+from jarvis.tasks.connection_watch import Watch
 from jarvis.tasks.gate import (
     _FILE_ARG,
     _IN_PLACE_DENIED,
@@ -129,7 +130,9 @@ def _model(task: dict) -> tuple[str, str]:
     return usage.available(TASK_MODEL), TASK_EFFORT
 
 
-def _options(task: dict, reporter: Reporter) -> ClaudeAgentOptions:
+def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> ClaudeAgentOptions:
+    """The task session's options; `live` keeps its connections current while it runs."""
+    live = live or Watch()
     kind = task["kind"]
     env: dict[str, str] = _blank_env()
     mcp = {"task": _task_server(task["id"], reporter)}
@@ -200,6 +203,7 @@ def _options(task: dict, reporter: Reporter) -> ClaudeAgentOptions:
         mcp["jarvis"], jarvis_allowed = jarvis_server(READ_ONLY_TOOLS + GOOGLE_EDIT_TOOLS)
         # Research MCP servers, read-only
         servers = mcp_servers.session(mcp_servers.for_research(), read_only=True)
+        live.use(servers.servers)
         mcp |= servers.configs
         allowed += jarvis_allowed + servers.allowed
         denied = denied + servers.blocked
@@ -237,6 +241,8 @@ def _options(task: dict, reporter: Reporter) -> ClaudeAgentOptions:
                     editors=set(setup.agents) - set(helpers) if setup else (), more_writes=more_writes,
                     commit_ordered=functools.partial(reporter.commit_ordered, task["id"]) if in_place else None)
     model, effort = _model(task)
+    # After each call: the user's nudges, and connections restarted since
+    after = _nudge_hook(task["id"], reporter) + (live.told if live.running else [])
 
     return sdk_options(
         env=env,
@@ -254,7 +260,7 @@ def _options(task: dict, reporter: Reporter) -> ClaudeAgentOptions:
         mcp_servers=mcp,
         permission_mode="default",
         can_use_tool=gate,
-        hooks={"PreToolUse": gate.hook} | dict.fromkeys(("PostToolUse", "PostToolUseFailure"), _nudge_hook(task["id"], reporter)),
+        hooks={"PreToolUse": gate.hook + (live.hook if live.running else [])} | dict.fromkeys(("PostToolUse", "PostToolUseFailure"), after),
         sandbox=sandbox,
         settings=json.dumps(flags) if flags else None,
         max_turns=TASK_MAX_TURNS,
@@ -368,7 +374,8 @@ async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
         return None
 
     result: ResultMessage | None = None
-    async with ClaudeSDKClient(limits.runs_on(_options(task, reporter))) as client:
+    live = Watch()
+    async with ClaudeSDKClient(limits.runs_on(_options(task, reporter, live))) as client:
         inbox: asyncio.Queue = asyncio.Queue()
 
         async def pump() -> None:
@@ -398,6 +405,7 @@ async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
             await client.query(text)
 
         reader = asyncio.create_task(pump())
+        watching = asyncio.create_task(live.run(client))  # a connection changed mid-run is brought up to date
         reminded = False
         try:
             await client.query(prompt)
@@ -445,8 +453,11 @@ async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
                            kind)
         finally:
             reader.cancel()
+            watching.cancel()
             with suppress(asyncio.CancelledError):
                 await reader
+            with suppress(asyncio.CancelledError):
+                await watching
     reporter.session(task["id"], result.session_id)
     error, kind = _error(result, limits, api_error)
     if not error and not asked and not (result.result or "").strip():

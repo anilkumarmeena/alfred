@@ -131,12 +131,17 @@ class Voice:
         from jarvis.state import memory
 
         self.turns, self.clis, self.logged = turns, [], []
+        self.resumed: list[str | None] = []  # the session each CLI was started to carry on, None for a new one
 
         def started(options) -> FakeCli:
             self.clis.append(FakeCli(self.turns, **cli))
             return self.clis[-1]
 
-        monkeypatch.setattr(brain_cli, "_options", lambda gate, jobs, kept=None, budget=None: type("Options", (), {"model": "claude-opus-5-5"}))
+        def options(gate, jobs, kept=None, budget=None, resume=None):
+            self.resumed.append(resume)
+            return type("Options", (), {"model": "claude-opus-5-5"})
+
+        monkeypatch.setattr(brain_cli, "_options", options)
         monkeypatch.setattr(brain_cli, "ClaudeSDKClient", started)
         monkeypatch.setattr(memory, "log_exchange", lambda user, assistant, approved=(), interrupted=False:
                             self.logged.append((user, assistant, interrupted)))

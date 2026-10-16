@@ -231,7 +231,7 @@ A changing call is read out from the tool's own title and arguments ("On Notion,
 - **The relay.** Each server runs behind a small relay (`jarvis/integrations/mcp_relay.py`) that runs reading calls **side by side** and follows MCP's long-running tasks.
 - **Slow calls** still running after `JARVIS_CONNECTION_WAIT` (20 s) move into the **background**, so the conversation carries on.
 - **Tool search.** Tools load on demand (`JARVIS_TOOL_SEARCH`), so more connections don't slow every reply.
-- **No restart.** Changes apply from the next conversation.
+- **No restart, no new conversation.** A new key or server address, a connection switched on, off, added, updated or removed, or its tools sorted again: the conversation takes it at your next turn, picking up where it was, and a task already running restarts a changed connection in place (one added mid-task comes with its next run).
 
 ### By hand
 
@@ -411,6 +411,8 @@ How-tos for workflows you repeat, in **Claude Code's own skill format** (a folde
 - **Hooks and inline** `` !`command` `` never run.
 - **Symlinks** make a skill unusable.
 - **A skill with scripts** stays off until you've heard a **review** (a fixed-pattern scan plus a short Sonnet summary) and approved exactly those files. Changed since, it's skipped.
+
+A skill switched on, off, saved or deleted reaches the conversation at your next turn, with no new conversation needed; tasks take it from their next run.
 
 ## 🔧 Adding a tool
 

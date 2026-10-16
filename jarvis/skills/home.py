@@ -2,7 +2,8 @@
 
 A skill is a folder with a SKILL.md (YAML frontmatter: name, description; then instructions) plus optional files, in
 Claude Code's format. Each session gets its own minimal plugin (`plugin`: plugin.json plus links to enabled skills),
-so skills appear as jarvis-skills:<name> and load on demand. Changes apply from the next conversation or task run.
+so skills appear as jarvis-skills:<name> and load on demand. A conversation takes changes at its next turn (`stamp`
+tells it something changed); a task takes them from its next run.
 
 The table records source (installed, written, learned, manual), enabled, and for skills with scripts the review and
 the approved digest. Folders added by hand appear disabled; removed folders drop out.
@@ -490,6 +491,22 @@ def usable() -> list[Skill]:
         elif s.enabled:
             log.warning("skill %s left out: %s", s.name, "; ".join(s.problems) or s.state)
     return out
+
+
+def stamp() -> str:
+    """A digest of the skills as sessions see them: each one's state, and when an enabled one's SKILL.md was last
+    written. It changes when one is switched on or off, saved, approved or deleted. Read-only and cheap, unlike
+    `all_skills`, so a live session can check it every turn."""
+    with _db() as db:
+        rows = db.execute("select name, enabled, updated, digest, approved from skills order by name").fetchall()
+    seen = []
+    for name, enabled, *state in rows:
+        try:
+            written = (home() / name / SKILL_FILE).stat().st_mtime if enabled else 0
+        except OSError:
+            written = -1
+        seen.append([name, enabled, *state, written])
+    return hashlib.sha256(json.dumps(seen).encode()).hexdigest()
 
 
 def qualified(skill: Skill) -> str:
