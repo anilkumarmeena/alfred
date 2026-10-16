@@ -106,6 +106,7 @@ ARTIFACT_ENV = {"CLAUDE_CODE_ARTIFACT": "1"}  # undocumented; the CLI omits Arti
 # Rust tools that read the system proxy, or they crash on start; Mach lookups are a Seatbelt rule, so Mac only.
 OPEN_NETWORK = {"allowedDomains": ["*"]} | (
     {"allowMachLookup": ["com.apple.SystemConfiguration.configd"]} if platform.MAC else {})
+CLOSED_NETWORK = {"allowedDomains": []}
 
 
 def _cache_env() -> dict[str, str]:
@@ -163,7 +164,7 @@ def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> Claud
         bash = _read_only_git
         # Bash is gated to read-only git; the sandbox is a second wall.
         sandbox = {"enabled": True, "autoAllowBashIfSandboxed": False, "allowUnsandboxedCommands": False,
-                   "network": {"allowedDomains": []}}
+                   "network": CLOSED_NETWORK}
     else:
         cwd = DATA_DIR / "tasks" / str(task["id"])
         cwd.mkdir(parents=True, exist_ok=True)
@@ -186,7 +187,7 @@ def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> Claud
             add_dirs += [d for d in (own, TASK_CACHE_DIR) if d != cwd]  # extra writable dirs
             env |= _cache_env()
             sandbox = {"enabled": True, "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False,
-                       "network": OPEN_NETWORK}
+                       "network": CLOSED_NETWORK if task.get("read_only") else OPEN_NETWORK}
             if kind == "code_question" and "projects" not in can:
                 # Block writes in the user's checkout except the path to its own folder (inside only for JARVIS's
                 # repo). Edit deny rules also act as sandbox write rules.
@@ -203,14 +204,18 @@ def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> Claud
         more_writes = list(TASK_READ_DIRS)  # TaskGate still blocks secrets and JARVIS's own files
     if "accounts" in can:
         # docs_insert_image's local paths are checked by TaskGate.doc_images
-        mcp["jarvis"], jarvis_allowed = jarvis_server(READ_ONLY_TOOLS + GOOGLE_EDIT_TOOLS)
+        mcp["jarvis"], jarvis_allowed = jarvis_server(READ_ONLY_TOOLS + ([] if task.get("read_only")
+                                                                         else GOOGLE_EDIT_TOOLS))
         # Connections: reading is free, each change waits for the user's yes (connection_calls)
         servers = mcp_servers.session(mcp_servers.for_research(), ask_own=True)
         live.use(servers.servers)
         mcp |= servers.configs
         allowed += jarvis_allowed + servers.allowed
         denied = denied + servers.blocked
-        connections = ConnectionGate(task["id"], servers.servers, reporter)
+        if task.get("read_only"):  # reads only: with no ConnectionGate, TaskGate refuses every change unasked
+            denied += [s.tool(t) for s in servers.servers for t in s.named("write", "own")]
+        else:
+            connections = ConnectionGate(task["id"], servers.servers, reporter)
         if found := repo_files.gitlab(servers.servers):  # whole files and projects, with the connection's own key
             mcp[repo_files.NAME] = repo_files.repo_server(task["id"], found)
             allowed += repo_files.TOOLS

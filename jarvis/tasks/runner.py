@@ -343,7 +343,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
     def start(self, kind: str, title: str, instruction: str, project: str | None = None, job: int | None = None,
               hidden: bool = False, grants: list[str] | None = None, order: str | None = None,
               fixes: int | None = None, todo: str | None = None, machine: str = "", after: list[int] | None = None,
-              after_merge: list[int] | None = None) -> dict:
+              after_merge: list[int] | None = None, read_only: bool = False) -> dict:
         """Create and launch a task (command tasks use start_command).
 
           job      scheduled job id; `hidden` keeps watch checks out of lists and the bell until relevant
@@ -353,6 +353,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
           todo     open to-do item it works on (text or unique substring), settled at the end
           machine  where the user said it should run ("here" or a machine's name); else Settings › Machines decides
           after    tasks to finish first, and `after_merge` tasks to be merged first: it waits till then (chains)
+          read_only  held to reads, with only `grants` (out of access.READ_ONLY) and never more; it runs here
         """
         self._open()
         if kind not in KINDS:
@@ -360,7 +361,10 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
                              + (": a command starts with start_job, not as a task" if kind == COMMAND else ""))
         if not instruction.strip():
             raise ValueError("instruction is empty")
-        grants = [n for n in access.check(grants) if n not in access.defaults(kind)]
+        grants = access.check(grants)
+        if read_only and (kind == "code_change" or set(grants) - access.READ_ONLY):
+            raise ValueError(f"A read-only task only reads, with at most {' and '.join(sorted(access.READ_ONLY))}.")
+        grants = [n for n in grants if read_only or n not in access.defaults(kind)]
         name, in_place, lives = None, False, None
         if kind != "research":
             if not project:
@@ -372,7 +376,9 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
         item = todos.find(todo) if todo else None
         needs = self._needed(after, after_merge)
         title = " ".join(title.split())[:80] or instruction[:60]
-        placeable = kind != "research" and not access.has({"kind": kind, "grants": json.dumps(grants)}) & access.LOCAL
+        # a read-only one stays here, where the worker surely holds it to reads
+        placeable = kind != "research" and not read_only and not access.has(
+            {"kind": kind, "grants": json.dumps(grants)}) & access.LOCAL
         if lives and not placeable:
             raise ValueError(f"{name} lives on {self.offload.name(lives)}, where accounts and other projects aren't: "
                              "start a task here for what needs them.")
@@ -381,7 +387,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
                 raise ValueError(f"A {kind} task that reads accounts or other projects runs on this computer, where they are.")
             machines.find(machine)  # an unknown name is said now, before anything starts
         task = self.store.create(kind, title, instruction, name, in_place, job, hidden, grants, fixes=fixes,
-                                 todo=item and item["id"])
+                                 todo=item and item["id"], read_only=read_only)
         self.store.log(task["id"], "start", instruction)
         if lives:  # it runs where its project lives, whatever the setting
             self._placed(task["id"], placement.Place(lives, self.offload.name(lives),

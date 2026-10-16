@@ -48,7 +48,7 @@ def routes(r: "Runner") -> list[web.RouteDef]:
         b = await req.json()
         task = r.start(b["kind"], b.get("title", ""), b["instruction"], b.get("project"), grants=b.get("access"),
                        order=b.get("order"), todo=b.get("todo"), machine=str(b.get("machine") or ""),
-                       after=b.get("after"), after_merge=b.get("after_merge"))
+                       after=b.get("after"), after_merge=b.get("after_merge"), read_only=bool(b.get("read_only")))
         return web.json_response(await r.where(task["id"]))
 
     async def reply(req: web.Request) -> web.Response:

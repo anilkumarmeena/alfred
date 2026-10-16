@@ -24,20 +24,26 @@ GH_TOKEN, GL_TOKEN = "ghp_not_a_real_token", "glpat-not-a-real-token"
 GH_VAR, GL_VAR = "GITHUB_PERSONAL_ACCESS_TOKEN", "GITLAB_PERSONAL_ACCESS_TOKEN"
 
 
-@pytest.fixture
-def fresh(monkeypatch, tmp_path):
-    """An empty list and vault, a master key, a scratch .env, and every program installed."""
-    monkeypatch.setattr(config, "MASTER_KEY", vault.new_key())
-    monkeypatch.setattr(vault, "ENV_FILE", tmp_path / "dotenv")  # not named .env: sandboxes hide those
-    settings.put(vault.CHECK, "")
+def _emptied() -> None:
     for name in vault.names():
         vault.remove(name)
     with mcp_servers._db() as db:
         db.execute("delete from mcp_servers")
         db.execute("delete from mcp_tools")
+
+
+@pytest.fixture
+def fresh(monkeypatch, tmp_path):
+    """An empty list and vault, a master key, a scratch .env, and every program installed; emptied again after, so
+    the connections a test saved reach no later test's tasks."""
+    monkeypatch.setattr(config, "MASTER_KEY", vault.new_key())
+    monkeypatch.setattr(vault, "ENV_FILE", tmp_path / "dotenv")  # not named .env: sandboxes hide those
+    settings.put(vault.CHECK, "")
+    _emptied()
     monkeypatch.setattr(mcp_servers, "which", lambda name: f"/opt/bin/{name}")
     monkeypatch.setattr(mcp_launch, "which", lambda name: f"/opt/bin/{name}")
-    return tmp_path
+    yield tmp_path
+    _emptied()
 
 
 def github() -> Server:

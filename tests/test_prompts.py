@@ -42,7 +42,7 @@ def test_every_prompt_file_loads_where_it_is_used():
     assert persona.persona().startswith(f"You are JARVIS, {profile.name()}'s personal AI assistant")
     assert f"You run on {profile.name()}'s computer ({platform.NAME})" in persona.persona()
     assert f"computer ({platform.NAME})" in review.system()
-    used = {"persona", "lookup_agent", "computer_lookup", "lookup_spoken", "voice_lookups", "task_brief", "task_host", "goal_check", "learning_review",
+    used = {"persona", "lookup_agent", "computer_lookup", "lookup_spoken", "lookup_carried_on", "voice_lookups", "task_brief", "task_host", "goal_check", "learning_review",
             "skill_review", "task_announcement", "injection_check", "placement", "todo_plan", "todo_match"}
     assert {p.stem for p in prompts.DIR.glob("*.md")} == used
 

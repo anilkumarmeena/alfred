@@ -102,7 +102,7 @@ uv run python -m jarvis.state.settings prefs voice bm_lewis  # change one
 | `JARVIS_TURN_TOOLS`<br>`JARVIS_TURN_SECONDS` | `3`<br>`15` | How much work a spoken reply does itself: past this many calls or seconds, more are refused and the brain hands the rest to a lookup or a task |
 | `JARVIS_VOICE_QUICK_MODEL` | *(off)* | A lighter model (e.g. `claude-sonnet-5`) for simple turns |
 | `JARVIS_LOOKUP_MODEL`<br>`JARVIS_LOOKUP_WAIT` | Haiku<br>`8` | The voice brain's read-only file and computer lookups: model, and seconds a spoken turn waits on them before they carry on in the background |
-| `JARVIS_SIDE_MODEL`<br>`JARVIS_SIDE_MINUTES` | Sonnet<br>`3` | Background lookups that let the conversation carry on: model and time limit |
+| `JARVIS_SIDE_MODEL`<br>`JARVIS_SIDE_MINUTES` | Sonnet<br>`3` | Background lookups that let the conversation carry on: model and time limit (past it, one carries on as a task) |
 | `JARVIS_PROACTIVE_JUDGE` | `on` | A fast model picks the moment to bring up task updates and alerts |
 | `JARVIS_TOOL_SEARCH` | `true` | Connections' tools load on demand via tool search |
 | `JARVIS_CONNECTION_WAIT` | `20` | Seconds a connection's call may hold up a spoken reply |

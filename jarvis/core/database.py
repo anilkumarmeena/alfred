@@ -70,6 +70,8 @@ _TASKS_MIGRATIONS = (
     # 3, 4: JSON lists of {task, merged} its start, or its merge, waits for (jarvis.tasks.chains)
     "alter table tasks add column waits_on text",
     "alter table tasks add column merge_waits_on text",
+    # 5: 1 for a task held to reads, carrying on a lookup (jarvis.tasks.access)
+    "alter table tasks add column read_only integer not null default 0",
 )
 _LOG = """
 create table log (
@@ -260,13 +262,14 @@ class Store:
 
     def create(self, kind: str, title: str, instruction: str, project: str | None, in_place: bool = False,
                job: int | None = None, hidden: bool = False, grants: list[str] = (), command: dict | None = None,
-               fixes: int | None = None, todo: int | None = None) -> dict:
+               fixes: int | None = None, todo: int | None = None, read_only: bool = False) -> dict:
         now = time.time()
         cur = self.db.execute(
             "insert into tasks (kind, title, instruction, project, in_place, status, created, updated, job, hidden, grants,"
-            " command, fixes, todo) values (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)",
+            " command, fixes, todo, read_only) values (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (kind, title, instruction, project, int(in_place), now, now, job, int(hidden),
-             json.dumps(grants) if grants else None, json.dumps(command) if command is not None else None, fixes, todo),
+             json.dumps(grants) if grants else None, json.dumps(command) if command is not None else None, fixes, todo,
+             int(read_only)),
         )
         return self.get(cur.lastrowid)
 

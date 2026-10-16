@@ -37,15 +37,18 @@ def _google_limits() -> str:
             f"leave those for {profile.name()}, and say so in your summary.")
 
 
-def _connections_brief() -> str:
-    """How a connection's reading and changing tools work in a task, and the GitLab download tools."""
+def _connections_brief(read_only: bool = False) -> str:
+    """How a connection's reading and changing tools work in a task (a read-only one only reads), and the GitLab
+    download tools."""
     name = profile.name()
-    return (f"\n- With the tools {name} has connected, reading is free. A tool that changes something there or reaches "
-            "other people (a comment, an inline review note, an issue, a merge) waits for their yes to that exact call: "
-            "just make the call. It's refused for now, and JARVIS reads out what it would do and asks them, so don't ask "
-            "them yourself. Carry on with anything that doesn't depend on it; if nothing's left, end your turn with one "
-            "short line. When they answer you'll get a message; if it's a yes, make the identical call again, with "
-            "exactly the same arguments, once. A tool refused as not available can't be used here."
+    changes = ("only reading: a tool that changes something there or reaches other people is refused." if read_only else
+               "reading is free. A tool that changes something there or reaches "
+               "other people (a comment, an inline review note, an issue, a merge) waits for their yes to that exact call: "
+               "just make the call. It's refused for now, and JARVIS reads out what it would do and asks them, so don't ask "
+               "them yourself. Carry on with anything that doesn't depend on it; if nothing's left, end your turn with one "
+               "short line. When they answer you'll get a message; if it's a yes, make the identical call again, with "
+               "exactly the same arguments, once. A tool refused as not available can't be used here.")
+    return (f"\n- With the tools {name} has connected, {changes}"
             f"\n- To read a GitLab file whole, or a whole project, use {' or '.join(repo_files.TOOLS)} where they're "
             "offered: they fetch with the connection's own key, which you never need. Never look for keys or tokens, or "
             "post or fetch another way round (glab, curl, git clone, the API).")
@@ -86,7 +89,7 @@ def _grants_brief(task: dict, cwd: Path, own: Path, can: set[str]) -> str:
             lines.append(f"- Your own folder is {own}: keep what you make there.")
         if "shell" in can:
             lines.append(f"- Bash commands run in a sandbox: they can write only in your own folder and {TASK_CACHE_DIR}, "
-                         "and reach any host on the network."
+                         + ("and can't reach the network." if task.get("read_only") else "and reach any host on the network.")
                          + (f" {profile.name()}'s checkout at {cwd} stays as it is: they can't write there."
                             if kind == "code_question" and "projects" not in can else ""))
         if "mac" in can:
@@ -101,7 +104,7 @@ def _grants_brief(task: dict, cwd: Path, own: Path, can: set[str]) -> str:
                      "and the tools they've connected (mcp__<server>__<tool>, loaded with ToolSearch when you need "
                      f"one), and edit their Google Sheets and Docs. {_google_limits()}")
     if "accounts" in can:
-        lines.append(_connections_brief().lstrip("\n"))
+        lines.append(_connections_brief(bool(task.get("read_only"))).lstrip("\n"))
     if lack := access.missing(task):
         lines.append(f"- If {profile.name()} asked for something that needs access you don't have, ask for it with "
                      f"request_access rather than giving up or working around it: {access.listing(lack)}. Then end "
@@ -157,6 +160,14 @@ def _system_prompt(task: dict, cwd: Path, setup: project_claude.Setup | None = N
         if can:
             extra = f"""
 - You're answering a question about {task['project']} at {cwd}, {profile.name()}'s live checkout. You can read and search files{"" if "projects" in can else ", but not change them"}. What else you've been given is below."""
+    elif task.get("read_only"):
+        reads = (", and their mail, calendar, Google Chat, the tools they've connected (mcp__<server>__<tool>, loaded "
+                 "with ToolSearch when you need one), their Google Sheets, Docs and Slides, and Google Drive"
+                 if "accounts" in can else "")
+        shell = ", and look at the computer with shell commands" if "shell" in can else ""
+        return f"""You find things out for {profile.name()}: you can search and read the web{reads}{shell}. You can only read: you can't contact anyone, edit, publish or change anything, and you never need to.
+
+{brief()}{granted}"""
     else:
         if can & {"shell", "mac", "projects"}:
             limits = "You can't contact anyone, and change only what the access below allows"

@@ -10,6 +10,10 @@
 
 Granted via task_start / task_reply, or requested mid-run with request_access (the task waits, then resumes in the same
 session). Secrets and JARVIS's own data stay out of reach whatever is granted.
+
+A read-only task (one carrying on a lookup that ran out of time, jarvis.brain.side) has no defaults, only what it was
+started with, out of READ_ONLY and held to reads (the worker gives it accounts without edits and a shell without the
+network), and it can never be given more.
 """
 
 import json
@@ -28,6 +32,8 @@ GRANTS = {
 _DEFAULTS = {"code_change": {"artifacts", "shell", "mac"}, "code_question": set(), "research": {"artifacts", "accounts"}}
 # What only this computer has (account keys, the user's other projects): a task with these never runs on a machine
 LOCAL = {"accounts", "projects"}
+READ_ONLY = {"accounts", "shell"}  # what a read-only task may start with
+FIXED = "it only reads, carrying on a lookup, so it can't be given more access: start a new task for what needs it"
 
 
 def _off() -> set[str]:
@@ -61,20 +67,23 @@ def wanted(task: dict) -> list[str]:
 
 
 def has(task: dict) -> set[str]:
-    """Defaults plus grants, minus anything switched off."""
-    return (defaults(task["kind"]) | set(granted(task))) - _off()
+    """Defaults (none for a read-only task) plus grants, minus anything switched off."""
+    return ((set() if task.get("read_only") else defaults(task["kind"])) | set(granted(task))) - _off()
 
 
 def missing(task: dict) -> list[str]:
-    """Grants the task could still be given."""
+    """Grants the task could still be given: none for a read-only one."""
     out = has(task) | _off()
-    return [n for n in GRANTS if n not in out]
+    return [] if task.get("read_only") else [n for n in GRANTS if n not in out]
 
 
 def new(task: dict, names) -> list[str]:
-    """The checked `names` the task doesn't have yet."""
+    """The checked `names` the task doesn't have yet; ValueError (FIXED) if a read-only task would gain any."""
     have = has(task)
-    return [n for n in check(names) if n not in have]
+    gained = [n for n in check(names) if n not in have]
+    if gained and task.get("read_only"):
+        raise ValueError(FIXED)
+    return gained
 
 
 def add(task: dict, names) -> str:

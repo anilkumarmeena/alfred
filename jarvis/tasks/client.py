@@ -42,17 +42,18 @@ async def call(method: str, path: str, body: dict | None = None, timeout: float 
 
 async def start(kind: str, title: str, instruction: str, project: str | None = None,
                 access: list[str] | None = None, order: str = "", todo: str = "", machine: str = "",
-                after: list[int] | None = None, after_merge: list[int] | None = None) -> dict:
+                after: list[int] | None = None, after_merge: list[int] | None = None, read_only: bool = False) -> dict:
     """Start a task with extra `access`.
 
     `order`: the user's words authorising risky actions without asking ("and push it"). `todo`: linked to-do id.
     `machine`: where the user said it runs ("here" or a machine's name). The reply's `where` says where it runs, when
     that's worth saying. `after` / `after_merge`: tasks to finish / be merged first; it waits for them, then starts
-    by itself."""
+    by itself. `read_only`: held to reads, with only `access` and never more (access.READ_ONLY)."""
     return await call("POST", "/tasks", {"kind": kind, "title": title, "instruction": instruction, "project": project,
                                          "access": access or []} | ({"order": order} if order else {})
                       | ({"todo": todo} if todo else {}) | ({"machine": machine} if machine else {})
-                      | ({"after": after} if after else {}) | ({"after_merge": after_merge} if after_merge else {}),
+                      | ({"after": after} if after else {}) | ({"after_merge": after_merge} if after_merge else {})
+                      | ({"read_only": True} if read_only else {}),
                       timeout=60)
 
 

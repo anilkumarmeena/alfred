@@ -115,6 +115,18 @@ def living_at(folder: Path) -> Project | None:
     return next((p for p in load() if p.node and folder.is_relative_to(p.path)), None)
 
 
+def named_in(text: str) -> Project | None:
+    """The project on this computer that `text` points at: the one whose folder (or a folder in it) it names, the
+    deepest if several, else the one it names by name, else JARVIS's own; None if none of them is listed."""
+    here = [p for p in load() if p.node is None]
+    paths = [(len(str(p.path)), p) for p in here for shape in {str(p.path), shown(p.path)}
+             if re.search(re.escape(shape) + r"(?![\w.-])", text)]
+    names = [(len(p.name), p) for p in here if re.search(rf"(?<!\w){re.escape(p.name)}(?!\w)", text, re.IGNORECASE)]
+    if found := paths or names:
+        return max(found, key=lambda f: f[0])[1]
+    return next((p for p in here if is_jarvis(p.path)), None)
+
+
 # ── Git ─────────────────────────────────────────────────────────
 
 

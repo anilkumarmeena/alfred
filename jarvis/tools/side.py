@@ -87,8 +87,7 @@ async def file_lookup(brief: str, about: str) -> str:
     screened=False,
 )
 async def computer_lookup(brief: str, about: str) -> str:
-    jobs = _jobs()
-    return await jobs.ask(brief, about, jobs.check)
+    return await _jobs().ask(brief, about, "computer_lookup")
 
 
 def _call_name(call: Call) -> str:

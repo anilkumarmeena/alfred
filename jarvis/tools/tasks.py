@@ -62,8 +62,11 @@ def _brief(t: dict, requests: list[dict] = ()) -> dict:
         out["in_place"] = f"Works in the project's own folder {on}, no separate branch; changes are left uncommitted unless the user asked for a commit."
     if t.get("todo") and (item := todo.get(t["todo"])):
         out["todo"] = item["text"] + (" (ticked off)" if item["done"] else "")
+    if t.get("read_only"):
+        out["read_only"] = ("It carries on a lookup, so it only reads, with just its access below: it can't be given "
+                            "more. Start a new task for anything that needs more.")
     if granted := access.granted(t):
-        out["access"] = granted  # beyond the kind's defaults
+        out["access"] = granted  # beyond the kind's defaults; all a read-only one has
     if t["status"] == "waiting" and (wants := access.wanted(t)):
         out["access_requested"] = wants
     if waiting := nudges(t):

@@ -11,6 +11,8 @@ that turn); otherwise they carry on in the background like the first.
 Background answers are announced via the floor, said as at most SAID_SENTENCES plain sentences (`spoken`); the
 whole answer goes to the brain unsaid, for follow-up questions. Per conversation, at most MAX_JOBS at once, each
 capped at SIDE_MINUTES; stopped when the session ends, or by background_stop when the user asks.
+One that runs out of time carries on as a background task (_carrier) told its brief and the steps it got through,
+said to carry on rather than stopped; the task's end is announced like any task's, and a task is never handed on again.
 """
 
 import asyncio
@@ -18,8 +20,9 @@ import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 
-from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+from claude_agent_sdk import AssistantMessage, PermissionResultAllow, PermissionResultDeny, TextBlock, ToolUseBlock
 
 from jarvis import prompts, tools
 from jarvis.core import profile
@@ -58,6 +61,13 @@ _DETAIL = re.compile(r"(?:^|\s)~?\.?/\w|\w/[\w.-]+\.[a-z]\w{0,4}\b|\w/[\w.-]+/(?
                      r"|\b(?:on|at|in|see|from) (?-i:lines? \d)|\blines? \d+(?:-\d+)? (?:of|in) \S+\.[a-z]\w{0,4}\b",
                      re.IGNORECASE)
 _SENTENCE = re.compile(r"(?<=[.!?…])\s+")
+STEPS_KEPT = 30  # of a lookup's latest steps, told to the task carrying it on
+STEP_MOST = 300  # chars of one
+# What each lookup is asked to do, as the task carrying one on that ran out of time is told (_carrier picks the task)
+DOING = {"background_lookup": "look something up", "file_lookup": "find something in files on the computer",
+         "computer_lookup": "check something on the computer with shell commands"}
+# The steps of the lookup this job runs, filled in as its session goes (_answer): per job, so a run needn't take it
+_steps: ContextVar[list[str] | None] = ContextVar("side_steps", default=None)
 
 def system() -> str:
     return f"""You do one piece of reading for JARVIS, {profile.name()}'s voice assistant, while it carries on talking with them: web searches, reading pages or documents, looking through mail or the calendar, comparing what you find. You can only read: you can't send, change, book or start anything, and you never need to.
@@ -160,15 +170,34 @@ async def _refuse(name: str, _args: dict, _ctx) -> PermissionResultDeny:
     return PermissionResultDeny(message=f"Not run: {name} needs more than the sandbox allows.")
 
 
+def _clip(text: str) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= STEP_MOST else text[:STEP_MOST - 1] + "…"
+
+
+def _noted(m: AssistantMessage) -> list[str]:
+    """A lookup session's message as steps: what it noted, and the tools it used with their short arguments."""
+    out = []
+    for b in m.content:
+        if isinstance(b, TextBlock) and b.text.strip():
+            out.append(f"noted: {b.text}")
+        elif isinstance(b, ToolUseBlock):
+            args = ", ".join(f"{k} {v}" for k, v in b.input.items() if isinstance(v, int | str))
+            out.append(f"{b.name}: {args}" if args else b.name)
+    return [_clip(s) for s in out]
+
+
 async def _answer(brief: str, options) -> str:
-    """One side session's reply. RuntimeError on failure."""
+    """One side session's reply, its steps kept in `_steps` as it goes. RuntimeError on failure."""
     import claude_agent_sdk  # resolved at call time so tests can fake query
 
     from jarvis.brain import sdk
 
-    reply = ""
+    reply, steps = "", _steps.get()
     async for m in claude_agent_sdk.query(prompt=brief, options=options):
-        if isinstance(m, claude_agent_sdk.RateLimitEvent):
+        if isinstance(m, AssistantMessage) and steps is not None:
+            steps += _noted(m)
+        elif isinstance(m, claude_agent_sdk.RateLimitEvent):
             sdk.record(m.rate_limit_info, options)  # under the login it ran on
         elif isinstance(m, claude_agent_sdk.ResultMessage):
             if m.is_error:
@@ -222,18 +251,41 @@ async def check(brief: str) -> str:
     ))
 
 
+def _carrier(lookup: str, brief: str) -> tuple[str, str | None, list[str]]:
+    """(kind, project, access) of the read-only task that carries on `lookup`, reaching what it could and no more: a
+    file lookup is a code_question on the project its brief points at."""
+    from jarvis.tasks import projects
+
+    if lookup == "background_lookup":
+        return "research", None, ["accounts"]  # read-only: no edits to Sheets or Docs
+    if lookup == "file_lookup" and (found := projects.named_in(brief)):
+        return "code_question", found.name, []
+    # a computer lookup, or files with no project listed: read with the shell, which has no network
+    return "research", None, ["shell"]
+
+
+async def _start_task(kind: str, title: str, instruction: str, project: str | None, access: list[str]) -> dict:
+    """Start the task carrying on a lookup, held to reads with only `access`, never more (jarvis.tasks.access)."""
+    from jarvis.tasks import client
+
+    return await client.start(kind, title, instruction, project, access, read_only=True)
+
+
 Run = Callable[[str], Awaitable[str]]
+StartTask = Callable[[str, str, str, str | None, list[str]], Awaitable[dict]]
 
 
 class Jobs:
-    """One conversation's side jobs. `announce(text, note)` speaks a result when the floor allows."""
+    """One conversation's side jobs. `announce(text, note)` speaks a result when the floor allows; `start_task`
+    starts the task that carries on one that runs out of time."""
 
     def __init__(self, announce: Callable[[str, str], object], run: Run = look, find: Run = find,
-                 check: Run = check) -> None:
+                 check: Run = check, start_task: StartTask = _start_task) -> None:
         self.announce = announce
         self.run = run
         self.find = find
         self.check = check
+        self.start_task = start_task
         self.running: dict[asyncio.Task, str] = {}  # job -> topic
         self.heard: set[asyncio.Task] = set()  # jobs a turn waits on: their answer goes back to it, unannounced
         self.waited = 0.0  # seconds this turn has waited on file lookups
@@ -247,8 +299,9 @@ class Jobs:
                     f"Say it'll follow once one is done.")
         return None
 
-    def _spawn(self, run: Run, brief: str, about: str) -> asyncio.Task:
-        job = asyncio.get_running_loop().create_task(self._do(run, brief, about))
+    def _spawn(self, lookup: str, brief: str, about: str) -> asyncio.Task:
+        run = {"background_lookup": self.run, "file_lookup": self.find, "computer_lookup": self.check}[lookup]
+        job = asyncio.get_running_loop().create_task(self._do(lookup, run, brief, about))
         self.running[job] = about
         job.add_done_callback(self.running.pop)
         log.info("side job started: %s", about)
@@ -258,16 +311,16 @@ class Jobs:
         """Start a background_lookup job; returns the message for the brain."""
         if busy := self._busy():
             return busy
-        self._spawn(self.run, brief, about)
+        self._spawn("background_lookup", brief, about)
         return (f"Started looking into {about} in the background. Say so in a few words and carry on; the answer is "
                 f"announced when it's ready.")
 
-    async def ask(self, brief: str, about: str, run: Run | None = None) -> str:
-        """Run a file lookup, or `run`: its answer if in within what's left of the turn's LOOKUP_WAIT, else it
+    async def ask(self, brief: str, about: str, lookup: str = "file_lookup") -> str:
+        """Run a file or computer `lookup`: its answer if in within what's left of the turn's LOOKUP_WAIT, else it
         carries on."""
         if busy := self._busy():
             return busy
-        job = self._spawn(run or self.find, brief, about)
+        job = self._spawn(lookup, brief, about)
         self.heard.add(job)
         began = time.monotonic()
         try:
@@ -287,7 +340,8 @@ class Jobs:
             self.announce(text, note)
         return text
 
-    async def _do(self, run: Run, brief: str, about: str) -> str:
+    async def _do(self, lookup: str, run: Run, brief: str, about: str) -> str:
+        _steps.set(steps := [])
         try:
             async with asyncio.timeout(SIDE_MINUTES * 60):
                 found = await run(brief)
@@ -295,7 +349,7 @@ class Jobs:
             raise
         except TimeoutError:
             log.warning("side job ran out of time: %s", about)
-            return self._tell(f"The lookup on {about} took too long, so I stopped it.")
+            return await self._carry_on(lookup, brief, about, steps)
         except Exception as e:
             log.warning("side job failed: %s: %s", about, e)
             return self._tell(f"The lookup on {about} didn't work.")
@@ -305,6 +359,25 @@ class Jobs:
         said, detail = await spoken(found)
         return self._tell(f"On {about}: {said}" if said else f"The lookup on {about} is back; ask me for the details.",
                           f"Not said aloud, for follow-up questions: {detail}" if detail else "")  # sent as <private>
+
+    async def _carry_on(self, lookup: str, brief: str, about: str, steps: list[str]) -> str:
+        """Hand a lookup that ran out of time to a read-only task told its brief and `steps`, and say so; stopped as
+        before if the task can't start. The task's end is announced as any task's, and a task never runs out of time
+        as a lookup does, so it isn't handed on again."""
+        kind, project, access = _carrier(lookup, brief)
+        so_far = "\n".join(f"- {s}" for s in steps[-STEPS_KEPT:]) or "- nothing yet"
+        instruction = prompts.load("lookup_carried_on", user_name=profile.name(), doing=DOING[lookup],
+                                   minutes=f"{SIDE_MINUTES:g}", brief=brief, so_far=so_far)
+        try:
+            task = await self.start_task(kind, about, instruction, project, access)
+        except Exception as e:  # the runner down, or refusing it
+            log.warning("side job couldn't carry on as a task: %s: %s", about, e)
+            return self._tell(f"The lookup on {about} took too long, so I stopped it.")
+        log.info("side job carries on as task %s: %s", task["id"], about)
+        return self._tell(f"The lookup on {about} is taking a while, so it carries on as a task, and its answer is "
+                          f"announced when it's done.",
+                          f"Not said aloud: it's task {task['id']} now; task_detail shows how it's going, and "
+                          f"task_stop stops it.")
 
     async def stop(self, job: asyncio.Task) -> None:
         """Stop one job; nothing is announced."""

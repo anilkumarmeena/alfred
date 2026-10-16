@@ -355,3 +355,48 @@ def test_jarvis_passes_access_on_and_knows_when_to_grant_it(monkeypatch):
     for name in ("task_start", "task_reply"):
         assert tools.get(name).properties["access"]["items"]["enum"] == list(access.GRANTS)
     assert "task_start's access" in persona.persona() and "access_requested" in persona.persona()
+
+
+# ── Read-only tasks: carrying on a lookup, with its access and no more ──
+
+
+def test_a_read_only_task_has_only_the_access_it_started_with_and_is_never_given_more(env, monkeypatch):
+    seen, bodies = runs(done, done)
+    fake_run(monkeypatch, *bodies)
+
+    async def main():
+        r = runner.Runner()
+        task = r.start("research", "flights", "Find them.", grants=["accounts"], read_only=True)
+        for kind, grants in (("research", ["artifacts"]), ("code_question", ["mac"]), ("code_change", [])):
+            with pytest.raises(ValueError, match="only reads"):
+                r.start(kind, "x", "Look.", "video-agent", grants=grants, read_only=True)
+        await settle(r)
+        for more in (lambda: r.reply(task["id"], "Publish it.", ["artifacts"]),
+                     lambda: r.request_access(task["id"], ["shell"], "To check.")):
+            with pytest.raises(ValueError, match="can't be given more access"):
+                more()
+        r.reply(task["id"], "Also look at trains.")  # a follow-up without access still carries on
+        await settle(r)
+        return r.store.get(task["id"])
+
+    after = asyncio.run(main())
+    assert after["read_only"] == 1 and access.granted(after) == ["accounts"] and len(seen) == 2
+    assert all(access.has(t) == {"accounts"} for t in seen)  # not research's artifacts, on either run
+    assert access.missing(after) == [] and "can't be given more" in task_tools._brief(after)["read_only"]
+
+
+def test_a_read_only_task_reads_accounts_without_edits_and_runs_commands_without_the_network(box):
+    reads = worker._options(worker_task(kind="research", project=None, read_only=1, **granted("accounts")),
+                            NullReporter())
+    assert "mcp__jarvis__gmail_search" in reads.allowed_tools
+    assert not {f"mcp__jarvis__{t}" for t in worker.GOOGLE_EDIT_TOOLS} & set(reads.allowed_tools)
+    assert not {"Artifact", "Write", "Bash"} & set(reads.tools) and "CLAUDE_CODE_ARTIFACT" not in reads.env
+    assert "You can only read" in reads.system_prompt and "edit their Google" not in reads.system_prompt
+    assert "request_access" not in reads.system_prompt
+    looks = worker._options(worker_task(kind="research", project=None, read_only=1, **granted("shell")),
+                            NullReporter())
+    assert "Bash" in looks.tools and looks.sandbox["network"] == {"allowedDomains": []}
+    assert "can't reach the network" in looks.system_prompt and "any host" not in looks.system_prompt
+    assert not any(t.startswith("mcp__jarvis__") for t in looks.allowed_tools)  # no mail without accounts
+    files = worker._options(question() | {"read_only": 1}, NullReporter())
+    assert "Artifact" not in files.tools and "request_access" not in files.system_prompt["append"]

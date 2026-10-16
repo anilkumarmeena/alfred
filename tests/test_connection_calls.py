@@ -177,6 +177,20 @@ def test_a_task_with_accounts_gets_its_connections_changes_held_and_gitlab_downl
     assert code.can_use_tool.connections is None and "repo" not in code.mcp_servers  # no accounts, no connections
 
 
+def test_a_read_only_task_reads_its_connections_but_cant_change_anything_through_them(fresh, monkeypatch):
+    use_task_cache(monkeypatch, fresh / "cache")
+    seeded()
+    opts = worker._options(worker_task(kind="research", project=None, read_only=1, grants=json.dumps(["accounts"])),
+                           NullReporter())
+    gate = opts.can_use_tool
+    changes = {"mcp__gitlab__create_merge_request_note", "mcp__github__create_pull_request",
+               "mcp__github__dismiss_notification"}
+    assert gate.connections is None and changes <= set(opts.disallowed_tools)  # not even asked about
+    assert isinstance(asyncio.run(gate("mcp__gitlab__create_merge_request_note", {}, ctx())), PermissionResultDeny)
+    assert "only reading" in opts.system_prompt and "waits for their yes" not in opts.system_prompt
+    assert set(repo_files.TOOLS) <= set(opts.allowed_tools)  # whole files still come: that only reads
+
+
 # ── Fetching whole files and projects ───────────────────────────
 
 def fake_gitlab(monkeypatch, handler) -> list[httpx.Request]:
