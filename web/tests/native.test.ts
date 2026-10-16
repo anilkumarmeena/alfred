@@ -174,15 +174,13 @@ function speakerPlugin() {
   const f = fakePlugin(), started: unknown[] = [];
   f.plugin.start = async (o) => { started.push(o.speakerOff); return { connection: "connected" }; };
   f.plugin.setSpeaker = async ({ off }) => { f.calls.push(`setSpeaker ${off}`); return { off }; };
-  f.plugin.restoreAfterCall = async ({ restore }) => { f.calls.push(`restoreAfterCall ${restore}`); };
-  const speaker: boolean[] = [], offers: unknown[] = [], { page, log } = fakePage();
-  page.setSpeakerOff = (v) => speaker.push(v);
-  page.setAfterCall = (was) => offers.push(was);
-  return { ...f, started, speaker, offers, page, log };
+  const speaker: boolean[] = [], byCall: boolean[] = [], { page, log } = fakePage();
+  page.setSpeakerOff = (v, call = false) => { speaker.push(v); byCall.push(call); };
+  return { ...f, started, speaker, byCall, page, log };
 }
 
 test("the speaker switch: asked for at the start, changed through the plugin, and followed when the plugin changes it", async () => {
-  const { plugin, calls, emit, started, speaker, page } = speakerPlugin();
+  const { plugin, calls, emit, started, speaker, byCall, page } = speakerPlugin();
   const s = bindNative(plugin, page);
   assert.ok(s.canSilence);
   await s.setSpeakerOff(true);  // no session: page keeps the choice
@@ -192,29 +190,65 @@ test("the speaker switch: asked for at the start, changed through the plugin, an
   await s.setSpeakerOff(false);
   assert.equal(calls.at(-1), "setSpeaker false");
   assert.equal(speaker.at(-1), false);
+  assert.equal(byCall.at(-1), false);  // the user's choice
   emit("speaker", { off: true, source: "call" });  // phone call
   assert.equal(speaker.at(-1), true);
+  assert.equal(byCall.at(-1), true);  // not the user's choice, so not kept for the next session
 });
 
-test("after a call the page offers to put the mic and speaker back, and the answer goes to the plugin", async () => {
-  const { plugin, calls, emit, offers, speaker, page } = speakerPlugin();
+test("a call's end needs no answer: the plugin puts the mic and speaker back itself", async () => {
+  const { plugin, calls, emit, speaker, byCall, page, log } = speakerPlugin();
+  plugin.restoreAfterCall = async ({ restore }) => { calls.push(`restoreAfterCall ${restore}`); };
   const s = bindNative(plugin, page);
   await s.connect({ passcode: "pw" });
   emit("call", { state: "began" });
-  assert.equal(offers.at(-1), null);
+  emit("mute", { muted: true, source: "call" });
+  emit("speaker", { off: true, source: "call" });
+  emit("call", { state: "ended" });
+  emit("speaker", { off: false, source: "call" });
+  emit("mute", { muted: false, source: "call" });
+  assert.ok(!calls.some((c) => c.startsWith("restoreAfterCall")));
+  assert.deepEqual(speaker.slice(-2), [true, false]);
+  assert.deepEqual(byCall.slice(-2), [true, true]);
+  assert.equal(log.at(-1), "muted false");
+
+  // Reloaded mid-call: the plugin's speaker off is the call's, not the user's choice
+  plugin.getStatus = async () => ({ connection: "connected", muted: true, interrupted: true, speakerOff: true, onCall: true });
+  await s.adopt();
+  assert.equal(speaker.at(-1), true);
+  assert.equal(byCall.at(-1), true);
+  plugin.getStatus = async () => ({ connection: "connected", muted: false, interrupted: false, speakerOff: true });
+  await s.adopt();
+  assert.equal(byCall.at(-1), false);  // no call on: the user's own choice
+});
+
+test("older app builds offer the pre-call state back: the page takes it unless the user chose during the call", async () => {
+  const { plugin, calls, emit, page } = speakerPlugin();
+  plugin.restoreAfterCall = async ({ restore }) => { calls.push(`restoreAfterCall ${restore}`); };
+  const s = bindNative(plugin, page);
+  await s.connect({ passcode: "pw" });
+  emit("mute", { muted: true, source: "user" });  // before the call: doesn't count
+  emit("call", { state: "began" });
+  emit("mute", { muted: true, source: "call" });
   emit("call", { state: "ended", restore: { muted: false, speakerOff: false } });
-  assert.deepEqual(offers.at(-1), { muted: false, speakerOff: false });
-  await s.restoreAfterCall(true);
-  assert.equal(offers.at(-1), null);
   assert.equal(calls.at(-1), "restoreAfterCall true");
 
-  // Missed while hidden: adopt restores the open offer and the plugin's speaker state
-  plugin.getStatus = async () => ({ connection: "connected", muted: true, interrupted: false, speakerOff: true, afterCall: { muted: true, speakerOff: false } });
+  emit("call", { state: "began" });
+  emit("mute", { muted: false, source: "earphone" });  // the user unmuted during the call
+  emit("call", { state: "ended", restore: { muted: false, speakerOff: false } });
+  assert.equal(calls.at(-1), "restoreAfterCall false");
+
+  emit("call", { state: "began" });
+  emit("speaker", { off: false, source: "user" });  // the speaker counts too
+  emit("call", { state: "ended", restore: { muted: false, speakerOff: false } });
+  assert.equal(calls.at(-1), "restoreAfterCall false");
+
+  // Missed while hidden: adopt takes the offer still open
+  emit("call", { state: "began" });
+  calls.length = 0;
+  plugin.getStatus = async () => ({ connection: "connected", muted: true, interrupted: false, speakerOff: true, afterCall: { muted: false, speakerOff: false } });
   await s.adopt();
-  assert.deepEqual(offers.at(-1), { muted: true, speakerOff: false });
-  assert.equal(speaker.at(-1), true);
-  await s.hangup();
-  assert.equal(offers.at(-1), null);  // cleared with the session
+  assert.deepEqual(calls, ["restoreAfterCall true"]);
 });
 
 test("an app build without the speaker switch says so, and the page leaves it alone", async () => {

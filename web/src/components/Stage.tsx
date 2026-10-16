@@ -2,26 +2,12 @@
 import { useLayoutEffect, useRef } from "preact/hooks";
 import { mountFold } from "../lib/fold";
 import { enablePush } from "../state/push";
-import { restoreAfterCall, unlockAudio } from "../state/session";
-import { afterCall, audioBlocked, error, notice, pushKey, pushLater, pushOn, readout } from "../state/store";
+import { unlockAudio } from "../state/session";
+import { audioBlocked, error, notice, pushKey, pushLater, pushOn, readout } from "../state/store";
 import { Core } from "./Core";
 import { FocusCard } from "./FocusCard";
 import { Login } from "./Login";
 import { BellIcon, SoundIcon } from "./icons";
-
-// Native app: after a phone call turned mic and speaker off, offer to restore them.
-function AfterCall() {
-  const was = afterCall.value;
-  if (!was) return null;
-  const what = [!was.muted && "mic", !was.speakerOff && "speaker"].filter(Boolean).join(" and ");
-  return (
-    <div id="afterCall" role="alert">
-      <p>Call over. Turn the {what} back on?</p>
-      <button class="pill" onClick={() => restoreAfterCall(true)}>Turn back on</button>
-      <button class="pill" onClick={() => restoreAfterCall(false)}>Keep off</button>
-    </div>
-  );
-}
 
 export function Stage() {
   const { label, hint } = readout.value;
@@ -42,7 +28,6 @@ export function Stage() {
         <BellIcon />
         Enable notifications
       </button>
-      <AfterCall />
       <FocusCard />
       <div id="error" role="alert">{error.value || null}</div>
       <div id="notice" role="status">{notice.value || null}</div>

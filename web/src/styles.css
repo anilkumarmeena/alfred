@@ -95,11 +95,6 @@ body[data-paused] #status { color: var(--accent-2); }
 #notice { max-width: 340px; padding: 9px 14px; border-radius: 12px; background: rgba(79,209,255,.08); border: 1px solid rgba(79,209,255,.25); color: #bfeaff; font-size: 14px; text-align: center; }
 #notice:empty { display: none; }
 #notifyBtn[aria-pressed="false"] { color: var(--dim); }
-/* Native app: offer to restore mic and speaker after a phone call */
-#afterCall { max-width: 340px; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px 10px; padding: 10px 14px;
-  border-radius: 14px; background: var(--glass); border: 1px solid rgba(79,209,255,.3); font-size: 14px; text-align: center; animation: rise .3s ease; }
-#afterCall p { flex-basis: 100%; margin: 0; }
-#afterCall .pill { min-height: 38px; padding: 0 16px; font-size: 14px; }
 body[data-live] #notify, body[data-view="login"] #notify { display: none; }
 
 /* Focus card for a tapped notification */

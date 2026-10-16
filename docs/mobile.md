@@ -83,7 +83,7 @@ The message box sends a question as text; it **interrupts JARVIS like speech**, 
 <td valign="top">
 
 **🔇 Speaker off**<br>
-The speaker button (or <kbd>S</kbd>) makes JARVIS reply in the transcript only; **no speech is generated** at all. In the native app, a phone call turns mic and speaker off by itself, and a session started during a call joins that way; typing still works.
+The speaker button (or <kbd>S</kbd>) makes JARVIS reply in the transcript only; **no speech is generated** at all. In the native app, a phone call turns mic and speaker off by itself, and a session started during a call joins that way; typing still works. When the call ends they come back as they were before it, with no prompt, unless you changed one during the call.
 
 </td>
 <td valign="top">

@@ -9,19 +9,18 @@ type Listener = (e: any) => void;
 /** iOS Mic Mode: `active` is in effect now, `preferred` is the user's Control Center choice. */
 export interface MicMode { active: string; preferred: string }
 
-/** Mic and speaker state when a phone call came in, offered for restore afterwards. */
-export interface BeforeCall { muted: boolean; speakerOff: boolean }
-
 /** JarvisAudio plugin subset used by the page. Optional methods may be missing in older app builds. */
 export interface NativeAudio {
   start(o: { serverUrl?: string; passcode: string; device?: string; muted?: boolean; speakerOff?: boolean }): Promise<unknown>;
   stop(): Promise<void>;
   setMuted(o: { muted: boolean }): Promise<{ muted: boolean }>;
   setSpeaker?(o: { off: boolean }): Promise<{ off: boolean }>;  // off = text-only replies
+  // Older app builds only: they offer the pre-call mic and speaker back (status afterCall, call event restore)
+  // where newer ones put them back themselves.
   restoreAfterCall?(o: { restore: boolean }): Promise<void>;
   sendText(o: { text: string }): Promise<void>;
   getStatus(): Promise<{ connection: string; agent?: string; muted: boolean; interrupted: boolean; startedAt?: number; micMode?: MicMode;
-    speakerOff?: boolean; afterCall?: BeforeCall }>;
+    speakerOff?: boolean; onCall?: boolean; afterCall?: object }>;
   showMicModes?(): Promise<void>;  // iOS only
   checkPermissions?(): Promise<{ notifications?: string }>;
   requestPermissions?(o?: { permissions: string[] }): Promise<{ notifications?: string }>;
@@ -95,8 +94,7 @@ export interface NativePage {
   ended(message?: string): void;  // message set unless the user ended it
   unauthorized(message: string): void;  // passcode refused
   setMicMode?(m: MicMode | null): void;  // iOS; null outside a session
-  setSpeakerOff?(v: boolean): void;  // plugin changed it (phone call, or the after-call answer)
-  setAfterCall?(was: BeforeCall | null): void;  // call ended: offer to restore mic and speaker
+  setSpeakerOff?(v: boolean, byCall?: boolean): void;  // plugin changed it; byCall: for a phone call, not the user's choice
 }
 
 export interface NativeSession {
@@ -109,8 +107,6 @@ export interface NativeSession {
   hangup(): Promise<void>;
   setMuted(m: boolean): Promise<void>;
   setSpeakerOff(off: boolean): Promise<void>;
-  /** After a phone call: restore mic and speaker, or leave them off. */
-  restoreAfterCall(restore: boolean): Promise<void>;
   /** Starts a muted session first if needed. */
   sendText(text: string, passcode: string, speakerOff?: boolean): Promise<void>;
   /** Voice levels 0..1, for the reactor. */
@@ -123,9 +119,13 @@ export interface NativeSession {
 
 export function bindNative(plugin: NativeAudio, page: NativePage, origin = globalThis.location?.origin): NativeSession {
   let muted = false, live = false, agentKnown = false, last = "disconnected", starting = false;
+  let choseInCall = false;  // the user set the mic or speaker since the last call began
   const connected = () => last !== "disconnected";
   const levels = { mic: 0, agent: 0 };
   const micMode = (m?: MicMode) => { if (m?.active) page.setMicMode?.({ active: m.active, preferred: m.preferred || m.active }); };
+  const chose = (source?: string) => { if (source === "user" || source === "earphone") choseInCall = true; };
+  // Older app builds offer the pre-call state back after a call: take it, unless the user chose meanwhile.
+  const takeOffer = () => { plugin.restoreAfterCall?.({ restore: !choseInCall }).catch(() => {}); };
 
   // state: "connecting" | "reconnecting" | "connected"
   function up(state: string, startedAt?: number) {
@@ -143,7 +143,6 @@ export function bindNative(plugin: NativeAudio, page: NativePage, origin = globa
     live = false; muted = false; agentKnown = false; last = "disconnected";
     levels.mic = levels.agent = 0;
     page.setMicMode?.(null);
-    page.setAfterCall?.(null);
     if (reason === "unauthorized") return page.unauthorized(message || "Wrong passcode.");
     if (was || message) page.ended(reason === "hangup" ? undefined : message || "Connection lost. Tap the core to reconnect.");
   }
@@ -151,14 +150,15 @@ export function bindNative(plugin: NativeAudio, page: NativePage, origin = globa
   const on = (event: string, fn: Listener) => { plugin.addListener(event, fn); };
   on("connection", (e) => (e.state === "disconnected" ? down(e.reason, e.message) : up(e.state)));
   on("agentState", (e) => { agentKnown = true; if (connected()) page.setState(e.state); });
-  on("mute", (e) => { muted = !!e.muted; page.setMuted(muted); });
+  on("mute", (e) => { chose(e.source); muted = !!e.muted; page.setMuted(muted); });
   on("transcript", (e) => page.line(e.id, e.speaker === "you" ? "you" : "jarvis", e.text));
   on("interruption", (e) => page.setPaused(e.state === "began" ? "recovering" : ""));
   on("quality", (e) => page.setQuality(e.quality));
   on("levels", (e) => { levels.mic = +e.mic || 0; levels.agent = +e.agent || 0; });
   on("micMode", (e) => { if (connected()) micMode(e); });
-  on("speaker", (e) => page.setSpeakerOff?.(!!e.off));
-  on("call", (e) => page.setAfterCall?.(e.state === "ended" && e.restore ? e.restore : null));
+  on("speaker", (e) => { chose(e.source); page.setSpeakerOff?.(!!e.off, e.source === "call"); });
+  // The plugin quiets mic and speaker for a call and puts them back when it ends.
+  on("call", (e) => { if (e.state === "began") choseInCall = false; else if (e.restore) takeOffer(); });
 
   async function connect({ passcode, muted: startMuted = false, speakerOff = false }: { passcode: string; muted?: boolean; speakerOff?: boolean }) {
     if (connected()) return;
@@ -187,8 +187,8 @@ export function bindNative(plugin: NativeAudio, page: NativePage, origin = globa
     if (s.agent) agentKnown = true;
     muted = s.muted; page.setMuted(s.muted);
     page.setPaused(s.interrupted ? "recovering" : "");  // only while a call or Siri actually holds the mic
-    if (s.speakerOff != null) page.setSpeakerOff?.(s.speakerOff);
-    page.setAfterCall?.(s.afterCall ?? null);
+    if (s.speakerOff != null) page.setSpeakerOff?.(s.speakerOff, !!s.onCall);
+    if (s.afterCall) takeOffer();
     micMode(s.micMode);
     up(s.connection, s.startedAt);
     if (s.agent && s.connection === "connected") page.setState(s.agent);
@@ -208,10 +208,6 @@ export function bindNative(plugin: NativeAudio, page: NativePage, origin = globa
     async setSpeakerOff(off) {  // no session: the page keeps the choice for the next start
       if (!connected() || !plugin.setSpeaker) return;
       try { page.setSpeakerOff?.((await plugin.setSpeaker({ off })).off); } catch { await adopt(); }
-    },
-    async restoreAfterCall(restore) {
-      page.setAfterCall?.(null);
-      try { await plugin.restoreAfterCall?.({ restore }); } catch { await adopt(); }
     },
     async sendText(text, passcode, speakerOff = false) {
       if (!connected()) await connect({ passcode, muted: true, speakerOff });

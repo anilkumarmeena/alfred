@@ -13,8 +13,8 @@ import { wakeReactor, type ReactorInput } from "../lib/reactor";
 import { trace } from "../lib/trace";
 import { keepAwake } from "../lib/wake";
 import {
-  afterCall, agentState, audioBlocked, canSilence, connected, hideLogin, joinMuted, live, loginShown, micMode, micPaused, muted, passcode,
-  paused, phoneMuted, quality, resuming, setLink, setPasscode, setSpeakerOff, setState, showError, showLogin, speakerOff, startedAt,
+  agentState, audioBlocked, canSilence, connected, hideLogin, joinMuted, live, loginShown, micMode, micPaused, muted, passcode, paused,
+  phoneMuted, quality, resetSpeaker, resuming, setLink, setPasscode, setSpeakerOff, setState, showError, showLogin, speakerOff, startedAt,
 } from "./store";
 import { addDivider, addLine, hasSpoken, resetSpoken } from "./transcript";
 
@@ -51,11 +51,10 @@ const native: NativeSession | null = (() => {
     setPaused(v) { micPaused.value = v; syncMute(); },
     setQuality(q) { quality.value = q; },
     line(id, who, text) { addLine(who, id, text); },
-    ended(msg) { endSession(msg ?? ""); },
+    ended(msg) { endSession(msg ?? ""); resetSpeaker(); },  // a call may have turned the speaker off
     unauthorized(msg) { endSession(""); setPasscode(null); showLogin(msg); },
     setMicMode(m) { micMode.value = m; },
-    setSpeakerOff,
-    setAfterCall(was) { afterCall.value = was; },
+    setSpeakerOff(off, byCall) { setSpeakerOff(off, !byCall); },
   });
 })();
 if (native && !native.canSilence) canSilence.value = false;  // app build without the speaker switch
@@ -126,7 +125,6 @@ function syncMute() {  // screen and earphones follow wantMuted
 }
 
 async function setMuted(m: boolean): Promise<unknown> {
-  afterCall.value = null;  // user has chosen
   if (native) {
     if (!native.connected()) return;
     wantMuted = m; syncMute();
@@ -162,7 +160,6 @@ export function pressMute() { keys.enable(); return toggleMute(); }
 // already playing.
 function setSpeaker(off: boolean) {
   setSpeakerOff(off);
-  afterCall.value = null;
   if (player) player.muted = off;
   if (native) return native.setSpeakerOff(off);
   if (room && live.peek()) tellSpeaker(room);  // else connect() sends it once live
@@ -177,9 +174,6 @@ function tellSpeaker(r: Room) {
     .then(() => { if (room === r && speakerWord() !== want) tellSpeaker(r); })  // toggled again meanwhile
     .catch((e) => { if (room === r) showError(`Couldn't change the speaker: ${(e as Error).message || e}`); });
 }
-
-// Native app: after a phone call turned mic and speaker off, restore them or leave them off.
-export function restoreAfterCall(restore: boolean) { native?.restoreAfterCall(restore); }
 
 function micChanged(r: Room) {  // LiveKit (un)muted the mic, by request or because the track ended
   if (room !== r || !live.peek()) return;

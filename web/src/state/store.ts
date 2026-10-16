@@ -1,7 +1,7 @@
 // Page state as signals. App.tsx mirrors the ones CSS keys on to body[data-*].
 import { computed, signal } from "@preact/signals";
 import type { AgentState, Focus, Link, Paused } from "../types";
-import type { BeforeCall, MicMode, Permission } from "../lib/native";
+import type { MicMode, Permission } from "../lib/native";
 import { PASSCODE_KEY, PUSH_KEY, SPEAKER_KEY, storage } from "../lib/storage";
 
 const STATES: Record<AgentState, [string, string]> = {
@@ -26,9 +26,9 @@ export const live = signal(false);  // body[data-live]: connected with audio flo
 export const muted = signal(false);  // body[data-muted]: user's mute choice, while connected
 export const joinMuted = signal(false);  // pre-session Mute: next session starts with the mic off
 // body[data-speaker="off"]: text-only replies. Persisted per device so a session starts silent.
-export const speakerOff = signal(storage.get(SPEAKER_KEY) === "off");
+const savedSpeakerOff = () => storage.get(SPEAKER_KEY) === "off";
+export const speakerOff = signal(savedSpeakerOff());
 export const canSilence = signal(true);  // false in app builds without the speaker switch
-export const afterCall = signal<BeforeCall | null>(null);  // Native app: call ended, offer to restore
 export const phoneMuted = signal(false);  // iOS muted the mic on an unreported earphone press
 export const micPaused = signal<Exclude<Paused, "resuming">>("");  // micGuard state
 export const resuming = signal(false);  // auto-reconnecting a lost session
@@ -102,10 +102,12 @@ export function showLogin(msg?: string): void {
 }
 export function hideLogin(): void { loginShown.value = false; }
 
-export function setSpeakerOff(off: boolean): void {
+// save: false when a phone call turned it off, which isn't the user's choice for the next session.
+export function setSpeakerOff(off: boolean, save = true): void {
   speakerOff.value = off;
-  storage.set(SPEAKER_KEY, off ? "off" : null);
+  if (save) storage.set(SPEAKER_KEY, off ? "off" : null);
 }
+export function resetSpeaker(): void { speakerOff.value = savedSpeakerOff(); }  // back to the user's choice
 
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 export function showNotice(msg?: string): void {
