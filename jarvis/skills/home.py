@@ -133,6 +133,14 @@ def sanitize(text: str, name: str | None = None) -> tuple[str, list[str]]:
     return compose(kept, body), dropped
 
 
+def parse(text: str) -> tuple[dict, str]:
+    """(frontmatter, body) of a SKILL.md that may have no frontmatter ({} then). Raises ValueError if it starts a
+    frontmatter block that isn't valid."""
+    if not text.lstrip("﻿").startswith("---"):
+        return {}, text.strip()
+    return split(text)
+
+
 def one_line(text: str) -> str:
     return " ".join(str(text or "").split())
 
@@ -423,13 +431,14 @@ def delete(name: str) -> str:
     return skill.name
 
 
-def save(name: str, description: str, instructions: str, source: str = WRITTEN, enable: bool = True) -> tuple[Skill, bool]:
+def save(name: str, description: str, instructions: str, source: str = WRITTEN, enable: bool = True,
+         meta: dict | None = None) -> tuple[Skill, bool]:
     """Write SKILL.md for a new skill (enabled per `enable`) or update an existing one (keeps source, files, state).
-    Returns (skill, is_new)."""
+    `meta` is other frontmatter to set (KEPT fields only), over what the replaced version had. Returns (skill, is_new)."""
     check_text(name, description, instructions)
     where, now = home() / name, time.time()
     new = not where.exists()
-    keep = {} if new else _meta(where)
+    keep = ({} if new else _meta(where)) | (meta or {})
     where.mkdir(exist_ok=True)
     write_atomic(where / SKILL_FILE, render(name, description, instructions, keep), mode=0o644)
     with _db() as db:

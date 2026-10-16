@@ -29,8 +29,7 @@ PAGES = {"type": "string", "description": f"For a PDF: pages to look at as pictu
                                           f"{documents.MAX_PAGES} at a time; for charts, scans, forms and layouts the "
                                           "text alone doesn't show. Optional.", "default": ""}
 # Searched for a bare file name: ~/Downloads, ~/Desktop, ~/Documents (on Linux, the XDG folders, maybe translated)
-LOOK_IN = [desktop.user_dir("DOWNLOAD", "Downloads"), desktop.user_dir("DESKTOP", "Desktop"),
-           desktop.user_dir("DOCUMENTS", "Documents")]
+LOOK_IN = desktop.USER_FOLDERS
 
 
 TRANSCRIBES = (f"Transcribed on the computer by Whisper, any language, at roughly {transcribe.SPEED_GUESS} times "

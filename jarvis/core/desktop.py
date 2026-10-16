@@ -54,6 +54,10 @@ def user_dir(key: str, english: str) -> str:
     return f"~/{english}"
 
 
+# The user's own file folders: where a bare file name is looked for, and where skills may be drafted from
+USER_FOLDERS = [user_dir("DOWNLOAD", "Downloads"), user_dir("DESKTOP", "Desktop"), user_dir("DOCUMENTS", "Documents")]
+
+
 # ── Running programs ────────────────────────────────────────────
 
 def graphical() -> bool:

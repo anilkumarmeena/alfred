@@ -535,6 +535,108 @@ def test_a_no_drops_the_draft(skills_home, gate):
     assert isinstance(asyncio.run(gate("mcp__jarvis__skill_confirm", {"draft_id": draft["draft_id"]}, None)), PermissionResultDeny)
 
 
+REVIEW_MD = """---
+name: review
+description: Reviews a pull request. Use when asked to review one.
+allowed-tools: Bash(gh pr diff:*)
+license: MIT
+when_to_use: Asked for a review.
+---
+
+1. Read the diff with gh pr diff.
+2. Say what's wrong.
+"""
+
+
+@pytest.fixture
+def places(tmp_path, monkeypatch):
+    """Task folders and the user's folders, here; returns the tasks folder and Downloads."""
+    monkeypatch.setattr(skill_tools, "TASK_DATA_DIR", tmp_path / "tasks")
+    monkeypatch.setattr(skill_tools.desktop, "USER_FOLDERS", [str(tmp_path / d) for d in ("Downloads", "Desktop")])
+    for d in ("tasks/12", "Downloads", "Desktop"):
+        (tmp_path / d).mkdir(parents=True)
+    return tmp_path / "tasks", tmp_path / "Downloads"
+
+
+def test_a_long_skill_is_drafted_from_a_tasks_file_and_saved_after_a_yes(skills_home, gate, places):
+    tasks, _ = places
+    (tasks / "12" / "SKILL.md").write_text(REVIEW_MD)
+    draft, error = run("skill_draft", {"name": "review", "path": str(tasks / "12" / "SKILL.md")})
+    assert not error and draft["new"] and "summary" not in draft  # what the file says comes back screened
+    assert draft["from_file"]["summary"] == (
+        "A new skill, review, from SKILL.md in task 12's folder: Reviews a pull request. Use when asked to review one. "
+        "It has 2 steps. I'll take out its allowed-tools settings, which would skip my checks. Saving switches it on.")
+    assert tools.get("skill_draft").screened == ("from_file",)
+    asked, done = confirm(gate, draft["draft_id"], "save task 12's skill as my review skill")
+    assert asked == draft["from_file"]["summary"] + " Shall I go ahead?"
+    assert done == "Saved the new skill review, switched on from the next conversation."
+    meta, body = home.split((skills_home / "review" / "SKILL.md").read_text())
+    assert meta == {"name": "review", "description": "Reviews a pull request. Use when asked to review one.",
+                    "when_to_use": "Asked for a review.", "license": "MIT"}
+    assert body == "1. Read the diff with gh pr diff.\n2. Say what's wrong." and home.get("review").usable
+
+
+def test_a_new_version_comes_from_a_folder_without_frontmatter_as_task_results_name_it(skills_home, gate, places):
+    tasks, downloads = places
+    home.save("review", "Reviews a pull request.", "1. Look at it.", meta={"license": "MIT"})
+    (tasks / "12" / "review").mkdir()
+    (tasks / "12" / "review" / "SKILL.md").write_text("1. Read the diff.\n2. Say what's wrong.\n")
+    (tasks / "12" / "review" / "notes.txt").write_text("left behind")
+    out, error = run("skill_draft", {"name": "review", "path": "data/tasks/12/review"})
+    assert error and "no description" in out  # none given, and the file has no frontmatter to take it from
+    draft, error = run("skill_draft", {"name": "review", "description": "Reviews a pull request.",
+                                       "path": "data/tasks/12/review"})
+    assert not error and not draft["new"]
+    assert draft["from_file"]["summary"] == (
+        "A new version of the skill review, from review/SKILL.md in task 12's folder, only that file, not the rest of "
+        "its folder: in its instructions, 2 lines added and 1 line taken out, 2 steps in all.")
+    confirm(gate, draft["draft_id"], "save that as my review skill")
+    meta, body = home.split((skills_home / "review" / "SKILL.md").read_text())
+    assert meta["license"] == "MIT" and body == "1. Read the diff.\n2. Say what's wrong."
+    assert home.files(skills_home / "review") == ["SKILL.md"]  # the rest of the folder stays where it was
+
+
+def test_a_new_version_from_a_file_says_which_settings_change(skills_home, places):
+    _, downloads = places
+    home.save("review", "Reviews a pull request. Use when asked to review one.", "1. Read the diff with gh pr diff.\n"
+              "2. Say what's wrong.", meta={"license": "Apache-2.0"})
+    (downloads / "review.md").write_text(REVIEW_MD)
+    draft, error = run("skill_draft", {"name": "review", "path": str(downloads / "review.md")})
+    assert not error, draft
+    assert draft["from_file"]["summary"] == (
+        "A new version of the skill review, from review.md in your Downloads: its license, when_to_use settings "
+        "change. I'll take out its allowed-tools settings, which would skip my checks.")
+
+
+@pytest.mark.parametrize("where, wrong", [
+    ("elsewhere/SKILL.md", "only from a file in a task's folder"),
+    ("tasks/jobs/SKILL.md", "only from a file in a task's folder"),  # host job logs, not a task's folder
+    ("Downloads/linked/SKILL.md", "only from a file in a task's folder"),  # a link out of Downloads
+    ("Downloads/secrets/SKILL.md", "never reads those"),
+    ("Downloads/notes.txt", "isn't a markdown file"),
+    ("Downloads/missing.md", "no SKILL.md at"),
+    ("Downloads/broken.md", "frontmatter isn't valid YAML"),
+])
+def test_skills_are_drafted_only_from_markdown_in_safe_places(skills_home, places, tmp_path, where, wrong):
+    for rel in ("elsewhere/SKILL.md", "tasks/jobs/SKILL.md", "Downloads/secrets/SKILL.md", "Downloads/notes.txt"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(REVIEW_MD)
+    (tmp_path / "Downloads" / "broken.md").write_text("---\nname: [unclosed\n---\nDo it.\n")
+    (tmp_path / "Downloads" / "linked").symlink_to(tmp_path / "elsewhere")
+    out, error = run("skill_draft", {"name": "review", "path": str(tmp_path / where)})
+    assert error and wrong in out and not home.all_skills()
+
+
+def test_a_draft_takes_instructions_or_a_path_not_both(skills_home, places):
+    tasks, _ = places
+    (tasks / "12" / "SKILL.md").write_text(REVIEW_MD)
+    out, error = run("skill_draft", {"name": "review", "description": "x", "instructions": "1. Do it.",
+                                     "path": str(tasks / "12")})
+    assert error and "not both" in out
+    out, error = run("skill_draft", {"name": "review", "description": "x"})
+    assert error and "or the path of a SKILL.md" in out
+
+
 def test_listing_and_reading_skills(skills_home):
     assert run("skills_list", {}) == ("There are no skills yet.", False)
     home.save("standup-notes", "Writes the standup.", STANDUP)
