@@ -1,7 +1,8 @@
 // Connections (MCP servers): toggle, sign in (via JARVIS's browser on its computer), set keys, remove.
 // Keys are write-only (pasted, never spoken; shown only as set/unset). Adding servers is by voice, with approval.
 import { useSignal } from "@preact/signals";
-import { act, servers, type Server } from "../../state/panel";
+import { badAddress, hostOf } from "../../lib/address";
+import { act, servers, toast, type Server } from "../../state/panel";
 import { ChevronIcon, TrashIcon } from "../icons";
 import { cap, Empty, Pill } from "./bits";
 
@@ -46,6 +47,42 @@ function KeyRow({ s, k }: { s: Server; k: { var: string; set: boolean } }) {
   );
 }
 
+// The server it reaches (a self-hosted GitLab, GitHub Enterprise). Moving it to another host forgets its keys.
+function AddressRow({ s, a }: { s: Server; a: { var: string; value: string } }) {
+  const open = useSignal(false), value = useSignal(a.value), busy = useSignal(false);
+  const url = value.value.trim(), why = badAddress(url);
+  async function save(e: Event) {
+    e.preventDefault();
+    if (why || busy.value) return;
+    const keys = s.secrets.filter((k) => k.set).map((k) => k.var);
+    if (keys.length && hostOf(url) !== hostOf(a.value)
+      && !confirm(`Its ${keys.join(", ")} ${keys.length > 1 ? "were" : "was"} for the old server, so ${keys.length > 1 ? "they're" : "it's"} `
+        + "forgotten: paste the new server's key afterwards.\n\nChange the server?")) return;
+    busy.value = true;
+    const r = await act<{ forgot: string[]; servers: Server[] }>("server_address", { name: s.name, var: a.var, value: url });
+    busy.value = false;
+    if (!r) return;
+    servers.value = r.servers;
+    open.value = false;
+    toast(r.forgot.length ? `Changed. Paste its ${r.forgot.join(", ")} again.` : "Changed");
+  }
+  return (
+    <div class="key">
+      <span class="var">{a.var}</span>
+      <span class="st">{a.value || "default server"}</span>
+      {open.value ? (
+        <form class="inline grow" onSubmit={save}>
+          <input class="field" type="url" autocomplete="off" placeholder="https://… (empty for the default)" aria-label={a.var}
+            value={value.value} onInput={(e) => { value.value = e.currentTarget.value; }} />
+          <button class="btn sm primary" disabled={busy.value || !!why || url === a.value}>Save</button>
+          <button type="button" class="btn sm" onClick={() => { open.value = false; value.value = a.value; }}>Cancel</button>
+        </form>
+      ) : <button class="btn sm" onClick={() => { value.value = a.value; open.value = true; }}>Change server</button>}
+      {open.value && why && <span class="sub warn">{why}</span>}
+    </div>
+  );
+}
+
 function Card({ s }: { s: Server }) {
   const tools = useSignal(false), signing = useSignal(false);
   const [said, kind] = state(s);
@@ -75,6 +112,7 @@ function Card({ s }: { s: Server }) {
       </div>
       <div class="sub">{from(s)}</div>
       <div class="cmdline" title={s.command}>{s.command}</div>
+      {s.addresses.map((a) => <AddressRow key={a.var} s={s} a={a} />)}
       {s.secrets.map((k) => <KeyRow key={k.var} s={s} k={k} />)}
       {s.sign_in && (
         <div class="key">
@@ -109,8 +147,8 @@ export function ConnectionsPage() {
       {all.map((s) => <Card key={s.name} s={s} />)}
       {!all.length && <Empty>No connections yet.</Empty>}
       <div class="note"><div>New tools are connected by voice: "connect Notion" finds it in the official MCP registry, and
-        it's set up after your yes. Paste keys here, never out loud. Tools that change things always ask first. Changes
-        apply from the next conversation.</div></div>
+        it's set up after your yes. Paste keys here, never out loud, and change the server one reaches (a company's own
+        GitLab, say). Tools that change things always ask first. Changes apply from the next conversation or task.</div></div>
     </>
   );
 }

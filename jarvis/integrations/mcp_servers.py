@@ -7,7 +7,8 @@ starts it via mcp_launch, the only place its secrets are decrypted, which then r
   blocked     never offered; unlisted tools are refused too
 Servers added by voice start disabled and unreviewed until the user approves the `sort` of their tools. A server may
 name a sign-in check (`check_tool`), which the notices service calls now and then to warn when its key or sign-in stops
-working (jarvis.tasks.notices).
+working (jarvis.tasks.notices). Its `addresses` are the settings naming the server it reaches (a self-hosted GitLab),
+the only settings the control panel changes.
 
 Sessions read the tables at start, so changes need no restart. Voice gets every enabled server; research tasks get
 the for_research ones, read-only; code tasks none. Servers missing their program or secrets are skipped. With tool
@@ -24,6 +25,7 @@ search on, their tools are deferred until looked up via ToolSearch.
     uv run python -m jarvis.integrations.mcp_servers set-secret NAME [VAR]   typed (hidden) or stdin, never an argument
     uv run python -m jarvis.integrations.mcp_servers clear-secret NAME [VAR]
     uv run python -m jarvis.integrations.mcp_servers test NAME [--read-only] start it and list its tools
+    uv run python -m jarvis.integrations.mcp_servers check NAME [--tool T]  call its sign-in check, say only if it passed
 
 Kept import-light (no SDK): the launcher imports it every time a server starts.
 """
@@ -46,6 +48,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from shutil import which
+from urllib.parse import urlsplit
 
 from jarvis.core import credentials, database, logins, profile, vault
 from jarvis.core.config import ROOT, TOOL_SEARCH
@@ -62,6 +65,10 @@ ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _FIELD = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")  # secret placeholder in a header: Bearer {API_KEY}
 # Package runners that fetch on every run, so the version must be pinned
 _FETCHERS = {"npx": "@", "pnpx": "@", "bunx": "@", "uvx": "==", "pipx": "=="}
+_REACHABLE = re.compile(r"https://|http://(localhost|127\.0\.0\.1)[:/]")  # an address JARVIS will send keys to
+# Settings naming the server a package talks to, by a piece of its command line: shown even while unset (its default)
+KNOWN_ADDRESSES = {"mcp-gitlab": "GITLAB_API_URL", "server-gitlab": "GITLAB_API_URL", "github-mcp-server": "GITHUB_HOST"}
+_ADDRESS_VAR = re.compile(r"[A-Z0-9_]*_(URL|HOST)")
 APPLIES = "It applies from the next conversation or task; no restart needed."
 # Defer MCP tools to ToolSearch. Only when search is on: deferred tools with search off could never load.
 ON_DEMAND = TOOL_SEARCH != "false"
@@ -166,6 +173,47 @@ def _unpinned(command: str, args: list[str]) -> str:
     return ""
 
 
+def addresses(server: Server) -> dict[str, str]:
+    """Its settings naming the server it reaches (a self-hosted GitLab, GitHub Enterprise), variable -> URL, '' while
+    unset so the package's default applies. The panel edits only these: other settings can be tool access."""
+    if server.transport != "stdio":
+        return {}
+    where = " ".join([server.command, *server.args])
+    known = {var: server.env.get(var, "") for piece, var in KNOWN_ADDRESSES.items() if piece in where}
+    return known | {var: value for var, value in server.env.items()
+                    if _ADDRESS_VAR.fullmatch(var) and re.match(r"https?://", value)}
+
+
+def bad_address(url: str) -> str:
+    """Why `url` can't be a server's address, or ''."""
+    try:
+        parts = urlsplit(url)
+        parts.port  # noqa: B018  raises ValueError for a port that isn't a number
+    except ValueError:
+        parts = None
+    if (not parts or not _REACHABLE.match(url) or not parts.hostname or "@" in parts.netloc or parts.query
+            or parts.fragment or re.search(r"\s", url)):
+        return f"'{url[:100]}' isn't a server address: give its https:// URL, like https://git.example.com/api/v4."
+    return ""
+
+
+def host_of(url: str) -> str:
+    """Its scheme, host and port, '' for none: keys entered for one host aren't sent to another."""
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc.lower()}" if url else ""
+
+
+def readdress(server: Server, var: str, url: str) -> Server:
+    """`server` pointed at `url` by its address setting `var` ('' for the package's default), for research tasks
+    too. Raises ValueError if it has no such setting or `url` isn't an address."""
+    if var not in addresses(server):
+        raise ValueError(f"{server.label} has no server address {var}.")
+    if url and (why := bad_address(url)):
+        raise ValueError(why)
+    env, read_only_env = ({k: v for k, v in env.items() if k != var} for env in (server.env, server.read_only_env))
+    return replace(server, env=env | ({var: url} if url else {}), read_only_env=read_only_env)
+
+
 def problems(server: Server, taken: list[str] = ()) -> list[str]:
     """Validation errors for `server`; empty if fine."""
     said = []
@@ -190,7 +238,7 @@ def problems(server: Server, taken: list[str] = ()) -> list[str]:
         if server.headers or server.sign_in:
             said.append("Only an HTTP server has headers or a sign-in.")
     else:
-        if not re.match(r"https://|http://(localhost|127\.0\.0\.1)[:/]", server.url):
+        if not _REACHABLE.match(server.url):
             said.append("An HTTP server needs an https:// URL (or http://localhost).")
         if server.command or server.args:
             said.append("An HTTP server has no command or arguments.")
@@ -210,6 +258,9 @@ def problems(server: Server, taken: list[str] = ()) -> list[str]:
                 said.append(f"{what}: {key} isn't a variable name with a text value.")
             elif host.SENSITIVE.search(key):
                 said.append(f"{key} looks like a secret: keep it encrypted with --secret-env {key}=NAME and set-secret.")
+    for var, url in addresses(server).items():
+        if var in server.env and (why := bad_address(url)):
+            said.append(f"{var}: {why}")
     for var, secret in server.secret_env.items():
         if not ENV_NAME.fullmatch(var) or var == vault.VAR:
             said.append(f"secret env: {var} can't be a variable.")
@@ -432,7 +483,7 @@ def show(servers: list[Server]) -> str:
         where = s.url or " ".join([s.command, *s.args])
         counts = ", ".join(f"{len(s.named(a))} {a}" for a in ACCESS if s.named(a))
         secrets = ", ".join(f"{var} ({'set' if vault.has(sec) else 'not set'})" for var, sec in s.secret_env.items())
-        urls = ", ".join(f"{k}={v}" for k, v in s.env.items() if k.endswith("_URL"))  # e.g. a self-hosted address
+        urls = ", ".join(f"{k}={v}" for k, v in addresses(s).items() if v)  # e.g. a self-hosted GitLab
         lines.append(f"  {s.name}  {s.label}  [{', '.join(flags)}]\n      {where[:120]}\n      tools: {counts or 'none listed'}"
                      + (f"\n      {urls}" if urls else "") + (f"\n      secrets: {secrets}" if secrets else ""))
     return "\n".join(lines)
@@ -649,6 +700,9 @@ def main(argv: list[str] | None = None) -> int:
     test = commands.add_parser("test", help="start a server and list what it offers")
     test.add_argument("name")
     test.add_argument("--read-only", action="store_true")
+    check_ = commands.add_parser("check", help="call its sign-in check now and say only whether it passed")
+    check_.add_argument("name")
+    check_.add_argument("--tool", help="another reading tool taking no arguments, e.g. whoami")
     args = parser.parse_args(argv)
 
     command = args.command or "list"
@@ -731,6 +785,16 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if command == "test":
             return _test(need(args.name), args.read_only)
+        if command == "check":
+            server = need(args.name)
+            tool = args.tool or server.check_tool
+            if server.tools.get(tool, Tool("")).access != "read":
+                raise ValueError(f"Name one of {server.name}'s reading tools with --tool." if args.tool or not tool else
+                                 f"Its sign-in check, {tool}, isn't one of its reading tools.")
+            said = check(replace(server, check_tool=tool))  # its answer isn't printed: it may say who is signed in
+            print(f"{server.label} ({tool}): " + ("signed in." if said == "" else "didn't answer." if said is None
+                                                    else f"refused: {said}"))
+            return 0 if said == "" else 1
     except (ValueError, RuntimeError, vault.VaultError) as e:
         sys.exit(str(e))
     return 0

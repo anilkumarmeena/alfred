@@ -97,6 +97,7 @@ export interface Device { id: string; kind: "web" | "app"; device: string; added
 export interface Server {
   name: string; label: string; enabled: boolean; reviewed: boolean; command: string; tools: Record<string, number>;
   tool_list: { name: string; access: string }[]; secrets: { var: string; set: boolean }[];
+  addresses: { var: string; value: string }[]; // the server it reaches; value "" = the package's default
   sign_in: boolean; signed_in: boolean; source: string; verified: boolean; version: string; research: boolean;
   problem: string;
 }

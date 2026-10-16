@@ -7,7 +7,8 @@ voice, and only by the owner's login: a code made here, run on the machine, and 
 itself are entered only here, write-only, so they're never spoken or typed to the brain.
 
 Deliberately not possible here, since anyone with a login can reach the page: showing secrets, adding MCP servers or
-changing their command or tool access, changing a project's folder. Those need voice with a yes, or the computer's
+changing their command, tool access or settings other than the server they reach (and moving that to another host
+forgets their keys, so a login can't send them elsewhere), changing a project's folder. Those need voice with a yes, or the computer's
 command line. Google accounts are added and signed in here (jarvis.integrations.google_signin): a sign-in needs the
 Google account's own password and consent, so a login alone gains nothing.
 """
@@ -1004,6 +1005,7 @@ def _server(s: mcp_servers.Server) -> dict:
             "command": s.url or " ".join([s.command, *s.args]), "tools": by_access,
             "tool_list": [{"name": t, "access": spec.access} for t, spec in sorted(s.tools.items())],
             "secrets": [{"var": var, "set": vault.has(name)} for var, name in s.secret_env.items()],
+            "addresses": [{"var": var, "value": url} for var, url in mcp_servers.addresses(s).items()],
             "sign_in": s.sign_in, "signed_in": s.sign_in and vault.has(s.oauth_secret),
             "source": s.source, "verified": s.verified, "version": s.version, "research": s.for_research,
             "problem": mcp_servers.missing(s, reviewed=False) if s.enabled or not s.reviewed else ""}
@@ -1075,6 +1077,29 @@ def _clear_secret(body: dict) -> list[dict]:
 async def server_secret_clear(body: dict) -> list[dict]:
     """Clear a connection secret: {"name", "var"}."""
     return await asyncio.to_thread(_clear_secret, body)
+
+
+def _set_address(body: dict) -> dict:
+    server = _connection(body)
+    var, url = _text(body, "var", 64), _text(body, "value", 500)
+    changed = mcp_servers.readdress(server, var, url)
+    if changed == server:
+        return {"forgot": [], "servers": _servers()}
+    mcp_servers.save(changed)
+    forgot = []
+    if mcp_servers.host_of(server.env.get(var, "")) != mcp_servers.host_of(url):
+        # Its keys were for the old server; keeping them would let any login send them to a server it picked
+        forgot = [v for v, secret in server.secret_env.items() if vault.remove(secret)]
+    activity.add(f"Pointed {server.label} at {url or 'its default server'} in the control panel"
+                 + (f", forgetting its {', '.join(forgot)}." if forgot else "."))
+    return {"forgot": forgot, "servers": _servers()}
+
+
+@action
+async def server_address(body: dict) -> dict:
+    """Set a connection's server address: {"name", "var", "value"} ('' for its default). Moving it to another host
+    forgets its keys."""
+    return await asyncio.to_thread(_set_address, body)
 
 
 @action

@@ -200,6 +200,7 @@ JARVIS finds and connects new tools for you as **MCP servers**. Say "connect Not
 | 🔍 | **Find** | The [official MCP registry](https://registry.modelcontextprotocol.io) first; failing that, the web, marked **unverified** |
 | 📦 | **Connect** | Says what it would install, from where, how it runs and what it needs. **Nothing installs until you say yes** |
 | 🔑 | **Keys** | Pasted in **Settings → Connections → Enter key**. A key said aloud is refused |
+| 🌐 | **Server** | A self-hosted service (your company's GitLab, GitHub Enterprise) is set in **Settings → Connections → Change server**, as an `https://` address |
 | 🔐 | **Sign-in** | OAuth services sign in through JARVIS's own browser on its computer |
 | 🗂️ | **Sort its tools** | **Reading** tools run at once; **changing** tools each wait for your yes |
 | 🔁 | **Later** | "What tools are connected?", "switch Notion off", "is there a newer Notion?", "remove Notion" |
@@ -208,6 +209,7 @@ JARVIS finds and connects new tools for you as **MCP servers**. Say "connect Not
 - **Keys and sign-ins** are kept encrypted; a key is never shown again.
 - **Sorting** follows the server's own `readOnlyHint` / `destructiveHint`; ask to move any tool or switch it off.
 - **Removing** a server says what goes with it first.
+- **Changing its server** is the one setting the control panel changes (`GITLAB_API_URL`, `GITHUB_HOST`, or a setting of its own ending in `_URL` or `_HOST`). Moving to **another host forgets its keys**, as they were for the old server, so a control-panel login can't send them elsewhere; paste the new server's key after.
 
 A changing call is read out from the tool's own title and arguments ("On Notion, create a page, parent Projects, title 'Q4 plan'. Okay to go ahead?") and runs once after a clear yes. **What a connection returns is data, never instructions**: JARVIS connects, updates or removes only on your own request.
 
@@ -247,6 +249,7 @@ make servers ARGS="test acme"                             # start it, list tools
 make servers ARGS="tools acme --sort --block wipe"        # sort by markings (or --read ... --write 'post=post to {channel}')
 make servers ARGS="set-secret acme"                       # typed in hidden, or stdin; never on the command line
 make servers ARGS="disable acme"                          # or enable, remove, set NAME --env K=V, clear-secret
+make servers ARGS="set gitlab --env GITLAB_API_URL=https://git.example.com/api/v4"  # its server, keeping its key
 ```
 
 </details>
@@ -260,7 +263,7 @@ Keys expire and sign-ins get revoked. So a tool doesn't fail you mid-conversatio
 - **Hourly.** The notices service calls each switched-on connection's check about once an hour.
 - **Said once.** A refusal is said once, as a notification, a phone push and a spoken heads-up, and again only after the check has passed in between.
 - **Silent when unreachable.** A server that doesn't start or answer at all isn't reported as a sign-in problem.
-- **By hand:** `make servers ARGS="tools acme --check whoami"`, or `--check ''` for none.
+- **By hand:** `make servers ARGS="tools acme --check whoami"`, or `--check ''` for none. Run it now with `make servers ARGS="check acme"` (or `--tool whoami` for another reading tool): it says only whether it passed, never what the tool answered.
 
 ## 🔒 Secrets vault
 

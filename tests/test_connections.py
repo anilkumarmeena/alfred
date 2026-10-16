@@ -510,6 +510,49 @@ def test_the_panel_takes_a_key_but_never_shows_one(fresh):
     assert not vault.has("notes.notes_key")
 
 
+def gitlab_with_a_key(url: str = "https://gitlab.com/api/v4") -> None:
+    mcp_servers.save(Server("gitlab", "GitLab", command="npx", args=["-y", "@zereight/mcp-gitlab@2.1.69"],
+                            env={"GITLAB_API_URL": url, "GITLAB_PERMISSION_MODE": "modify"},
+                            secret_env={"GITLAB_PERSONAL_ACCESS_TOKEN": "gitlab.token"},
+                            tools={"whoami": Tool("read")}), new=True)
+    vault.ensure()
+    vault.put("gitlab.token", "glpat-not-a-real-token")
+
+
+def test_the_panel_shows_and_changes_the_server_a_connection_reaches(fresh):
+    gitlab_with_a_key()
+    assert call("servers")[0]["addresses"] == [{"var": "GITLAB_API_URL", "value": "https://gitlab.com/api/v4"}]
+    said = call("server_address", {"name": "gitlab", "var": "GITLAB_API_URL", "value": " https://gitlab.com/api/v4/ "})
+    assert said["forgot"] == [] and vault.has("gitlab.token")  # the same host keeps its key
+    assert mcp_servers.get("gitlab").env["GITLAB_API_URL"] == "https://gitlab.com/api/v4/"
+    assert said["servers"][0]["addresses"][0]["value"] == "https://gitlab.com/api/v4/"
+
+
+def test_moving_a_connection_to_another_host_forgets_its_keys(fresh):
+    gitlab_with_a_key()
+    said = call("server_address", {"name": "gitlab", "var": "GITLAB_API_URL", "value": "https://git.example.com/api/v4"})
+    assert said["forgot"] == ["GITLAB_PERSONAL_ACCESS_TOKEN"] and not vault.has("gitlab.token")
+    assert said["servers"][0]["secrets"] == [{"var": "GITLAB_PERSONAL_ACCESS_TOKEN", "set": False}]
+    assert "glpat" not in json.dumps(said)
+    server = mcp_servers.get("gitlab")
+    assert server.env == {"GITLAB_API_URL": "https://git.example.com/api/v4", "GITLAB_PERMISSION_MODE": "modify"}
+    vault.put("gitlab.token", "glpat-not-a-real-token")
+    assert call("server_address", {"name": "gitlab", "var": "GITLAB_API_URL", "value": ""})["forgot"] == ["GITLAB_PERSONAL_ACCESS_TOKEN"]
+    assert "GITLAB_API_URL" not in mcp_servers.get("gitlab").env  # back to the package's default, gitlab.com
+
+
+@pytest.mark.parametrize("body, why", [
+    ({"var": "GITLAB_API_URL", "value": "http://git.example.com"}, "https://"),
+    ({"var": "GITLAB_PERMISSION_MODE", "value": "https://git.example.com"}, "no server address"),
+    ({"var": "NODE_OPTIONS", "value": "https://git.example.com"}, "no server address"),
+])
+def test_the_panel_changes_only_a_server_address_and_only_to_https(fresh, body, why):
+    gitlab_with_a_key()
+    with pytest.raises(ValueError, match=why):
+        call("server_address", {"name": "gitlab"} | body)
+    assert mcp_servers.get("gitlab").env["GITLAB_API_URL"] == "https://gitlab.com/api/v4" and vault.has("gitlab.token")
+
+
 def test_the_panel_switches_one_on_only_once_its_tools_are_sorted(fresh):
     mcp_servers.save(Server("notes", "Notes", command="npx", args=["-y", "n@1.0.0"], reviewed=False,
                             source="com.example/notes-mcp", verified=True, version="1.0.0"), new=True)

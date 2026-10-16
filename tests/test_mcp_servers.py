@@ -191,6 +191,21 @@ def test_a_sign_in_check_says_whether_its_tool_answered_refused_or_nothing_came_
     assert mcp_servers.check(mcp_servers.get("quiet"), timeout=30) is None
 
 
+def test_checking_from_the_command_line_says_only_whether_it_passed(fresh, tmp_path, capsys):
+    script = tmp_path / "checked.py"
+    script.write_text(CHECKED_SERVER)
+    tools = {"whoami": Tool("read"), "expired": Tool("read"), "post": Tool("write")}
+    mcp_servers.save(Server("fake", "Fake", command=sys.executable, args=[str(script)], tools=tools), new=True)
+    assert mcp_servers.main(["check", "fake", "--tool", "whoami"]) == 0
+    out = capsys.readouterr().out
+    assert out == "Fake (whoami): signed in.\n" and "sam" not in out
+    assert mcp_servers.main(["check", "fake", "--tool", "expired"]) == 1
+    assert capsys.readouterr().out == "Fake (expired): refused: bad credentials\n"
+    for argv in (["check", "fake"], ["check", "fake", "--tool", "post"]):
+        with pytest.raises(SystemExit, match="reading tools"):
+            mcp_servers.main(argv)
+
+
 def test_a_sign_in_check_has_to_be_a_reading_tool(fresh, capsys):
     tools = {"whoami": Tool("read"), "post": Tool("write")}
     for check in ("post", "nothing"):
@@ -282,6 +297,44 @@ def test_pinned_package_fetchers_pass():
     for args in (["-y", "@acme/mcp@1.2.3"], ["acme-mcp@0.4.0"]):
         assert mcp_servers.problems(Server("acme", "Acme", command="npx", args=args)) == []
     assert mcp_servers.problems(Server("acme", "Acme", command="uvx", args=["acme-mcp==1.0"])) == []
+
+
+def test_a_server_s_address_settings_are_found_even_while_unset():
+    assert mcp_servers.addresses(gitlab()) == {"GITLAB_API_URL": "https://git.example.com/api/v4"}
+    assert mcp_servers.addresses(github()) == {"GITHUB_HOST": ""}  # unset: the package's default, github.com
+    acme = Server("acme", "Acme", command="acme-mcp", env={"ACME_BASE_URL": "https://acme.example", "PG_URL": "postgres://db",
+                                                           "ACME_MODE": "fast"})
+    assert mcp_servers.addresses(acme) == {"ACME_BASE_URL": "https://acme.example"}
+    assert mcp_servers.addresses(Server("n", "N", transport="http", url="https://n.example/mcp")) == {}
+
+
+@pytest.mark.parametrize("url", ["http://git.example.com/api/v4", "git.example.com", "https://", "ftp://git.example.com",
+                                 "https://user:pw@git.example.com", "https://git.example.com/?x=1", "https://git example.com",
+                                 "https://git.example.com:port/"])
+def test_a_server_address_has_to_be_https(url):
+    assert mcp_servers.bad_address(url)
+    assert any("GITLAB_API_URL" in p for p in mcp_servers.problems(replace(gitlab(), env={"GITLAB_API_URL": url})))
+
+
+def test_a_good_address_passes_and_moving_it_keeps_its_other_settings():
+    for url in ("https://git.example.com/api/v4", "https://ghe.example.com", "http://localhost:8080/api"):
+        assert mcp_servers.bad_address(url) == ""
+    server = replace(gitlab(), read_only_env={"GITLAB_PERMISSION_MODE": "readonly", "GITLAB_API_URL": "https://old.example"})
+    moved = mcp_servers.readdress(server, "GITLAB_API_URL", "https://code.example.com/api/v4")
+    assert moved.env == {"GITLAB_API_URL": "https://code.example.com/api/v4", "GITLAB_PERMISSION_MODE": "modify"}
+    assert moved.read_only_env == {"GITLAB_PERMISSION_MODE": "readonly"}  # research tasks reach the same server
+    assert mcp_servers.readdress(moved, "GITLAB_API_URL", "").env == {"GITLAB_PERMISSION_MODE": "modify"}
+    for var, url in (("GITLAB_PERMISSION_MODE", "https://x.example"), ("GITLAB_API_URL", "http://x.example")):
+        with pytest.raises(ValueError):
+            mcp_servers.readdress(server, var, url)
+
+
+def test_a_new_address_reaches_the_server_at_its_next_start(fresh):
+    seeded()
+    mcp_servers.save(mcp_servers.readdress(mcp_servers.need("gitlab"), "GITLAB_API_URL", "https://code.example.com/api/v4"))
+    for read_only in (False, True):
+        _, env = mcp_launch.command(mcp_servers.need("gitlab"), read_only)
+        assert env["GITLAB_API_URL"] == "https://code.example.com/api/v4" and env[GL_VAR] == GL_TOKEN
 
 
 def test_save_refuses_a_bad_server_and_a_clash(fresh):
