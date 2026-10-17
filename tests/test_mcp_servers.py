@@ -453,13 +453,50 @@ def test_the_voice_brain_loads_connections_tools_on_demand_and_its_own_up_front(
     assert "ToolSearch" in opts.system_prompt and "GitHub (mcp__github__…)" in opts.system_prompt
 
 
-def test_research_tasks_load_connections_on_demand_and_their_own_tools_up_front(fresh):
+def test_research_tasks_load_only_their_reporting_tools_up_front(fresh):
     seeded()
     opts = worker._options(worker_task(kind="research", project=None), NullReporter())
-    assert opts.mcp_servers["github"]["alwaysLoad"] is False
-    assert all(opts.mcp_servers[s]["alwaysLoad"] is True for s in ("task", "jarvis", "repo"))
+    assert opts.mcp_servers["task"]["alwaysLoad"] is True  # report_progress, ask_user: every run's
+    assert all(opts.mcp_servers[s]["alwaysLoad"] is False for s in ("github", "jarvis", "repo"))
     assert "ToolSearch" in opts.tools and "ToolSearch" in opts.allowed_tools
     assert "ToolSearch" in opts.system_prompt
+    # Deferred, not taken away: still allowed once loaded
+    assert {"mcp__jarvis__gmail_search", "mcp__jarvis__sheets_write"} <= set(opts.allowed_tools)
+
+
+def test_a_code_task_without_accounts_needs_no_tool_search(fresh):
+    """Its few tools of JARVIS's would save less deferred than ToolSearch's own description costs."""
+    opts = worker._options(worker_task(worktree=str(fresh)), NullReporter())
+    assert all(opts.mcp_servers[s]["alwaysLoad"] is True for s in ("task", "host"))
+    assert "ToolSearch" not in opts.tools and "ENABLE_TOOL_SEARCH" not in opts.env
+
+
+def test_tool_search_off_loads_a_tasks_own_tools_up_front(fresh, monkeypatch):
+    monkeypatch.setattr(mcp_servers, "ON_DEMAND", False)  # JARVIS_TOOL_SEARCH=false
+    seeded()
+    for task in (worker_task(kind="research", project=None), worker_task(worktree=str(fresh))):
+        opts = worker._options(task, NullReporter())
+        assert all(c.get("alwaysLoad") is not False for c in opts.mcp_servers.values())
+        assert "ToolSearch" not in opts.tools and "ENABLE_TOOL_SEARCH" not in opts.env
+
+
+def test_an_in_process_server_marked_deferred_stays_deferred():
+    own = {"type": "sdk", "name": "host", "instance": object(), "alwaysLoad": False}
+    got = claude.on_demand({"tools": ["Bash"], "env": {}, "mcp_servers": {"host": own,
+                                                                         "task": {"type": "sdk", "name": "task"}}})
+    assert got["mcp_servers"]["host"]["alwaysLoad"] is False and got["mcp_servers"]["task"]["alwaysLoad"] is True
+    assert got["tools"] == ["Bash", "ToolSearch"] and got["env"]["ENABLE_TOOL_SEARCH"] == claude.TOOL_SEARCH
+
+
+def test_gitlab_guidance_is_given_only_with_a_gitlab_connection_on(fresh):
+    seeded(gitlab_on=False)
+    prompt = worker._options(worker_task(kind="research", project=None), NullReporter()).system_prompt
+    assert "With the tools Sam has connected" in prompt and "Never look for their keys" in prompt
+    assert "GitLab file whole" not in prompt and "create_merge_request_thread" not in prompt
+    _emptied()
+    seeded()
+    prompt = worker._options(worker_task(kind="research", project=None), NullReporter()).system_prompt
+    assert "GitLab file whole" in prompt and "create_merge_request_thread" in prompt
 
 
 def test_a_session_without_connections_gets_no_tool_search(fresh):

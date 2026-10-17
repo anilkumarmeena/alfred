@@ -190,6 +190,27 @@ def test_a_greeting_says_an_update_in_whole_sentences_and_a_question_whole():
     assert announce.brief({"status": "waiting", "spoken": long}) == (long.strip(), True)
 
 
+def test_spoken_task_updates_are_worded_by_the_cheapest_model(monkeypatch):
+    from jarvis.brain import side
+    from jarvis.llm import claude, roles
+    from jarvis.llm.roles import Role
+
+    asked = []
+
+    async def ask(text, system, role, **_):
+        asked.append(role)
+        return "It's done.", 0.0
+
+    monkeypatch.setattr(claude, "ask", ask)
+    monkeypatch.setattr(side, "ANNOUNCE_ENABLED", True)
+    monkeypatch.setattr(usage, "out", lambda now=None: None)
+    asyncio.run(announce.ask_model("<task>Fix the login</task>"))
+    asyncio.run(side.spoken("## Found\n\n- The **login** page was fixed in `auth.py`, and its tests pass. " * 3))
+    cheapest = roles.model("fast")
+    assert "haiku" in cheapest and asked and {roles.model(r) for r in asked} == {cheapest}
+    assert roles.model(Role.COMMAND_SUMMARY) == cheapest  # a command task's spoken summary
+
+
 def test_the_update_a_greeting_leads_with_is_the_weightiest_with_words():
     silent = {"status": "waiting", "spoken": " ", "updated": 9}
     stopped = {"status": STOPPED, "spoken": "The scan stopped.", "updated": 3}

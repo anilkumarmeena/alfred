@@ -136,6 +136,9 @@ class Outcome:
 
 
 ARTIFACT_ENV = {"CLAUDE_CODE_ARTIFACT": "1"}  # undocumented; the CLI omits Artifact under the SDK without it
+# The CLI may cache prompts for an hour, whose writes cost twice the input price; a task's calls follow each other
+# within minutes, so the five-minute cache (writes at 1.25x) is cheaper. Covers its subagents too.
+FIVE_MINUTE_CACHE = {"FORCE_PROMPT_CACHING_5M": "1"}
 
 
 # "*" allows every domain through the sandbox proxy. configd (macOS network settings) is needed by uv and other
@@ -162,6 +165,12 @@ def _blank_env() -> dict[str, str]:
     return {k: "" for k in host.env_keys() if not k.startswith("CLAUDE_")} | mcp_servers.session_env()
 
 
+def _on_demand(server: dict) -> dict:
+    """An in-process server whose tools are listed by name only until the session loads one with ToolSearch, while
+    tool search is on (else loaded up front: with search off, a deferred tool could never load)."""
+    return server | {"alwaysLoad": False} if mcp_servers.ON_DEMAND else server
+
+
 def _model(task: dict) -> tuple[str, str]:
     """(model, effort): scheduled non-code runs get the schedule role; usage.available falls back if a limit is out."""
     if task.get("job") is not None and task["kind"] != "code_change":
@@ -173,9 +182,11 @@ def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> Claud
     """The task session's options; `live` keeps its connections current while it runs."""
     live = live or Watch()
     kind = task["kind"]
-    env: dict[str, str] = _blank_env()
+    env: dict[str, str] = _blank_env() | FIVE_MINUTE_CACHE
+    # Reporting and host tools load up front; only the many account tools wait for ToolSearch (deferring a few small
+    # ones would cost more in ToolSearch's own description than it saves)
     mcp = {"task": _task_server(task["id"], reporter)}
-    allowed = ["WebSearch", "WebFetch", "TodoWrite", "mcp__task__report_progress", "mcp__task__ask_user",
+    allowed = ["WebSearch", "WebFetch", "mcp__task__report_progress", "mcp__task__ask_user",
                "mcp__task__propose_data_edit", REQUEST_ACCESS]
     add_dirs: list[Path] = []
     denied: list[str] = []
@@ -183,7 +194,7 @@ def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> Claud
     if kind == "code_change":
         cwd = Path(task["worktree"])  # the project folder when in place
         denied = _IN_PLACE_DENIED if task["in_place"] else []
-        builtins = ["Read", "Glob", "Grep", "Edit", "Write", "Bash", "TodoWrite", "WebSearch", "WebFetch"]
+        builtins = ["Read", "Glob", "Grep", "Edit", "Write", "Bash", "WebSearch", "WebFetch"]
         read_roots, write_roots = [cwd, TASK_CACHE_DIR, host.TASK_JOBS_DIR, *TASK_READ_DIRS, claude_logins.voice_logs()], [cwd]
         add_dirs = [TASK_CACHE_DIR]
         env |= _cache_env()
@@ -240,8 +251,8 @@ def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> Claud
         more_writes = list(TASK_READ_DIRS)  # TaskGate still blocks secrets and JARVIS's own files
     if "accounts" in can:
         # docs_insert_image's local paths are checked by TaskGate.doc_images
-        mcp["jarvis"], jarvis_allowed = _wired().server(READ_ONLY_TOOLS + ([] if task.get("read_only")
-                                                                         else GOOGLE_EDIT_TOOLS))
+        own_tools, jarvis_allowed = _wired().server(READ_ONLY_TOOLS + ([] if task.get("read_only") else GOOGLE_EDIT_TOOLS))
+        mcp["jarvis"] = _on_demand(own_tools)
         # Connections: reading is free, each change waits for the user's yes (connection_calls)
         servers = mcp_servers.session(mcp_servers.for_research(), ask_own=True)
         live.use(servers.servers)
@@ -253,7 +264,7 @@ def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> Claud
         else:
             connections = ConnectionGate(task["id"], servers.servers, reporter)
         if found := repo_files.gitlab(servers.servers):  # whole files and projects, with the connection's own key
-            mcp[repo_files.NAME] = repo_files.repo_server(task["id"], found)
+            mcp[repo_files.NAME] = _on_demand(repo_files.repo_server(task["id"], found))
             allowed += repo_files.TOOLS
             builtins += [t for t in ("Read", "Glob", "Grep") if t not in builtins]
             read_roots = [*read_roots, repo_files.downloads(task["id"])]

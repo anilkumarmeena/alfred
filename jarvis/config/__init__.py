@@ -175,8 +175,9 @@ EFFORT = text("voice_brain.effort", "JARVIS_EFFORT")
 SIDE_MINUTES = number("voice_brain.side_minutes", "JARVIS_SIDE_MINUTES", 0.5, 30.0)
 # A fast model picks when to speak updates and reminders (jarvis.voice.floor); off = as soon as nobody is talking
 PROACTIVE_JUDGE = flag("voice_brain.proactive_judge", "JARVIS_PROACTIVE_JUDGE")
-# CLI ENABLE_TOOL_SEARCH for MCP tools (JARVIS's own always load): true = always deferred, auto:N = deferred once they'd
-# fill N% of context, false = all loaded up front. Deferring keeps many connections from slowing every reply.
+# CLI ENABLE_TOOL_SEARCH for connections' tools: true = always deferred, auto:N = deferred once they'd fill N% of
+# context, false = all loaded up front. JARVIS's own tools load up front, except a task's account tools, deferred too
+# while this is on. Deferring keeps many connections from slowing every reply, and a task's first call small.
 TOOL_SEARCH = text("voice_brain.tool_search", "JARVIS_TOOL_SEARCH").lower()
 # Seconds an MCP call may block a spoken reply before continuing in the background (jarvis.integrations.mcp_relay).
 # 0 = always wait. Tasks always wait.

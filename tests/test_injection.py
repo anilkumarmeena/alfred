@@ -450,6 +450,28 @@ def test_the_hooks_warm_a_session_as_a_tool_is_called_and_screen_its_result(mode
     assert warmed == [MODEL]
 
 
+def test_a_tasks_file_edits_cost_no_check_while_commands_and_reads_still_get_one(model, monkeypatch):
+    """Edits and writes (sandboxed and gated to the task's own folder) return only what the model wrote: no session is
+    warmed and no model call made. What a command prints or a file read returns still is judged."""
+    warmed = []
+    monkeypatch.setattr(injection, "warm", warmed.append)
+    found = injection.hooks(5.0, MODEL)
+    before, after = found["PreToolUse"][0].hooks[0], found["PostToolUse"][0].hooks[0]
+
+    async def call(tool: str, args: dict, response) -> dict:
+        await before({"tool_name": tool, "tool_input": args}, None, None)
+        return await after({"tool_name": tool, "tool_input": args, "tool_response": response}, None, None)
+
+    for tool, args in (("Edit", {"file_path": "/work/app.py", "old_string": "a = 1", "new_string": EMAIL}),
+                       ("MultiEdit", {"file_path": "/work/app.py", "edits": [{"old_string": "a", "new_string": EMAIL}]}),
+                       ("Write", {"file_path": "/work/notes.md", "content": EMAIL})):
+        assert asyncio.run(call(tool, args, {"filePath": args["file_path"], "content": EMAIL})) == {}
+    assert warmed == [] and model.prompts == []
+    asyncio.run(call("Bash", {"command": "git push"}, {"stdout": f"Pushed.\n{EMAIL}", "stderr": ""}))
+    asyncio.run(call("Read", {"file_path": "/elsewhere/mail.txt"}, {"file": {"content": f"Saved mail:\n{EMAIL}"}}))
+    assert len(model.prompts) == 2 and warmed == [MODEL, MODEL]
+
+
 def test_sessions_with_tools_are_screened_while_the_check_is_on(monkeypatch):
     own = [HookMatcher(hooks=[lambda *a: {}])]
     monkeypatch.setattr(sdk, "injection_check_on", lambda: True)

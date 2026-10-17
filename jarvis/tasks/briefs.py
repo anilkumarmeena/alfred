@@ -40,8 +40,8 @@ def _google_limits() -> str:
 
 
 def _connections_brief(read_only: bool = False) -> str:
-    """How a connection's reading and changing tools work in a task (a read-only one only reads), and the GitLab
-    download tools."""
+    """How a connection's reading and changing tools work in a task (a read-only one only reads), and, with a GitLab
+    connection on, its download tools and inline comments."""
     name = profile.name()
     changes = ("only reading: a tool that changes something there or reaches other people is refused." if read_only else
                "reading is free. A tool that changes something there or reaches "
@@ -50,14 +50,17 @@ def _connections_brief(read_only: bool = False) -> str:
                "them yourself. Carry on with anything that doesn't depend on it; if nothing's left, end your turn with one "
                "short line. When they answer you'll get a message; if it's a yes, make the identical call again, with "
                "exactly the same arguments, once. A tool refused as not available can't be used here.")
-    inline = "" if read_only else (
-        f" An inline comment on a merge request's diff line is GitLab's {mcp_servers.GITLAB_THREAD}, with a position: "
-        "position_type text, base_sha, start_sha and head_sha from the merge request's diff_refs, and new_path and "
-        "new_line (old_path and old_line for a removed line).")
-    return (f"\n- With the tools {name} has connected, {changes}"
-            f"\n- To read a GitLab file whole, or a whole project, use {' or '.join(repo_files.TOOLS)} where they're "
-            "offered: they fetch with the connection's own key, which you never need. Never look for keys or tokens, or "
-            f"post or fetch another way round (glab, curl, git clone, the API).{inline}")
+    said = (f"\n- With the tools {name} has connected, {changes} Never look for their keys or tokens, or post or fetch "
+            "another way round (glab, gh, curl, git clone, the API).")
+    labs = [s for s in mcp_servers.for_research() if repo_files.ADDRESS in mcp_servers.addresses(s)]
+    if repo_files.gitlab(labs):
+        said += (f"\n- To read a GitLab file whole, or a whole project, use {' or '.join(repo_files.TOOLS)}: they fetch "
+                 "with the connection's own key, which you never need.")
+    if labs and not read_only:
+        said += (f"\n- An inline comment on a merge request's diff line is GitLab's {mcp_servers.GITLAB_THREAD}, with a "
+                 "position: position_type text, base_sha, start_sha and head_sha from the merge request's diff_refs, "
+                 "and new_path and new_line (old_path and old_line for a removed line).")
+    return said
 
 
 def _artifact_brief(folder: Path) -> str:

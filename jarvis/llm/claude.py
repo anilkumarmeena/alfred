@@ -61,14 +61,14 @@ def refusing(refused: Callable[[str, dict], str]) -> list[HookMatcher]:
 
 
 def on_demand(options: dict) -> dict:
-    """`options` with deferred connections (alwaysLoad false) loaded on demand via ToolSearch.
+    """`options` with deferred servers (alwaysLoad false) loaded on demand via ToolSearch.
 
-    In-process (sdk) servers always load. ToolSearch is allowed freely: it only loads tools, and calls still meet the
-    same rules and gate. With no deferred connection, everything loads up front.
+    In-process (sdk) servers load up front unless marked deferred themselves. ToolSearch is allowed freely: it only
+    loads tools, and calls still meet the same rules and gate. With no deferred server, everything loads up front.
     """
     if not (servers := options.get("mcp_servers")):
         return options
-    servers = servers | {name: c | {"alwaysLoad": True} for name, c in servers.items() if c.get("type") == "sdk"}
+    servers = servers | {name: {"alwaysLoad": True} | c for name, c in servers.items() if c.get("type") == "sdk"}
     if not any(c.get("alwaysLoad") is False for c in servers.values()):
         return options | {"mcp_servers": servers}
     return options | {"mcp_servers": servers, "tools": [*options["tools"], TOOL_SEARCH_TOOL],

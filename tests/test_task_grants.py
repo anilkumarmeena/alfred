@@ -400,3 +400,22 @@ def test_a_read_only_task_reads_accounts_without_edits_and_runs_commands_without
     assert not any(t.startswith("mcp__jarvis__") for t in looks.allowed_tools)  # no mail without accounts
     files = worker._options(question() | {"read_only": 1}, NullReporter())
     assert "Artifact" not in files.tools and "request_access" not in files.system_prompt["append"]
+
+
+# ── What a session costs up front ───────────────────────────────
+
+
+def test_every_kind_of_task_uses_the_five_minute_prompt_cache_not_the_hour(box):
+    """Hour-long cache writes cost twice the input price; a task's calls come minutes apart."""
+    for task in (worker_task(worktree=str(box["video"])), question(), question("shell", "mac"),
+                 worker_task(kind="research", project=None)):
+        env = worker._options(task, NullReporter()).env
+        assert env["FORCE_PROMPT_CACHING_5M"] == "1" and not env.get("ENABLE_PROMPT_CACHING_1H")
+
+
+def test_a_task_loads_the_built_in_tools_its_kind_works_with(box):
+    change = worker._options(worker_task(worktree=str(box["video"])), NullReporter()).tools
+    assert {"Read", "Edit", "Write", "Bash", "WebSearch", "WebFetch", "Agent", "Artifact"} <= set(change)
+    assert "TodoWrite" not in change  # a planning list no one sees, with a long description
+    looks = worker._options(question(), NullReporter()).tools
+    assert set(looks) == {"Read", "Glob", "Grep", "Bash", "WebSearch", "WebFetch", "Agent"}
