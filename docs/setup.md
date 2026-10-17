@@ -45,6 +45,7 @@ flowchart LR
 | 📱 | [6. Your phone over Tailscale](#-6-your-phone-over-tailscale) | The home-screen app on your phone |
 | 📁 | [7. Projects for code tasks](#-7-projects-for-code-tasks) | Repos background tasks can work on |
 | 🔁 | [8. Run it 24/7](#-8-run-it-247) | Four services that never stop: launchd or systemd |
+| 🧹 | [Uninstall](#-uninstall) | Remove the services, or everything but the code |
 | 📂 | [Where things live](#-where-things-live) | Every file and folder JARVIS keeps |
 
 </details>
@@ -424,6 +425,24 @@ sudo loginctl enable-linger $USER
 | 📊 | Check on them | `make status` |
 
 `JARVIS_SERVICE_PREFIX` changes the `com.jarvis` part, to **run a second JARVIS** under the same user account; `make services-restart` moves the services to the new labels.
+
+## 🧹 Uninstall
+
+Two levels. **Neither touches the code**: delete the checkout folder yourself to finish.
+
+| | Command | Removes | Keeps |
+|:-:|---|---|---|
+| 🛑 | `make uninstall` | Every service: the four, any under an old label, and a second machine's `node` service. None comes back at login, and launchd's service logs move back into `logs/` | Your data, settings, secrets and models: `make services-install` brings JARVIS back |
+| 🗑️ | `make uninstall-all` | All of the above, plus JARVIS_HOME's `.env`, `config.toml`, `data/`, `secrets/`, `models/` and `logs/`, JARVIS's own Claude logins (signed out, so their keychain entries go too), `.venv`, `web/node_modules`, `web/dist`, and the `livekit-server` that `make livekit-bin` put in `~/.local/bin` | The code |
+
+`make uninstall-all` lists every path first and deletes **only after you type `delete`**. `YES=1` skips the question, for scripts. It refuses while JARVIS still runs in the foreground (`make dev`, `make console`). It removes links, never what they point to.
+
+**Left for you to decide**, printed at the end when they apply:
+
+- Tailscale serving JARVIS on your tailnet: `tailscale serve reset` clears this computer's serve settings.
+- Sleep turned off by `make awake`: `make sleep-normal`.
+- Paired machines: run `make uninstall` on each. On a second machine, remove it in the main computer's **Settings › Machines**.
+- Shared tools stay: `uv`, a Homebrew `livekit` (`brew uninstall livekit`), and the speech models in `~/.cache/huggingface`.
 
 ## 📂 Where things live
 

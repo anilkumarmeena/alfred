@@ -100,7 +100,7 @@ WEB_STAMP := web/node_modules/.install-stamp
 .PHONY: help install uv-bin livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks speech-gate voice-timing voiceprint test host-check artifact-check features \
         services-install services-start services-stop services-restart status logs awake sleep-normal \
         claude-login claude-status accounts about servers passcode vault chat-check tailscale-serve check clean \
-        node-setup node-login node-pair node-install node-stop node-check node-status
+        node-setup node-login node-pair node-install node-stop node-check node-status uninstall uninstall-all
 
 help: ## Show this list
 	@grep -hE '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -269,6 +269,12 @@ DETACH := /usr/bin/perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV'
 else
 DETACH  = $(if $(shell command -v systemd-run),systemd-run --user --collect --quiet --setenv=PATH="$$PATH" --,setsid)
 endif
+
+uninstall: ## Remove JARVIS's services (a node's too) from this computer; keeps the code, data and settings
+	@$(SERVICE_CTL) uninstall
+
+uninstall-all: ## Also delete the data, settings, secrets, models, Claude logins and build files (asks; YES=1 skips)
+	@$(SERVICE_CTL) uninstall --all $(if $(YES),--yes)
 
 services-restart: web-build ## Rebuild web app, restart services
 	@mkdir -p "$(LOGS_DIR)"; rm -f "$(RESTART_LOG).done"

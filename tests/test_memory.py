@@ -142,7 +142,9 @@ def test_conversation_search_is_a_voice_tool(logs):
 
 def test_the_logs_stay_out_of_git_and_within_reach_of_the_shell_and_lookup():
     assert profile.current().conversations == DATA_DIR / "conversations"
-    ignored = subprocess.run(["git", "check-ignore", "-q", "data/conversations/2026-09-27.md"], cwd=ROOT)
+    # After make home-move data is a link (git never looks through one): then the link itself must be ignored
+    inside = "data" if (ROOT / "data").is_symlink() else "data/conversations/2026-09-27.md"
+    ignored = subprocess.run(["git", "check-ignore", "-q", inside], cwd=ROOT)
     assert ignored.returncode == 0
     path = str(profile.current().conversations / "2026-09-27.md")
     assert not any(path.startswith(str(p)) for p in commands.JARVIS_SECRETS) and not commands.names_secret(path)

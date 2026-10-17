@@ -12,6 +12,9 @@
   node-install / node-stop   on a second machine: its one service, which runs python -m jarvis.node serve
   move-home  move .env, data, secrets, models and logs out of the checkout into JARVIS_HOME (default ~/.jarvis);
              run with the services stopped (make home-move does both)
+  uninstall [--all [--yes]]   remove every service (a node's too) and the service logs folder; --all also deletes
+             the install's data, settings, secrets, models and Claude logins and the checkout's build files, after
+             you type "delete" (--yes skips that). The code stays.
 
 Services this checkout installed under old labels (e.g. a changed JARVIS_SERVICE_PREFIX) are stale: stop unloads them;
 start and --install remove them before loading the current ones.
@@ -406,6 +409,173 @@ def stop_node() -> None:
         print(f"stopped {path.stem}")
 
 
+# ── Uninstall ──
+
+BUILT = (".venv", "web/node_modules", "web/dist")  # what make install builds in the checkout
+OWN_LIVEKIT = Path.home() / ".local/bin/livekit-server"  # make livekit-bin's (a Homebrew one is only pointed out)
+
+
+def uninstall_services() -> list[str]:
+    """Stop and remove every service this checkout installed (the four, any under stale labels, a second machine's
+    node service) so none comes back at login, and put launchd's service logs back in logs/. Returns their labels."""
+    removed = []
+    for path in dict.fromkeys([*(installed(name) for name in (*SERVICES, NODE)), *stale()]):
+        if not path.exists():
+            continue
+        if _systemd():
+            _systemctl("disable", "--now", path.name)
+        else:
+            _launchctl("bootout", path)
+        path.unlink(missing_ok=True)
+        removed.append(path.stem)
+    if removed and _systemd():
+        _systemctl("daemon-reload")
+    _unlink_logs()
+    return removed
+
+
+def _unlink_logs(logs: Path = LOGS_DIR, service_logs: Path = SERVICE_LOGS) -> None:
+    """Move the logs launchd wrote in `service_logs` back into `logs`, in place of their links (_link_log)."""
+    if not service_logs.is_dir():
+        return
+    for target in sorted(service_logs.glob("*.log")):
+        link = logs / target.name
+        if link.is_symlink():
+            link.unlink()
+        if not link.exists():
+            logs.mkdir(parents=True, exist_ok=True)
+            shutil.move(target, link)
+    for link in logs.glob("*.log") if logs.is_dir() else []:
+        if link.is_symlink() and link.resolve().is_relative_to(service_logs.resolve()):
+            link.unlink()
+    shutil.rmtree(service_logs, ignore_errors=True)
+
+
+def install_files(root: Path = ROOT, home: Path = HOME_DIR, user_home: Path | None = None) -> list[Path]:
+    """What uninstall --all deletes: the install's own files (JARVIS_HOME's .env, config.toml, data, secrets, models
+    and logs, the checkout's data link, a ~/.jarvis link), what make install built in the checkout, and make
+    livekit-bin's livekit-server. Never the checkout's code, or a folder holding it or the user's home."""
+    user_home = user_home or Path.home()
+    found = [home / name for name in HOME_ITEMS]
+    found += [root / name for name in HOME_ITEMS
+              if (root / name).is_symlink() and (root / name).resolve() == (home / name).resolve()]
+    found += [config.DATA_DIR, config.SECRETS_DIR, *(root / p for p in BUILT), OWN_LIVEKIT]
+    if (link := user_home / ".jarvis").is_symlink() and link.resolve() == home.resolve():
+        found.append(link)
+    keep = [Path("/"), user_home.resolve(), root.resolve()]
+    return [path for path in dict.fromkeys(found) if (path.exists() or path.is_symlink())
+            and not any(k.is_relative_to(path.resolve()) for k in keep if not path.is_symlink())]
+
+
+def delete(paths: list[Path], home: Path = HOME_DIR) -> None:
+    """Delete each path; a link goes, never what it points to. JARVIS_HOME goes too once it's empty."""
+    for path in paths:
+        if path.is_symlink() or path.is_file():
+            path.unlink(missing_ok=True)
+        elif path.is_dir():
+            shutil.rmtree(path)
+    if home.is_dir() and not home.is_symlink() and home.resolve() != ROOT.resolve() and not any(home.iterdir()):
+        home.rmdir()
+
+
+def _sign_out_claude() -> None:
+    """Sign JARVIS's own Claude logins out, so their keychain entries go with their folders (never the Mac's own)."""
+    from jarvis import claude_login
+    from jarvis.llm import claude_logins
+
+    for name in claude_logins.named():
+        claude_login.sign_out(name)
+        print(f"signed out Claude login {name}")
+
+
+def _still_running() -> bool:
+    """Whether a task runner still answers on its socket (make dev or make console, say)."""
+    import socket
+
+    try:
+        with socket.socket(socket.AF_UNIX) as s:
+            return config.RUNNER_SOCKET.exists() and s.connect_ex(str(config.RUNNER_SOCKET)) == 0
+    except OSError:
+        return False
+
+
+def _output(*argv: str) -> str:
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=15).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def leftovers(everything: bool) -> list[str]:
+    """What uninstalling leaves on this computer that only the user should undo, as hints."""
+    hints = []
+    tailscale = next((c for c in TAILSCALE_CLIS if shutil.which(c) or os.path.exists(c)), "")
+    served = _output(tailscale, "serve", "status") if tailscale else ""
+    if any(f":{port}" in served for port in (config.WEB_PORT, 7880)):
+        hints.append("Tailscale still serves JARVIS on your tailnet: `tailscale serve reset` clears this computer's "
+                     "serve settings (all of them)")
+    asleep = (_output("systemctl", "is-enabled", "sleep.target").strip() == "masked" if _systemd()
+              else re.search(r"SleepDisabled\s+1", _output("pmset", "-g")))
+    if asleep:
+        hints.append("Sleep is still off (make awake): `make sleep-normal` turns it back on")
+    try:
+        from jarvis.node import home, machines
+
+        if machines.load():
+            hints.append("Machines paired with this one still try to reach it: run `make uninstall` on each")
+        if home.PAIRING_FILE.exists():
+            hints.append("The main computer still lists this machine: remove it in Settings › Machines")
+    except Exception:  # an unreadable or already deleted install: nothing to say
+        pass
+    if everything:
+        if _output("brew", "list", "--versions", "livekit").strip():
+            hints.append("livekit-server came from Homebrew: `brew uninstall livekit` if nothing else uses it")
+        hints.append("uv and the Hugging Face cache (~/.cache/huggingface, speech models) are shared with other "
+                     "tools, so they stay")
+        hints.append(f"The code is still in {_shown(ROOT)}: delete that folder to finish")
+    else:
+        hints.append("Your data, settings and secrets are kept: `make services-install` brings JARVIS back, "
+                     "`make uninstall-all` deletes them too")
+    return hints
+
+
+def uninstall(everything: bool = False, yes: bool = False, ask=input) -> None:
+    """Remove JARVIS from this computer: its services and service logs; with `everything`, also its data, settings,
+    secrets, models, Claude logins and build files, after the user types "delete" (or `yes`)."""
+    if _systemd() and not shutil.which("systemctl"):
+        print("systemctl isn't installed, so there are no services to remove")
+    else:
+        for label in uninstall_services():
+            print(f"removed {label}")
+    if everything:
+        if _still_running():
+            sys.exit("JARVIS is still running in the foreground (make dev or make console?): stop it and rerun")
+        paths = install_files()
+        print("This deletes, for good (links go, not what they point to):")
+        for path in paths:
+            print(f"  {_shown(path)}")
+        if not yes:
+            if not sys.stdin.isatty() and ask is input:
+                sys.exit('Not deleting anything without a yes: rerun in a terminal, or with YES=1')
+            if ask('Type "delete" to go ahead: ').strip() != "delete":
+                sys.exit("Nothing deleted; the services stay removed")
+        _sign_out_claude()
+        hints = leftovers(everything)  # before the files that tell them go
+        delete(paths)
+        if (ROOT / ".git").exists():
+            subprocess.run(["git", "-C", str(ROOT), "worktree", "prune"], check=False)
+        print("deleted")
+    else:
+        hints = leftovers(everything)
+    for hint in hints:
+        print(f"- {hint}")
+
+
+def _uninstall_command() -> None:
+    flags = set(sys.argv[2:])
+    uninstall(everything="--all" in flags, yes="--yes" in flags)
+
+
 def properties(text: str) -> dict[str, str]:
     """systemctl show output (Key=Value lines) as a dict."""
     return {key: value for key, found, value in (line.partition("=") for line in text.splitlines()) if found}
@@ -447,7 +617,7 @@ def main() -> None:
     services = {"start": start_services, "stop": stop_services, "status": print_status,
                 "labels": lambda: print(" ".join(config.service_label(name) for name in SERVICES)),
                 "node-install": install_node, "node-stop": stop_node,
-                "install": install_services, "move-home": _move_home_command}
+                "install": install_services, "move-home": _move_home_command, "uninstall": _uninstall_command}
     arg = sys.argv[1] if len(sys.argv) > 1 else ""
     if arg in ("-h", "--help", "help"):
         return print(__doc__.strip())

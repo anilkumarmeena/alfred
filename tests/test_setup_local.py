@@ -430,3 +430,64 @@ def test_projects_default_to_the_folder_jarvis_is_in(monkeypatch, tmp_path):
     assert config.projects_home() == tmp_path / "code"  # a task's worktree goes by its main checkout
     monkeypatch.setattr(config, "ROOT", Path.home() / "jarvis")
     assert config.projects_home() == Path.home() / "Projects"  # never the whole home folder
+
+
+
+def test_uninstall_removes_every_service_and_keeps_none_for_login(tmp_path, monkeypatch):
+    agents, stopped = tmp_path / "LaunchAgents", []
+    agents.mkdir()
+    monkeypatch.setattr(setup_local, "LAUNCH_AGENTS", agents)
+    monkeypatch.setattr(setup_local, "MANAGER", "launchd")
+    monkeypatch.setattr(setup_local, "SERVICE_LOGS", tmp_path / "Library/Logs/com.jarvis")
+    monkeypatch.setattr(setup_local, "_launchctl", lambda action, plist: stopped.append((action, plist.stem)) or "")
+    for name in ("agent", "web", "node"):
+        setup_local.installed(name).write_text("<plist/>")
+    removed = setup_local.uninstall_services()
+    assert removed == ["com.jarvis.agent", "com.jarvis.web", "com.jarvis.node"]
+    assert stopped == [("bootout", label) for label in removed] and not list(agents.iterdir())
+
+
+def test_uninstall_puts_the_service_logs_back_in_logs(tmp_path):
+    logs, service_logs = tmp_path / "home/logs", tmp_path / "Library/Logs/com.jarvis"
+    logs.mkdir(parents=True)
+    service_logs.mkdir(parents=True)
+    (service_logs / "agent.log").write_text("history\n")
+    (logs / "agent.log").symlink_to(service_logs / "agent.log")
+    (logs / "web.log").symlink_to(service_logs / "web.log")  # never written: just the link
+    setup_local._unlink_logs(logs, service_logs)
+    assert not (logs / "agent.log").is_symlink() and (logs / "agent.log").read_text() == "history\n"
+    assert not (logs / "web.log").exists() and not (logs / "web.log").is_symlink() and not service_logs.exists()
+
+
+def test_uninstall_all_deletes_the_install_never_the_code_or_home(tmp_path, monkeypatch):
+    user, root = tmp_path / "user", tmp_path / "user/code/jarvis"
+    home = user / "jarvis-home"
+    for folder in (root / "jarvis", root / ".venv", root / "web/node_modules", home / "data", home / "secrets"):
+        folder.mkdir(parents=True)
+    (home / ".env").write_text("JARVIS_MASTER_KEY=x\n")
+    (root / "data").symlink_to(home / "data")
+    (user / ".jarvis").symlink_to(home)
+    monkeypatch.setattr(setup_local.config, "DATA_DIR", home / "data")
+    monkeypatch.setattr(setup_local.config, "SECRETS_DIR", home / "secrets")
+    monkeypatch.setattr(setup_local, "OWN_LIVEKIT", tmp_path / "bin/livekit-server")
+    found = setup_local.install_files(root, home, user)
+    assert set(found) == {home / ".env", home / "data", home / "secrets", root / "data", root / ".venv",
+                          root / "web/node_modules", user / ".jarvis"}
+    setup_local.delete(found, home)
+    assert (root / "jarvis").is_dir() and not home.exists() and not (user / ".jarvis").is_symlink()
+    # A home that is the user's own folder, or holds the code, is never deleted whole
+    monkeypatch.setattr(setup_local.config, "DATA_DIR", user)
+    assert user not in setup_local.install_files(root, user, user)
+
+
+def test_uninstall_all_deletes_nothing_without_a_yes(tmp_path, monkeypatch):
+    doomed = tmp_path / "data"
+    doomed.mkdir()
+    monkeypatch.setattr(setup_local, "uninstall_services", lambda: [])
+    monkeypatch.setattr(setup_local, "install_files", lambda: [doomed])
+    monkeypatch.setattr(setup_local, "_still_running", lambda: False)
+    monkeypatch.setattr(setup_local, "leftovers", lambda everything: [])
+    monkeypatch.setattr(setup_local, "_sign_out_claude", lambda: pytest.fail("signed out without a yes"))
+    with pytest.raises(SystemExit, match="Nothing deleted"):
+        setup_local.uninstall(everything=True, ask=lambda prompt: "yes")  # only "delete" counts
+    assert doomed.is_dir()

@@ -18,7 +18,9 @@ SCRATCH = Path(tempfile.mkdtemp(prefix="jarvis-tests-"))
 atexit.register(shutil.rmtree, SCRATCH, True)
 os.environ["JARVIS_DATA_DIR"] = str(SCRATCH / "data")
 os.environ["JARVIS_DB_FILE"] = str(SCRATCH / "data" / "tasks.db")
-(SCRATCH / "config.toml").write_text("")  # only the shipped defaults, never this machine's config.toml
+# The checkout as JARVIS_HOME (the layout tests assume), never this machine's ~/.jarvis or its config.toml
+os.environ["JARVIS_HOME"] = str(Path(__file__).resolve().parents[1])
+(SCRATCH / "config.toml").write_text("")  # only the shipped defaults
 os.environ["JARVIS_CONFIG"] = str(SCRATCH / "config.toml")
 os.environ["JARVIS_GOAL_LOOP"] = "0"  # test_goal enables it with a fake check
 os.environ["JARVIS_CONSENT"] = "0"  # test_consent fakes the model call

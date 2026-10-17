@@ -315,6 +315,8 @@ What a lower layer names so a higher one can fill it in (`jarvis/contracts/`), w
 | 24/7 services (launchd on macOS, systemd on Linux) | `make services-install` | Install and start the services |
 | 24/7 services (launchd on macOS, systemd on Linux) | `make services-start` | Start services |
 | 24/7 services (launchd on macOS, systemd on Linux) | `make services-stop` | Stop services (stay installed) |
+| 24/7 services (launchd on macOS, systemd on Linux) | `make uninstall` | Remove JARVIS's services (a node's too) from this computer; keeps the code, data and settings |
+| 24/7 services (launchd on macOS, systemd on Linux) | `make uninstall-all` | Also delete the data, settings, secrets, models, Claude logins and build files (asks; YES=1 skips) |
 | 24/7 services (launchd on macOS, systemd on Linux) | `make services-restart` | Rebuild web app, restart services |
 | 24/7 services (launchd on macOS, systemd on Linux) | `make status` | Show service status |
 | 24/7 services (launchd on macOS, systemd on Linux) | `make logs` | Follow service logs |
