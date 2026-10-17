@@ -1,15 +1,17 @@
 """Tests for tasks carrying on by themselves: after running out of steps (up to TASK_CONTINUES times per ask), and
-after Claude's usage limit resets (once per reset)."""
+after Claude's usage limit resets (once per reset), or at once on another Claude login."""
 
 import asyncio
 import json
 import time
+from types import SimpleNamespace
 
 import pytest
 from test_in_place import env  # noqa: F401  (fixture)
 from test_nudges import fake_run, finishes, settle, until
 
 from jarvis.brain import retry, usage
+from jarvis.core import claude_logins, config
 from jarvis.core.database import Store
 from jarvis.tasks import runner
 from jarvis.tasks.worker import STEPS_OUT, Outcome
@@ -293,6 +295,85 @@ def test_a_limit_on_its_model_alone_carries_on_with_a_lighter_one(env, monkeypat
     _, task, said = asyncio.run(run_one())
     assert prompts[1] == runner.LIMIT_RESUMED and task["status"] == "done"
     assert "carries on with a lighter one" in said[0]
+
+
+@pytest.fixture
+def backup(tmp_path, monkeypatch):
+    """This computer's own Claude login, holding session s1, and a backup login after it in the priority order."""
+    monkeypatch.setattr(config, "CLAUDE_LOGINS_DIR", tmp_path / "claude-logins")
+    monkeypatch.setattr(config, "CLAUDE_OWN_CONFIG_DIR", "")
+    monkeypatch.setattr(config, "CLAUDE_CONFIG_DIR", str(tmp_path / "home-claude"))
+    monkeypatch.setattr(usage, "USAGE_FILE", tmp_path / "usage.json")
+    (tmp_path / "home-claude/projects/-x").mkdir(parents=True)
+    (tmp_path / "home-claude/projects/-x/s1.jsonl").write_text("{}")
+    claude_logins.make("backup")
+
+
+def used_up(login: str, resets: float) -> None:
+    """Claude reports `login`'s weekly limit used up until `resets`."""
+    usage.record(SimpleNamespace(rate_limit_type="seven_day", status="rejected", resets_at=resets, utilization=1.0,
+                                 overage_status=None), login=login)
+
+
+def limited_on(login: str, resets: float):
+    """Fake run on session s1 that uses up `login`'s limit."""
+    async def body(task, prompt, reporter) -> Outcome:
+        used_up(login, resets)
+        return await limited(resets)(task, prompt, reporter)
+
+    return body
+
+
+def test_a_task_cut_short_by_the_usage_limit_carries_on_at_once_on_the_backup_login(env, backup, monkeypatch):
+    ran_on = []
+
+    async def resumes(task, prompt, reporter) -> Outcome:
+        ran_on.append(claude_logins.resume_on(task["session_id"]))  # as worker.run picks its login
+        return await finishes()(task, prompt, reporter)
+
+    prompts = fake_run(monkeypatch, limited_on("", time.time() + 7 * 86400), resumes)
+    _, task, said = asyncio.run(run_one())
+    assert prompts[1] == runner.LIMIT_RESUMED and ran_on == ["backup"] and task["status"] == "done"
+    assert "carries on on the backup Claude login" in said[0]
+
+
+def test_a_task_waits_for_the_reset_when_the_backup_login_is_used_up_too(env, backup, monkeypatch):
+    resets = time.time() + 3600
+    used_up("backup", resets)
+    fake_run(monkeypatch, limited_on("", resets))
+
+    async def main():
+        r = runner.Runner()
+        task = r.start("research", "Flights", "Find flights to Goa.")
+        await until(lambda: task["id"] in r.wakes)
+        found = r.store.get(task["id"])
+        await r.shutdown()
+        return found
+
+    task = asyncio.run(main())
+    assert task["status"] == "queued" and "usage limit to reset" in task["activity"]
+
+
+def test_a_task_already_waiting_for_the_reset_moves_to_the_backup_login(env, backup, monkeypatch):
+    resets = time.time() + 7 * 86400
+    used_up("", resets)
+    store = Store()
+    waiting = store.create("research", "Flights", "Find flights to Goa.", None)
+    store.set(waiting["id"], status="queued", session_id="s1",
+              interrupted=json.dumps({"prompt": runner.LIMIT_RESUMED, "after": resets}))
+    prompts = fake_run(monkeypatch, finishes())
+
+    async def main():
+        r = runner.Runner()
+        r.start_background()
+        await settle(r)
+        found = r.store.get(waiting["id"]), logged(r, waiting["id"], "limit")
+        await r.shutdown()
+        return found
+
+    task, limit = asyncio.run(main())
+    assert prompts == [runner.LIMIT_RESUMED] and task["status"] == "done" and task["interrupted"] is None
+    assert limit[-1].startswith("the backup Claude login is free, so it carries on on that one")
 
 
 def test_a_task_waiting_for_the_reset_doesnt_hold_its_project(env, monkeypatch):

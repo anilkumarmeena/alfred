@@ -18,6 +18,7 @@ authenticate). Chosen at every CLI start, so a change in order or a used-up limi
   folder(name) / folders()     a login's config folder / every login's
   resume_on(session_id)        the login to resume a session on: its own, or, while that one is passed over, the one
                                in use, with the transcript copied over
+  elsewhere(session_id)        a usable login to move a session to now, while its own is passed over, or None
   named() / make() / remove()  JARVIS's logins; removable(name): it isn't the last
   note(name, ...) / checks()   the last check of each login (could the services use it?)
 """
@@ -155,8 +156,18 @@ def resume_on(session_id: str | None) -> str | None:
         if found.is_dir():
             shutil.copytree(found, to, dirs_exist_ok=True)
         else:
-            shutil.copy2(found, to)
+            shutil.copy(found, to)  # a fresh modified time: this copy is now the latest (holding)
     return now_on
+
+
+def elsewhere(session_id: str | None) -> str | None:
+    """The login a session can carry on on now while its own is passed over (its limit used up, say): the one in use,
+    if that's another and usable. None when it should wait: its own still works, or every login is passed over."""
+    held = holding(session_id)
+    if held is None or not skipped(held):
+        return None
+    now_on = active()
+    return now_on if now_on != held and not skipped(now_on) else None
 
 
 def make(name: str) -> Path:
@@ -187,13 +198,13 @@ def remove(name: str) -> None:
 
 
 def holding(session_id: str | None) -> str | None:
-    """The login whose folder holds session `session_id`'s transcript, or None."""
+    """The login whose folder holds session `session_id`'s latest transcript, or None: once resume_on has moved a
+    session, the login it moved from keeps an older copy."""
     if not session_id or not SESSION.fullmatch(session_id):
         return None
-    for name in (MAC, *named()):
-        if next(folder(name).glob(f"projects/*/{session_id}.jsonl"), None):
-            return name
-    return None
+    held = [(found.stat().st_mtime, name) for name in (MAC, *named())
+            for found in folder(name).glob(f"projects/*/{session_id}.jsonl")]
+    return max(held, key=lambda h: h[0])[1] if held else None
 
 
 def account(name: str) -> dict:

@@ -166,3 +166,18 @@ def test_a_task_resumes_on_its_own_login_or_carries_on_on_the_next(logins_dir, m
     assert claude_logins.resume_on("abc-123") == ""  # copied over to the default login, which isn't used up
     home = tmp_path / "home-claude" / "projects/-x"
     assert (home / "abc-123.jsonl").read_text() == "{}" and (home / "abc-123").is_dir()
+    assert claude_logins.holding("abc-123") == ""  # the copy is the latest: work keeps an older one
+
+
+def test_a_session_moves_elsewhere_only_while_its_login_is_passed_over_and_another_isnt(logins_dir, monkeypatch,
+                                                                                         tmp_path):
+    monkeypatch.setattr(usage, "USAGE_FILE", tmp_path / "usage.json")
+    monkeypatch.setattr(config, "CLAUDE_CONFIG_DIR", str(tmp_path / "home-claude"))
+    (home := tmp_path / "home-claude/projects/-x").mkdir(parents=True)
+    (home / "abc-123.jsonl").write_text("{}")
+    claude_logins.make("backup")
+    assert claude_logins.elsewhere("abc-123") is None  # its own login works
+    usage.record(Info(), login="")
+    assert claude_logins.elsewhere("abc-123") == "backup" and claude_logins.elsewhere("other") is None
+    usage.record(Info(), login="backup")
+    assert claude_logins.elsewhere("abc-123") is None  # every login used up: it waits

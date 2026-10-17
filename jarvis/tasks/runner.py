@@ -28,7 +28,8 @@ Concepts:
   access      extra grants at start, on reply, or via request_access (task waits)
   shutdown    SIGTERM marks queued/running tasks `interrupted`; next start resumes up to RESUME_TASKS (_after_restart)
   carrying on a run out of turns carries on in its session, up to TASK_CONTINUES times per user ask (_carried_on);
-              one the usage limit cut short waits queued for the reset, then resumes, once per reset (_limit_reset)
+              one the usage limit cut short waits queued for the reset, then resumes, once per reset (_limit_reset);
+              or resumes at once on another Claude login that's usable (_other_login)
 Also runs notices, the scheduler and the learning review. API: Unix socket in data/ (mode 600), unreachable from
 browsers and from tasks' host commands. Mixins: approvals, command_tasks, git_ops, task_edits, events, chains; HTTP
 in api.
@@ -51,7 +52,7 @@ from aiohttp import web
 from claude_agent_sdk import CanUseToolShadowedWarning
 
 from jarvis.brain import retry, usage
-from jarvis.core import profile
+from jarvis.core import claude_logins, profile
 from jarvis.core.config import (
     GOAL_DAILY_CHECKS,
     LEARNING_ENABLED,
@@ -838,11 +839,17 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
     def _wait_out_limit(self, task: dict, prompt: str, resets: float, reported: bool) -> None:
         """Queue the task until the usage limit resets, and say so once (a wait also as a notification and push).
 
-        A limit on its model family alone needn't wait: the next run uses a lighter model (usage.available). That's
-        tried once, when Claude `reported` the limit and no limit for every model is used up; a later hit waits."""
+        Another Claude login that's usable means no wait: the next run resumes on it (claude_logins.resume_on). A
+        limit on its model family alone needn't wait either: the next run uses a lighter model (usage.available).
+        That's tried once, when Claude `reported` the limit and no limit for every model is used up; a later hit
+        waits."""
         task_id = task["id"]
         now = time.time()
-        if (reported and task_id not in self.limit_resumed and not task["node"] and not usage.used_up_until()
+        if (other := self._other_login(task)) is not None:
+            self.limit_resumed[task_id] = now  # a later hit on that login waits for its own reset
+            after, said = None, (f"Task {task_id}, {task['title']}, hit Claude's usage limit, so it carries on on the "
+                                 f"{other or 'default'} Claude login.")
+        elif (reported and task_id not in self.limit_resumed and not task["node"] and not usage.used_up_until()
                 and usage.available(TASK_MODEL) != TASK_MODEL):
             self.limit_resumed[task_id] = now
             after, said = None, (f"Task {task_id}, {task['title']}, hit Claude's usage limit for its model, so it "
@@ -861,12 +868,14 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
             self._emit("status", self.store.update(task_id, spoken=said, seen=0), said)
 
     async def _wait_for_reset(self, task_id: int, after: float) -> None:
-        """Sleep until `after`, and any limit still used up on this computer, has reset, or a message comes. Wakes
-        every WAIT_STEP to check the wall clock: the event loop's clock stops while the computer sleeps."""
+        """Sleep until `after`, and any limit still used up on this computer, has reset, another Claude login is
+        usable, or a message comes. Wakes every WAIT_STEP to check the wall clock (the event loop's clock stops while
+        the computer sleeps) and the logins."""
         # A message sent before the limit was hit doesn't end the wait: it was for that run, and goes with the next
         wake = self.wakes.setdefault(task_id, asyncio.Event())
         task = self.store.get(task_id)
-        while not wake.is_set():
+        other = None
+        while not wake.is_set() and (other := self._other_login(task)) is None:
             until = self.limit_waits[task_id] = max(after, 0 if task["node"] else usage.used_up_until() or 0)
             if (left := until + LIMIT_SLACK - time.time()) <= 0:
                 break
@@ -875,10 +884,20 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
         if wake.is_set():
             self.limit_resumed.pop(task_id, None)  # sent on early: hitting the limit again waits for the reset again
             self.store.log(task_id, "limit", "a message came, so it carries on before the usage limit's reset")
+        elif other is not None:
+            self.limit_resumed[task_id] = time.time()  # a later hit on that login waits for its own reset
+            self.store.log(task_id, "limit", f"the {other or 'default'} Claude login is free, so it carries on on that "
+                                             "one before the usage limit's reset")
         else:
             self.store.log(task_id, "limit", "Claude's usage limit has reset, so it carries on by itself")
         self._waited(task_id)
         self.store.set(task_id, interrupted=None)
+
+    @staticmethod
+    def _other_login(task: dict) -> str | None:
+        """The Claude login a task its own login's usage limit stopped can carry on on now, or None to wait. One on
+        another machine runs on that machine's logins, which aren't known here."""
+        return None if task["node"] else claude_logins.elsewhere(task["session_id"])
 
     def _waited(self, task_id: int) -> None:
         """Forget a task's wait for a usage limit's reset: it's over, or its job ended."""
