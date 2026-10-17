@@ -222,7 +222,7 @@ Run **`make help`** for the full list.
 Install on macOS, Linux or WSL2, Claude login, Google, your phone, running 24/7
 
 **[⚙️ Configuration](docs/configuration.md)**<br>
-Every `.env` setting with its default
+Every setting with its default: `config/*.toml`, `.env` and the app
 
 **[🗣️ Voice](docs/voice.md)**<br>
 Turn-taking, noise filter, speech gate, speaker check
@@ -244,6 +244,12 @@ Code map, tests, web app, adding a tool
 
 **[🏗️ Architecture](docs/architecture.md)**<br>
 The deep dive: components, data, security
+
+**[🧭 Features](docs/features.md)**<br>
+Every part, tool, model role and process, generated from the code
+
+**[🧱 Architecture review](docs/architecture-review.md)**<br>
+Layers, contracts and configuration outside the package: the why and the plan
 
 </td>
 </tr>

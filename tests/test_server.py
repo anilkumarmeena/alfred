@@ -13,7 +13,7 @@ from livekit import api
 
 from conftest import use_profile
 from jarvis import server
-from jarvis.core import logins
+from jarvis.auth import logins
 from jarvis.state import todo
 from jarvis.voice import quiet
 

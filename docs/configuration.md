@@ -4,9 +4,9 @@
 
 # ⚙️ Configuration
 
-**Every setting JARVIS reads from `.env`, grouped by area, with its default.**
+**Every setting JARVIS reads, grouped by area, with its default, and where each one can be set.**
 
-[🏠 Home](../README.md) · [🚀 Setup](setup.md) · **⚙️ Configuration** · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md)
+[🏠 Home](../README.md) · [🚀 Setup](setup.md) · **⚙️ Configuration** · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md) · [🧭 Features](features.md)
 
 </div>
 
@@ -15,15 +15,31 @@
 **Nothing here is required**: `make setup` writes the few secrets JARVIS needs, and everything else has a sensible default.
 
 > [!IMPORTANT]
-> **How settings work**
-> - **Where:** `.env` in the repo root, copied from `.env.example`. It stays on JARVIS's computer (mode 600).
-> - **`.env` wins:** a few settings can also be changed in the app's **Settings** ([below](#-changed-in-the-app)). When the variable is set in `.env`, **it wins** and the app only shows it.
+> **How settings work.** Each setting is read from four places, **and the later one wins**:
+>
+> | # | Where | What it's for |
+> |:-:|---|---|
+> | 1 | `config/jarvis.toml`, `config/models.toml` in the checkout | The **shipped defaults**. Don't edit them: they change with updates |
+> | 2 | `config.toml` in **JARVIS_HOME** | **Your overrides**, same tables and keys (e.g. `[tasks]` `max_turns = 200`) |
+> | 3 | `.env` in **JARVIS_HOME** (copied from `.env.example`, mode 600) | Secrets and quick overrides: the variable named in each table below |
+> | 4 | The app's **Settings** ([below](#-changed-in-the-app)) | A few preferences. When the variable is set in `.env`, **it wins** and the app only shows it |
+>
 > - **Empty = default:** a setting that is present but empty counts as unset.
 > - **On/off values:** `1` `on` `true` `yes` · `0` `off` `false` `no`.
 > - **Apply a change** with `make services-restart`.
 
 > [!TIP]
-> Models default to `claude-opus-5-5` (main), `claude-sonnet-5` (helpers) and `claude-haiku-4-5-20251001` (fast checks), written below as **Opus**, **Sonnet** and **Haiku**.
+> **Models are picked by role, not by name.** `config/models.toml` maps each job (the voice, a task, an announcement…) to a tier, and each tier to a model: **deep** `claude-opus-5-5`, **balanced** `claude-sonnet-5`, **fast** `claude-haiku-4-5-20251001`, written below as **Opus**, **Sonnet** and **Haiku**. Change a tier for every job that uses it in your `config.toml` (`[models.tiers]` `fast = "…"`), or one job with its variable below.
+
+### 📂 JARVIS_HOME
+
+Everything an install keeps lives in one folder, **JARVIS_HOME**: `config.toml`, `.env`, `data/` (the database, task worktrees, caches), `secrets/`, `models/` and `logs/`. It is:
+
+1. the `JARVIS_HOME` variable, if set;
+2. else **`~/.jarvis`**, once it holds an install (a `.env` or `data/`), so a lone `config.toml` there never swaps in an empty one;
+3. else the checkout itself (the layout of installs made before JARVIS_HOME).
+
+`make home-move` moves an existing install's files out of the checkout into `~/.jarvis` (or `JARVIS_HOME`), then rewrites the services so they find them, so the checkout holds only code and `git clean` can't touch your data. A custom `JARVIS_HOME` gets a `~/.jarvis` link, so later `make` commands find it without the variable. Until you move it, your `config.toml` goes in the checkout. `JARVIS_CONFIG` names a different settings file than JARVIS_HOME's `config.toml`.
 
 <details>
 <summary><b>📑 On this page</b></summary>

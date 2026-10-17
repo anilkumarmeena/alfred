@@ -51,7 +51,7 @@ Tests that need one OS's programs (`sips`, `afconvert`, a working `bwrap`) skip 
 - **Both platforms stay working.** Code that differs by OS branches on `jarvis.core.platform` (`MAC`, `LINUX`, `WSL`) and keeps **both paths**; tests cover each by faking `platform.MAC` / `platform.LINUX` with `monkeypatch`. Say "the computer", not "the Mac", in prompts and messages.
 - **Safety stays in code.** Anything that sends, deletes, spends or reaches outside the computer goes through the existing gates (`jarvis/safety/`); don't rely on the prompt to hold it back.
 - **No personal data** in code, tests, prompts or docs: use placeholder names and `example.com`.
-- **Settings** go in `jarvis/core/config.py` with a default, and in [Configuration](docs/configuration.md).
+- **Settings** get their default in `config/jarvis.toml` (models: a role in `config/models.toml`; never a model id in code), are read in `jarvis/config/__init__.py`, and are listed in [Configuration](docs/configuration.md).
 
 ## 📬 Pull requests
 

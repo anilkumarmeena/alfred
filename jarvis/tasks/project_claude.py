@@ -20,8 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from claude_agent_sdk import AgentDefinition
 
+from jarvis.llm.sdk import AgentDefinition
 from jarvis.safety import scan
 
 log = logging.getLogger("jarvis.tasks.project_claude")

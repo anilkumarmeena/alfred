@@ -1,4 +1,4 @@
-"""Tests for transcribing recordings (jarvis.core.transcribe, file tools): chunking, transcripts, previews."""
+"""Tests for transcribing recordings (jarvis.media.transcribe, file tools): chunking, transcripts, previews."""
 
 import asyncio
 import base64
@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from jarvis import tools
-from jarvis.core import documents, transcribe
+from jarvis.media import documents, transcribe
 from jarvis.tasks import worker
 from jarvis.tools import files
 

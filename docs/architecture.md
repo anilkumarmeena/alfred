@@ -6,7 +6,7 @@
 
 **The contributor's deep dive: where each part lives, how the parts talk, and which invariants hold.**
 
-[🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · **🏗️ Architecture**
+[🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · **🏗️ Architecture** · [🧭 Features](features.md)
 
 </div>
 
@@ -87,7 +87,7 @@ flowchart TB
 | | Service | Entry point | Listens on | Role |
 |:-:|---|---|---|---|
 | 📡 | **LiveKit server**<br>`com.jarvis.livekit` | `livekit-server` (Homebrew on macOS, else `~/.local/bin`), config `secrets/livekit.yaml` | 7880/tcp (127.0.0.1), 7881/tcp, 7882/udp | WebRTC media, clients ↔ agent |
-| 🎙️ | **Voice agent**<br>`com.jarvis.agent` | `jarvis/voice/agent.py` | 8081/tcp (worker health) | LiveKit Agents worker |
+| 🎙️ | **Voice agent**<br>`com.jarvis.agent` | `jarvis/apps/agent.py` | 8081/tcp (worker health) | LiveKit Agents worker |
 | 🌐 | **Web server**<br>`com.jarvis.web` | `jarvis/server.py` | 8787/tcp (127.0.0.1) | Web app, passcode → LiveKit token, panel, push, photos |
 | ⚙️ | **Task runner**<br>`com.jarvis.tasks` | `jarvis/tasks/runner.py` | `data/runner.sock` (mode 600) | Tasks, approvals, notices, scheduler, learning review |
 
@@ -104,55 +104,54 @@ JARVIS runs on **macOS on Apple silicon** and **Linux** (x86_64 and aarch64, wit
 |---|---|---|---|
 | **Which OS** | `platform.MAC`, `APPLE_SILICON` | `platform.LINUX`, `WSL` | `jarvis/core/platform.py` |
 | **Services** | launchd agents from `deploy/*.plist` | systemd user units from `deploy/systemd/*.service` | `jarvis/setup_local.py` |
-| **Speech to text** | MLX Whisper on the Apple GPU | faster-whisper: CUDA float16 when a GPU works, else CPU int8 | `jarvis/core/whisper.py` |
+| **Speech to text** | MLX Whisper on the Apple GPU | faster-whisper: CUDA float16 when a GPU works, else CPU int8 | `jarvis/media/whisper.py` |
 | **Desktop tools** | AI Armory's `mac_*` tools | `desktop_*`: notify-send, xdg-open, clipboard, volume | `jarvis/tools/mac.py`, `jarvis/tools/desktop.py`, `jarvis/core/desktop.py` |
 | **Task host walls** | Seatbelt (`sandbox-exec`) | bubblewrap (`bwrap`) | `jarvis/safety/host.py` |
 | **Screenshots, photos** | `screencapture`, `sips` | grim, gnome-screenshot, spectacle, scrot or ImageMagick; Pillow + pillow-heif | `jarvis/state/pictures.py` |
-| **Old documents** | `textutil` for .doc/.rtf/.odt | LibreOffice, else pandoc | `jarvis/core/documents.py` |
+| **Old documents** | `textutil` for .doc/.rtf/.odt | LibreOffice, else pandoc | `jarvis/media/documents.py` |
 | **User folders** | `~/Downloads`, `~/Desktop`, … | XDG user dirs (`~/.config/user-dirs.dirs`) | `jarvis/core/desktop.py` `user_dir` |
 | **Staying awake** | `caffeinate`, `make awake` = `pmset` | `systemd-inhibit`, `make awake` masks sleep targets | `deploy/`, `Makefile` |
 | **Prompts** | `{{os}}` = `macOS` | `{{os}}` = `Linux` or `Linux (WSL2 on Windows)` | `jarvis/prompts/__init__.py` |
 
 - **`platform.py` imports nothing Unix-only**, so `import jarvis` on native Windows exits with *"run it inside WSL2"* instead of an `ImportError` (`jarvis/__init__.py`). `platform.NAME` is what the model is told, and `SERVICE_MANAGER` picks launchd or systemd.
-- **`whisper.py`** gives both backends one result shape, so `jarvis/voice/speech.py` and `jarvis/core/transcribe.py` don't care which runs. Intel Macs get faster-whisper too (MLX needs Apple silicon).
+- **`whisper.py`** gives both backends one result shape, so `jarvis/voice/speech.py` and `jarvis/media/transcribe.py` don't care which runs. Intel Macs get faster-whisper too (MLX needs Apple silicon).
 - **Desktop tools** are registered only on their OS. Each Linux tool is offered only while its program is installed and a display is reachable; there's no Shortcuts equivalent, and `desktop_open` opens links, files and folders, not apps by name.
 - **`setup_local.py`** fills the same `${LABEL}`, `${ROOT}`, `${HOME}`, `${NODE}` placeholders into either template. On Linux it imports the desktop session's `DISPLAY`, `WAYLAND_DISPLAY`, `XDG_*` and `DBUS_SESSION_BUS_ADDRESS` into the user manager so services can notify, copy and take screenshots, and hints at `loginctl enable-linger`. `python -m jarvis.setup_local status` works on both.
 - **Prompts say "the computer"** and use `{{os}}`, so the model suggests commands that work here.
 
 ## 📦 Code map
 
-| Package | Key files | Responsibility |
-|---|---|---|
-| `jarvis/voice/` | `agent.py`, `session.py`, `speech.py`, `turn.py`, `floor.py` | The call: LiveKit worker, per-call `VoiceSession`, Whisper and Kokoro, turn-taking, speaking unprompted |
-| | `denoise.py`, `speech_gate.py`, `speaker.py`, `barge_in.py`, `cutoff.py`, `clauses.py`, `quiet.py` | Noise filter, phantom gate, speaker check, voice-only barge-in, where a reply was cut off, sentence splits, speaker-off |
-| | `timing.py`, `ram.py`, `audio_file.py` | Per-turn latency log, memory footprints, text into audio files |
-| `jarvis/brain/` | `cli.py`, `sdk.py`, `persona.py` | `CliBrain` on the Claude Agent SDK, options shared with tasks, the persona |
-| | `quick.py`, `route.py`, `side.py`, `budget.py`, `usage.py`, `retry.py` | Warm fast-model judgements, quick-model routing, background lookups, the turn budget, usage limits, retries |
-| `jarvis/tools/` | `__init__.py` (registry), one module per group (`mac.py` on macOS, `desktop.py` on Linux) | Every tool the brain can call (see [Tools](#-tools)) |
-| `jarvis/safety/` | `commands.py`, `scripts.py`, `shell.py`, `draft_gate.py`, `mcp_gate.py` | Command risk rules and what the scripts a command runs do, the voice shell's gate, its extensions for drafts and MCP writes |
-| | `consent.py`, `approvals.py`, `remembered.py` | Reading a spoken yes/no, voice side of task approvals, remembered rules |
-| | `host.py`, `scan.py`, `injection.py` | Host walls (Seatbelt on macOS, bubblewrap on Linux) and long jobs, hidden-instruction scan, tool-result injection screening |
-| `jarvis/tasks/` | `runner.py`, `runner_base.py` + mixins `approvals.py`, `command_tasks.py`, `git_ops.py`, `task_edits.py`, `events.py`, `chains.py`, `api.py` | The runner service, split by concern; `runner_base.py` holds shared state |
-| | `worker.py`, `gate.py`, `host_tools.py`, `reporting.py`, `subagents.py`, `briefs.py`, `access.py`, `project_claude.py` | One run of a task: session, gate, host commands, reporting, nudges, prompts, access grants |
-| | `goal.py`, `announce.py`, `data_edits.py`, `merge_check.py`, `stall.py` | Goal check, spoken endings, suggested data edits, tests before merging JARVIS's own branches, stall watchdog |
-| | `notices.py`, `scheduler.py`, `schedules.py`, `tool_watch.py`, `hold.py`, `learning.py` | Services that run inside the runner |
-| | `command_jobs.py`, `connection_jobs.py`, `connection_watch.py`, `projects.py`, `client.py` | Command and connection task kinds, keeping a running task's connections current, the project list, the socket client |
-| `jarvis/integrations/` | `accounts.py`, `browser.py` | Google accounts, JARVIS's own Chrome |
-| | `mcp_servers.py`, `mcp_launch.py`, `mcp_relay.py`, `mcp_bridge.py`, `mcp_registry.py`, `mcp_oauth.py` | External MCP servers: list, launcher, relay, HTTP bridge, registry search, OAuth |
-| `jarvis/state/` | `memory.py`, `todo.py`, `settings.py`, `vocabulary.py`, `voiceprints.py`, `conversation.py`, `activity.py`, `history.py`, `pictures.py`, `shared_files.py` | What JARVIS keeps for the user |
-| `jarvis/core/` | `config.py`, `database.py`, `vault.py`, `profile.py`, `logins.py`, `credentials.py`, `documents.py`, `transcribe.py`, `proc.py` | Config, SQLite, encrypted secrets, profiles, logins, file reading, transcription |
-| | `platform.py`, `whisper.py`, `desktop.py` | Which OS, the two Whisper backends, the Linux desktop (see [Platform layer](#-platform-layer)) |
-| `jarvis/skills/` | `home.py`, `install.py`, `review.py` | Claude Code-format skills: storage, install, script review |
-| `jarvis/notify/` | `push.py`, `apns.py`, `fcm.py` | Web Push, APNs (iOS) and FCM (Android) |
-| `jarvis/prompts/` | `*.md`, loaded by `prompts.load` | Every long prompt, with `{{placeholders}}` |
-| `jarvis/panel.py` | | Control panel actions behind `POST /api/panel/<action>` |
-| `jarvis/setup_local.py` | | Keys, passcode, LiveKit config, service install (launchd or systemd) |
+Top to bottom in **layers**: an import points only down (`tests/test_architecture.py`), and lower parts that need something above them take it through `jarvis/contracts/`, wired by `jarvis/bootstrap.py`. **[Features](features.md)** has the generated list of every part, tool, role and process.
+
+| Layer | Package | Key files | Responsibility |
+|---|---|---|---|
+| 🚪 Entry | `jarvis/apps/` | `agent.py`, `runner.py`, `mcp_launch.py`, `audio_file.py`, `host_check.py`, `features.py` | The processes JARVIS starts: the voice process, the task runner wired to the machines, an MCP server's launcher, an audio-file job, checks |
+| | `jarvis/server.py`, `jarvis/panel/` | `panel/<area>.py` | Web front end; control panel actions behind `POST /api/panel/<action>`, one module per area |
+| | `jarvis/setup_local.py`, `jarvis/claude_login.py` | | Keys, passcode, LiveKit config, service install (launchd or systemd); Claude sign-ins |
+| 🔧 Wiring | `jarvis/bootstrap.py` | `wire()` | Hands task sessions JARVIS's tools and watches the tool registry; every process calls it at start |
+| 🎙️ Capabilities | `jarvis/voice/` | `session.py`, `speech.py`, `turn.py`, `floor.py`, `denoise.py`, `speech_gate.py`, `speaker.py`, `barge_in.py` | The call: per-call `VoiceSession`, Whisper and Kokoro, turn-taking, noise filter, phantom gate, speaker check, barge-in, speaking unprompted |
+| | `jarvis/brain/` | `cli.py`, `sdk.py`, `persona.py`, `route.py`, `side.py`, `budget.py`, `kept.py`, `timing.py` | `CliBrain`, sessions carrying JARVIS's tools, the persona, quick-model routing, background lookups, the turn budget, tool calls carried on, per-turn timing |
+| | `jarvis/gates/` | `shell.py`, `draft_gate.py`, `mcp_gate.py`, `injection.py` | The voice shell's gate and its extensions for drafts and MCP writes; tool-result injection screening |
+| | `jarvis/tools/` | `__init__.py` (registry), one module per group (`mac.py` on macOS, `desktop.py` on Linux) | Every tool the brain can call (see [Tools](#-tools)) |
+| ⚙️ Orchestration | `jarvis/node/` | `offload.py`, `hub.py`, `machines.py`, `placement.py`, `agent.py`, `work.py` | Other machines: sending them work (`offload.wire()` hands the runner its machines) and running it there |
+| | `jarvis/tasks/` | `runner.py`, `runner_base.py` + mixins, `store.py`, `worker.py`, `gate.py`, `local.py` | The runner service, the task store, one run of a task, its gate; `local.py` runs everything here when no machines are wired |
+| | | `goal.py`, `announce.py`, `data_edits.py`, `merge_check.py`, `stall.py`, `notices.py`, `scheduler.py`, `schedules.py`, `tool_watch.py`, `hold.py`, `learning.py` | Goal check, spoken endings, data edits, merge checks, the stall watchdog, and the services inside the runner |
+| | | `command_jobs.py`, `connection_jobs.py`, `connection_watch.py`, `client.py`, `api.py` | Command and connection task kinds, the socket client and API |
+| 🔌 Services | `jarvis/integrations/` | `accounts.py`, `armory.py`, `browser.py`, `drafts.py`, `mcp_*.py`, `mcp_words.py` | Google accounts and the one AI Armory facade, JARVIS's own Chrome, MCP servers (list, relay, bridge, registry, OAuth, what a write says) |
+| | `jarvis/media/` | `documents.py`, `transcribe.py`, `whisper.py`, `audio_file.py` | Reading files, recordings, the two Whisper backends, text into audio files |
+| | `jarvis/skills/`, `jarvis/notify/`, `jarvis/projects.py` | | Skills (storage, install, review); Web Push, APNs, FCM; the project list |
+| 🗂️ Foundations | `jarvis/state/` | `memory.py`, `todo.py`, `settings.py`, `preferences.py`, `vocabulary.py`, `voiceprints.py`, `conversation.py`, `activity.py`, `history.py` | What JARVIS keeps for the user; live Settings-panel preferences; the conversation in progress |
+| | `jarvis/safety/` | `commands.py`, `scripts.py`, `risk.py`, `consent.py`, `approvals.py`, `remembered.py`, `host.py`, `scan.py`, `urls.py` | Command risk rules and risk kinds, what scripts do, reading a spoken yes/no, remembered rules, host walls (Seatbelt or bubblewrap), the hidden-instruction scan, which addresses may be fetched |
+| | `jarvis/llm/` | `roles.py`, `claude.py`, `sdk.py`, `quick.py`, `standby.py`, `usage.py`, `retry.py`, `claude_logins.py` | The only code that talks to Claude: roles, one-shot calls, the SDK facade, warm sessions, usage limits, retries, logins |
+| | `jarvis/auth/`, `jarvis/storage/` | `vault.py`, `logins.py`, `credentials.py`; `database.py`, `settings_table.py`, `profile.py` | Encrypted secrets, panel logins, JARVIS's keys; SQLite connections and migrations, the settings table, profiles |
+| | `jarvis/config/`, `jarvis/prompts/` | `__init__.py`, `files.py`, `models.py`; `*.md` | Settings from `config/*.toml`, JARVIS_HOME and `.env`; model roles; every long prompt, with `{{placeholders}}` |
+| | `jarvis/contracts/`, `jarvis/core/` | `call.py`, `remote.py`, `runner.py`; `platform.py`, `files.py`, `proc.py`, `speakable.py`, `gpu.py`, `desktop.py` | Protocols a lower layer names for a higher one; which OS, safe file writes, processes, speakable text, the GPU shim, the Linux desktop |
 | `web/` | `src/components/`, `src/state/`, `src/lib/`, `public/sw.js` | The Vite/Preact web app and its service worker |
 | `deploy/` | `*.plist`, `systemd/*.service` | launchd templates (macOS), systemd user unit templates (Linux) |
 
 ## 💾 Data and secrets
 
-Everything per-user lives under the **profile** (`jarvis/core/profile.py`). The owner's profile uses `data/`, `data/tasks.db` and `secrets/`. Code calls `profile.current()` as it runs, so a changed name or time zone needs **no restart**.
+Everything an install keeps lives in **JARVIS_HOME** ([Configuration](configuration.md#-jarvis_home)): `~/.jarvis` once `make home-move` has run, else the checkout itself. Below, `data/`, `secrets/` and `.env` are inside it. Everything per-user lives under the **profile** (`jarvis/storage/profile.py`). The owner's profile uses `data/`, `data/tasks.db` and `secrets/`. Code calls `profile.current()` as it runs, so a changed name or time zone needs **no restart**.
 
 | | Store | Location | Contents |
 |:-:|---|---|---|
@@ -168,13 +167,13 @@ Everything per-user lives under the **profile** (`jarvis/core/profile.py`). The 
 | 🔔 | **Push** | `data/push_subscriptions.json`, `data/push_devices.json`, `data/fcm_devices.json`, `data/shared_files.json` | Web Push subscriptions, APNs and FCM tokens, files shared to the phone |
 | 🌍 | **Browser** | `data/browser/profile` | JARVIS's Chrome profile, **treated as a secret** |
 | 🔑 | **Secrets** | `secrets/` | `livekit.yaml`, `logins.json` (scrypt hashes), `google-<label>.json`, `claude/` (CLI login), `vapid_private.pem`, `apns_key.p8`, `fcm_service_account.json` |
-| 📄 | **Settings** | `.env` | Settings and `JARVIS_MASTER_KEY` |
+| 📄 | **Settings** | `.env`, `config.toml` | Overrides of the shipped `config/*.toml`, and `JARVIS_MASTER_KEY` |
 
 - **`data/tasks.db` holds:** tasks, approvals, approval rules, projects, to-dos, Google accounts, settings, MCP servers and tools, vault secrets, voiceprints, skills, schedules, activity and the injection-check cache.
 
 #### Database invariants
 
-`jarvis/core/database.py`:
+`jarvis/storage/database.py`:
 
 - Every connection comes from `database.connect()`: WAL, `NORMAL` sync, `BUSY_SECONDS` (10 s) busy timeout.
 - Every table is opened through `database.table()`, which runs `migrate()`: version 1 is the schema, later versions are an ordered list of migrations counted in `schema_versions`. **Never edit a released schema or migration; append a new one.**
@@ -182,9 +181,9 @@ Everything per-user lives under the **profile** (`jarvis/core/profile.py`). The 
 
 #### Vault
 
-`jarvis/core/vault.py` keeps **AES-256-GCM** secrets in the `secrets` table under `JARVIS_MASTER_KEY` (32 bytes in `.env`; `"new,old"` while rotating).
+`jarvis/auth/vault.py` keeps **AES-256-GCM** secrets in the `secrets` table under `JARVIS_MASTER_KEY` (32 bytes in `.env`; `"new,old"` while rotating).
 
-- JARVIS's own keys (LiveKit, APNs key ID, Google OAuth client) live here via `jarvis/core/credentials.py`, entered **only in the control panel, never by voice**.
+- JARVIS's own keys (LiveKit, APNs key ID, Google OAuth client) live here via `jarvis/auth/credentials.py`, entered **only in the control panel, never by voice**.
 - Processes drop the master key from their environment as config loads.
 
 ## 🎤 The voice pipeline
@@ -226,7 +225,7 @@ sequenceDiagram
 |:-:|---|---|---|
 | 🔇 | **Noise filter** | `denoise.py` | DeepFilterNet 3 on ONNX Runtime, one CPU core, as a frame processor |
 | ⏸️ | **Turn end** | `agent.py` `turn_handling`, `turn.py` `Transcribed` | Silence alone: `JARVIS_TURN_SILENCE` after the VAD hears speech stop, once Whisper has every clip. No model judges the words |
-| 📝 | **Transcribe** | `speech.py` `WhisperSTT`, `core/whisper.py` | Batch mode. **MLX Whisper** large-v3-turbo 4-bit on Apple silicon; **faster-whisper** elsewhere |
+| 📝 | **Transcribe** | `speech.py` `WhisperSTT`, `media/whisper.py` | Batch mode. **MLX Whisper** large-v3-turbo 4-bit on Apple silicon; **faster-whisper** elsewhere |
 | 🚪 | **Speech gate** | `speech_gate.py` | Drops Whisper's phantoms ("Thank you.") on near-silence. `enforce` or `shadow` |
 | 👤 | **Speaker check** | `speaker.py`, `state/voiceprints.py` | Drops utterances that aren't the user's, once a voiceprint is enrolled |
 | 🧠 | **Think** | `agent.py` `JarvisAgent.llm_node` | Replaces LiveKit's LLM step and streams `CliBrain.respond` |
@@ -271,8 +270,8 @@ sequenceDiagram
 | ⏱️ | **Turn budget** | `jarvis/brain/budget.py`: past `JARVIS_TURN_TOOLS` (3) calls or `JARVIS_TURN_SECONDS` (15 s) in a turn, more are refused and handed off |
 | ⏳ | **Kept calls** | `jarvis/brain/kept.py`: a JARVIS tool still running after `JARVIS_TOOL_WAIT` (8 s) leaves the turn; the brain follows up on its result |
 | ⚡ | **Quick routing** | Optional (`JARVIS_VOICE_QUICK_MODEL`): `jarvis/brain/route.py` sends small talk to a lighter model |
-| 📊 | **Usage limits** | `jarvis/brain/usage.py` records each `rate_limit_event` in `data/usage.json` |
-| 🔂 | **Retries** | `jarvis/brain/retry.py`: failures are `LIMIT`, `PASSING` or `ERROR` |
+| 📊 | **Usage limits** | `jarvis/llm/usage.py` records each `rate_limit_event` in `data/usage.json` |
+| 🔂 | **Retries** | `jarvis/llm/retry.py`: failures are `LIMIT`, `PASSING` or `ERROR` |
 
 - **Lockdown:** built-ins are `WebSearch`, `WebFetch`, `Bash` and `Skill` when skills are on; no subagents (`sdk.BUILTIN_AGENTS_DENIED`). Everything else meets `ShellGate`.
 - **Side jobs** run in a read-only session; the answer comes back through the floor. The brain can't read files itself: `file_lookup` searches with `Read`, `Glob` and `Grep` on `JARVIS_LOOKUP_MODEL` (Haiku), never secrets, a dozen reads at most. Its answer comes back in the turn only within `JARVIS_LOOKUP_WAIT` seconds a turn; after that it carries on in the background, so no lookup holds a spoken reply for long. `computer_lookup` works the same way for the computer's state, with `Bash` held in the sandbox (`allowUnsandboxedCommands` off) and each command stopped after 20 s. A lookup that runs out of its `JARVIS_SIDE_MINUTES` carries on as a background task, told what it did so far, rather than stopping.
@@ -288,9 +287,9 @@ sequenceDiagram
 
 ### The voice shell
 
-`Bash` runs in Claude Code's own sandbox (Seatbelt on macOS; bubblewrap and socat on Linux) from `data/shell/`: **reads anything but secrets, writes only `data/shell/`, no network.** Inside it, commands run without asking. On macOS it can also use the GPU (Metal), as task sandboxes can (`jarvis/safety/gpu.py`).
+`Bash` runs in Claude Code's own sandbox (Seatbelt on macOS; bubblewrap and socat on Linux) from `data/shell/`: **reads anything but secrets, writes only `data/shell/`, no network.** Inside it, commands run without asking. On macOS it can also use the GPU (Metal), as task sandboxes can (`jarvis/core/gpu.py`).
 
-A command that needs more, and every `start_job`, goes to `ShellGate` (`jarvis/safety/shell.py`). It splits the line at `;`, `&&`, `|` and substitutions and judges each part with `commands.risky`:
+A command that needs more, and every `start_job`, goes to `ShellGate` (`jarvis/gates/shell.py`). It splits the line at `;`, `&&`, `|` and substitutions and judges each part with `commands.risky`:
 
 | | Kind | Examples | Outcome |
 |:-:|---|---|---|
@@ -349,8 +348,8 @@ Tools are Python functions registered with `@tool(name, description, properties,
 | 🧠 | Memory, to-dos, vocabulary, voiceprint, conversation search | `jarvis/tools/core.py` | No (text is scanned first) |
 | 🛠️ | Background tasks, projects, approvals | `jarvis/tools/tasks.py` → runner socket | `task_merge`, `task_discard`, `project_git_init` |
 | ⏰ | Schedules, do not disturb, usage | `jarvis/tools/schedules.py` | Command jobs via `ShellGate` |
-| 📄 | Files, attachments, recordings | `jarvis/tools/files.py`, `jarvis/core/documents.py`, `jarvis/core/transcribe.py` | No; never reads secrets |
-| 🔊 | Audio files | `jarvis/tools/audio.py` → `jarvis/voice/audio_file.py` | No |
+| 📄 | Files, attachments, recordings | `jarvis/tools/files.py`, `jarvis/media/documents.py`, `jarvis/media/transcribe.py` | No; never reads secrets |
+| 🔊 | Audio files | `jarvis/tools/audio.py` → `jarvis/media/audio_file.py` | No |
 | 🖥️ | Screen | `jarvis/tools/screen.py` | Only when the user's own words mention the screen |
 | 🌍 | Web browser (`browser_*`) | `jarvis/tools/browser.py`, `jarvis/integrations/browser.py` | No: open, read, links, screenshot, back, close only |
 | 🔎 | Background, file and computer lookups | `jarvis/tools/side.py` | No (read-only session) |
@@ -439,9 +438,9 @@ Chrome (else Playwright's Chromium) on `data/browser/profile`, one page at a tim
 |:-:|---|---|---|
 | 📷 | **Photos** | `jarvis/state/pictures.py`, `web/src/lib/photo.ts` | `POST /api/picture` → `data/pictures/inbox/` → image block on the next turn. HEIC and big photos: `sips` on macOS, Pillow on Linux |
 | 🖥️ | **Screen** | `jarvis/tools/screen.py`, `jarvis/state/pictures.py` | Only when the user's own words ask. `screencapture` on macOS; grim, gnome-screenshot, spectacle, scrot or ImageMagick on Linux; refused on WSL |
-| 📄 | **Files** | `jarvis/tools/files.py`, `jarvis/core/documents.py` | PDF, Word, Excel, text; scans become images. 20,000 chars per page. .doc/.rtf/.odt: `textutil` on macOS, LibreOffice or pandoc on Linux |
-| 🎧 | **Recordings** | `jarvis/core/transcribe.py` | Detached process, one at a time, 10-minute chunks, cached in `data/transcripts/` |
-| 🔊 | **Audio files** | `jarvis/voice/audio_file.py` | Command task with its own Kokoro at `nice` 10. m4a: `afconvert` or ffmpeg; mp3: ffmpeg or lame |
+| 📄 | **Files** | `jarvis/tools/files.py`, `jarvis/media/documents.py` | PDF, Word, Excel, text; scans become images. 20,000 chars per page. .doc/.rtf/.odt: `textutil` on macOS, LibreOffice or pandoc on Linux |
+| 🎧 | **Recordings** | `jarvis/media/transcribe.py` | Detached process, one at a time, 10-minute chunks, cached in `data/transcripts/` |
+| 🔊 | **Audio files** | `jarvis/media/audio_file.py` | Command task with its own Kokoro at `nice` 10. m4a: `afconvert` or ffmpeg; mp3: ffmpeg or lame |
 
 - **Files:** text is passed through `jarvis.safety.scan`.
 - **Audio files** can be shared to the phone via `/api/files/<token>`.
@@ -537,7 +536,7 @@ Each run resumes the task's own Claude session, so follow-ups keep everything it
 
 - **File gate reads:** task folders, `JARVIS_TASK_READ_DIRS` and voice session logs.
 - **Secrets:** `.env*`, keys, credential files, `secrets/`, `~/.ssh` and similar. `.env` values are blanked in the CLI's environment.
-- **Sandbox:** network is open through the sandbox proxy. On macOS, Metal works too: Claude Code's settings can't add IOKit rules, so `jarvis/safety/sandbox-bin/env`, first on the CLI's `PATH` (`safety/gpu.py`), appends two allows to each sandboxed command's Seatbelt profile: the GPU's user client (`AGXDeviceUserClient`) and the shader compiler (`com.apple.MTLCompilerService`). Nothing else changes. Metal's shader caches stay unwritable, so compiling Metal source at run time (`mx.compile`, some MLX JIT kernels) still fails; MLX Whisper's precompiled kernels don't need it. If a CLI update stops starting commands through `env`, the shim is skipped and Metal is unavailable again; `tests/test_gpu.py` checks the bundled CLI for that.
+- **Sandbox:** network is open through the sandbox proxy. On macOS, Metal works too: Claude Code's settings can't add IOKit rules, so `jarvis/core/sandbox-bin/env`, first on the CLI's `PATH` (`core/gpu.py`), appends two allows to each sandboxed command's Seatbelt profile: the GPU's user client (`AGXDeviceUserClient`) and the shader compiler (`com.apple.MTLCompilerService`). Nothing else changes. Metal's shader caches stay unwritable, so compiling Metal source at run time (`mx.compile`, some MLX JIT kernels) still fails; MLX Whisper's precompiled kernels don't need it. If a CLI update stops starting commands through `env`, the shim is skipped and Metal is unavailable again; `tests/test_gpu.py` checks the bundled CLI for that.
 - **Host commands:** the walls deny **reading secrets, writing JARVIS's files, and the runner's socket** (compared in [Security model](#host-walls-seatbelt-and-bubblewrap)). The environment comes from `host.task_env()`, keeping only the SSH agent.
 - **Own things:** deleting must be strictly inside its own folders.
 - **Project setup:** CLAUDE.md, `.claude/agents`, `.claude/skills` and `.claude/commands`. Flagged files are left out and the user is told.
@@ -673,7 +672,7 @@ Monitors are ordinary scheduled jobs, listed with the rest in the panel's Tasks 
 |---|---|
 | `GET /`, `/sw.js`, `/static/` | The built web app (`web/dist`) and service worker |
 | `POST /api/token` | Passcode → 12-hour LiveKit token for a fresh room, with lockout |
-| `POST /api/panel/<action>` | Control panel actions (`jarvis/panel.py`) |
+| `POST /api/panel/<action>` | Control panel actions (`jarvis/panel/`) |
 | `POST /api/events` | Runner events, bell entries and the to-do list (whenever it changes) as JSON lines, with pings and a build hello for reloads |
 | `POST /api/approvals/<id>` | Answer from a push, with its nonce |
 | `POST /api/picture`, `/api/picture/drop` | Photos for the next turn |
@@ -688,7 +687,7 @@ Monitors are ordinary scheduled jobs, listed with the rest in the panel's Tasks 
 <td width="50%" valign="top">
 
 **🔐 Logins**<br>
-`jarvis/core/logins.py`: one login per person; the passcode alone identifies it, checked against a salted scrypt hash in `secrets/logins.json`. An encrypted copy in the vault lets `make passcode` show it in the terminal; no HTTP route returns it. The first login made is the owner's: only it pairs, confirms or forgets machines, and only it changes or removes itself.
+`jarvis/auth/logins.py`: one login per person; the passcode alone identifies it, checked against a salted scrypt hash in `secrets/logins.json`. An encrypted copy in the vault lets `make passcode` show it in the terminal; no HTTP route returns it. The first login made is the owner's: only it pairs, confirms or forgets machines, and only it changes or removes itself.
 
 </td>
 <td width="50%" valign="top">
@@ -722,18 +721,18 @@ Defence in depth: **every layer assumes the one above it can be talked into some
 | | Layer | Code | Guarantee |
 |:-:|---|---|---|
 | 🌐 | **Network** | `jarvis/server.py`, `secrets/livekit.yaml` | Web and LiveKit signalling bind to 127.0.0.1; the phone gets in only via Tailscale Serve |
-| 🔐 | **Login** | `jarvis/core/logins.py` | Per-person passcode, scrypt hash, lockout, 12-hour single-room tokens |
+| 🔐 | **Login** | `jarvis/auth/logins.py` | Per-person passcode, scrypt hash, lockout, 12-hour single-room tokens |
 | 🔌 | **Runner API** | `data/runner.sock` | Unix socket, mode 600, unreachable from browsers and from tasks' host commands |
 | 🧠 | **Brain lockdown** | `jarvis/brain/cli.py`, `jarvis/brain/sdk.py` | No file edits, no user settings or MCP config, built-in subagents denied, unknown tools refused |
-| 🐚 | **Voice shell** | `jarvis/safety/shell.py`, `jarvis/safety/commands.py` | Sandbox by default. Risky commands need a yes and run only as asked. Secrets refused |
+| 🐚 | **Voice shell** | `jarvis/gates/shell.py`, `jarvis/safety/commands.py` | Sandbox by default. Risky commands need a yes and run only as asked. Secrets refused |
 | 🗣️ | **Consent** | `jarvis/safety/consent.py`, `jarvis/state/conversation.py` | A yes counts only from `heard`. The fallback model never sees commands or tool output |
-| ✍️ | **Draft gates** | `jarvis/safety/draft_gate.py`, `jarvis/safety/mcp_gate.py` | Sends, deletes and MCP writes read aloud from code-built summaries, approved once |
-| 🛡️ | **Injection screening** | `jarvis/safety/injection.py` | Every tool result carrying outside content, in every session, is judged by a fast model |
+| ✍️ | **Draft gates** | `jarvis/gates/draft_gate.py`, `jarvis/gates/mcp_gate.py` | Sends, deletes and MCP writes read aloud from code-built summaries, approved once |
+| 🛡️ | **Injection screening** | `jarvis/gates/injection.py` | Every tool result carrying outside content, in every session, is judged by a fast model |
 | 🔍 | **Hidden-instruction scan** | `jarvis/safety/scan.py` | Strips invisible Unicode and flags instruction-like text before it's kept or loaded |
 | 📦 | **Task sandbox** | `jarvis/tasks/gate.py`, `jarvis/tasks/worker.py` | One writable folder, secrets hidden, `.env` blanked, no settings |
 | 🧱 | **Host walls** | `jarvis/safety/host.py` | Seatbelt (macOS) or bubblewrap (Linux) deny secret reads, writes to JARVIS's files and the runner socket, whatever runs. **No walls, no run** |
 | ✋ | **Approvals** | `jarvis/tasks/approvals.py`, `jarvis/safety/remembered.py` | Only the user approves or makes rules. Nonces one-time and hashed. Egress, push, delete always ask |
-| 🔒 | **Vault** | `jarvis/core/vault.py`, `jarvis/integrations/mcp_launch.py` | AES-256-GCM. Only the launcher decrypts, one server at a time |
+| 🔒 | **Vault** | `jarvis/auth/vault.py`, `jarvis/integrations/mcp_launch.py` | AES-256-GCM. Only the launcher decrypts, one server at a time |
 | 🌍 | **Browser guard** | `jarvis/integrations/browser.py` | Proxy refuses local and tailnet addresses after DNS. Page text is fenced |
 
 - **Injection screening** covers voice, lookups, side jobs, tasks and subagents, after `PostToolUse`. **Block** withholds the passages, **warn** annotates. A failed check passes the result with an "unchecked" note.

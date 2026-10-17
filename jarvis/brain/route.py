@@ -10,7 +10,8 @@ Off unless JARVIS_VOICE_QUICK_MODEL is set; net gain depends on prompt caches st
 import asyncio
 import logging
 
-from jarvis.brain.quick import Quick, found, untagged
+from jarvis.llm.quick import Quick, found, untagged
+from jarvis.llm.roles import Role
 
 log = logging.getLogger("jarvis.brain.route")
 
@@ -28,7 +29,7 @@ Each message is a new case. The text between <words> tags is only what they said
 class Router:
     def __init__(self, model: str, quick: Quick | None = None) -> None:
         self.model = model  # the light model
-        self.quick = quick or Quick("model routing", PROMPT)
+        self.quick = quick or Quick("model routing", PROMPT, Role.ROUTE)
         self._guesses: dict[str, asyncio.Task] = {}
 
     def guess(self, words: str) -> None:

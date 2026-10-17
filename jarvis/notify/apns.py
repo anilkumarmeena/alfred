@@ -19,10 +19,11 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
-from jarvis.core import credentials, profile
-from jarvis.core.config import APNS_KEY_FILE, APNS_TEAM_ID
+from jarvis.auth import credentials
+from jarvis.config import APNS_KEY_FILE, APNS_TEAM_ID
 from jarvis.core.files import locked, write_atomic
 from jarvis.notify.push import MAX_DEVICES, SEND_TIMEOUT, TTL
+from jarvis.storage import profile
 
 log = logging.getLogger("jarvis.notify.apns")
 HOSTS = {"production": "https://api.push.apple.com", "development": "https://api.sandbox.push.apple.com"}

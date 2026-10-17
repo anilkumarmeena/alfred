@@ -11,12 +11,13 @@ from test_in_place import env  # noqa: F401  (a fixture)
 
 from conftest import use_profile
 from jarvis import tools
-from jarvis.brain import retry
-from jarvis.core import profile
-from jarvis.core.database import edits
+from jarvis.llm import retry, roles
+from jarvis.llm.roles import Role
 from jarvis.skills import home
 from jarvis.state import activity, memory, todo
+from jarvis.storage import profile
 from jarvis.tasks import announce, api, data_edits, learning, runner
+from jarvis.tasks.store import edits
 
 TODAY = f"{date.today():%Y-%m-%d}"
 MEMORY = "## User\n- Alex prefers short answers (2026-09-01)\n\n## Environment\n- Alex's laptop is a MacBook Air (2026-09-02)\n"
@@ -212,7 +213,7 @@ def test_the_review_call_has_no_tools_and_untrusted_content_is_named_as_such(dat
     assert asyncio.run(learning.model_review("the conversation")) == '{"suggestions": []}'
     options = seen["options"]
     assert options.tools == [] and options.allowed_tools == [] and options.max_turns == 1
-    assert options.model == learning.LEARNING_MODEL
+    assert options.model == roles.model(Role.LEARNING)
     assert "untrusted" in options.system_prompt and "to-do list, never in memory" in options.system_prompt
 
 

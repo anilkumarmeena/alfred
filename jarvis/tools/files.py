@@ -1,4 +1,4 @@
-"""File reading tools: Gmail attachments and local documents (via jarvis.core.documents); recordings are transcribed.
+"""File reading tools: Gmail attachments and local documents (via jarvis.media.documents); recordings are transcribed.
 
 - Documents return text in parts; pictures and requested/textless PDF pages return as images (WithPictures).
 - Recordings: transcript saved to a file; the tool returns a preview, or the text in parts.
@@ -10,9 +10,9 @@ import base64
 import os
 from pathlib import Path
 
-from ai_armory.toolsets.google import common, current
-
-from jarvis.core import desktop, documents, transcribe
+from jarvis.core import desktop
+from jarvis.integrations.armory import common, current
+from jarvis.media import documents, transcribe
 from jarvis.safety.commands import secret_path
 
 from . import WithPictures, google, tool, unregister

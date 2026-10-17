@@ -2,14 +2,15 @@
 
 import time
 
-from jarvis.core import profile
-from jarvis.core.config import NEW_PROJECTS_DIR
-from jarvis.core.database import COMMAND, KINDS, edits, minutes_since_update, nudges
+from jarvis import projects
+from jarvis.config import NEW_PROJECTS_DIR
 from jarvis.node import machines
 from jarvis.safety import approvals, consent, remembered
 from jarvis.safety.commands import holds_commit, ordered, orders, said_scope, tells_approve, tells_deny
 from jarvis.state import conversation, todo
-from jarvis.tasks import access, client, command_jobs, data_edits, projects
+from jarvis.storage import profile
+from jarvis.tasks import access, client, command_jobs, data_edits
+from jarvis.tasks.store import COMMAND, KINDS, edits, minutes_since_update, nudges
 
 from . import tool
 from .core import vetted

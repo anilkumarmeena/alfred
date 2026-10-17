@@ -14,12 +14,12 @@ import shlex
 from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 
-from claude_agent_sdk import HookMatcher, PermissionResultAllow, PermissionResultDeny, ToolPermissionContext
-
-from jarvis.brain.sdk import deny
-from jarvis.core import profile
-from jarvis.core.config import CLAUDE_CONFIG_DIR, ROOT, SECRETS_DIR
+from jarvis.config import CLAUDE_CONFIG_DIR, HOME_DIR, ROOT, SECRETS_DIR
+from jarvis.llm import claude_logins
+from jarvis.llm.claude import deny
+from jarvis.llm.sdk import HookMatcher, PermissionResultAllow, PermissionResultDeny, ToolPermissionContext
 from jarvis.safety import commands
+from jarvis.storage import profile
 from jarvis.tasks.connection_calls import ConnectionGate
 from jarvis.tasks.host_tools import HOST_COMMANDS, _inside, _resolve, answer
 from jarvis.tasks.subagents import _AGENT_TOOLS
@@ -48,7 +48,7 @@ DOC_IMAGES = "mcp__jarvis__docs_insert_image"  # uploads local image files, so t
 
 def _secret(path: Path) -> bool:
     """Whether resolved `path` is secret (secrets folders, .env, keys, credentials); voice logs are exempt."""
-    if path.is_relative_to(profile.current().voice_logs.resolve()):
+    if path.is_relative_to(claude_logins.voice_logs().resolve()):
         return False
     return commands.secret_path(path)
 
@@ -81,22 +81,28 @@ def _secret_folders(folder: Path, keep: Path) -> list[str]:
 
 def _secret_rules(read_dirs: list[Path]) -> dict:
     """CLI settings with Read deny rules for every secret the task could otherwise see."""
-    keep = profile.current().voice_logs.resolve()
+    keep = claude_logins.voice_logs().resolve()
     hidden = {p for root in (SECRETS_DIR, Path(CLAUDE_CONFIG_DIR)) for p in _hide_except(root.resolve(), keep)}
     rules = [r for p in sorted(hidden) for r in (f"Read(/{p})", f"Read(/{p}/**)")]
     rules += [r for p in commands.HOME_SECRETS for r in (f"Read({p})", f"Read({p}/**)")]
-    for folder in dict.fromkeys(d.resolve() for d in read_dirs):
+    # The rest of JARVIS's own secrets (.env, the browser profile), and the install's folder like a read folder: once
+    # JARVIS_HOME is outside the checkout, no read folder covers its .env
+    walled = (SECRETS_DIR.resolve(), Path(CLAUDE_CONFIG_DIR).resolve())
+    own = dict.fromkeys(Path(p).resolve() for p in commands.JARVIS_SECRETS)
+    rules += [r for p in own if p not in walled for r in (f"Read(/{p})", f"Read(/{p}/**)")]
+    for folder in dict.fromkeys([*(d.resolve() for d in read_dirs), HOME_DIR.resolve()]):
         rules += [f"Read(/{folder}/{pattern})" for pattern in commands.SECRET_PATTERNS]
         rules += _secret_folders(folder, SECRETS_DIR.resolve())
     return {"permissions": {"deny": list(dict.fromkeys(rules))}}
 
 
 def _jarvis_own(path: Path) -> bool:
-    """Whether `path` is JARVIS's code, db or memory, which no grant may write.
+    """Whether `path` is JARVIS's code, its install's files (JARVIS_HOME), db or memory, which no grant may write.
 
-    A task's own folder under ROOT is fine: write roots are checked before this."""
+    A task's own folder under ROOT or JARVIS_HOME is fine: write roots are checked before this."""
     mine = profile.current()
-    return path.is_relative_to(ROOT.resolve()) or path in (mine.db.resolve(), mine.memory_file.resolve())
+    return (any(path.is_relative_to(own.resolve()) for own in (ROOT, HOME_DIR))
+            or path in (mine.db.resolve(), mine.memory_file.resolve()))
 
 
 def _read_only_git(command: str) -> bool:

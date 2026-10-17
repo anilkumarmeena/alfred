@@ -1,4 +1,4 @@
-"""Tests for sdk.ask_json/ask_flag: schema-checked JSON verdicts; anything else is None, never keyword-matched."""
+"""Tests for claude.ask_json/ask_flag: schema-checked JSON verdicts; anything else is None, never keyword-matched."""
 
 import asyncio
 import logging
@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from jarvis.brain import sdk
+from jarvis.llm import claude
 
 SCHEMA = {"type": "object", "properties": {"met": {"type": "boolean"}, "said": {"type": "string"}},
           "required": ["met"]}
@@ -14,13 +14,13 @@ SCHEMA = {"type": "object", "properties": {"met": {"type": "boolean"}, "said": {
 
 @pytest.fixture
 def replies(monkeypatch):
-    """Fake sdk.ask: each call returns (or raises, or awaits) the next item of `replies.queue`.
+    """Fake claude.ask: each call returns (or raises, or awaits) the next item of `replies.queue`.
 
     Records (prompt, system, model, options) in `replies.asked` and timeouts in `replies.timeouts`.
     """
     fake = SimpleNamespace(queue=[], asked=[], timeouts=[])
 
-    async def ask(prompt, system_prompt, model, timeout=sdk.ASK_SECONDS, **options):
+    async def ask(prompt, system_prompt, model, timeout=claude.ASK_SECONDS, **options):
         fake.asked.append((prompt, system_prompt, model, options))
         fake.timeouts.append(timeout)
         reply = fake.queue.pop(0)
@@ -31,7 +31,7 @@ def replies(monkeypatch):
                 await reply.wait()
         return reply, 0.01
 
-    monkeypatch.setattr(sdk, "ask", ask)
+    monkeypatch.setattr(claude, "ask", ask)
     return fake
 
 
@@ -49,12 +49,12 @@ def replies(monkeypatch):
     ("", None),
 ])
 def test_a_reply_is_json_matching_the_schema_or_none(reply, found):
-    assert sdk.json_reply(reply, SCHEMA) == found
+    assert claude.json_reply(reply, SCHEMA) == found
 
 
 def test_ask_json_puts_the_schema_to_the_model_and_returns_what_it_says(replies):
     replies.queue.append('{"met": true, "said": "It shipped."}')
-    found, cost = asyncio.run(sdk.ask_json("Did it ship?", SCHEMA, "You judge launches.", "claude-x", effort="low"))
+    found, cost = asyncio.run(claude.ask_json("Did it ship?", SCHEMA, "You judge launches.", "claude-x", effort="low"))
     assert (found, cost) == ({"met": True, "said": "It shipped."}, 0.01)
     [(prompt, system, model, options)] = replies.asked
     assert (prompt, model, options) == ("Did it ship?", "claude-x", {"effort": "low"})
@@ -64,8 +64,8 @@ def test_ask_json_puts_the_schema_to_the_model_and_returns_what_it_says(replies)
 
 def test_a_malformed_reply_is_none_and_logged_without_its_words(replies, caplog):
     replies.queue.append("Yes, the secret project shipped.")
-    with caplog.at_level(logging.WARNING, logger="jarvis.brain.sdk"):
-        found, cost = asyncio.run(sdk.ask_json("Did it ship?", SCHEMA, "s", "claude-x"))
+    with caplog.at_level(logging.WARNING, logger="jarvis.llm.claude"):
+        found, cost = asyncio.run(claude.ask_json("Did it ship?", SCHEMA, "s", "claude-x"))
     assert (found, cost) == (None, 0.01)
     assert "wasn't JSON matching its schema" in caplog.text and "secret project" not in caplog.text
 
@@ -73,7 +73,7 @@ def test_a_malformed_reply_is_none_and_logged_without_its_words(replies, caplog)
 def test_a_failed_call_raises_for_the_caller(replies):
     replies.queue.append(RuntimeError("the model call failed: error_during_execution"))
     with pytest.raises(RuntimeError):
-        asyncio.run(sdk.ask_json("Did it ship?", SCHEMA, "s", "claude-x"))
+        asyncio.run(claude.ask_json("Did it ship?", SCHEMA, "s", "claude-x"))
 
 
 def test_ask_json_on_the_real_sdk_path(monkeypatch):
@@ -86,7 +86,7 @@ def test_ask_json_on_the_real_sdk_path(monkeypatch):
                             session_id="s", total_cost_usd=0.02, result='{"met": false}')
 
     monkeypatch.setattr(claude_agent_sdk, "query", query)
-    assert asyncio.run(sdk.ask_json("Did it ship?", SCHEMA, "s", "claude-x")) == ({"met": False}, 0.02)
+    assert asyncio.run(claude.ask_json("Did it ship?", SCHEMA, "s", "claude-x")) == ({"met": False}, 0.02)
 
 
 @pytest.mark.parametrize("reply, answer", [
@@ -98,12 +98,12 @@ def test_ask_json_on_the_real_sdk_path(monkeypatch):
 ])
 def test_ask_flag_answers_yes_no_or_none(replies, reply, answer):
     replies.queue.append(reply)
-    assert asyncio.run(sdk.ask_flag("Fixed it.", "rerun", "s", "claude-x", effort="low")) is answer
+    assert asyncio.run(claude.ask_flag("Fixed it.", "rerun", "s", "claude-x", effort="low")) is answer
     [(_, system, _, options)] = replies.asked
     assert '"rerun": {"type": "boolean"}' in system and options == {"effort": "low"}
 
 
 def test_ask_flag_gives_up_after_its_timeout(replies):
     replies.queue.append(asyncio.Event())  # never set: the call hangs
-    assert asyncio.run(sdk.ask_flag("Fixed it.", "rerun", "s", "claude-x", timeout=0.05)) is None
+    assert asyncio.run(claude.ask_flag("Fixed it.", "rerun", "s", "claude-x", timeout=0.05)) is None
     assert replies.timeouts == [0.05]  # the call itself is bounded

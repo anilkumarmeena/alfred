@@ -20,12 +20,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
-from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny, create_sdk_mcp_server, tool as sdk_tool
-
-from jarvis.brain.sdk import READS
-from jarvis.core import platform, profile
-from jarvis.core.config import TASK_CACHE_DIR
+from jarvis.config import TASK_CACHE_DIR
+from jarvis.core import platform
+from jarvis.llm.claude import READS
+from jarvis.llm.sdk import PermissionResultAllow, PermissionResultDeny, create_sdk_mcp_server, tool as sdk_tool
 from jarvis.safety import commands, host, remembered
+from jarvis.storage import profile
 
 if TYPE_CHECKING:
     from jarvis.tasks.reporting import Reporter

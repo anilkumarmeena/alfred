@@ -10,15 +10,10 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
-from jarvis.core import profile
+from jarvis.contracts.call import BackgroundCalls, Lookups, SpeakerCheck
 from jarvis.safety.approvals import Heard, RuleOffer
-
-if TYPE_CHECKING:
-    from jarvis.brain.kept import Kept
-    from jarvis.brain.side import Jobs
-    from jarvis.voice.speaker import SpeakerCheck
+from jarvis.storage import profile
 
 
 @dataclass(eq=False)
@@ -27,8 +22,8 @@ class Conversation:
     heard: Heard = field(default_factory=Heard)
     offer: RuleOffer = field(default_factory=RuleOffer)
     speaker: SpeakerCheck | None = None
-    lookups: Jobs | None = None
-    kept: Kept | None = None
+    lookups: Lookups | None = None
+    kept: BackgroundCalls | None = None
 
 
 _current: ContextVar[Conversation | None] = ContextVar("jarvis_conversation", default=None)

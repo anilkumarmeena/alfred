@@ -21,9 +21,10 @@ from test_nudges import FakeClient, Pending, result, said, worker_run
 
 from conftest import use_profile, use_task_cache
 from jarvis.brain import cli
-from jarvis.brain.sdk import BUILTIN_AGENTS_DENIED
-from jarvis.core.config import FAST_MODEL
-from jarvis.safety import mcp_gate, shell
+from jarvis.gates import mcp_gate, shell
+from jarvis.llm import roles
+from jarvis.llm.claude import BUILTIN_AGENTS_DENIED
+from jarvis.llm.roles import Role
 from jarvis.state import memory
 from jarvis.tasks import runner, worker
 
@@ -62,7 +63,7 @@ def test_each_kind_of_task_gets_its_own_subagents(env, monkeypatch, name, agents
     assert set(BUILTIN_AGENTS_DENIED) <= set(opts.disallowed_tools)  # general-purpose would inherit every tool
     for agent in opts.agents.values():
         assert set(agent.tools) <= set(opts.tools) - EDITS - {"Agent"}  # none edits or starts its own subagents
-        assert agent.model != worker.TASK_MODEL and agent.maxTurns
+        assert agent.model != roles.model(Role.TASK) and agent.maxTurns
 
 
 def test_in_place_tasks_keep_refusing_git_writes_alongside_the_builtin_agents(env, monkeypatch):
@@ -74,7 +75,7 @@ def test_only_the_test_runner_gets_a_shell_and_the_searcher_is_read_only():
     assert worker.SEARCHER.tools == ["Read", "Glob", "Grep"]
     assert worker.RESEARCHER.tools == ["WebSearch", "WebFetch"]
     assert "Bash" in worker.TESTER.tools and not EDITS & set(worker.TESTER.tools)
-    assert worker.SEARCHER.model == FAST_MODEL
+    assert worker.SEARCHER.model == roles.model("fast")
     for agent in (worker.SEARCHER, worker.TESTER, worker.RESEARCHER):
         assert "Don't edit" in agent.prompt
 

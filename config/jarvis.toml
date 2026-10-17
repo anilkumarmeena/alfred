@@ -1,0 +1,171 @@
+# JARVIS settings: the shipped defaults. Model ids are in models.toml.
+#
+# Don't edit this file to change your install. Put overrides in config.toml in JARVIS_HOME (~/.jarvis after make
+# home-move, else the checkout), or the file $JARVIS_CONFIG names, using the same tables and keys. The environment variable named beside a value
+# (set in .env) wins over both files. docs/configuration.md says what each one does.
+
+# Settings-panel preferences; the panel's value wins over these, and .env wins over the panel
+[preferences]
+voice = "bm_george"            # JARVIS_TTS_VOICE: Kokoro voice, b*/a* = British/American, then m/f
+voice_speed = 1.05             # JARVIS_TTS_SPEED: 0.5-2.0
+speech_gate = "enforce"        # JARVIS_SPEECH_GATE: enforce, shadow or off
+max_tasks = 6                  # JARVIS_MAX_TASKS: tasks running at once (1-12), the rest queue
+browser = "on"                 # JARVIS_BROWSER: browser tools on or off
+browser_window = "headed"      # JARVIS_BROWSER_WINDOW: headed or headless
+speaker_check = "on"           # JARVIS_SPEAKER_CHECK: on, shadow or off
+speaker_threshold = 0.35       # JARVIS_SPEAKER_THRESHOLD: 0.1-0.8
+injection_check = "on"         # JARVIS_INJECTION_CHECK: on or off
+quiet_hours = "23:00-08:00"    # JARVIS_QUIET_HOURS: local hours with no watch checks or notices; "off" = never
+
+# The spoken conversation
+[voice_brain]
+effort = "low"                 # JARVIS_EFFORT: low keeps spoken replies fast
+lookup_wait = 8.0              # JARVIS_LOOKUP_WAIT: seconds a turn waits on file lookups, then they carry on (0-60)
+side_minutes = 3.0             # JARVIS_SIDE_MINUTES: time limit of a background lookup (0.5-30)
+proactive_judge = true         # JARVIS_PROACTIVE_JUDGE: a fast model picks when to speak updates
+tool_search = "true"           # JARVIS_TOOL_SEARCH: defer MCP tools: true, false or auto:N
+connection_wait = 20.0         # JARVIS_CONNECTION_WAIT: seconds an MCP call may block a reply (0 = always wait)
+tool_wait = 8.0                # JARVIS_TOOL_WAIT: seconds one of JARVIS's tools may block a reply (0 = always wait)
+max_tool_rounds = 8            # JARVIS_MAX_TOOL_ROUNDS
+turn_tools = 3                 # JARVIS_TURN_TOOLS: tool calls a turn may make before handing off
+turn_seconds = 15.0            # JARVIS_TURN_SECONDS: seconds a turn may work before handing off
+approval_minutes = 5           # JARVIS_APPROVAL_MINUTES: how long a risky command waits for a spoken yes
+
+[consent]
+enabled = true                 # JARVIS_CONSENT: off = yes/no word lists only
+seconds = 8.0                  # JARVIS_CONSENT_SECONDS: unclear after this (0.5-15)
+
+[injection]
+voice_seconds = 6.0            # JARVIS_INJECTION_VOICE_SECONDS: check time limit in a spoken turn (1-30)
+task_seconds = 30.0            # JARVIS_INJECTION_TASK_SECONDS: check time limit in a task (1-120)
+
+[tasks]
+effort = "high"                # JARVIS_TASK_EFFORT
+max_turns = 150                # JARVIS_TASK_MAX_TURNS
+continues = 3                  # JARVIS_TASK_CONTINUES: times a run out of turns carries on by itself (0-20)
+approval_hours = 12.0          # JARVIS_TASK_APPROVAL_HOURS: how long a task's risky command waits for the user
+stall_minutes = 15             # JARVIS_TASK_STALL_MINUTES: without progress before flagged stalled (0 = never)
+resume = 3                     # JARVIS_RESUME_TASKS: tasks a restart interrupted to resume (0-12)
+artifacts = true               # JARVIS_TASK_ARTIFACTS: allow the Artifact tool
+
+[goal]
+loop = true                    # JARVIS_GOAL_LOOP: check a "finished" task against its request
+rounds = 2                     # JARVIS_GOAL_ROUNDS: times it's sent back (0-5)
+max_cost = 0.0                 # JARVIS_GOAL_MAX_COST: dollars after which it stops (0 = no limit)
+daily_checks = 100             # JARVIS_GOAL_DAILY_CHECKS: cap per 24 hours, all tasks
+
+[announce]
+enabled = true                 # JARVIS_ANNOUNCE: model-worded task endings; off = fixed wording
+seconds = 30.0                 # JARVIS_ANNOUNCE_SECONDS (5-120)
+
+[node]
+lost_minutes = 30.0            # JARVIS_NODE_LOST_MINUTES: a machine unreachable this long with work is reported
+wait_minutes = 30.0            # JARVIS_NODE_WAIT_MINUTES: a task waits this long for its machine to come back
+sync_max_gb = 20.0             # JARVIS_NODE_SYNC_MAX_GB: largest project copy sent to a machine
+
+[notices]
+enabled = true                 # JARVIS_NOTICES
+
+[scheduler]
+enabled = true                 # JARVIS_SCHEDULER
+effort = "medium"              # JARVIS_SCHEDULE_EFFORT
+
+[usage]
+hold = 0.9                     # JARVIS_USAGE_HOLD: share of the five-hour window after which scheduled runs wait
+
+[learning]
+enabled = true                 # JARVIS_LEARNING
+quiet_minutes = 10             # JARVIS_LEARNING_QUIET_MINUTES
+
+[todo_match]
+enabled = true                 # JARVIS_TODO_MATCH: off = only identically worded to-dos are repeats
+seconds = 8.0                  # JARVIS_TODO_MATCH_SECONDS (2-30)
+
+[push]
+enabled = true                 # JARVIS_PUSH
+contact = ""                   # JARVIS_PUSH_CONTACT: VAPID "sub" claim; empty = default Google account's address
+
+[apns]
+team_id = ""                   # JARVIS_APNS_TEAM_ID
+
+[services]
+prefix = "com.jarvis"          # JARVIS_SERVICE_PREFIX: change only for a second install under one user account
+livekit_url = "ws://127.0.0.1:7880"   # LIVEKIT_URL
+web_port = 8787                # JARVIS_WEB_PORT
+
+# On-device speech models, in $JARVIS_HOME/models unless a full path
+[speech]
+whisper_mlx = "mlx-community/whisper-large-v3-turbo-q4"   # JARVIS_STT on Apple silicon
+whisper = ""                   # JARVIS_STT elsewhere; empty = whisper_gpu on an NVIDIA GPU, whisper_cpu on the CPU
+whisper_gpu = "large-v3-turbo"
+whisper_cpu = "small.en"       # live voice: English only, ~1 s a clip on 4-8 cores
+whisper_cpu_files = "small"    # recordings: any language
+device = ""                    # JARVIS_STT_DEVICE: cuda or cpu; empty = cuda when an NVIDIA GPU is usable
+transcribe = ""                # JARVIS_TRANSCRIBE_MODEL: recordings; empty = the live model on Apple silicon
+prompt = true                  # JARVIS_STT_PROMPT: prompt Whisper with the speech vocabulary
+kokoro = "kokoro-v1.0.onnx"    # JARVIS_TTS_MODEL
+kokoro_fallbacks = ["kokoro-v1.0.onnx", "kokoro-v1.0.int8.onnx"]
+kokoro_voices = "voices-v1.0.bin"
+tts_threads = ""               # JARVIS_TTS_THREADS: empty = performance cores - 1, 2-4; 0 = ONNX Runtime's default
+denoise = "deepfilternet3-streaming.onnx"
+speaker = "wespeaker-voxceleb-resnet34-LM.onnx"
+speaker_id = "wespeaker-voxceleb-resnet34-LM"
+
+[voice]
+idle_processes = 1             # JARVIS_VOICE_IDLE_PROCESSES: warm spare job processes (~300 MB each)
+mlx_cache_mb = 256             # JARVIS_MLX_CACHE_MB: MLX buffer-cache cap; 0 = free every clip, -1 = no cap
+tts_memory_arena = false       # JARVIS_TTS_MEMORY_ARENA
+malloc_large_cache = false     # JARVIS_VOICE_MALLOC_LARGE_CACHE
+memory_log_minutes = 10.0      # JARVIS_VOICE_MEMORY_LOG_MINUTES (0 = never)
+turn_silence = 0.8             # JARVIS_TURN_SILENCE: seconds of silence that end a turn (0.3-5)
+whisper_unsure_logprob = -1.0  # JARVIS_WHISPER_UNSURE_LOGPROB
+vad_min_speech = 0.2           # JARVIS_VAD_MIN_SPEECH
+vad_min_silence = 0.55         # JARVIS_VAD_MIN_SILENCE (0.3-2)
+vad_threshold = 0.5            # JARVIS_VAD_THRESHOLD
+denoise = "on"                 # JARVIS_DENOISE: on, vad or off
+denoise_atten_db = 18.0        # JARVIS_DENOISE_ATTEN_DB (0 = no limit)
+
+[audio_files]
+format = "m4a"                 # JARVIS_AUDIO_FORMAT: m4a, mp3 or wav
+model = "kokoro-v1.0.onnx"     # JARVIS_AUDIO_MODEL
+threads = 0                    # JARVIS_AUDIO_THREADS: 0 = a quarter of the cores, at least 2
+
+# Drops clips without real speech (jarvis.voice.speech_gate); each is JARVIS_SPEECH_GATE_<KEY>
+[speech_gate]
+min_speech_seconds = 0.1
+min_seconds = 0.3
+min_dbfs = -55.0
+no_speech = 0.8
+weak_speech_seconds = 0.25
+faint_speech_seconds = 0.25
+faint_dbfs = -28.0
+faint_max_seconds = 1.4
+phantom_dbfs = -22.0
+phantom_speech_seconds = 0.6
+phantoms = []                  # empty = the built-in list ("Thank you.", "Bye.")
+min_logprob = -1.0
+unsure_speech_seconds = 0.5
+max_compression = 2.4
+save_short = true
+short_seconds = 2.0
+short_speech_seconds = 0.5
+audio_keep = 300
+
+# Speaker verification (jarvis.voice.speaker); each is JARVIS_SPEAKER_<KEY>
+[speaker]
+short_margin = 0.1
+relax = 0.1
+short_seconds = 1.0
+long_seconds = 3.0
+min_seconds = 0.4
+recent_seconds = 30.0
+reply_seconds = 10.0
+adapt = true
+adapt_margin = 0.1
+enroll_seconds = 25.0
+enroll_min_seconds = 12.0
+enroll_timeout = 120.0
+barge_in = true
+barge_in_min_seconds = 0.5
+barge_in_max_seconds = 1.0
+barge_in_step = 0.25

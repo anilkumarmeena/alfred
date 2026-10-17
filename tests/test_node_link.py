@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from jarvis.core import vault
+from jarvis.auth import vault
 from jarvis.node import agent, hub as hubs, keys, link, machines
 from jarvis.node.link import Link, LinkDown, Refused, memory_pair
 

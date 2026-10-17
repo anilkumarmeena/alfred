@@ -18,9 +18,10 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-from jarvis.core import database, vault
+from jarvis.auth import vault
 from jarvis.node import keys
 from jarvis.state import settings
+from jarvis.storage import database
 
 CODE_MINUTES = 10
 CODE_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O or 1/I to misread

@@ -9,10 +9,10 @@ import pytest
 from conftest import use_profile
 from jarvis import tools
 from jarvis.brain import cli, persona, side
-from jarvis.core import profile
-from jarvis.core.config import DATA_DIR, ROOT
+from jarvis.config import DATA_DIR, ROOT
 from jarvis.safety import commands
 from jarvis.state import memory
+from jarvis.storage import profile
 
 
 @pytest.fixture

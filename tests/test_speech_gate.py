@@ -15,7 +15,8 @@ import numpy as np
 import pytest
 from livekit import rtc
 
-from jarvis.core import config
+from jarvis import config
+from jarvis.state import preferences
 from jarvis.voice import speech, speech_gate
 from jarvis.voice.speech_gate import RATE, WINDOW, Measure, SpeechGate, Thresholds
 
@@ -467,16 +468,17 @@ def test_saving_is_on_by_default_only_in_shadow_mode(monkeypatch):
         monkeypatch.delenv(var, raising=False)
     try:
         importlib.reload(config)
-        assert config.SPEECH_GATE == "enforce" and config.SPEECH_GATE_SAVE_AUDIO is False
+        assert preferences.speech_gate() == "enforce" and preferences.speech_gate_save_audio() is False
         monkeypatch.setenv("JARVIS_SPEECH_GATE", "shadow")
         importlib.reload(config)
-        assert config.SPEECH_GATE_SAVE_AUDIO is True
-        assert config.SPEECH_GATE_AUDIO_KEEP == 300 and config.SPEECH_GATE_AUDIO_DIR == config.ROOT / "logs/speech-gate-audio"
+        assert preferences.speech_gate_save_audio() is True
+        assert config.SPEECH_GATE_AUDIO_KEEP == 300
+        assert config.SPEECH_GATE_AUDIO_DIR == config.LOGS_DIR / "speech-gate-audio"
         assert (config.SPEECH_GATE_FAINT_SPEECH_SECONDS, config.SPEECH_GATE_FAINT_DBFS,
                 config.SPEECH_GATE_FAINT_MAX_SECONDS) == (0.25, -28, 1.4)
         monkeypatch.setenv("JARVIS_SPEECH_GATE", "enforce")
         importlib.reload(config)
-        assert config.SPEECH_GATE_SAVE_AUDIO is False
+        assert preferences.speech_gate_save_audio() is False
         assert config.SPEECH_GATE_SAVE_SHORT is True  # short clips it lets through are still saved
         assert (config.SPEECH_GATE_SHORT_SECONDS, config.SPEECH_GATE_SHORT_SPEECH_SECONDS) == (2.0, 0.5)
         monkeypatch.setenv("JARVIS_SPEECH_GATE_SAVE_SHORT", "off")
@@ -486,11 +488,11 @@ def test_saving_is_on_by_default_only_in_shadow_mode(monkeypatch):
         monkeypatch.setenv("JARVIS_SPEECH_GATE_SAVE_AUDIO", "on")
         monkeypatch.setenv("JARVIS_SPEECH_GATE_AUDIO_KEEP", "50")
         importlib.reload(config)
-        assert config.SPEECH_GATE_SAVE_AUDIO is True and config.SPEECH_GATE_AUDIO_KEEP == 50
+        assert preferences.speech_gate_save_audio() is True and config.SPEECH_GATE_AUDIO_KEEP == 50
         monkeypatch.setenv("JARVIS_SPEECH_GATE", "shadow")
         monkeypatch.setenv("JARVIS_SPEECH_GATE_SAVE_AUDIO", "off")
         importlib.reload(config)
-        assert config.SPEECH_GATE_SAVE_AUDIO is False
+        assert preferences.speech_gate_save_audio() is False
     finally:
         monkeypatch.undo()
         importlib.reload(config)

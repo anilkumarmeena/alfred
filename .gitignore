@@ -2,6 +2,7 @@
 __pycache__/
 secrets/
 data/
+/data
 logs/
 models/
 web/node_modules/
@@ -9,3 +10,4 @@ web/dist/
 .env
 # onnxruntime telemetry session file, written if telemetry is turned on
 :memory:.ses
+/config.toml

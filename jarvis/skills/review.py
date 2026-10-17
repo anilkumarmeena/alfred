@@ -2,7 +2,7 @@
 
   scan       fixed patterns over scripts (network, deletes, secrets, env, subprocess, installs, persistence, sudo,
              obfuscation, binaries, !`command`) plus hidden-instruction checks on markdown (safety.scan)
-  summarise  one tool-less SKILL_REVIEW_MODEL call over the fenced (untrusted) files; reply parsed as JSON only
+  summarise  one tool-less skill_review-role call over the fenced (untrusted) files; reply parsed as JSON only
   run        both, pinned to home.digest: approval covers exactly the files reviewed
 """
 
@@ -12,11 +12,12 @@ import time
 from pathlib import Path
 
 from jarvis import prompts
-from jarvis.core import profile
-from jarvis.core.config import SKILL_REVIEW_MODEL
+from jarvis.llm import roles
+from jarvis.llm.roles import Role
 from jarvis.safety import scan as scan_text
 from jarvis.safety.commands import ENV_TEMPLATES, names_secret
 from jarvis.skills import home
+from jarvis.storage import profile
 
 MAX_CHARS = 60_000  # total chars sent; beyond this files are omitted and marked partial
 MAX_FILE = 20_000  # chars per file
@@ -149,11 +150,11 @@ def parse(reply: str) -> dict:
 
 async def summarise(where: Path, name: str) -> tuple[dict, bool]:
     """(review, partial). Raises RuntimeError (call failed), ValueError (unreadable) or TimeoutError."""
-    from jarvis.brain.sdk import ask
+    from jarvis.llm.claude import ask
 
     files, partial = _fenced(where)
     prompt = f"The skill is called {name}. Its files:\n\n{files}"
-    reply, _ = await ask(prompt, system(), SKILL_REVIEW_MODEL, timeout=CALL_TIMEOUT)
+    reply, _ = await ask(prompt, system(), Role.SKILL_REVIEW, timeout=CALL_TIMEOUT)
     return parse(reply), partial
 
 
@@ -170,7 +171,7 @@ async def run(name: str, summariser=None) -> dict:
     if after != before:
         raise ValueError(f"The skill {skill.name}'s files changed while it was being reviewed; review it again.")
     review = found | {"flags": scan(where), "partial": partial, "digest": after, "scripts": skill.scripts,
-                      "model": SKILL_REVIEW_MODEL, "at": time.time()}
+                      "model": roles.model(Role.SKILL_REVIEW), "at": time.time()}
     home.set_review(skill.name, review)
     return review
 

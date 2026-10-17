@@ -14,11 +14,11 @@ import pytest
 from ai_armory.toolsets.google import chat, common
 
 from conftest import use_profile
-from jarvis import tools
-from jarvis.core import config, profile
+from jarvis import config, tools
 from jarvis.integrations import accounts
 from jarvis.integrations.accounts import Account, Accounts
 from jarvis.state import settings
+from jarvis.storage import profile
 from jarvis.tools import google
 
 ROOT = config.ROOT

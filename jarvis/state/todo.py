@@ -4,7 +4,7 @@ Text API (voice tools, task runner) matches items by wording: find(), done(), re
 id: items(), check(), edit(), delete(), restore(). read() renders a Markdown checklist, open items first.
 
 Repeats: add_new() (voice tool, suggested edits) won't add an item the list already has. repeat_of() finds it: worded
-the same (ignoring case and punctuation), else judged by TODO_MATCH_MODEL among the few items sharing most of its words.
+the same (ignoring case and punctuation), else judged by the todo_match role among the few items sharing most of its words.
 The panel's add() takes what the user typed as it is.
 """
 
@@ -19,9 +19,10 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from jarvis import prompts
-from jarvis.core import database, profile
-from jarvis.core.config import TODO_MATCH_ENABLED, TODO_MATCH_MODEL, TODO_MATCH_SECONDS
+from jarvis.config import TODO_MATCH_ENABLED, TODO_MATCH_SECONDS
+from jarvis.llm.roles import Role
 from jarvis.safety import scan
+from jarvis.storage import database, profile
 
 log = logging.getLogger("jarvis.state.todo")
 
@@ -120,12 +121,12 @@ async def repeat_of(item: str) -> Repeat | None:
         return Repeat(same)
     if not TODO_MATCH_ENABLED or not (near := _lookalikes(item, listed)):
         return None
-    from jarvis.brain import sdk
+    from jarvis.llm import claude
 
     shown = [{"n": n, "text": i["text"], "state": "done" if i["done"] else "open"} for n, i in enumerate(near, 1)]
     try:
-        found, _ = await sdk.ask_json(json.dumps({"new": item, "listed": shown}, ensure_ascii=False), _MATCH,
-                                      prompts.load("todo_match", user_name=profile.name()), TODO_MATCH_MODEL,
+        found, _ = await claude.ask_json(json.dumps({"new": item, "listed": shown}, ensure_ascii=False), _MATCH,
+                                      prompts.load("todo_match", user_name=profile.name()), Role.TODO_MATCH,
                                       timeout=TODO_MATCH_SECONDS, effort="low")
     except Exception as e:
         log.warning("checking a new to-do for repeats failed (%s); it's added", type(e).__name__)

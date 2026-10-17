@@ -14,7 +14,7 @@ from test_in_place import env, git  # noqa: F401  (env is a fixture)
 from test_nudges import fake_run, finishes, settle, until
 from test_scheduler import flags, with_scheduler  # noqa: F401  (flags is a fixture)
 
-from jarvis.core import profile
+from jarvis.storage import profile
 from jarvis.tasks import goal, runner, schedules
 from jarvis.tasks.goal import BLOCKED, COMPLETE, INCOMPLETE, Budget, Check
 from jarvis.tasks.worker import Outcome
@@ -112,7 +112,7 @@ def test_a_check_that_gave_no_usable_reply_is_none():
     ('{"verdict": "complete", "said": "done.", "todos": [{"id": "4", "done": true}]}', None),  # an id not a number
 ])
 def test_the_check_reply_must_match_its_schema(reply, found):
-    from jarvis.brain.sdk import json_reply
+    from jarvis.llm.claude import json_reply
 
     assert json_reply(reply, goal.SCHEMA) == found
 
@@ -155,7 +155,8 @@ def test_the_checks_model_is_a_setting_else_the_tasks_own(tmp_path, setting, mod
     # Fresh process: config is read at import. Set but empty means the default, whatever .env says
     env = os.environ | {"JARVIS_GOAL_MODEL": setting, "JARVIS_TASK_MODEL": "claude-task-model",
                         "JARVIS_GOAL_MAX_COST": "", "JARVIS_DB_FILE": str(tmp_path / "t.db")}
-    out = subprocess.run([sys.executable, "-c", "from jarvis.core import config; print(config.GOAL_MODEL, config.GOAL_MAX_COST)"],
+    code = "from jarvis import config; print(config.MODELS.role('goal'), config.GOAL_MAX_COST)"
+    out = subprocess.run([sys.executable, "-c", code],
                          env=env, cwd=Path(__file__).parents[1], capture_output=True, text=True, check=True).stdout
     assert out.split() == [model, "0.0"]
 
@@ -172,7 +173,7 @@ def test_the_check_asks_the_configured_model(monkeypatch):
         yield ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
                             session_id="s", total_cost_usd=0.03, result='{"verdict": "complete", "said": "done."}')
 
-    monkeypatch.setattr(goal, "GOAL_MODEL", "claude-opus-5-5")
+    monkeypatch.setenv("JARVIS_GOAL_MODEL", "claude-opus-5-5")
     monkeypatch.setattr(claude_agent_sdk, "query", query)
     assert asyncio.run(goal.ask_model("material")) == (verdict(COMPLETE, "done."), 0.03)
     assert used == [("claude-opus-5-5", [], 1)]

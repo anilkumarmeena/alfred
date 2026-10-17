@@ -17,16 +17,17 @@ from test_in_place import env as repos  # noqa: F401  (a fixture)
 from test_nudges import fake_run, finishes
 from test_scheduler import NOW, Clock, at
 
-from jarvis import tools
-from jarvis.brain import sdk, usage
-from jarvis.core import claude_logins, config
-from jarvis.core.config import COMMAND_SUMMARY_MODEL, COMMAND_TRIAGE_MODEL
-from jarvis.core.database import COMMAND
-from jarvis.safety import host, shell
-from jarvis.safety.shell import ShellGate
+from jarvis import config, tools
+from jarvis.brain import sdk
+from jarvis.gates import shell
+from jarvis.gates.shell import ShellGate
+from jarvis.llm import claude, claude_logins, usage
+from jarvis.llm.roles import Role
+from jarvis.safety import host
 from jarvis.tasks import client, command_jobs, events as task_events, runner, schedules, stall
 from jarvis.tasks.command_jobs import Triage, parse_triage
 from jarvis.tasks.scheduler import Scheduler
+from jarvis.tasks.store import COMMAND
 from jarvis.tasks.worker import Outcome
 from jarvis.tools import schedules as schedule_tools, tasks as task_tools
 
@@ -61,7 +62,7 @@ def env(repos, monkeypatch):  # noqa: F811
             return json.dumps({"rerun": env["rerun"]}), 0.0
         return (SUMMARY if system == command_jobs.summary_system() else env["triage"]), 0.0
 
-    monkeypatch.setattr(sdk, "ask", ask)
+    monkeypatch.setattr(claude, "ask", ask)
     return env
 
 
@@ -128,7 +129,7 @@ def test_a_job_is_a_command_task_in_the_list_said_when_it_ends(env):
     assert said == [f"Task {done['id']}, the launch render, is done, in 0 seconds. {SUMMARY}"]
     assert env["pushed"] == [{"title": f"Task {done['id']} is done", "body": said[0]}]
     (prompt, _, model), = env["asked"]
-    assert model == COMMAND_SUMMARY_MODEL and "rendered: 2 videos" in prompt and "echo" in prompt
+    assert model == Role.COMMAND_SUMMARY and "rendered: 2 videos" in prompt and "echo" in prompt
     view = r.view(done)["command"]
     assert "rendered: 2 videos" in view["output_tail"] and view["outcome"] == "done" and view["code"] == 0
     assert view["folder"] == str(env["project"]) and view["log_path"].endswith(f"commands/{done['id']}.log")
@@ -360,7 +361,7 @@ def test_an_ordinary_failure_is_fixed_then_rerun_and_the_rerun_says_it_all(env, 
     assert [p["body"] for p in env["pushed"]] == [said[1]]
     (prompt,) = triaged(env)
     assert "exit code 3" in prompt and "ffmpeg: not found" in prompt and "the action is report" not in prompt
-    assert COMMAND_TRIAGE_MODEL in [m for _, _, m in env["asked"]]
+    assert Role.COMMAND_TRIAGE in [m for _, _, m in env["asked"]]
 
 
 def test_a_rerun_that_fails_again_is_only_said(env, monkeypatch):
@@ -467,7 +468,7 @@ def test_with_no_model_to_read_it_a_failure_is_fixed_and_rerun_once(env, monkeyp
     async def down(prompt, system, model, **options):
         raise RuntimeError("Claude is overloaded")
 
-    monkeypatch.setattr(sdk, "ask", down)
+    monkeypatch.setattr(claude, "ask", down)
     fake_run(monkeypatch, finishes("Fixed."))
 
     async def main():
@@ -487,7 +488,7 @@ def test_with_no_model_to_read_it_a_failure_is_fixed_and_rerun_once(env, monkeyp
 
 def test_the_triage_reply_is_read_strictly():
     def read(reply: str, can_fix: bool = True) -> Triage | None:
-        return parse_triage(sdk.json_reply(reply, command_jobs.TRIAGE_SCHEMA), can_fix)
+        return parse_triage(claude.json_reply(reply, command_jobs.TRIAGE_SCHEMA), can_fix)
 
     assert read(triage(" It  broke. ", "fix", "ignored")) == Triage("fix", "It broke.")
     assert read(triage("It broke.", "ask", "a push")) == Triage("ask", "It broke.", "a push")
@@ -499,10 +500,10 @@ def test_the_triage_reply_is_read_strictly():
 
 def test_a_fix_is_rerun_unless_its_summary_is_read_as_saying_the_cause_remains(monkeypatch):
     async def flag(prompt, field, system_prompt, model, **options):
-        assert (field, system_prompt, model) == ("rerun", command_jobs.rerun_system(), command_jobs.VERDICT_MODEL)
+        assert (field, system_prompt, model) == ("rerun", command_jobs.rerun_system(), Role.VERDICT)
         return answer
 
-    monkeypatch.setattr(sdk, "ask_flag", flag)
+    monkeypatch.setattr(claude, "ask_flag", flag)
     for answer, again in ((True, True), (False, False), (None, True)):  # None: the call failed
         assert asyncio.run(command_jobs.wants_rerun("Fixed the path.")) is again
     # the verdict knows the fix task couldn't run it for want of hidden keys, which the rerun has

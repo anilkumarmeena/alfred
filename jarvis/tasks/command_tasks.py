@@ -6,18 +6,17 @@ import logging
 import time
 from pathlib import Path
 
-from jarvis.brain import usage
-from jarvis.core import claude_logins
-from jarvis.core.database import ACTIVE, COMMAND, CONNECTION, WAIT_QUESTION
-from jarvis.node import machines, placement
-from jarvis.node.offload import TurnedDown
+from jarvis import projects
+from jarvis.contracts.remote import COMMANDS, HERE, HERE_WORD, Place, TurnedDown
+from jarvis.llm import claude_logins, usage
 from jarvis.safety.commands import secret_path
 from jarvis.state import activity as bell
-from jarvis.tasks import command_jobs, connection_jobs, projects, scheduler, schedules
+from jarvis.tasks import command_jobs, connection_jobs, scheduler, schedules
 from jarvis.tasks.approvals import SAID_MOST
 from jarvis.tasks.command_jobs import ASK, DONE, FAILED, FIX, LOST, REPORT, STOPPED, TIMEOUT, last_lines, spec, took
 from jarvis.tasks.runner_base import RunnerBase
 from jarvis.tasks.scheduler import sentence
+from jarvis.tasks.store import ACTIVE, COMMAND, CONNECTION, WAIT_QUESTION
 
 log = logging.getLogger("jarvis.tasks.runner")
 COMMAND_POLL = 2.0  # seconds between polls of running command and connection tasks
@@ -65,14 +64,14 @@ class CommandTasks(RunnerBase):
         owner = there.name if there else command_jobs.project_of(path) if placeable else None
         if there:
             machine = ""  # it runs where its project lives
-        elif machine and machine.strip().lower() != machines.HERE:
+        elif machine and machine.strip().lower() != HERE_WORD:
             if not owner:
                 raise ValueError("Only a command in one of the projects can run on another machine: its project is "
                                  "copied there.")
-            machines.find(machine)  # an unknown name is said now, before anything starts
+            self.machines.find(machine)  # an unknown name is said now, before anything starts
         task = self.store.create(COMMAND, title, command, project, job=job, command=how)
         task_id = task["id"]
-        if owner and (there or machine or machines.paired()):
+        if owner and (there or machine or self.machines.paired()):
             self._said_start(task, attempt, after, job)
             self.placing[task_id] = placing = asyncio.create_task(
                 self._place_command(task_id, path, projects.find(owner), how, machine))
@@ -113,13 +112,13 @@ class CommandTasks(RunnerBase):
                 self._finish(task_id, "failed", f"Task {task_id}, {task['title']}, didn't start: {name}, where "
                                                 f"{owner.name} lives, isn't online.", error=f"{name} isn't online")
                 return
-            place = placement.Place(owner.node, name, f"It's running on {name}, where {owner.name} lives.")
+            place = Place(owner.node, name, f"It's running on {name}, where {owner.name} lives.")
         else:
             try:
-                place = await self.offload.place(placement.COMMANDS, job, machine)
+                place = await self.offload.place(COMMANDS, job, machine)
             except Exception as e:
                 log.warning("command task %s: choosing its machine failed: %s", task_id, e)
-                place = placement.HERE
+                place = HERE
         if place.node:
             self._placed(task_id, place)
             try:
@@ -140,7 +139,7 @@ class CommandTasks(RunnerBase):
                                                     f"{place.name}: {e}"[:400], error=str(e)[:300])
                     return
                 await self.offload.forget(place.node, self.offload.key(task_id))
-                place = placement.Place(said=f"It couldn't be sent to {place.name} ({e}), so it's running on this "
+                place = Place(said=f"It couldn't be sent to {place.name} ({e}), so it's running on this "
                                              "computer instead."[:400])
                 self.store.set(task_id, node=None)
             else:

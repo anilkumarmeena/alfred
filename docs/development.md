@@ -6,7 +6,7 @@
 
 **How the code is laid out, how to test it, and how to work on the web app and AI Armory alongside it.**
 
-[🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · **👩‍💻 Development** · [🏗️ Architecture](architecture.md)
+[🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · **👩‍💻 Development** · [🏗️ Architecture](architecture.md) · [🧭 Features](features.md)
 
 </div>
 
@@ -19,6 +19,7 @@
 <summary><b>📑 On this page</b></summary>
 
 - [Code map](#-code-map)
+- [Layers and contracts](#-layers-and-contracts)
 - [Tests and checks](#-tests-and-checks)
 - [Running the parts](#-running-the-parts)
 - [Web app](#-web-app)
@@ -30,31 +31,50 @@
 
 ## 🧭 Code map
 
+The packages sit in **layers**, and an import may only point **down** (`tests/test_architecture.py` fails otherwise). **[Features](features.md)** lists every part, tool, model role and process, generated from the code; the reasoning behind the layout is in **[Architecture review](architecture-review.md)**.
+
 ```text
 jarvis/
-├── voice/           the voice agent (agent.py, session.py), Whisper and Kokoro, turn-taking,
-│                    noise filter, speech gate, speaker check, barge-in, timing, audio files
-├── brain/           Claude behind the voice: the CLI brain, Agent SDK set-up, persona,
-│                    quick routing, side lookups, usage
-├── prompts/         the long prompts as markdown, {{name}} placeholders filled by prompts.load()
-├── tools/           what the brain can call: Google, Mac (macOS) or desktop (Linux), files,
-│                    memory, to-dos, tasks, schedules, browser, skills
-├── tasks/           the task runner, its worker and client, projects, notices, scheduler,
-│                    learning review
-├── safety/          command rules, the host walls (Seatbelt or bubblewrap), approvals, consent,
-│                    the gates, hidden-instruction scan and injection check
-├── integrations/    Google accounts, MCP servers (registry, launcher, relay, OAuth),
-│                    the web browser, sign-ins
+│  ── entry points: processes, and what wires them ──────────────────────────────────────
+├── apps/            agent (the voice process), runner (the task runner's), mcp_launch, audio_file,
+│                    host_check, artifact_check, features (make features)
+├── server.py        web app, token endpoint and push registration
+├── panel/           the control panel's actions, one module per area (tasks, schedules, accounts…)
+├── setup_local.py   local setup and the services (launchd on macOS, systemd on Linux)
+├── claude_login.py  signing Claude logins in
+├── bootstrap.py     the composition root: hands lower layers what sits above them (wire())
+│  ── capabilities ───────────────────────────────────────────────────────────────────────
+├── voice/           the call's audio stack: Whisper and Kokoro, turn-taking, noise filter,
+│                    speech gate, speaker check, barge-in, speaking unasked
+├── brain/           the voice brain (cli.py), its tool sessions (sdk.py), persona, routing,
+│                    side lookups, turn budget, timing
+├── gates/           what every tool call passes: the shell gate, Google drafts, connection
+│                    writes (spoken yes), and screening results for hidden instructions
+├── tools/           what the brain can call: thin adapters over the layers below
+│  ── orchestration and services ─────────────────────────────────────────────────────────
+├── node/            other machines: sending them work (offload, hub) and running it there
+├── tasks/           the task runner, its worker and gate, the task store, git, commands,
+│                    approvals, scheduler, notices, learning review
+├── integrations/    Google accounts and AI Armory (armory.py), MCP servers, the web browser
 ├── skills/          skills: storage, installing, script reviews
 ├── notify/          Web Push, APNs and FCM
-├── state/           memory, settings, to-dos, vocabulary, voiceprints, history, pictures
-├── core/            config, database, vault, credentials, logins, profiles, documents,
-│                    transcription; platform.py (which OS), whisper.py (MLX or
-│                    faster-whisper), desktop.py (the Linux desktop)
-├── server.py        web app, token endpoint and push registration
-├── panel.py         the control panel's actions
-└── setup_local.py   local setup and the services (launchd on macOS, systemd on Linux)
+├── media/           documents, recordings (transcription, Whisper backends), audio files
+├── projects.py      the project list
+│  ── foundations ────────────────────────────────────────────────────────────────────────
+├── state/           memory, preferences, settings, to-dos, vocabulary, voiceprints, history,
+│                    the conversation in progress
+├── safety/          command and script rules, the host walls, URL guard, consent, risk kinds,
+│                    remembered approvals, the hidden-instruction scan
+├── llm/             the only code that talks to Claude: roles, one-shot calls, sessions,
+│                    the SDK facade, logins, usage limits, retries
+├── auth/            the vault, panel logins, JARVIS's own keys
+├── storage/         the database (connections, migrations), the settings table, profiles
+├── config/          typed settings read from config/*.toml, JARVIS_HOME and .env
+├── prompts/         the long prompts as markdown, {{name}} placeholders filled by prompts.load()
+├── contracts/       Protocols and data a lower layer names for a higher one to fill in
+└── core/            platform.py (which OS), files, processes, speakable text, the GPU shim
 
+config/              the shipped settings: jarvis.toml (every default) and models.toml (model roles)
 web/                 the phone web app (Vite + TypeScript + Preact), served from web/dist
 tests/               pytest, plus web/tests/ (vitest)
 deploy/              launchd plists, systemd/ user unit templates
@@ -65,19 +85,48 @@ docs/                these pages
 
 | | File | For |
 |:-:|---|---|
-| 📞 | `jarvis/voice/agent.py`, `jarvis/voice/session.py` | **One call**: LiveKit's side, and the `VoiceSession` |
-| 🧠 | `jarvis/brain/cli.py`, `jarvis/brain/sdk.py` | **The brain**: the `claude` CLI through the Agent SDK |
+| 📞 | `jarvis/apps/agent.py`, `jarvis/voice/session.py` | **One call**: LiveKit's side, and the `VoiceSession` |
+| 🧠 | `jarvis/brain/cli.py`, `jarvis/llm/` | **The brain**: the `claude` CLI through the Agent SDK, which only `jarvis/llm/` talks to |
 | 🧰 | `jarvis/tools/__init__.py` | **The tool registry**: `@tool` and AI Armory's tool sets |
 | ⚙️ | `jarvis/tasks/runner.py`, `jarvis/tasks/worker.py` | **Background tasks**: the runner, its HTTP API and one task's run |
-| 🛡️ | `jarvis/safety/` | **Every guard** |
-| 🎛️ | `jarvis/core/config.py` | **Every setting** and its default ([Configuration](configuration.md)) |
+| 🛡️ | `jarvis/safety/`, `jarvis/gates/` | **Every guard**: the rules, and the gates that apply them to each tool call |
+| 🎛️ | `config/*.toml`, `jarvis/config/` | **Every setting**: defaults and model roles in the TOML files, read by `jarvis.config` ([Configuration](configuration.md)) |
 | 🧩 | `jarvis/core/platform.py` | **Which OS**: `MAC`, `LINUX`, `WSL`, `APPLE_SILICON`, `NAME` ([Platform layer](architecture.md#-platform-layer)) |
 
 - **`VoiceSession`** routes each turn and speaks tasks' requests.
-- **`ask_json`** (in the brain) is the one way a short model call gives a verdict: JSON checked against a schema.
-- **The guards:** `commands.py` (what's risky) and `scripts.py` (what a script's code does), `shell.py` / `draft_gate.py` (spoken yes), `host.py` (the host walls: Seatbelt on macOS, bubblewrap on Linux), `injection.py` / `scan.py`.
-- **The Google and Mac tools** come from **[AI Armory](https://github.com/anilkumarmeena/ai-armory)**, a git dependency pinned to a commit in `pyproject.toml`, registered in `jarvis/tools/google.py` and `jarvis/tools/mac.py`. The Linux desktop tools are JARVIS's own: `jarvis/tools/desktop.py` on top of `jarvis/core/desktop.py`.
-- **OS differences** stay behind `platform.MAC` / `platform.LINUX` checks; speech goes through `jarvis/core/whisper.py`, which hides whether MLX Whisper or faster-whisper runs.
+- **`claude.ask_json`** (`jarvis/llm/claude.py`) is the one way a short model call gives a verdict: JSON checked against a schema. Calls name a **role** (`Role.ANNOUNCE`), never a model.
+- **The guards:** `commands.py` (what's risky) and `scripts.py` (what a script's code does), `gates/shell.py` / `gates/draft_gate.py` (spoken yes), `host.py` (the host walls: Seatbelt on macOS, bubblewrap on Linux), `gates/injection.py` / `scan.py`.
+- **The Google and Mac tools** come from **[AI Armory](https://github.com/anilkumarmeena/ai-armory)**, a git dependency pinned to a commit in `pyproject.toml`, registered in `jarvis/tools/google.py` and `jarvis/tools/mac.py`, and imported only through `jarvis/integrations/armory.py`. The Linux desktop tools are JARVIS's own: `jarvis/tools/desktop.py` on top of `jarvis/core/desktop.py`.
+- **OS differences** stay behind `platform.MAC` / `platform.LINUX` checks; speech goes through `jarvis/media/whisper.py`, which hides whether MLX Whisper or faster-whisper runs.
+
+## 🧱 Layers and contracts
+
+Four rules keep a change in one part from breaking another. **`make test` enforces the first three.**
+
+| Rule | What it means | Checked by |
+|---|---|---|
+| **Imports point down** | A package imports only its own modules and lower layers; parts in one layer don't import each other (a short, commented allow-list in the test aside) | `tests/test_architecture.py` |
+| **One door per vendor** | Only `jarvis/llm/` imports the Claude Agent SDK (`jarvis/llm/sdk.py` re-exports what the rest uses); only `jarvis/integrations/armory.py` imports AI Armory | `tests/test_architecture.py` |
+| **No model id in code** | Code names a **role** (`Role.ANNOUNCE`); `config/models.toml` says which model plays it | `tests/test_architecture.py` |
+| **Upward needs go through a contract** | When a lower part needs something above it, name it in `jarvis/contracts/` (a Protocol or plain data) and have `jarvis/bootstrap.py` or the process's entry point hand it in | review |
+
+<details>
+<summary><b>Where does my change go?</b></summary>
+
+<br>
+
+| You're adding | Put it in | Then |
+|---|---|---|
+| A setting | `config/jarvis.toml` (default, with its variable in a comment), read in `jarvis/config/__init__.py` | Document it in [Configuration](configuration.md) |
+| A model call | A role in `config/models.toml` and `jarvis/llm/roles.py`; call `claude.ask(…, Role.X)` | |
+| A tool | A `@tool` in `jarvis/tools/<area>.py`, calling a service below; no business logic in the tool | `make features` |
+| A process | `jarvis/apps/<name>.py`, calling `bootstrap.wire()` before it starts work | `make features` |
+| A panel action | An `@action` in `jarvis/panel/<area>.py` | `make features` (the web app's action list) |
+| A prompt | `jarvis/prompts/<name>.md`, read with `prompts.load()` | |
+
+</details>
+
+The architecture test's baseline (`tests/architecture_baseline.txt`) is **empty**: a new break fails the build. `make features` regenerates `docs/features.md` and `web/src/lib/panelActions.ts`, and a test fails when either is stale.
 
 ## 🧪 Tests and checks
 

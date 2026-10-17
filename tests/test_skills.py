@@ -21,10 +21,10 @@ from test_task_host import Asking
 from conftest import use_profile, use_task_cache
 from jarvis import panel, tools
 from jarvis.brain import cli
-from jarvis.brain.sdk import ATTRIBUTION
-from jarvis.core import profile
-from jarvis.safety import draft_gate
+from jarvis.gates import draft_gate
+from jarvis.llm.claude import ATTRIBUTION
 from jarvis.skills import home, install, review
+from jarvis.storage import profile
 from jarvis.tasks import data_edits, learning, worker
 from jarvis.tools import skills as skill_tools  # noqa: F401  (registers the skill tools)
 

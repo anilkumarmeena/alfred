@@ -10,9 +10,9 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from jarvis.core import profile
 from jarvis.core.files import locked, update, write_atomic
 from jarvis.safety import scan
+from jarvis.storage import profile
 
 RECENT_MAX_CHARS = 6000
 SEARCH_MAX_CHARS = 6000

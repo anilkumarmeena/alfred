@@ -26,9 +26,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from jarvis.config import CLAUDE_CONFIG_DIR, DATA_DIR, HOME_DIR, ROOT, SECRETS_DIR
 from jarvis.core import platform
-from jarvis.core.config import CLAUDE_CONFIG_DIR, DATA_DIR, ROOT, SECRETS_DIR
 from jarvis.safety import scripts
+from jarvis.safety.risk import Risk
 from jarvis.safety.scripts import UNSEEN
 
 # ── Secrets ─────────────────────────────────────────────────────
@@ -39,7 +40,8 @@ HOME_SECRETS = ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/gh", "~/.netrc", "~/.
                 "~/Library/Keychains", "~/.git-credentials", "~/.npmrc", "~/.pypirc", "~/.local/share/keyrings",
                 "~/.local/share/kwalletd", "~/.password-store", "~/.config/Bitwarden", "~/.pki/nssdb"]
 # JARVIS's own: keys and sign-ins, Claude login (and voice logs), .env, and the browser profile (cookies = logins)
-JARVIS_SECRETS = [SECRETS_DIR, Path(CLAUDE_CONFIG_DIR), ROOT / ".env", DATA_DIR / "browser/profile"]
+JARVIS_SECRETS = [SECRETS_DIR, Path(CLAUDE_CONFIG_DIR), *dict.fromkeys([ROOT / ".env", HOME_DIR / ".env"]),
+                  DATA_DIR / "browser/profile"]
 # Secret wherever they appear
 SECRET_DIRS = {"secrets", ".ssh", ".aws", ".gnupg", "Keychains"}
 # .env.example and the like hold placeholders, not secrets: every check here leaves them out, while .env, .env.local,
@@ -363,14 +365,14 @@ _FD_NUMBER = re.compile(r"(?<![^\s;&|()])\d+(?=[<>])")
 _ALWAYS = {
     "rm": "deletes files", "rmdir": "deletes files", "unlink": "deletes files", "shred": "deletes files",
     "srm": "deletes files", "trash": "deletes files", "truncate": "deletes files", "dd": "writes a disk",
-    "kill": "stops a process", "killall": "stops a process", "pkill": "stops a process",
+    "kill": Risk.STOPS, "killall": Risk.STOPS, "pkill": Risk.STOPS,
     "shutdown": "stops the computer", "reboot": "stops the computer", "halt": "stops the computer",
     "sudo": "runs as root", "su": "runs as root", "doas": "runs as root",
-    "chmod": "changes permissions", "chown": "changes permissions", "chgrp": "changes permissions",
-    "chflags": "changes permissions", "crontab": "changes the system", "installer": "installs software",
-    "softwareupdate": "installs software", "pipx": "installs software", "mas": "installs software",
-    "npx": "installs software", "pnpx": "installs software", "bunx": "installs software", "uvx": "installs software",
-    "port": "installs software",
+    "chmod": Risk.PERMISSIONS, "chown": Risk.PERMISSIONS, "chgrp": Risk.PERMISSIONS,
+    "chflags": Risk.PERMISSIONS, "crontab": "changes the system", "installer": Risk.INSTALLS,
+    "softwareupdate": Risk.INSTALLS, "pipx": Risk.INSTALLS, "mas": Risk.INSTALLS,
+    "npx": Risk.INSTALLS, "pnpx": Risk.INSTALLS, "bunx": Risk.INSTALLS, "uvx": Risk.INSTALLS,
+    "port": Risk.INSTALLS,
     **dict.fromkeys(("scp", "sftp", "ssh", "ftp", "nc", "ncat", "netcat", "telnet", "mail", "sendmail"),
                     "sends data off the computer"),
     "csrutil": "changes the system",
@@ -380,7 +382,7 @@ _ALWAYS = {
     "at": "changes the system", "batch": "changes the system",  # run commands later, as crontab does
     # Linux
     "poweroff": "stops the computer", "pkexec": "runs as root", "run0": "runs as root",
-    "chattr": "changes permissions", "setfacl": "changes permissions", "setcap": "changes permissions",
+    "chattr": Risk.PERMISSIONS, "setfacl": Risk.PERMISSIONS, "setcap": Risk.PERMISSIONS,
     "passwd": "changes the system", "chpasswd": "changes the system", "chage": "changes the system",
     "chsh": "changes the system", "chfn": "changes the system", "usermod": "changes the system",
     "useradd": "changes the system", "userdel": "changes the system", "groupadd": "changes the system",
@@ -389,7 +391,7 @@ _ALWAYS = {
     "swapoff": "changes the system", "modprobe": "changes the system", "insmod": "changes the system",
     "rmmod": "changes the system", "systemd-run": "changes the system", "dpkg-reconfigure": "changes the system",
     "update-rc.d": "changes the system", "chkconfig": "changes the system", "iptables-restore": "changes the system",
-    "ip6tables-restore": "changes the system", "add-apt-repository": "installs software", "apt-key": "installs software",
+    "ip6tables-restore": "changes the system", "add-apt-repository": Risk.INSTALLS, "apt-key": Risk.INSTALLS,
     "fdisk": "writes a disk", "sfdisk": "writes a disk", "parted": "writes a disk", "wipefs": "writes a disk",
     "mkswap": "writes a disk", "cryptsetup": "writes a disk",
     "dbus-send": "controls apps", "qdbus": "controls apps", "xdotool": "controls apps", "ydotool": "controls apps",
@@ -436,16 +438,16 @@ _READ_ONLY_SUBCOMMANDS = {  # any other subcommand changes things
 }
 _READ_ONLY_WHY = {"security": "reads the keychain", "busctl": "controls apps", "gdbus": "controls apps",
                   **dict.fromkeys(("apt", "apt-get", "dnf", "dnf5", "yum", "microdnf", "zypper", "apk", "snap", "flatpak"),
-                                  "installs software")}
+                                  Risk.INSTALLS)}
 _BARE_READS = {"systemctl", "loginctl", "timedatectl", "hostnamectl", "localectl", "busctl"}  # alone: a status listing
 _SUB_WHY = {  # subcommands with a reason of their own
     "systemctl": dict.fromkeys(("poweroff", "reboot", "halt", "kexec", "soft-reboot", "suspend", "hibernate", "sleep",
                                 "hybrid-sleep", "suspend-then-hibernate", "rescue", "emergency"),
                                "stops the computer"),
-    "snap": {"start": "stops a process", "stop": "stops a process", "restart": "stops a process",
-             "connect": "changes permissions", "disconnect": "changes permissions"},
-    "flatpak": {"kill": "stops a process", "override": "changes permissions", "permission-set": "changes permissions",
-                "permission-remove": "changes permissions", "permission-reset": "changes permissions"},
+    "snap": {"start": Risk.STOPS, "stop": Risk.STOPS, "restart": Risk.STOPS,
+             "connect": Risk.PERMISSIONS, "disconnect": Risk.PERMISSIONS},
+    "flatpak": {"kill": Risk.STOPS, "override": Risk.PERMISSIONS, "permission-set": Risk.PERMISSIONS,
+                "permission-remove": Risk.PERMISSIONS, "permission-reset": Risk.PERMISSIONS},
 }
 _SUB_VALUES = {  # options taking a value, before the subcommand
     "systemctl": {"-t", "--type", "-p", "--property", "-P", "-H", "--host", "-M", "--machine", "-n", "--lines", "-o",
@@ -728,7 +730,7 @@ def _pacman(args: list[str]) -> str:
         return ""
     if op == "S" and letters & set("silgp") and not letters & set("yuwc"):
         return ""  # search, info, list, groups, print: nothing installed
-    return "installs software"
+    return Risk.INSTALLS
 
 
 def _dpkg(args: list[str]) -> str:
@@ -736,7 +738,7 @@ def _dpkg(args: list[str]) -> str:
              "--clear-selections", "--add-architecture", "--remove-architecture", "--update-avail", "--merge-avail",
              "--clear-avail", "--record-avail")
     letters = {c for a in args if a.startswith("-") and not a.startswith("--") for c in a[1:]}
-    return "installs software" if letters & set("irPA") or any(a.startswith(longs) for a in args) else ""
+    return Risk.INSTALLS if letters & set("irPA") or any(a.startswith(longs) for a in args) else ""
 
 
 def _rpm(args: list[str]) -> str:
@@ -744,7 +746,7 @@ def _rpm(args: list[str]) -> str:
              "--restore", "--setperms", "--setugids")
     letters = {c for a in args if a.startswith("-") and not a.startswith("--") for c in a[1:]}
     if any(a.startswith(longs) for a in args) or letters & set("iUFe") and not letters & set("qVK"):
-        return "installs software"  # rpm -qi is a query
+        return Risk.INSTALLS  # rpm -qi is a query
     return ""
 
 
@@ -890,23 +892,23 @@ def _piece(argv: list[str]) -> str:
             a.startswith(("-get", "-list", "-print")) for a in args) or program == "xattr" and flags & {"-d", "-c", "-w"}:
         return "changes the system"
     if program in ("devicectl", "simctl") and flags & _DEVICE_CHANGES:
-        return "changes the iPhone" if program == "devicectl" else "changes a simulator"
+        return Risk.IPHONE if program == "devicectl" else Risk.SIMULATOR
     if program == "brew" and args[:1] == ["services"]:
-        return "stops a process" if flags & {"stop", "kill", "restart", "start", "run", "cleanup"} else ""
+        return Risk.STOPS if flags & {"stop", "kill", "restart", "start", "run", "cleanup"} else ""
     if re.fullmatch(r"python[\d.]*", program):
         if args[:2] == ["-m", "pip"] and flags & {"install", "uninstall"}:
-            return "installs software"
+            return Risk.INSTALLS
         program = "python"
     if program in _INSTALLS:
         rest = _options_then(args, {"-C", "--prefix", "--directory", "--cwd"})
         if (program == "yarn" and not rest) or (rest and rest[0] in _INSTALLS[program]):
-            return "installs software"
+            return Risk.INSTALLS
         if program == "uv" and rest[:1] in (["pip"], ["tool"]) and set(rest[1:2]) & {"install", "uninstall", "sync", "upgrade",
                                                                                      "run"}:
-            return "installs software"
+            return Risk.INSTALLS
         return ""
     if program in ("docker", "podman"):
-        return "stops a process" if flags & {"stop", "kill", "rm", "rmi", "prune", "down", "restart", "pause"} else ""
+        return Risk.STOPS if flags & {"stop", "kill", "rm", "rmi", "prune", "down", "restart", "pause"} else ""
     if program == "git":
         return _git(args)
     if program == "gh":
@@ -1828,7 +1830,7 @@ def own_sandbox(command: str) -> bool:
         return False
     installs = False
     for argv in pieces:
-        if argv[0] in _OWN_SANDBOX and _piece(argv) == "installs software":
+        if argv[0] in _OWN_SANDBOX and _piece(argv) == Risk.INSTALLS:
             installs = True
         elif not (argv[0] == "cd" or argv[0] in _STDIN_FILTERS and all(a.startswith("-") or a.isdigit() for a in argv[1:])):
             return False
@@ -1964,10 +1966,10 @@ def _ordered_piece(argv: list[str], why: str, acts: set[str], said: set[str]) ->
     if why == "deletes files":
         paths = _operands(args if name in _DELETERS else rest if (name, sub) == ("git", "rm") else [])
         return "delete" in acts and bool(paths) and all(_path_named(p, said) for p in paths)
-    if why == "stops a process" and name in ("kill", "pkill", "killall"):
+    if why == Risk.STOPS and name in ("kill", "pkill", "killall"):
         targets = _operands(args)  # kill takes pids, which can't be named
         return "stop" in acts and (name == "kill" or bool(targets) and all(_named(t, said) for t in targets))
-    if why in ("stops a process", "changes the system") and (name in ("launchctl", "systemctl", "docker", "podman")
+    if why in (Risk.STOPS, "changes the system") and (name in ("launchctl", "systemctl", "docker", "podman")
                                                             or (name, sub) == ("brew", "services")):
         if name in ("docker", "podman") and set(args) & _CONTAINER_REMOVES:
             return False
@@ -1976,7 +1978,7 @@ def _ordered_piece(argv: list[str], why: str, acts: set[str], said: set[str]) ->
             return False  # each unit by name: "restart nginx"
         does = {"brew": rest[:1], "launchctl": [sub], "systemctl": [sub]}.get(name, args)
         return any(set(does) & _SERVICES[act] for act in acts & _SERVICES.keys())
-    if why == "installs software":
+    if why == Risk.INSTALLS:
         return _install_as_said(words, acts, said)
     if why.startswith("changes things on ") and sub in ("pr", "mr") and rest:
         return {"merge": "merge", "create": "open"}.get(rest[0]) in acts and bool(_PULL_REQUEST & said)

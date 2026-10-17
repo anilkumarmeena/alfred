@@ -1,4 +1,4 @@
-// Claude logins: the Claude accounts JARVIS can run on, by priority (jarvis.core.claude_logins). JARVIS runs on the
+// Claude logins: the Claude accounts JARVIS can run on, by priority (jarvis.llm.claude_logins). JARVIS runs on the
 // first one that's usable, moving down the list while one's limit is used up or its sign-in stopped working. This
 // Mac's own Claude Code login (name "") is on the list like any other, but always stays: the terminal uses it.
 // Signing in runs Claude Code's own sign-in on JARVIS's computer (jarvis.claude_login): Claude's page opens in a new
@@ -9,6 +9,7 @@ import { now } from "../../state/store";
 import { DownIcon, TrashIcon, UpIcon } from "../icons";
 import { cap, Empty, Led, Pill } from "./bits";
 import { blankTab } from "./GoogleAccounts";
+import type { PanelAction } from "../../lib/panelActions";
 
 const MAC = "This Mac";  // this Mac's own Claude Code login, name ""
 const called = (l: Pick<ClaudeLogin, "name">) => (l.name ? `the ${l.name} login` : "this Mac's login");
@@ -98,7 +99,7 @@ async function move(at: number, by: -1 | 1) {
 
 function LoginRow({ l, at, count, flow, can }: { l: ClaudeLogin; at: number; count: number; flow: Signal<Flow | null>; can: boolean }) {
   const busy = useSignal("");
-  async function run<T extends ClaudeLogins>(action: string, done?: string): Promise<T | null> {
+  async function run<T extends ClaudeLogins>(action: PanelAction, done?: string): Promise<T | null> {
     busy.value = action;
     const r = await act<T>(action, { name: l.name }, done);
     busy.value = "";

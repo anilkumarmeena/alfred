@@ -3,7 +3,8 @@
 import pytest
 from test_mcp_servers import fresh, github, seeded  # noqa: F401  (fixture)
 
-from jarvis.core import vault
+from jarvis.apps import mcp_launch as launcher
+from jarvis.auth import vault
 from jarvis.integrations import mcp_bridge, mcp_launch, mcp_relay, mcp_servers
 from jarvis.integrations.mcp_servers import Server
 
@@ -15,7 +16,7 @@ def started(monkeypatch):
     """Records launches: ("relay", server, wait, how), ("bridge", server) or ("exec", argv)."""
     ran: list[tuple] = []
 
-    async def relay(server, wait, how):
+    async def relay(server, wait, how, runner=None):
         ran.append(("relay", server.name, wait, how))
         return 0
 
@@ -26,13 +27,13 @@ def started(monkeypatch):
     monkeypatch.setattr(mcp_relay, "serve", relay)
     monkeypatch.setattr(mcp_relay, "detach", lambda: ran.append(("detach",)))
     monkeypatch.setattr(mcp_bridge, "serve", bridge)
-    monkeypatch.setattr(mcp_launch.os, "execvpe", lambda program, argv, env: ran.append(("exec", argv)))
+    monkeypatch.setattr(launcher.os, "execvpe", lambda program, argv, env: ran.append(("exec", argv)))
     return ran
 
 
 def launch(*argv: str):
     with pytest.raises(SystemExit) as ended:
-        mcp_launch.main(list(argv))
+        launcher.main(list(argv))
     return ended.value.code
 
 
@@ -58,7 +59,7 @@ def test_a_server_thats_off_or_unsorted_can_still_be_probed_but_not_run(fresh, s
     mcp_servers.save(server, new=True)
     vault.ensure()
     vault.put("github.token", "ghp_not_a_real_token")
-    mcp_launch.main(["github", "--probe"])  # exec takes the process over, so no exit
+    launcher.main(["github", "--probe"])  # exec takes the process over, so no exit
     assert started == [("exec", ["/opt/bin/github-mcp-server", "stdio", "--toolsets=repos,pull_requests"])]
     assert launch("github") == "There's no enabled MCP server github."
 

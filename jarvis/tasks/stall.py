@@ -13,13 +13,12 @@ desktop notification, push), within notices.MINUTES and not in quiet hours or do
 import time
 from collections.abc import Callable
 
-from claude_agent_sdk import AssistantMessage, RateLimitEvent, ToolResultBlock, ToolUseBlock, UserMessage
-
-from jarvis.brain import usage
-from jarvis.core.config import TASK_STALL_MINUTES
-from jarvis.core.database import COMMAND
+from jarvis.config import TASK_STALL_MINUTES
+from jarvis.llm import usage
+from jarvis.llm.sdk import AssistantMessage, RateLimitEvent, ToolResultBlock, ToolUseBlock, UserMessage
 from jarvis.safety import host
 from jarvis.tasks.host_tools import HOST_RUN, JOB_WAIT, call_minutes
+from jarvis.tasks.store import COMMAND
 
 GRACE = 120  # seconds of slack past a command's own time limit
 BASH_DEFAULT, BASH_MOST = 120, 600  # seconds: Bash tool default and maximum timeout

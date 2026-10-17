@@ -5,8 +5,9 @@ import asyncio
 import pytest
 from livekit.agents import llm
 
+from jarvis.apps import agent
 from jarvis.safety.approvals import VoiceApprovals
-from jarvis.voice import agent, floor as floor_module
+from jarvis.voice import floor as floor_module
 from jarvis.voice.floor import (
     QUESTION_MINUTES,
     REPEAT_MINUTES,

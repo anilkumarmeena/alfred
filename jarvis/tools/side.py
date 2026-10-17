@@ -4,15 +4,12 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING
 
 from jarvis import tools
+from jarvis.contracts.call import BackgroundCall as Call, BackgroundCalls as Kept, Lookups as Jobs
 from jarvis.state import conversation
 from jarvis.tools import tool
 
-if TYPE_CHECKING:
-    from jarvis.brain.kept import Call, Kept
-    from jarvis.brain.side import Jobs
 
 def _jobs() -> Jobs:
     if (lookups := conversation.current().lookups) is None:

@@ -1,4 +1,4 @@
-"""Tests for jarvis.core.credentials: vault storage, .env fallback and migration, panel entry that never echoes keys."""
+"""Tests for jarvis.auth.credentials: vault storage, .env fallback and migration, panel entry that never echoes keys."""
 
 import asyncio
 import json
@@ -7,8 +7,8 @@ import stat
 
 import pytest
 
-from jarvis import panel, setup_local
-from jarvis.core import config, credentials, vault
+from jarvis import config, panel, setup_local
+from jarvis.auth import credentials, vault
 from jarvis.notify import apns
 from jarvis.state import settings
 

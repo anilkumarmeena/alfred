@@ -1,7 +1,7 @@
 """Scheduler: runs due jobs from jarvis.tasks.schedules inside the task runner, every TICK_SECONDS (stateless SQL read).
 
   reminder  desktop notification, phone push, spoken in a live session
-  task      background task on SCHEDULE_MODEL; ends with a NOTEPAD: line kept for the next run. only_changes runs
+  task      background task on the schedule role; ends with a NOTEPAD: line kept for the next run. only_changes runs
             judged "nothing new" by `read` stay silent. Transient failures retry after RETRY_MINUTES; a failure
             kind is announced once until a run succeeds
   watch     task probe (model judges met via `read`), model-free url probe, or tool probe (jarvis.tasks.tool_watch:
@@ -13,7 +13,7 @@
             like probes, then one notification says what was resumed or started; nothing to do stays silent
 Missed runs never pile up: one-offs run once late; day-based jobs catch up only within CATCH_UP_HOURS; interval jobs
 and watches run once now. Overlapping runs are skipped. Watches skip quiet hours. Do-not-disturb holds everything;
-model runs also wait out Claude's usage limit (jarvis.brain.usage).
+model runs also wait out Claude's usage limit (jarvis.llm.usage).
 """
 
 import asyncio
@@ -27,11 +27,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from jarvis.brain import retry, usage
-from jarvis.core import claude_logins, profile
-from jarvis.core.config import DATA_DIR, VERDICT_MODEL
-from jarvis.core.database import ACTIVE as TASK_ACTIVE, COMMAND
+from jarvis.config import DATA_DIR
+from jarvis.llm import claude_logins, retry, usage
+from jarvis.llm.roles import Role
+from jarvis.storage import profile
 from jarvis.tasks import hold, schedules, tool_watch
+from jarvis.tasks.store import ACTIVE as TASK_ACTIVE, COMMAND
 
 log = logging.getLogger("jarvis.tasks.scheduler")
 TICK_SECONDS = 30
@@ -107,11 +108,11 @@ def news_system() -> str:
 
 
 async def read(task: dict, summary: str) -> Reading:
-    """Judge a finished run's summary with one VERDICT_MODEL JSON call: watch met?, only_changes nothing new?
+    """Judge a finished run's summary with one verdict-role JSON call: watch met?, only_changes nothing new?
 
     On failure a watch stays unmet and a task run is delivered.
     """
-    from jarvis.brain import sdk
+    from jarvis.llm import claude
 
     job = schedules.get(task["job"]) if task.get("job") is not None else None
     if not job:
@@ -119,10 +120,10 @@ async def read(task: dict, summary: str) -> Reading:
     about = f"<instruction>\n{job['text']}\n</instruction>\n\n"
     if job["kind"] == "watch":
         prompt = f"{about}<summary>\n{summary.strip() or '(empty)'}\n</summary>"
-        return Reading(met=await sdk.ask_flag(prompt, "met", met_system(), VERDICT_MODEL, effort="low"))
+        return Reading(met=await claude.ask_flag(prompt, "met", met_system(), Role.VERDICT, effort="low"))
     if job["kind"] == "task" and job.get("only_changes"):
         prompt = f"{about}<report>\n{split_notepad(summary)[0].strip() or '(empty)'}\n</report>"
-        return Reading(nothing_new=bool(await sdk.ask_flag(prompt, "nothing_new", news_system(), VERDICT_MODEL,
+        return Reading(nothing_new=bool(await claude.ask_flag(prompt, "nothing_new", news_system(), Role.VERDICT,
                                                              effort="low")))
     return Reading()
 
@@ -481,7 +482,7 @@ class Scheduler:
               kind: str = retry.ERROR) -> Verdict | None:
         """Verdict for a finished scheduled run given `read`'s result; None means the runner's default handling.
 
-        `kind` is the failure kind from jarvis.brain.retry.
+        `kind` is the failure kind from jarvis.llm.retry.
         """
         reading = reading or Reading()
         if not (job := schedules.get(task["job"])):

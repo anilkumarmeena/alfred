@@ -13,11 +13,12 @@ import subprocess
 
 import psutil
 
+from jarvis.config import SECRETS_DIR
 from jarvis.core import platform, proc
-from jarvis.core.config import MAX_TASKS, SECRETS_DIR
 from jarvis.core.files import write_atomic
 from jarvis.node import keys
 from jarvis.safety import commands, host
+from jarvis.state import preferences
 
 PRIVATE = SECRETS_DIR / "node"
 KEY_FILE = PRIVATE / "node.key"
@@ -81,4 +82,4 @@ def facts(version: str = "") -> dict:
     """What this machine reports about itself."""
     return {"name": computer_name(), "host": socket.gethostname().split(".")[0], "os": platform.NAME,
             "cores": os.cpu_count() or 0, "ram_gb": round(psutil.virtual_memory().total / 1e9, 1),
-            "tools": [t for t in TOOLS if shutil.which(t)], "max_tasks": MAX_TASKS, "version": version}
+            "tools": [t for t in TOOLS if shutil.which(t)], "max_tasks": preferences.max_tasks(), "version": version}

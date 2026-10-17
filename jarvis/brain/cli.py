@@ -2,7 +2,7 @@
 
 The user's own Claude login (or JARVIS's, see CLAUDE_OWN_CONFIG_DIR); one CLI process per voice session. Claude Code's own abilities (file edits,
 settings, its skills, other MCP servers) are off. Available: JARVIS tools, web search/fetch, sandboxed shell and jobs
-(jarvis.safety.shell), the browser when on, enabled MCP servers (writes gated by jarvis.safety.mcp_gate), side jobs
+(jarvis.gates.shell), the browser when on, enabled MCP servers (writes gated by jarvis.gates.mcp_gate), side jobs
 for slow reading and file lookups (jarvis.brain.side), and enabled skills as a per-session plugin. The brain has no
 file reads or subagents of its own: a file lookup holds a turn at most LOOKUP_WAIT seconds in all, then carries on in
 the background.
@@ -26,7 +26,19 @@ import warnings
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 
-from claude_agent_sdk import (
+from jarvis import prompts, tools
+from jarvis.brain import timing
+from jarvis.brain.budget import Budget
+from jarvis.brain.kept import Kept
+from jarvis.brain.persona import Notes, system_prompt
+from jarvis.brain.sdk import jarvis_server, sdk_options
+from jarvis.config import CONNECTION_WAIT, EFFORT, INJECTION_VOICE_SECONDS, MAX_TOOL_ROUNDS
+from jarvis.gates import mcp_gate, shell
+from jarvis.integrations import accounts, mcp_servers
+from jarvis.llm import claude_logins, usage
+from jarvis.llm.claude import BUILTIN_AGENTS_DENIED, LimitWatch
+from jarvis.llm.roles import Role
+from jarvis.llm.sdk import (
     AssistantMessage,
     CanUseToolShadowedWarning,
     ClaudeAgentOptions,
@@ -40,28 +52,12 @@ from claude_agent_sdk import (
     ToolUseBlock,
     UserMessage,
 )
-
-from jarvis import prompts, tools
-from jarvis.brain import usage
-from jarvis.brain.budget import Budget
-from jarvis.brain.kept import Kept
-from jarvis.brain.persona import Notes, system_prompt
-from jarvis.brain.sdk import BUILTIN_AGENTS_DENIED, LimitWatch, jarvis_server, sdk_options
-from jarvis.core import claude_logins, profile
-from jarvis.core.config import (
-    CLI_MODEL,
-    CONNECTION_WAIT,
-    EFFORT,
-    INJECTION_VOICE_SECONDS,
-    MAX_TOOL_ROUNDS,
-    browser_on,
-)
-from jarvis.integrations import accounts, mcp_servers
-from jarvis.safety import consent, mcp_gate, remembered, shell
+from jarvis.safety import consent, remembered
 from jarvis.skills import home as skills
 from jarvis.state import activity, conversation, memory, pictures
+from jarvis.state.preferences import browser_on
+from jarvis.storage import profile
 from jarvis.tools import browser, connections, google, screen, skills as skill_tools
-from jarvis.voice import timing
 
 log = logging.getLogger("jarvis.brain.cli")
 JARVIS_TOOLS = "mcp__jarvis__"  # CLI prefix for JARVIS's own tools
@@ -128,7 +124,7 @@ def _options(gate: mcp_gate.Gate, jobs: shell.Jobs, kept: Kept | None = None, bu
                                     + (browser.prompt() if browser_on() else "")
                                     + mcp_servers.prompt(mcp.servers) + connections.prompt()
                                     + skill_tools.prompt(found)),
-        model=usage.available(CLI_MODEL),  # lighter model while Opus's weekly limit is used up
+        model=usage.available(Role.VOICE),  # lighter model while Opus's weekly limit is used up
         effort=EFFORT,
         tools=ALLOWED_BUILTINS + ["Bash"] + (["Skill"] if found else []),
         skills=[skills.qualified(s) for s in found],  # only these, as Skill(name)

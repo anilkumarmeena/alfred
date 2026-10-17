@@ -8,9 +8,9 @@ from test_in_place import NullReporter, env, git, worker_task  # noqa: F401  (en
 from test_nudges import fake_run, settle
 
 from conftest import use_task_cache
-from jarvis.brain.sdk import ATTRIBUTION
-from jarvis.core import profile
+from jarvis.llm.claude import ATTRIBUTION
 from jarvis.safety.commands import in_place_git, orders, refused
+from jarvis.storage import profile
 from jarvis.tasks import git_ops, runner, worker
 from jarvis.tasks.gate import TaskGate
 from jarvis.tasks.worker import Outcome

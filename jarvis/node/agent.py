@@ -17,11 +17,13 @@ from pathlib import Path
 
 import aiohttp
 
-from jarvis.brain import usage
-from jarvis.core import platform, profile
-from jarvis.core.config import MAX_TASKS, ROOT
+from jarvis.config import ROOT
+from jarvis.core import platform
+from jarvis.llm import usage
 from jarvis.node import bundles, home, link, transfer, update
 from jarvis.node.link import Channel, Link, LinkDown, Refused, WebSocketChannel
+from jarvis.state import preferences
+from jarvis.storage import profile
 
 log = logging.getLogger("jarvis.node.agent")
 
@@ -172,7 +174,8 @@ class Agent:
         except OSError:
             load = None
         asked = [str(p) for p in body.get("programs") or []]
-        return {"free": max(0, MAX_TASKS - running), "max_tasks": MAX_TASKS, "running": running, "load": load,
+        most = preferences.max_tasks()
+        return {"free": max(0, most - running), "max_tasks": most, "running": running, "load": load,
                 "cores": os.cpu_count() or 0, "version": self.commit, "protocol": link.PROTOCOL,
                 "usage": await asyncio.to_thread(usage.windows), "hold_until": await asyncio.to_thread(usage.hold_until),
                 "updating": self.updater.pending, "update_problem": self.updater.problem} | (

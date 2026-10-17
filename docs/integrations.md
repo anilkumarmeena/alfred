@@ -6,7 +6,7 @@
 
 **Everything JARVIS connects to beyond the conversation, how each one is kept safe, and how to add a tool of your own.**
 
-[🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · **🔌 Integrations** · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md)
+[🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · **🔌 Integrations** · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md) · [🧭 Features](features.md)
 
 </div>
 
@@ -431,7 +431,7 @@ Tools may be sync (run in a thread) or async. Useful flags on `@tool`:
 | `gated=True` | Runs only after your spoken yes |
 | `enabled=fn` | Offered only while `fn()` is true, checked as each session starts |
 
-A gated tool follows the draft-then-confirm pattern in `jarvis/safety/draft_gate.py`. Return text, something JSON-serialisable, or `WithPictures` for images.
+A gated tool follows the draft-then-confirm pattern in `jarvis/gates/draft_gate.py`. Return text, something JSON-serialisable, or `WithPictures` for images.
 
 ---
 

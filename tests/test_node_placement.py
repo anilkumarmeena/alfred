@@ -7,7 +7,7 @@ import time
 import pytest
 from test_node_link import mine, paired  # noqa: F401  (mine is a fixture)
 
-from jarvis.brain import sdk, usage
+from jarvis.llm import claude, usage
 from jarvis.node import home, machines, placement
 
 FREE = {"same_protocol": True, "free": 2, "usage": {}, "online": True}
@@ -32,14 +32,14 @@ class Hub:
 @pytest.fixture(autouse=True)
 def no_model(monkeypatch):
     """The real placement model never runs here: its answer would depend on the computer's Claude login. A test that
-    reaches it fakes sdk.ask_json itself; any other call fails the test."""
+    reaches it fakes claude.ask_json itself; any other call fails the test."""
     stray = []
 
     async def unexpected(*args, **kwargs):
         stray.append(args[0])
         raise RuntimeError("an unfaked model call")
 
-    monkeypatch.setattr(sdk, "ask_json", unexpected)
+    monkeypatch.setattr(claude, "ask_json", unexpected)
     yield
     assert not stray, "a placement test reached the model without faking it"
 
@@ -93,7 +93,7 @@ def test_letting_jarvis_choose_asks_the_model_among_those_able(mine, monkeypatch
         asked.append((json.loads(prompt), schema))
         return {"where": str(studio.id), "why": "More cores."}, 0.0
 
-    monkeypatch.setattr(sdk, "ask_json", ask_json)
+    monkeypatch.setattr(claude, "ask_json", ask_json)
     place = choose(Hub({studio.id: FREE}))  # the laptop is offline, so it isn't offered
     assert place.node == studio.id and place.said == ""
     material, schema = asked[0]
@@ -149,7 +149,7 @@ def test_letting_jarvis_choose_shows_the_model_each_computers_room(mine, monkeyp
         asked.append(json.loads(prompt))
         return {"where": "here", "why": "It's light."}, 0.0
 
-    monkeypatch.setattr(sdk, "ask_json", ask_json)
+    monkeypatch.setattr(claude, "ask_json", ask_json)
     half = {"five_hour": {"status": "allowed", "utilization": 0.5, "resets_at": time.time() + 3600}}
     assert choose(Hub({studio.id: FREE | {"usage": half, "cores": 12, "load": 1.0}}), command="ls") == placement.HERE
     seen = asked[0]
@@ -164,7 +164,7 @@ def test_when_the_model_cant_be_asked_the_computer_with_the_most_room_takes_it(m
     async def broken(*args, **kwargs):
         raise RuntimeError("down")
 
-    monkeypatch.setattr(sdk, "ask_json", broken)
+    monkeypatch.setattr(claude, "ask_json", broken)
     assert choose(Hub({studio.id: FREE}), running=1, slots=1).node == studio.id  # no slot free here
     monkeypatch.setattr(placement, "_here", lambda running, slots: placement.Standing(12, 0.0, 2, 1.0))
     assert choose(Hub({studio.id: FREE | {"cores": 12, "load": 0.0}})) == placement.HERE  # a tie stays here

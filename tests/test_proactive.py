@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from jarvis.brain import quick
-from jarvis.core import profile
+from jarvis.llm import quick
+from jarvis.storage import profile
 from jarvis.tasks import data_edits, learning, schedules
 from jarvis.voice import floor as floor_module
 from jarvis.voice.floor import CUT_IN, HOLD_MINUTES, Announcement, Announcements, Floor, Moment

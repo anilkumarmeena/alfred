@@ -21,6 +21,7 @@ from typing import Protocol
 import aiohttp
 from aiohttp import web
 
+from jarvis.contracts.remote import MAX_MESSAGE  # noqa: F401  (bytes per message; callers find it here)
 from jarvis.node import keys
 
 log = logging.getLogger("jarvis.node.link")
@@ -29,7 +30,6 @@ PROTOCOL = 2  # bumped when messages change incompatibly; a machine on another o
 #               scheduled Claude tasks)
 CONTEXT = "jarvis-link/1"
 HANDSHAKE_SECONDS = 10.0
-MAX_MESSAGE = 8 * 1024 * 1024  # bytes per message; files go in chunks well under it
 
 
 class LinkDown(ConnectionError):

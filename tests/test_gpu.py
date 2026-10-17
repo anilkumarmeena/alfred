@@ -1,4 +1,4 @@
-"""Tests for jarvis.safety.gpu: the `env` shim that adds Metal's rules to the CLI's macOS sandbox profile, and only
+"""Tests for jarvis.core.gpu: the `env` shim that adds Metal's rules to the CLI's macOS sandbox profile, and only
 those, and the CLI it relies on still starting sandboxed commands through `env`."""
 
 import os
@@ -9,8 +9,7 @@ import claude_agent_sdk
 import pytest
 
 from jarvis.brain.sdk import sdk_options
-from jarvis.core import platform
-from jarvis.safety import gpu
+from jarvis.core import gpu, platform
 
 SHIM = str(gpu.SHIM_DIR / "env")
 METAL = ['(allow iokit-open (iokit-user-client-class "AGXDeviceUserClient"))',

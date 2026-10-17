@@ -10,10 +10,10 @@ import pytest
 from test_in_place import env  # noqa: F401  (fixture)
 from test_nudges import fake_run, finishes, settle, until
 
-from jarvis.brain import retry, usage
-from jarvis.core import claude_logins, config
-from jarvis.core.database import Store
+from jarvis import config
+from jarvis.llm import claude_logins, retry, usage
 from jarvis.tasks import runner
+from jarvis.tasks.store import Store
 from jarvis.tasks.worker import STEPS_OUT, Outcome
 
 

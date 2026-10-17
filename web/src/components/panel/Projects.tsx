@@ -62,7 +62,7 @@ function Card({ p }: { p: Project }) {
           <button class="btn sm" onClick={async () => set(await act("project_git", { name: p.name }, `Set up git for ${p.name}`))}>Set up git</button></div>}
         <label class="lbl">Folder</label>
         <div class="field mono ro" title={p.path}>{p.path}</div>
-        <p class="hint">To move it, on JARVIS's computer: <code>uv run python -m jarvis.tasks.projects set {p.name} --path …</code></p>
+        <p class="hint">To move it, on JARVIS's computer: <code>uv run python -m jarvis.projects set {p.name} --path …</code></p>
         <label class="lbl">Said as</label>
         <input class="field" value={aliases.value} placeholder="other names, comma separated" onInput={(e) => { aliases.value = e.currentTarget.value; }} />
         <label class="lbl">About</label>

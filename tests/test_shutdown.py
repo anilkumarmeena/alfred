@@ -11,9 +11,9 @@ from test_in_place import env, worker_task  # noqa: F401  (fixture)
 from test_nudges import fake_run, finishes, settle, until
 
 from conftest import use_task_cache
-from jarvis.core.database import Store
 from jarvis.safety import host
 from jarvis.tasks import access, api, host_tools, runner, worker
+from jarvis.tasks.store import Store
 from jarvis.tasks.worker import Outcome
 
 

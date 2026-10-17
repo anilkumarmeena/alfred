@@ -6,7 +6,7 @@
 
 **How JARVIS hears you, decides you've finished, ignores what isn't you, and where the wait before it speaks goes.**
 
-[🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · **🗣️ Voice** · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md)
+[🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · **🗣️ Voice** · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md) · [🧭 Features](features.md)
 
 </div>
 
@@ -49,11 +49,11 @@ flowchart TB
 | | Stage | Code | Settings |
 |:-:|---|---|---|
 | 🔉 | [Noise filter](#-noise-filter) | `jarvis/voice/denoise.py` | [Speech in and out](configuration.md#-speech-in-and-out) |
-| ⌛ | [End of turn](#-when-youve-finished) | `jarvis/voice/agent.py`, `jarvis/voice/turn.py` | `JARVIS_TURN_SILENCE`, `JARVIS_VAD_*` |
+| ⌛ | [End of turn](#-when-youve-finished) | `jarvis/apps/agent.py`, `jarvis/voice/turn.py` | `JARVIS_TURN_SILENCE`, `JARVIS_VAD_*` |
 | 📝 | [Whisper, Kokoro](#-whisper-in-kokoro-out) | `jarvis/voice/speech.py` | [Speech in and out](configuration.md#-speech-in-and-out) |
 | 🚫 | [Speech gate](#-speech-gate) | `jarvis/voice/speech_gate.py` | [Speech gate](configuration.md#-speech-gate) |
 | 🔐 | [Speaker check, barge-in](#-speaker-check) | `jarvis/voice/speaker.py`, `barge_in.py` | [Speaker check](configuration.md#-speaker-check) |
-| 📈 | [Turn timing](#-voice-timing) | `jarvis/voice/timing.py` | none |
+| 📈 | [Turn timing](#-voice-timing) | `jarvis/brain/timing.py` | none |
 
 > [!TIP]
 > Say **"learn my voice"** once. With a voiceprint, only **you** get answered and only you can interrupt JARVIS.

@@ -10,7 +10,7 @@ from test_notices import AFTERNOON, Notifier
 from test_nudges import FakeClient, result, settle, until, worker_run
 from test_subagents import Recorder
 
-from jarvis.brain import usage
+from jarvis.llm import usage
 from jarvis.safety import host
 from jarvis.tasks import notices, runner, stall
 from jarvis.tasks.stall import GRACE, Pulse

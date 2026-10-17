@@ -11,8 +11,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlencode
 
-from jarvis.core import profile
 from jarvis.core.files import locked, write_atomic
+from jarvis.storage import profile
 
 SHARE_DAYS = 7
 TOKEN = r"[A-Za-z0-9_-]{32,64}"  # must match the server route

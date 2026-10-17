@@ -5,7 +5,7 @@ import asyncio
 from claude_agent_sdk import ResultMessage, StreamEvent
 
 from jarvis.brain import budget, cli
-from jarvis.safety import mcp_gate, shell
+from jarvis.gates import mcp_gate, shell
 from jarvis.state import memory
 
 HEALTH_CHECK = ("uptime; echo ---; memory_pressure | tail -3; echo ---; sysctl vm.swapusage; echo ---; df -h / | "

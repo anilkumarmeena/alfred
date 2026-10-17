@@ -10,8 +10,8 @@ import pytest
 from conftest import use_profile
 from jarvis import tools
 from jarvis.brain import persona
-from jarvis.core import database
 from jarvis.state import todo
+from jarvis.tasks import store as store_module
 from jarvis.tools import core
 
 TODAY = f"{date.today():%Y-%m-%d}"
@@ -73,10 +73,10 @@ def test_done_ticks_off_exactly_one_match(db):
 
 
 def test_the_table_sits_beside_the_tasks_without_disturbing_them(db):
-    store = database.Store()
+    store = store_module.Store()
     task = store.create("research", "t", "i", None)
     todo.add("One")
-    assert database.Store().get(task["id"])["title"] == "t" and todo.read().count("- [ ]") == 1
+    assert store_module.Store().get(task["id"])["title"] == "t" and todo.read().count("- [ ]") == 1
 
 
 def test_todo_tools_are_registered_and_say_the_list_is_theirs_alone():
@@ -92,7 +92,7 @@ def test_todo_tools_are_registered_and_say_the_list_is_theirs_alone():
 @pytest.fixture
 def judge(db, monkeypatch):
     """The repeat check's model call, faked: set `judge.reply` (or an exception); `judge.asked` keeps what it saw."""
-    from jarvis.brain import sdk
+    from jarvis.llm import claude
 
     class Judge:
         reply: dict | Exception | None = {"same": None, "merged": ""}
@@ -107,7 +107,7 @@ def judge(db, monkeypatch):
 
     Judge.asked = []
     monkeypatch.setattr(todo, "TODO_MATCH_ENABLED", True)
-    monkeypatch.setattr(sdk, "ask_json", ask_json)
+    monkeypatch.setattr(claude, "ask_json", ask_json)
     return Judge
 
 

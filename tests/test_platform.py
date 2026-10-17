@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from jarvis.core import config, platform
-from jarvis.core.config import ROOT
+from jarvis import config
+from jarvis.config import ROOT
+from jarvis.core import platform
 
 
 def test_exactly_one_of_mac_and_linux_here():
@@ -43,7 +44,7 @@ def test_mac_and_linux_are_supported(monkeypatch):
 
 def test_importing_jarvis_on_windows_says_wsl2_not_importerror():
     """jarvis/__init__ checks before config imports pwd, which Windows lacks."""
-    done = subprocess.run([sys.executable, "-c", "import sys; sys.platform = 'win32'; import jarvis.core.config"],
+    done = subprocess.run([sys.executable, "-c", "import sys; sys.platform = 'win32'; import jarvis.config"],
                           cwd=ROOT, capture_output=True, text=True)
     assert done.returncode == 1 and "WSL2" in done.stderr and "Traceback" not in done.stderr
 

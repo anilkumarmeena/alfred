@@ -18,12 +18,12 @@ import asyncio
 import json
 import logging
 
-from jarvis.core import profile
-from jarvis.core.database import WAIT_AFTER
 from jarvis.notify.push import task_target
+from jarvis.storage import profile
 from jarvis.tasks import hold
 from jarvis.tasks.announce import joined
 from jarvis.tasks.runner_base import RunnerBase
+from jarvis.tasks.store import WAIT_AFTER
 
 log = logging.getLogger("jarvis.tasks.runner")
 START, MERGE = "waits_on", "merge_waits_on"  # the task's columns: what its start, or its merge, waits for

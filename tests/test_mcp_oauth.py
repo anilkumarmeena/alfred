@@ -12,7 +12,7 @@ import pytest
 from test_connections import WIKI, Auth, serving
 from test_mcp_servers import fresh  # noqa: F401  (the fixture)
 
-from jarvis.core import vault
+from jarvis.auth import vault
 from jarvis.integrations import mcp_oauth
 from jarvis.integrations.mcp_servers import Server
 

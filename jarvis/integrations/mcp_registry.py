@@ -19,7 +19,7 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
-from jarvis.core import vault
+from jarvis.auth import vault
 from jarvis.integrations import mcp_servers
 from jarvis.integrations.mcp_servers import ENV_NAME, Server
 

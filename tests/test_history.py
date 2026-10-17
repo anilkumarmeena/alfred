@@ -8,8 +8,8 @@ import pytest
 
 from conftest import use_profile
 from jarvis import panel, server
-from jarvis.core import profile
 from jarvis.state import history, memory
+from jarvis.storage import profile
 
 DAY = """# Conversations, Monday 5 October 2026
 

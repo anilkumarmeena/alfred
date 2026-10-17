@@ -9,7 +9,7 @@ import pytest
 from livekit import rtc
 from livekit.agents import vad
 
-from jarvis.core.config import DENOISE_MODEL
+from jarvis.config import DENOISE_MODEL
 from jarvis.voice import denoise
 
 model = pytest.mark.skipif(not DENOISE_MODEL.is_file(), reason="needs the DeepFilterNet model (make models)")

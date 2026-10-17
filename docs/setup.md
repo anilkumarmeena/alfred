@@ -6,7 +6,7 @@
 
 **From a fresh clone to JARVIS answering on your phone and running around the clock, on macOS, Linux or Windows through WSL2.**
 
-[🏠 Home](../README.md) · **🚀 Setup** · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md)
+[🏠 Home](../README.md) · **🚀 Setup** · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md) · [🧭 Features](features.md)
 
 </div>
 
@@ -367,17 +367,17 @@ Notifications, earphones and the native app on iOS and Android: **[📱 Mobile](
 The projects code tasks can work on live in the `projects` table of `data/tasks.db`. Add them **by voice** ("add my billing api folder as a project") or from a terminal, with **aliases** for names speech recognition might mishear:
 
 ```sh
-uv run python -m jarvis.tasks.projects add billing-api --path ~/code/billing-api \
+uv run python -m jarvis.projects add billing-api --path ~/code/billing-api \
   --aliases "billing api, the billing service" --about "Billing service (work)" --worktrees
 
 # list them
-uv run python -m jarvis.tasks.projects
+uv run python -m jarvis.projects
 
 # change one: --in-place, or --path, --aliases, --about, --worktrees
-uv run python -m jarvis.tasks.projects set billing-api --in-place
+uv run python -m jarvis.projects set billing-api --in-place
 
 # take it off the list; the folder stays
-uv run python -m jarvis.tasks.projects remove billing-api
+uv run python -m jarvis.projects remove billing-api
 ```
 
 Changes apply at once. **In place** (the default) vs **worktrees** is explained in **[🛠️ Tasks](tasks.md#where-code-changes-go)**.

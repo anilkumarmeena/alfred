@@ -30,17 +30,18 @@ import shutil
 import time
 from pathlib import Path
 
-from jarvis.brain import usage
+from jarvis import projects
+from jarvis.config import DATA_DIR, ROOT, WORKTREES_DIR
 from jarvis.core import proc
-from jarvis.core.config import DATA_DIR, ROOT, WORKTREES_DIR
 from jarvis.core.files import write_atomic
+from jarvis.llm import usage
 from jarvis.node import home, sync, transfer
 from jarvis.node.agent import Agent
 from jarvis.node.journal import Journal
 from jarvis.node.link import Link, LinkDown, Refused
 from jarvis.safety import commands
 from jarvis.skills import home as skills
-from jarvis.tasks import command_jobs, git_ops, projects, schedules, stall
+from jarvis.tasks import command_jobs, git_ops, schedules, stall
 from jarvis.tasks.host_tools import TaskJobs
 from jarvis.tasks.worker import Outcome, run as run_task
 

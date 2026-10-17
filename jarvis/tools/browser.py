@@ -1,13 +1,13 @@
 """Browser tools on JARVIS's own Chrome profile (user logs in to sites themselves). Read-only.
 
-Offered only while config.browser_on. Page content is fenced as untrusted. Any future tool that buys, submits or
+Offered only while preferences.browser_on(). Page content is fenced as untrusted. Any future tool that buys, submits or
 sends must be registered gated.
 """
 
-from jarvis.core import profile
-from jarvis.core.config import browser_on
 from jarvis.integrations import browser
 from jarvis.integrations.browser import BROWSER
+from jarvis.state.preferences import browser_on
+from jarvis.storage import profile
 
 from . import tool
 

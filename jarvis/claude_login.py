@@ -1,4 +1,4 @@
-"""Signing JARVIS's Claude logins in (core.claude_logins), from the control panel (Settings › Claude logins) or with
+"""Signing JARVIS's Claude logins in (jarvis.llm.claude_logins), from the control panel (Settings › Claude logins) or with
 uv run python -m jarvis.claude_login [login | check] [NAME]
 
   login (default)  sign NAME in (without one, this Mac's own Claude Code login), check that the services can use
@@ -33,8 +33,10 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from jarvis.core import claude_logins, platform
-from jarvis.core.config import CLAUDE_CLI, DATA_DIR, FAST_MODEL, ROOT, SERVICE_PREFIX
+from jarvis.config import CLAUDE_CLI, DATA_DIR, ROOT, SERVICE_PREFIX
+from jarvis.core import platform
+from jarvis.llm import claude_logins, roles
+from jarvis.llm.roles import Role
 
 LOGIN_KEYCHAIN = Path.home() / "Library/Keychains/login.keychain-db"
 CHECK_LABEL = f"{SERVICE_PREFIX}.claude-check"
@@ -82,8 +84,8 @@ def _reply(name: str) -> str:
     """The check's reply, run here."""
     with tempfile.TemporaryDirectory() as tmp:
         try:
-            done = subprocess.run([cli(), "-p", CHECK_PROMPT, "--model", FAST_MODEL], capture_output=True, text=True,
-                                  env=os.environ | claude_logins.env(name), timeout=CHECK_SECONDS, cwd=tmp)
+            done = subprocess.run([cli(), "-p", CHECK_PROMPT, "--model", roles.model(Role.SIGN_IN_CHECK)], capture_output=True,
+                                  text=True, env=os.environ | claude_logins.env(name), timeout=CHECK_SECONDS, cwd=tmp)
         except subprocess.TimeoutExpired:
             return "no reply in time"
     return (done.stdout + done.stderr).strip()
@@ -95,7 +97,7 @@ def _launchd_reply(name: str) -> str:
         out, plist = Path(tmp) / "out.txt", Path(tmp) / f"{CHECK_LABEL}.plist"
         plist.write_bytes(plistlib.dumps({
             "Label": CHECK_LABEL, "RunAtLoad": True, "WorkingDirectory": tmp,
-            "ProgramArguments": [cli(), "-p", CHECK_PROMPT, "--model", FAST_MODEL],
+            "ProgramArguments": [cli(), "-p", CHECK_PROMPT, "--model", roles.model(Role.SIGN_IN_CHECK)],
             "EnvironmentVariables": {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", **claude_logins.env(name)},
             "StandardOutPath": str(out), "StandardErrorPath": str(out)}))
         domain = f"gui/{os.getuid()}"

@@ -45,6 +45,10 @@ JARVIS_PYTHON ?= $(UV) python
 else
 JARVIS_PYTHON ?= "$(MAIN_DIR)/.venv/bin/python"
 endif
+# The install's settings and data (jarvis.config.files): JARVIS_HOME, else ~/.jarvis if it exists, else the checkout
+JARVIS_HOME_DIR := $(or $(JARVIS_HOME),$(if $(wildcard $(HOME)/.jarvis/.env $(HOME)/.jarvis/data),$(HOME)/.jarvis,$(MAIN_DIR)))
+MODELS_DIR := $(JARVIS_HOME_DIR)/models
+LOGS_DIR   := $(JARVIS_HOME_DIR)/logs
 # Service labels (com.jarvis.* or JARVIS_SERVICE_PREFIX): launchd on macOS, systemd user units on Linux; evaluated
 # lazily. Service control always runs in the main
 # checkout so a worktree never installs its own copy.
@@ -52,24 +56,24 @@ SERVICE_CTL = cd "$(MAIN_DIR)" && $(JARVIS_PYTHON) -m jarvis.setup_local
 SERVICES    = $(shell $(SERVICE_CTL) labels)
 # Claude login: the user's own, unless .env (or the environment) sets JARVIS_CLAUDE_CONFIG_DIR, a login of JARVIS's own
 CLAUDE_DIR := $(or $(JARVIS_CLAUDE_CONFIG_DIR),$(shell sed -n "s/^JARVIS_CLAUDE_CONFIG_DIR=[\"']*\([^\"']*\)[\"']*$$/\1/p" \
-               "$(MAIN_DIR)/.env" 2>/dev/null | tail -1))
-# ...relative to the main checkout, as jarvis.core.config reads it
-CLAUDE_PATH = $(if $(CLAUDE_DIR),$(if $(filter /%,$(CLAUDE_DIR)),,$(MAIN_DIR)/)$(CLAUDE_DIR))
+               "$(JARVIS_HOME_DIR)/.env" 2>/dev/null | tail -1))
+# ...relative to JARVIS_HOME, as jarvis.config reads it
+CLAUDE_PATH = $(if $(CLAUDE_DIR),$(if $(filter /%,$(CLAUDE_DIR)),,$(JARVIS_HOME_DIR)/)$(CLAUDE_DIR))
 # Kokoro voice: kokoro-onnx's model files, from a pinned Hugging Face mirror (byte-identical to the GitHub release,
 # which serves ~120 KB/s per connection), hash-checked
 KOKORO_HF   := https://huggingface.co/fastrtc/kokoro-onnx/resolve/8d07950c9b6c87ce6809e9bba7bd494336217c2a
-TTS         := models/kokoro-v1.0.onnx
+TTS         := $(MODELS_DIR)/kokoro-v1.0.onnx
 TTS_SHA     := 7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5
-VOICES      := models/voices-v1.0.bin
+VOICES      := $(MODELS_DIR)/voices-v1.0.bin
 VOICES_SHA  := bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d
 # Optional 8-bit Kokoro (make models-int8): only on the GitHub release, so slow
 KOKORO_INT8 := https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx
 # Noise filter: DeepFilterNet 3 streaming ONNX (torchDF export), pinned and hash-checked
-DFN       := models/deepfilternet3-streaming.onnx
+DFN       := $(MODELS_DIR)/deepfilternet3-streaming.onnx
 DFN_URL   := https://github.com/yuyun2000/SpeechDenoiser/raw/9a1f069f562089c2f56008a8ecd897fa981fbc50/48k/denoiser_model.onnx
 DFN_SHA   := fe5eb64fa2e4154c83f8e4935e82871c850c154387ee892e0ab65fe179e7d8c9
-# Speaker check: WeSpeaker ResNet34, pinned and hash-checked; keep in step with SPEAKER_MODEL in jarvis/core/config.py
-SPK       := models/wespeaker-voxceleb-resnet34-LM.onnx
+# Speaker check: WeSpeaker ResNet34, pinned and hash-checked; keep in step with [speech] speaker in config/jarvis.toml
+SPK       := $(MODELS_DIR)/wespeaker-voxceleb-resnet34-LM.onnx
 SPK_URL   := https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM/resolve/f0c48c298fd835726c27956a5d617bad7115627e/voxceleb_resnet34_LM.onnx
 SPK_SHA   := 7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068
 WEB_PORT  := 8787
@@ -93,7 +97,7 @@ NPM       := npm --prefix web
 # web-install reruns only when the manifests change
 WEB_STAMP := web/node_modules/.install-stamp
 
-.PHONY: help install uv-bin livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks speech-gate voice-timing voiceprint test host-check artifact-check \
+.PHONY: help install uv-bin livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks speech-gate voice-timing voiceprint test host-check artifact-check features \
         services-install services-start services-stop services-restart status logs awake sleep-normal \
         claude-login claude-status accounts about servers passcode vault chat-check tailscale-serve check clean \
         node-setup node-login node-pair node-install node-stop node-check node-status
@@ -145,27 +149,34 @@ endif
 # shasum on macOS; sha256sum where Perl's shasum isn't installed
 SHA256 = $$(command -v shasum >/dev/null && echo shasum -a 256 || echo sha256sum)
 # $(call fetch,FILE,URL,SHA): download once into FILE.part, keep it only if the hash matches
-fetch = [ -f $(1) ] || { curl -fSL -o $(1).part $(2) && echo "$(3)  $(1).part" | $(SHA256) -c --quiet - && mv $(1).part $(1); }
+fetch = [ -f "$(1)" ] || { curl -fSL -o "$(1).part" $(2) && echo "$(3)  $(1).part" | $(SHA256) -c --quiet - && \
+	mv "$(1).part" "$(1)"; }
 
-models: ## Download speech, VAD, noise and speaker models
-	@mkdir -p models
+models: ## Download speech, VAD, noise and speaker models (into JARVIS_HOME/models)
+	@mkdir -p "$(MODELS_DIR)"
 	@$(call fetch,$(TTS),$(KOKORO_HF)/kokoro-v1.0.onnx,$(TTS_SHA))
 	@$(call fetch,$(VOICES),$(KOKORO_HF)/voices-v1.0.bin,$(VOICES_SHA))
 	@$(call fetch,$(DFN),$(DFN_URL),$(DFN_SHA))
 	@$(call fetch,$(SPK),$(SPK_URL),$(SPK_SHA))
-# Whisper for this machine: MLX on Apple silicon, faster-whisper elsewhere (jarvis.core.whisper)
-	$(UV) python -m jarvis.core.whisper
+# Whisper for this machine: MLX on Apple silicon, faster-whisper elsewhere (jarvis.media.whisper)
+	$(UV) python -m jarvis.media.whisper
 # os._exit skips teardown, which native plugin libraries can crash on macOS
 	$(UV) python -c "import os, sys; from livekit.agents.__main__ import main; code = main(['download-files']); \
 		sys.stdout.flush(); sys.stderr.flush(); os._exit(code)"
 
 models-int8: ## Download the 8-bit Kokoro (~230 MB less memory, slower; JARVIS_TTS_MODEL=kokoro-v1.0.int8.onnx)
-	@mkdir -p models
-	@[ -f models/kokoro-v1.0.int8.onnx ] || { curl -fSL -o models/kokoro-v1.0.int8.onnx.part $(KOKORO_INT8) && \
-		mv models/kokoro-v1.0.int8.onnx.part models/kokoro-v1.0.int8.onnx; }
+	@mkdir -p "$(MODELS_DIR)"
+	@[ -f "$(MODELS_DIR)/kokoro-v1.0.int8.onnx" ] || { curl -fSL -o "$(MODELS_DIR)/kokoro-v1.0.int8.onnx.part" \
+		$(KOKORO_INT8) && mv "$(MODELS_DIR)/kokoro-v1.0.int8.onnx.part" "$(MODELS_DIR)/kokoro-v1.0.int8.onnx"; }
 
 setup: uv-bin ## Generate keys, passcode and LiveKit config (rerunnable)
 	$(UV) python -m jarvis.setup_local
+
+# The services are rewritten afterwards (a fresh process, so they get the new home); a refused move restarts them
+home-move: ## Move .env, data, secrets, models and logs out of the checkout into ~/.jarvis (or JARVIS_HOME)
+	@$(SERVICE_CTL) stop
+	@$(SERVICE_CTL) move-home || { $(SERVICE_CTL) start; exit 1; }
+	@$(SERVICE_CTL) install
 
 claude-login: ## Log in to Claude (yours, or JARVIS's own NAME=work), check, restart services; also in Settings
 	@cd "$(MAIN_DIR)" && $(JARVIS_PYTHON) -m jarvis.claude_login login $(NAME)
@@ -186,10 +197,10 @@ servers: ## MCP servers (ARGS="set-secret notion")
 	@$(UV) python -m jarvis.integrations.mcp_servers $(or $(ARGS),list)
 
 passcode: ## Show the logins' passcodes (this computer only; never over the web)
-	@$(UV) python -m jarvis.core.logins
+	@$(UV) python -m jarvis.auth.logins
 
 vault: ## Vault status (ARGS=init|rotate|reencrypt|"reset --yes")
-	@$(UV) python -m jarvis.core.vault $(or $(ARGS),status)
+	@$(UV) python -m jarvis.auth.vault $(or $(ARGS),status)
 
 chat-check: ## Check Google Chat access (LABEL=...)
 	$(UV) python -m jarvis.integrations.accounts check-chat $(LABEL)
@@ -202,19 +213,19 @@ tailscale-serve: ## Serve web app and LiveKit on the tailnet
 ## ── Run in the foreground ──────────────────────────────────────
 
 # Exits 0 when a task runner answers on its socket. Checked first: a second runner would take the socket over
-RUNNER_UP = import socket, sys; from jarvis.core.config import RUNNER_SOCKET as p; \
+RUNNER_UP = import socket, sys; from jarvis.config import RUNNER_SOCKET as p; \
 	sys.exit(not p.exists() or socket.socket(socket.AF_UNIX).connect_ex(str(p)))
 
 console: ## Talk via this machine's mic, no server (starts the task runner for the session if it isn't running)
-	@mkdir -p logs; \
+	@mkdir -p "$(LOGS_DIR)"; \
 	if $(UV) python -c "$(RUNNER_UP)" 2>/dev/null; then echo "using the task runner that's already running"; \
-	else echo "starting the task runner for this session (logs/console-runner.log)"; \
-		$(UV) python -m jarvis.tasks.runner >logs/console-runner.log 2>&1 & runner=$$!; \
+	else echo "starting the task runner for this session ($(LOGS_DIR)/console-runner.log)"; \
+		$(UV) python -m jarvis.tasks.runner >"$(LOGS_DIR)/console-runner.log" 2>&1 & runner=$$!; \
 		trap 'kill -TERM $$runner 2>/dev/null; wait $$runner 2>/dev/null' EXIT INT TERM; fi; \
 	$(UV) python -m jarvis.voice.agent console
 
 livekit: ## Run LiveKit server
-	$(LIVEKIT_SERVER) --config secrets/livekit.yaml
+	$(LIVEKIT_SERVER) --config "$(JARVIS_HOME_DIR)/secrets/livekit.yaml"
 
 web: web-build ## Build and run web app (:8787)
 	$(UV) python -m jarvis.server
@@ -252,7 +263,7 @@ services-stop: ## Stop services (stay installed)
 # Stop+start run detached in their own session (setsid): stopping a service kills its children, so a restart started
 # by the agent or a task would die halfway. Not a child either (`& wait` still died), so poll a done file. On Linux
 # setsid isn't enough (systemd stops a service's whole cgroup), so systemd-run starts the restart as its own unit.
-RESTART_LOG := $(MAIN_DIR)/logs/restart.log
+RESTART_LOG := $(LOGS_DIR)/restart.log
 ifeq ($(UNAME),Darwin)
 DETACH := /usr/bin/perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV'
 else
@@ -260,7 +271,7 @@ DETACH  = $(if $(shell command -v systemd-run),systemd-run --user --collect --qu
 endif
 
 services-restart: web-build ## Rebuild web app, restart services
-	@mkdir -p "$(MAIN_DIR)/logs"; rm -f "$(RESTART_LOG).done"
+	@mkdir -p "$(LOGS_DIR)"; rm -f "$(RESTART_LOG).done"
 	@$(DETACH) \
 		sh -c '$(MAKE) --no-print-directory -C "$(MAIN_DIR)" services-stop services-start > "$(RESTART_LOG)" 2>&1; touch "$(RESTART_LOG).done"' \
 		</dev/null >/dev/null 2>&1 &
@@ -277,8 +288,8 @@ else
 endif
 
 logs: ## Follow service logs
-	@mkdir -p logs && touch logs/livekit.log logs/agent.log logs/web.log logs/tasks.log
-	tail -f logs/livekit.log logs/agent.log logs/web.log logs/tasks.log
+	@mkdir -p "$(LOGS_DIR)" && cd "$(LOGS_DIR)" && touch livekit.log agent.log web.log tasks.log
+	cd "$(LOGS_DIR)" && tail -f livekit.log agent.log web.log tasks.log
 
 # Linux: masking the sleep targets makes suspend (lid close included) a no-op. Under WSL2 Windows decides; no effect.
 SLEEP_TARGETS := sleep.target suspend.target hibernate.target hybrid-sleep.target
@@ -306,7 +317,7 @@ speech-gate: ## Clips the speech gate dropped (last day)
 	@$(UV) python -m jarvis.voice.speech_gate
 
 voice-timing: ## Voice turn latency by stage (HOURS=24)
-	@$(UV) python -m jarvis.voice.timing $(HOURS)
+	@$(UV) python -m jarvis.brain.timing $(HOURS)
 
 voiceprint: ## Voiceprint (ARGS=enroll|test|remove|log)
 	@$(UV) python -m jarvis.voice.speaker $(or $(ARGS),status)
@@ -353,18 +364,21 @@ test: ## Run unit tests
 	$(UV) --with pytest pytest -q
 
 host-check: ## Check task sandbox walls
-	$(UV) python -m jarvis.safety.host check
+	$(UV) python -m jarvis.apps.host_check check
 
 artifact-check: ## Test artifact publishing (FILE=page.html)
-	$(if $(CLAUDE_PATH),JARVIS_CLAUDE_CONFIG_DIR="$(CLAUDE_PATH)" )$(JARVIS_PYTHON) -m jarvis.tasks.artifact_check $(if $(FILE),--file "$(abspath $(FILE))")
+	$(if $(CLAUDE_PATH),JARVIS_CLAUDE_CONFIG_DIR="$(CLAUDE_PATH)" )$(JARVIS_PYTHON) -m jarvis.apps.artifact_check $(if $(FILE),--file "$(abspath $(FILE))")
+
+features: ## Write docs/features.md: every part, tool, model role and process, from the code
+	$(UV) python -m jarvis.apps.features
 
 check: ## Compile, type-check, import all
 	$(UV) python -m compileall -q jarvis
 # Errors only; see warnings with `uv run --with pyright pyright`
 	$(UV) --with pyright==$(PYRIGHT) pyright --level error
 	$(NPM) run typecheck
-	$(UV) python -c "import jarvis.voice.agent, jarvis.server, jarvis.setup_local, jarvis.integrations.accounts, jarvis.state.settings, jarvis.brain.cli, jarvis.tasks.runner, jarvis.tasks.notices; from jarvis import tools; print(len(tools.all_tools()), 'tools, imports ok')"
+	$(UV) python -c "import jarvis.apps.agent, jarvis.server, jarvis.setup_local, jarvis.integrations.accounts, jarvis.state.settings, jarvis.brain.cli, jarvis.tasks.runner, jarvis.tasks.notices; from jarvis import tools; print(len(tools.all_tools()), 'tools, imports ok')"
 
 clean: ## Remove caches and logs
 	find . -name __pycache__ -not -path './.venv/*' -prune -exec rm -rf {} +
-	rm -rf logs/*.log
+	rm -f "$(LOGS_DIR)"/*.log

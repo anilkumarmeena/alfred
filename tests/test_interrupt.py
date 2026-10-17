@@ -3,10 +3,10 @@
 import asyncio
 
 from claude_agent_sdk import ClaudeSDKError
-from fake_cli import Hold, next_turn, result, text, tool_call, tool_done
 
+from fake_cli import Hold, next_turn, result, text, tool_call, tool_done
 from jarvis.brain import cli
-from jarvis.safety import shell
+from jarvis.gates import shell
 
 STORY = "tell me a story"
 

@@ -10,8 +10,8 @@ import pytest
 from test_in_place import env, git  # noqa: F401  (env is a fixture)
 from test_node_link import until
 
-from jarvis.brain import sdk
-from jarvis.core import vault
+from jarvis.auth import vault
+from jarvis.llm import claude
 from jarvis.node import agent as agents, keys, machines, offload, work
 from jarvis.node.journal import Journal
 from jarvis.node.link import Refused, memory_pair
@@ -38,7 +38,7 @@ def world(env, monkeypatch, tmp_path):  # noqa: F811
             return json.dumps({"said": "It broke.", "action": "report"}), 0.0
         return SUMMARY, 0.0
 
-    monkeypatch.setattr(sdk, "ask", ask)
+    monkeypatch.setattr(claude, "ask", ask)
     return env
 
 
@@ -46,7 +46,7 @@ class World:
     """This computer's runner and a paired, connected machine running `run` for Claude tasks."""
 
     def __init__(self, tmp: Path, run=None) -> None:
-        self.r = runner.Runner()
+        self.r = runner.Runner(machines=offload.wire)
         self.r.commands = command_jobs.Runs(shell=("/bin/sh", "-c"))
         self.r.hub.spool = tmp / "main-node" / "outbox"
         key = keys.new()
@@ -405,7 +405,7 @@ def test_after_a_restart_here_a_run_still_going_there_is_taken_up(world, tmp_pat
         task = w.r.start("code_change", "long", "Long work", "video-agent")
         await until(lambda: w.work.runs and w.r.store.get(task["id"])["session_id"] == "s-9")
         await w.r.shutdown()  # this computer restarts; the machine carries on
-        again = runner.Runner()
+        again = runner.Runner(machines=offload.wire)
         again.commands = w.r.commands
         w.r = again
         again.start_background()

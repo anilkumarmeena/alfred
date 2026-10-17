@@ -4,8 +4,8 @@ import asyncio
 import dataclasses
 import threading
 
-from jarvis.core import profile
 from jarvis.state import conversation
+from jarvis.storage import profile
 
 
 def test_each_conversation_has_its_own_state_and_runs_as_its_profile():

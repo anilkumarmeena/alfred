@@ -13,6 +13,7 @@ import { BellIcon, ChevronIcon, EyeIcon, PauseIcon, PlayIcon, RepeatIcon, RetryI
 import { Answer } from "./Answer";
 import { cap, Empty, InlineForm, Led, Pill, StatusPill } from "./bits";
 import { Markdown } from "./Markdown";
+import type { PanelAction } from "../../lib/panelActions";
 
 const where = (t: Task) => [t.project, t.kind === "code_change" ? (t.in_place ? "in place" : "worktree") : t.kind.replace("_", " "),
   t.machine && `on ${t.machine}`].filter(Boolean).join(" · ");
@@ -335,7 +336,7 @@ export function TaskView({ id }: { id: number }) {
   const mine = approvals.value.filter((a) => a.task === id);
   const shellJob = t.kind === "command" && !!t.command;  // no model or messages; show its output
 
-  async function run(action: string, done: string, ask?: string) {
+  async function run(action: PanelAction, done: string, ask?: string) {
     if (ask && !confirm(ask)) return;
     busy.value = action;
     const r = await act(action, { id }, done);

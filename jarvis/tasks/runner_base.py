@@ -3,8 +3,9 @@
 import asyncio
 from typing import TYPE_CHECKING
 
-from jarvis.core.database import Store
+from jarvis.contracts import remote
 from jarvis.tasks import command_jobs
+from jarvis.tasks.store import Store
 
 SHUTTING_DOWN = "JARVIS's task runner is shutting down; try again once it's back, in a moment."
 
@@ -25,12 +26,9 @@ class RunnerBase:
     closing: bool
     placing: dict[int, asyncio.Task]
     limit_waits: dict[int, float]
-    if TYPE_CHECKING:
-        from jarvis.node.hub import Hub
-        from jarvis.node.offload import Offload
-        from jarvis.node.placement import Place
-        offload: Offload
-        hub: Hub
+    offload: remote.Offload
+    hub: remote.Links
+    machines: remote.Machines
 
     if TYPE_CHECKING:
         # jarvis.tasks.runner
@@ -38,7 +36,7 @@ class RunnerBase:
                   hidden: bool = False, grants: list[str] | None = None, order: str | None = None,
                   fixes: int | None = None, todo: str | None = None) -> dict: ...
         def _launch(self, task_id: int, prompt: str, after: float | None = None) -> dict: ...
-        def _placed(self, task_id: int, place: "Place") -> None: ...
+        def _placed(self, task_id: int, place: remote.Place) -> None: ...
         # jarvis.tasks.approvals
         def _close_approvals(self, task_id: int, why: str = "stopped") -> None: ...
         # jarvis.tasks.chains

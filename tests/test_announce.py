@@ -6,10 +6,11 @@ import pytest
 from test_data_edits import FACT, TODO, data, run_task  # noqa: F401  (fixture)
 from test_in_place import env  # noqa: F401  (fixture)
 
-from jarvis.brain import persona, usage
-from jarvis.core.database import edits
+from jarvis.brain import persona
+from jarvis.llm import usage
 from jarvis.tasks import announce
 from jarvis.tasks.announce import DONE, FAILED, QUESTION, STOPPED, Ending
+from jarvis.tasks.store import edits
 
 TICK = ("tick off the to-do matching 'MCP connection tools'", "JARVIS's check found task 125's work finishes it.")
 

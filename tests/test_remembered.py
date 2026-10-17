@@ -11,14 +11,14 @@ from test_shell import Clock, ask
 
 from conftest import use_profile
 from jarvis import panel, tools
-from jarvis.core import profile
-from jarvis.core.database import APPROVED, PENDING
+from jarvis.gates.shell import ShellGate
 from jarvis.safety import remembered
 from jarvis.safety.approvals import RuleOffer, VoiceApprovals
 from jarvis.safety.commands import Own, said_breadth, said_scope, tells_approve, yes_scope
-from jarvis.safety.shell import ShellGate
 from jarvis.state import conversation
+from jarvis.storage import profile
 from jarvis.tasks import client, runner
+from jarvis.tasks.store import APPROVED, PENDING
 from jarvis.tools import tasks as task_tools
 from jarvis.voice import session as voice_session
 

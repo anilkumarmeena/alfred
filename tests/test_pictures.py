@@ -18,8 +18,9 @@ from claude_agent_sdk import ResultMessage, StreamEvent
 from conftest import use_profile
 from jarvis import server, tools
 from jarvis.brain import cli, sdk
-from jarvis.core import platform, profile
+from jarvis.core import platform
 from jarvis.state import conversation, memory, pictures
+from jarvis.storage import profile
 from jarvis.tasks import worker
 from jarvis.tools import screen
 

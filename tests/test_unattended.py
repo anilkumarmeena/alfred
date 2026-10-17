@@ -12,8 +12,8 @@ from test_in_place import env  # noqa: F401  (fixture)
 from test_nudges import fake_run, finishes, settle
 from test_scheduler import FakeRunner, call
 
-from jarvis.core import profile
 from jarvis.state import todo
+from jarvis.storage import profile
 from jarvis.tasks import runner, schedules, unattended
 from jarvis.tasks.goal import COMPLETE
 from jarvis.tasks.scheduler import Scheduler
@@ -38,7 +38,7 @@ def planner(monkeypatch):
         fake.asked.append((prompt, system_prompt))
         return fake.reply, 0.0
 
-    monkeypatch.setattr("jarvis.brain.sdk.ask_json", ask_json)
+    monkeypatch.setattr("jarvis.llm.claude.ask_json", ask_json)
     return fake
 
 
@@ -186,7 +186,7 @@ def test_with_nothing_to_resume_a_run_stays_silent(env):
 
 def test_resume_and_todo_runs_wait_for_a_used_up_usage_limit(env, monkeypatch):
     reset = later().timestamp() + 3600
-    monkeypatch.setattr("jarvis.brain.usage.hold_until", lambda now=None: reset)
+    monkeypatch.setattr("jarvis.llm.usage.hold_until", lambda now=None: reset)
     r = FakeRunner()
     for job in (schedules.add("resume", "resume", "", in_minutes=1), schedules.add("todo", "todo", "", in_minutes=1)):
         assert run_job(r, job) == []

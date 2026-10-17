@@ -7,7 +7,7 @@ import pytest
 from test_node_link import connect, mine, paired, until  # noqa: F401  (mine is a fixture)
 
 from jarvis import panel, server
-from jarvis.core import logins
+from jarvis.auth import logins
 from jarvis.node import hub as hubs, keys, machines
 from jarvis.state import activity
 from jarvis.tasks import client

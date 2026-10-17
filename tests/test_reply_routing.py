@@ -6,8 +6,9 @@ from livekit.agents import llm
 from test_consent import model  # noqa: F401  (the fixture)
 from test_voice_session import REQUEST, Brain, Runner, call, quiet, reply  # noqa: F401  (quiet: the fixture)
 
+from jarvis.apps import agent
 from jarvis.safety import consent
-from jarvis.voice import agent, session as voice_session
+from jarvis.voice import session as voice_session
 
 RULE = {"program": "npm", "why": "it builds", "words": ["npm", "run", "build"]}
 

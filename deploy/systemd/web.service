@@ -7,11 +7,12 @@ Description=JARVIS web app (${LABEL})
 Type=exec
 WorkingDirectory=${ROOT}
 Environment="PATH=${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+Environment="JARVIS_HOME=${JARVIS_HOME}"
 ExecStart="${ROOT}/.venv/bin/python" -m jarvis.server
 Restart=always
 RestartSec=10
-StandardOutput=append:${ROOT}/logs/web.log
-StandardError=append:${ROOT}/logs/web.log
+StandardOutput=append:${JARVIS_HOME}/logs/web.log
+StandardError=append:${JARVIS_HOME}/logs/web.log
 
 [Install]
 WantedBy=default.target

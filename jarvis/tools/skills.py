@@ -13,12 +13,12 @@ import os
 import re
 from pathlib import Path
 
-from ai_armory.toolsets.google import drafts
-
-from jarvis.core import desktop, profile
+from jarvis.core import desktop
+from jarvis.integrations.armory import drafts
 from jarvis.safety.commands import secret_path
 from jarvis.safety.host import TASK_DATA_DIR
 from jarvis.skills import home, install, review
+from jarvis.storage import profile
 
 from . import tool
 

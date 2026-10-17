@@ -22,10 +22,10 @@ from dataclasses import dataclass
 
 import httpx
 
-from jarvis.core import profile
+from jarvis.contracts.runner import ConnectionRunner, RunnerUnavailable
 from jarvis.integrations import mcp_bridge
 from jarvis.integrations.mcp_servers import Server
-from jarvis.tasks import client
+from jarvis.storage import profile
 
 log = logging.getLogger("jarvis.integrations.mcp_relay")
 
@@ -84,7 +84,7 @@ class Relay:
     """One session's traffic between the CLI (`to_cli`) and the server (`send`, set once open)."""
 
     def __init__(self, server: Server, to_cli: Callable[[dict], Awaitable[None]], wait: float = 0.0,
-                 runner=client) -> None:
+                 runner: ConnectionRunner | None = None) -> None:
         self.server, self.to_cli, self.wait, self.runner = server, to_cli, wait, runner
         self.send: Callable[[dict], Awaitable[None]] | None = None
         self.tasks = False  # server supports tools/call as tasks
@@ -240,12 +240,14 @@ class Relay:
 
     async def _to_background(self, call: Call, run: asyncio.Task) -> str:
         """Hand a running call to the task runner as a connection task; returns the CLI's reply text, or '' if the
-        runner is unavailable (the call is then awaited in the foreground)."""
+        runner is unavailable or none was given (the call is then awaited in the foreground)."""
+        if self.runner is None:
+            return ""
         title = f"{self.server.label} {call.tool.replace('_', ' ')}"
         instruction = f"{self.server.tool(call.tool)} {json.dumps(call.args, ensure_ascii=False)}"
         try:
             task = await self.runner.start_connection(title, instruction, os.getpid())
-        except (client.RunnerUnavailable, ValueError, OSError) as e:
+        except (RunnerUnavailable, ValueError, OSError) as e:
             log.warning("%s: %s carries on in the foreground: %s", self.server.name, call.tool, e)
             return ""
         call.background = True
@@ -261,6 +263,7 @@ class Relay:
         """Report progress until the call ends, cancelling it if the task is stopped or after BACKGROUND_HOURS; then
         report the outcome."""
         told, until = "", time.monotonic() + BACKGROUND_HOURS * 3600
+        assert self.runner is not None  # only calls handed to a runner are followed
         try:
             while not run.done():
                 await asyncio.wait({run}, timeout=FOLLOW_SECONDS)
@@ -276,7 +279,7 @@ class Relay:
                     if call.said != told:
                         await self.runner.connection_update(task_id, call.said)
                         told = call.said
-                except (client.RunnerUnavailable, ValueError, OSError):
+                except (RunnerUnavailable, ValueError, OSError):
                     pass  # runner restarting; retry next round
             try:
                 reply = run.result()
@@ -289,11 +292,12 @@ class Relay:
             self.by_token.pop(call.token, None)
 
     async def _report(self, task_id: int, outcome: str, result: str) -> None:
+        assert self.runner is not None
         for _ in range(REPORT_TRIES):
             try:
                 await self.runner.end_connection(task_id, outcome, result)
                 return
-            except (client.RunnerUnavailable, OSError):
+            except (RunnerUnavailable, OSError):
                 await asyncio.sleep(FOLLOW_SECONDS)
             except ValueError:  # task no longer exists
                 break
@@ -355,7 +359,7 @@ class Process:
 
 async def serve(server: Server, wait: float = 0.0, command: tuple[list[str], dict[str, str]] | None = None,
                 reader: asyncio.StreamReader | None = None, out=None,
-                transport: httpx.AsyncBaseTransport | None = None) -> int:
+                transport: httpx.AsyncBaseTransport | None = None, runner: ConnectionRunner | None = None) -> int:
     """Relay stdin/stdout to the server until either ends, then wait for background calls. Local servers start from
     `command` (mcp_launch.command); HTTP ones go through the bridge. Raises vault.VaultError if a secret isn't set."""
     reader = reader or await mcp_bridge._stdin()
@@ -370,7 +374,7 @@ async def serve(server: Server, wait: float = 0.0, command: tuple[list[str], dic
             except (BrokenPipeError, ValueError):  # CLI gone; background calls continue
                 pass
 
-    relay = Relay(server, write, wait)
+    relay = Relay(server, write, wait, runner)
     if server.transport == "http":
         bridge = mcp_bridge.Bridge(server, relay.from_server, transport)
         relay.send, ended, close = bridge.send, asyncio.get_running_loop().create_future(), bridge.close

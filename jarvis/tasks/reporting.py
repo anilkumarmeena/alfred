@@ -9,10 +9,9 @@
 from collections.abc import Awaitable
 from typing import Protocol
 
-from claude_agent_sdk import HookMatcher, create_sdk_mcp_server, tool as sdk_tool
-
-from jarvis.core import profile
+from jarvis.llm.sdk import HookMatcher, create_sdk_mcp_server, tool as sdk_tool
 from jarvis.state.memory import FACT_MAX, LIMITS, SECTIONS
+from jarvis.storage import profile
 from jarvis.tasks import access, data_edits
 from jarvis.tasks.host_tools import TaskJobs, answer
 

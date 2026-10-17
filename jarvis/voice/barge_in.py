@@ -22,7 +22,7 @@ from collections.abc import Callable
 from livekit import rtc
 from livekit.agents import vad
 
-from jarvis.core.config import (
+from jarvis.config import (
     SPEAKER_BARGE_IN,
     SPEAKER_BARGE_IN_MAX_SECONDS,
     SPEAKER_BARGE_IN_MIN_SECONDS,

@@ -7,11 +7,12 @@ Description=JARVIS LiveKit server (${LABEL})
 Type=exec
 WorkingDirectory=${ROOT}
 Environment="PATH=${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
-ExecStart="${LIVEKIT}" --config "${ROOT}/secrets/livekit.yaml"
+Environment="JARVIS_HOME=${JARVIS_HOME}"
+ExecStart="${LIVEKIT}" --config "${JARVIS_HOME}/secrets/livekit.yaml"
 Restart=always
 RestartSec=10
-StandardOutput=append:${ROOT}/logs/livekit.log
-StandardError=append:${ROOT}/logs/livekit.log
+StandardOutput=append:${JARVIS_HOME}/logs/livekit.log
+StandardError=append:${JARVIS_HOME}/logs/livekit.log
 
 [Install]
 WantedBy=default.target

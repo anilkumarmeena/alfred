@@ -14,8 +14,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from jarvis.core import platform, profile as profiles
-from jarvis.core.config import DATA_DIR, ROOT, TASK_CACHE_DIR, WORKTREES_DIR
+from jarvis.apps import host_check
+from jarvis.config import DATA_DIR, ROOT, TASK_CACHE_DIR, WORKTREES_DIR
+from jarvis.core import platform
+from jarvis.llm import claude_logins
 from jarvis.safety import host
 from jarvis.safety.commands import HOME_SECRETS, SECRET_DIRS
 
@@ -39,7 +41,7 @@ def test_the_profile_allows_by_default_and_denies_only_what_must_stay_closed():
 
 def test_the_setuid_ps_that_could_read_mcp_servers_tokens_cant_run():
     assert '(deny process-exec (literal "/bin/ps"))' in host.profile()
-    assert any("ps eww" in what and not should for what, _, should in host._mac_checks())
+    assert any("ps eww" in what and not should for what, _, should in host_check._mac_checks())
 
 
 def test_secrets_are_unreadable_but_the_voice_session_logs_are_readable():
@@ -48,7 +50,7 @@ def test_secrets_are_unreadable_but_the_voice_session_logs_are_readable():
     for secret in [str(ROOT / "secrets"), str(ROOT / ".env"), *(p.replace("~", home, 1) for p in HOME_SECRETS)]:
         assert f'(subpath "{os.path.realpath(secret)}")' in reads, secret
     assert all(re.escape(d) in reads for d in SECRET_DIRS) and r"\.env(\.(([^est/][^/]*)?|e([^x/][^/]*)?|" in reads and "client_secret" in reads
-    assert f'(require-not (require-any (subpath "{os.path.realpath(profiles.current().voice_logs)}")' in reads
+    assert f'(require-not (require-any (subpath "{os.path.realpath(claude_logins.voice_logs())}")' in reads
 
 
 def test_ssh_can_check_known_hosts_but_never_read_a_key():
@@ -235,7 +237,7 @@ def test_bwrap_keeps_jarvis_own_files_read_only_and_the_runner_socket_out(linux_
         assert ("--ro-bind", "/dev/null", f"{root}/.env") in ops
     if (ROOT / "secrets").is_dir():
         assert ("--tmpfs", f"{root}/secrets") in ops and ("--remount-ro", f"{root}/secrets") in ops
-        logs = os.path.realpath(profiles.current().voice_logs)
+        logs = os.path.realpath(claude_logins.voice_logs())
         if os.path.exists(logs):
             assert ("--ro-bind", logs, logs) in ops  # the voice session logs stay readable
 
@@ -286,21 +288,21 @@ def test_linux_host_commands_lose_the_session_bus_address(monkeypatch):
 
 
 def test_linux_checks_cover_what_the_mac_ones_do():
-    linux = {what for what, _, _ in host._linux_checks()}
+    linux = {what for what, _, _ in host_check._linux_checks()}
     assert {"reads JARVIS's .env", "reads an SSH key file", "reaches the SSH agent", "writes tasks.db",
             "reaches the runner's socket", "reads the voice session logs", "writes the task cache"} <= linux
     assert any("environments" in what for what in linux) and any("session bus" in what for what in linux)
 
 
 def test_ssh_remotes_name_where_they_sign_in_and_other_remotes_nothing():
-    assert host._ssh_remote("git@git.example.com:team/app.git") == "git@git.example.com"
-    assert host._ssh_remote("ssh://git@git.example.com:2222/team/app.git") == "ssh://git@git.example.com:2222"
+    assert host_check._ssh_remote("git@git.example.com:team/app.git") == "git@git.example.com"
+    assert host_check._ssh_remote("ssh://git@git.example.com:2222/team/app.git") == "ssh://git@git.example.com:2222"
     for other in ("https://git.example.com/team/app.git", "/srv/repos/app.git", "../app", "file:///srv/app.git"):
-        assert host._ssh_remote(other) == ""
+        assert host_check._ssh_remote(other) == ""
 
 
 def test_the_ssh_check_signs_in_to_the_users_own_git_hosts_or_is_left_out(monkeypatch, tmp_path):
-    from jarvis.tasks import projects
+    from jarvis import projects
 
     repo = tmp_path / "app"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
@@ -308,12 +310,12 @@ def test_the_ssh_check_signs_in_to_the_users_own_git_hosts_or_is_left_out(monkey
                       ("fork", "git@git.example.com:me/app.git")):
         subprocess.run(["git", "-C", str(repo), "remote", "add", name, url], check=True)
     monkeypatch.setattr(projects, "load", lambda: [])
-    monkeypatch.setattr(host, "ROOT", repo)
-    (what, command, should), = host._ssh_checks()
+    monkeypatch.setattr(host_check, "ROOT", repo)
+    (what, command, should), = host_check._ssh_checks()
     assert what == "signs in to git@git.example.com over SSH, through the agent" and should
     assert "git@git.example.com" in command and "255" in command
-    monkeypatch.setattr(host, "ROOT", tmp_path / "elsewhere")  # no repo, so no remotes
-    assert host._ssh_checks() == []
+    monkeypatch.setattr(host_check, "ROOT", tmp_path / "elsewhere")  # no repo, so no remotes
+    assert host_check._ssh_checks() == []
 
 
 # ── The environment ─────────────────────────────────────────────

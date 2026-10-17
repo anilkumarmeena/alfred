@@ -21,9 +21,11 @@ def _serve() -> int:
     import logging
     import signal
 
+    from jarvis import bootstrap
     from jarvis.node import agent, home, work
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    bootstrap.wire()
     pairing = home.pairing()
     if not pairing:
         print("This machine isn't paired yet: make node-pair CODE=... MAIN=...", file=sys.stderr)
@@ -95,12 +97,12 @@ def _status() -> int:
 def _check() -> int:
     import asyncio
 
+    from jarvis.apps import host_check
     from jarvis.node import agent, bundles, home, link
-    from jarvis.safety import host
 
     good = True
     print("Walls around tasks' commands:")
-    good &= asyncio.run(host.check())
+    good &= asyncio.run(host_check.check())
     pairing = home.pairing()
     print(f"{'ok  ' if pairing else 'FAIL'}  paired" + (f" with {pairing['main']}" if pairing else ": make node-pair"))
     good &= bool(pairing)

@@ -7,9 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from jarvis import setup_local
-from jarvis.core import config
-from jarvis.core.config import ROOT
+from jarvis import config, setup_local
+from jarvis.config import HOME_DIR, ROOT
 
 GUI = f"gui/{os.getuid()}"
 
@@ -44,7 +43,7 @@ def test_a_service_log_moves_out_of_the_checkout_and_is_linked_back(tmp_path, mo
     root, logs = tmp_path / "jarvis", tmp_path / "Library/Logs/com.jarvis"
     (root / "logs").mkdir(parents=True)
     (root / "logs/agent.log").write_text("history\n")
-    monkeypatch.setattr(setup_local, "ROOT", root)
+    monkeypatch.setattr(setup_local, "LOGS_DIR", root / "logs")
     monkeypatch.setattr(setup_local, "SERVICE_LOGS", logs)
     setup_local._link_log("agent")
     setup_local._link_log("agent")  # again: already linked
@@ -208,13 +207,13 @@ def test_each_unit_gets_its_label_and_this_machine_s_folders(name, monkeypatch):
     settings = unit(text)
     assert "$" not in text and f"(com.jarvis.{name})" in settings["Description"][0]
     assert settings["WorkingDirectory"] == [str(ROOT)] and settings["Restart"] == ["always"]
-    assert settings["StandardOutput"] == [f"append:{ROOT}/logs/{name}.log"] == settings["StandardError"]
+    assert settings["StandardOutput"] == [f"append:{HOME_DIR}/logs/{name}.log"] == settings["StandardError"]
     assert settings["WantedBy"] == ["default.target"] and settings["Type"] == ["exec"]
     assert settings["Environment"][0].startswith('"PATH=/home/alex/.local/bin:')
     if name in ("tasks", "agent"):
         assert "/home/alex/.nvm/versions/node/v22/bin:/usr/local/bin" in settings["Environment"][0]
     if name == "livekit":
-        assert settings["ExecStart"] == [f'"/usr/local/bin/livekit-server" --config "{ROOT}/secrets/livekit.yaml"']
+        assert settings["ExecStart"] == [f'"/usr/local/bin/livekit-server" --config "{HOME_DIR}/secrets/livekit.yaml"']
 
 
 def test_livekit_falls_back_to_where_make_install_puts_it(monkeypatch):
@@ -424,7 +423,10 @@ def test_a_folder_already_set_is_kept(monkeypatch):
 def test_projects_default_to_the_folder_jarvis_is_in(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "ROOT", tmp_path / "code" / "jarvis")
     assert config.projects_home() == tmp_path / "code"
-    monkeypatch.setattr(config, "ROOT", tmp_path / "code" / "jarvis" / "data" / "worktrees" / "jarvis-7")
+    tree = tmp_path / "home" / "data" / "worktrees" / "jarvis-7"  # JARVIS_HOME may be outside the checkout
+    tree.mkdir(parents=True)
+    (tree / ".git").write_text(f"gitdir: {tmp_path}/code/jarvis/.git/worktrees/jarvis-7\n")
+    monkeypatch.setattr(config, "ROOT", tree)
     assert config.projects_home() == tmp_path / "code"  # a task's worktree goes by its main checkout
     monkeypatch.setattr(config, "ROOT", Path.home() / "jarvis")
     assert config.projects_home() == Path.home() / "Projects"  # never the whole home folder

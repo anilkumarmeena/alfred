@@ -13,12 +13,14 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from jarvis.core import files, profile
-from jarvis.core.database import edits
+from jarvis import projects
+from jarvis.core import files
 from jarvis.safety import scan
 from jarvis.skills import home as skills
 from jarvis.state import memory, todo, vocabulary
-from jarvis.tasks import projects, schedules
+from jarvis.storage import profile
+from jarvis.tasks import schedules
+from jarvis.tasks.store import edits
 
 MAX_EDITS = 20  # per task
 MAX_TEXT = 4000  # characters in any one field

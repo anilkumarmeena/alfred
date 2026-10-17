@@ -9,10 +9,10 @@
     <array>
         <string>/opt/homebrew/bin/livekit-server</string>
         <string>--config</string>
-        <string>${ROOT}/secrets/livekit.yaml</string>
+        <string>${JARVIS_HOME}/secrets/livekit.yaml</string>
     </array>
     <key>EnvironmentVariables</key>
-    <dict><key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+    <dict><key>JARVIS_HOME</key><string>${JARVIS_HOME}</string><key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ThrottleInterval</key><integer>10</integer>

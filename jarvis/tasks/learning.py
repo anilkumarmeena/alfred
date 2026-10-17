@@ -4,7 +4,7 @@ Runs in the task runner every CHECK_SECONDS. Progress mark (day file + byte offs
 A conversation is over when the voice agent reports a hang-up (POST /learn) and END_GRACE_SECONDS pass without a
 reconnect, or after LEARNING_QUIET_MINUTES of silence. The mark moves before saving, so nothing is reviewed twice;
 on first run the existing log is only marked read. Too few user words: skipped without a call.
-One tool-less LEARNING_MODEL call returns JSON suggestions, saved as a hidden `review` task's edits (data_edits
+One tool-less learning-role call returns JSON suggestions, saved as a hidden `review` task's edits (data_edits
 checks). Routine ones (new facts, misheard words) apply at once; rewrites, deletions, to-dos, skills and facts
 saying work is finished need a yes.
 Recent requests (HISTORY_DAYS) let it propose skills for repeated workflows. JARVIS_LEARNING=off disables it.
@@ -21,12 +21,13 @@ from datetime import datetime
 from pathlib import Path
 
 from jarvis import prompts
-from jarvis.brain import retry
-from jarvis.core import profile
-from jarvis.core.config import LEARNING_MODEL, LEARNING_QUIET_MINUTES
+from jarvis.config import LEARNING_QUIET_MINUTES
 from jarvis.core.files import write_atomic
+from jarvis.llm import retry
+from jarvis.llm.roles import Role
 from jarvis.skills import home as skills
 from jarvis.state import memory, vocabulary
+from jarvis.storage import profile
 
 log = logging.getLogger("jarvis.tasks.learning")
 KIND, TITLE = "review", "learning review"  # hidden task holding a review's suggestions
@@ -216,10 +217,10 @@ def to_edits(suggestions: list[dict], lines: list[tuple[str, str]], today: str, 
 
 
 async def model_review(prompt: str) -> str:
-    """One tool-less LEARNING_MODEL call; returns the reply text."""
-    from jarvis.brain.sdk import ask
+    """One tool-less learning-role call; returns the reply text."""
+    from jarvis.llm.claude import ask
 
-    return (await ask(prompt, system(), LEARNING_MODEL, timeout=CALL_TIMEOUT))[0]
+    return (await ask(prompt, system(), Role.LEARNING, timeout=CALL_TIMEOUT))[0]
 
 
 Save = Callable[[list[dict], str], Awaitable[object]]

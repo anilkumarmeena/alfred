@@ -10,9 +10,9 @@ import pytest
 from livekit import rtc
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
-from jarvis import panel, tools
-from jarvis.core import config
-from jarvis.state import conversation, settings, voiceprints
+from jarvis import config, panel, tools
+from jarvis.panel import preferences as panel_preferences
+from jarvis.state import conversation, preferences, settings, voiceprints
 from jarvis.state.voiceprints import OWNER, Voiceprint
 from jarvis.voice import speaker, speech
 from jarvis.voice.floor import Floor
@@ -518,14 +518,14 @@ def test_while_enrolling_clips_go_to_the_voiceprint_not_the_brain(monkeypatch):
 def test_the_check_and_its_threshold_are_preferences():
     settings.set_preference("speaker_check", "Shadow")
     settings.set_preference("speaker_threshold", "0.45")
-    assert config.speaker_check() == "shadow" and config.speaker_threshold() == 0.45
+    assert preferences.speaker_check() == "shadow" and preferences.speaker_threshold() == 0.45
     with pytest.raises(ValueError, match="on, shadow, off"):
         settings.set_preference("speaker_check", "maybe")
     with pytest.raises(ValueError, match="from 0.1 to 0.8"):
         settings.set_preference("speaker_threshold", "0.95")
     settings.set_preference("speaker_check", "")
     settings.set_preference("speaker_threshold", "")
-    assert config.speaker_check() == "on" and config.speaker_threshold() == 0.35
+    assert preferences.speaker_check() == "on" and preferences.speaker_threshold() == 0.35
     shown = settings.preferences()["preferences"]
     assert shown["speaker_check"]["default"] == "on" and shown["speaker_threshold"]["default"] == "0.35"
 
@@ -547,7 +547,7 @@ def test_the_panel_shows_enrolls_and_forgets_the_voiceprint(monkeypatch):
     assert heard[0][1] == "panel" and np.allclose(heard[0][0], 0.25)
     with pytest.raises(ValueError, match="didn't arrive whole"):
         asyncio.run(panel.call("voiceprint_enroll", {"audio": "not base64!"}))
-    too_long = base64.b64encode(b"\0" * (panel.MAX_ENROLL_SECONDS * RATE * 2 + 2)).decode()
+    too_long = base64.b64encode(b"\0" * (panel_preferences.MAX_ENROLL_SECONDS * RATE * 2 + 2)).decode()
     with pytest.raises(ValueError, match="too long"):
         asyncio.run(panel.call("voiceprint_enroll", {"audio": too_long}))
     assert asyncio.run(panel.call("voiceprint_remove", {}))["owner"] is None

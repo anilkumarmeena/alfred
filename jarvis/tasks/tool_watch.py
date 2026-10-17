@@ -16,12 +16,40 @@ import json
 import logging
 from datetime import datetime
 from email.utils import parsedate_to_datetime
+from typing import Any, Protocol
 
-from jarvis.core import profile
-from jarvis.core.config import VERDICT_MODEL
 from jarvis.integrations import mcp_servers
+from jarvis.llm.roles import Role
+from jarvis.storage import profile
 
 log = logging.getLogger("jarvis.tasks.tool_watch")
+
+
+class Registry(Protocol):
+    """JARVIS's own tools (jarvis.tools), which sit above the tasks, so each process hands them in at start
+    (jarvis.bootstrap.wire). fresh() takes account changes made since the process started."""
+
+    def get(self, name: str) -> Any: ...
+
+    def input_schema(self, tool: Any) -> dict: ...
+
+    async def run(self, name: str, arguments: dict) -> tuple[Any, bool]: ...
+
+    def fresh(self) -> None: ...
+
+
+_tools: Registry | None = None
+
+
+def use(registry: Registry) -> None:
+    global _tools
+    _tools = registry
+
+
+def _registry() -> Registry:
+    if _tools is None:
+        raise RuntimeError("Watches aren't wired to JARVIS's tools: the process must call jarvis.bootstrap.wire()")
+    return _tools
 MAX_ITEMS = 200  # of one result, compared
 MAX_SEEN = 1000  # keys kept from earlier checks
 SHOWN_ITEMS, ITEM_CHARS = 15, 1500  # new items the model reads, and how much of each
@@ -50,11 +78,10 @@ def problem(name: str) -> str:
         if why := mcp_servers.missing(server):
             return f"{server.label} can't start: {why}."
         return ""
-    from jarvis import tools
-    from jarvis.safety.draft_gate import DRAFTING
-    from jarvis.tools import google
+    from jarvis.integrations.drafts import DRAFTING
 
-    google.fresh()  # accounts added or removed since this process started
+    tools = _registry()
+    tools.fresh()  # accounts added or removed since this process started
     t = tools.get(name)
     if t is None or not (t.armory and t.reads) or name in DRAFTING:
         return (f"{name} isn't a reading tool a watch can call: name a connection's reading tool, as "
@@ -68,8 +95,7 @@ def wrong_arguments(name: str, arguments: dict) -> str:
     """What's wrong with `arguments` for a built-in tool's schema, or ''. A connection's tool checks its own."""
     if name.startswith("mcp__"):
         return ""
-    from jarvis import tools
-
+    tools = _registry()
     schema = tools.input_schema(tools.get(name))
     known = schema.get("properties") or {}
     if missing := [k for k in schema.get("required") or [] if k not in arguments]:
@@ -104,9 +130,7 @@ async def call(name: str, arguments: dict):
         if isinstance(found := result.get("structuredContent"), (dict, list)):
             return found
         return _value(mcp_servers.text(result))
-    from jarvis import tools
-
-    content, failed = await tools.run(name, arguments)
+    content, failed = await _registry().run(name, arguments)
     if not isinstance(content, str):  # with pictures: their text
         content = mcp_servers.text({"content": content})
     if failed:
@@ -190,8 +214,8 @@ def judge_system() -> str:
 
 
 async def judge(job: dict, new: list) -> dict | None:
-    """One VERDICT_MODEL call on the new items: {"met", "notice", "spoken"?}, or None if it failed."""
-    from jarvis.brain import sdk
+    """One verdict-role call on the new items: {"met", "notice", "spoken"?}, or None if it failed."""
+    from jarvis.llm import claude
 
     since = datetime.fromtimestamp(job["created"], profile.tz())
     shown = "\n".join(said(i)[:ITEM_CHARS] for i in new[:SHOWN_ITEMS])
@@ -199,7 +223,7 @@ async def judge(job: dict, new: list) -> dict | None:
     prompt = (f"<waiting_for>\n{job['text']}\n</waiting_for>\n\nWatching since {since:%a %d %b %Y %H:%M} "
               f"({since.tzname()}), with the tool {job['target']}.\n\n<new_items>\n{shown}{more}\n</new_items>")
     try:
-        found, _ = await sdk.ask_json(prompt, JUDGEMENT, judge_system(), VERDICT_MODEL, effort="low", timeout=60)
+        found, _ = await claude.ask_json(prompt, JUDGEMENT, judge_system(), Role.VERDICT, effort="low", timeout=60)
     except Exception as e:
         log.warning("watch %s: reading what's new failed: %s", job["id"], type(e).__name__)
         return None

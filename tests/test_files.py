@@ -14,7 +14,8 @@ import pytest
 
 from jarvis import tools
 from jarvis.brain import sdk
-from jarvis.core import documents, platform
+from jarvis.core import platform
+from jarvis.media import documents
 from jarvis.tasks import worker
 from jarvis.tools import files
 

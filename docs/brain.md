@@ -42,13 +42,13 @@
 | [`cli.py`](../jarvis/brain/cli.py) | 340 | **`CliBrain`**: the session, the turn loop, interruptions, the lookup subagent |
 | [`sdk.py`](../jarvis/brain/sdk.py) | 201 | SDK options **shared with tasks**: lockdown, tool server, `ask` / `ask_json` / `ask_flag` |
 | [`persona.py`](../jarvis/brain/persona.py) | 63 | Builds the system prompt; frames each user turn (`Notes`) |
-| [`quick.py`](../jarvis/brain/quick.py) | 159 | **`Quick`**: one warm fast-model session for sub-second judgements |
+| [`quick.py`](../jarvis/llm/quick.py) | 159 | **`Quick`**: one warm fast-model session for sub-second judgements |
 | [`route.py`](../jarvis/brain/route.py) | 57 | **`Router`**: optional small-talk → lighter model |
 | [`side.py`](../jarvis/brain/side.py) | 104 | **Side jobs**: background reading and checks (`background_lookup`, `file_lookup`, `computer_lookup`) |
 | [`budget.py`](../jarvis/brain/budget.py) | 70 | **Turn budget**: past a few calls or seconds, a turn's own work is refused and handed off |
 | [`kept.py`](../jarvis/brain/kept.py) | 166 | **Kept calls**: slow JARVIS tools leave the turn; their results come back as follow-ups |
-| [`usage.py`](../jarvis/brain/usage.py) | 176 | Usage-limit state in `data/usage.json`; model step-down; hold for scheduled runs |
-| [`retry.py`](../jarvis/brain/retry.py) | 96 | Failure kinds `LIMIT` / `PASSING` / `ERROR` and retry `Policy` |
+| [`usage.py`](../jarvis/llm/usage.py) | 176 | Usage-limit state in `data/usage.json`; model step-down; hold for scheduled runs |
+| [`retry.py`](../jarvis/llm/retry.py) | 96 | Failure kinds `LIMIT` / `PASSING` / `ERROR` and retry `Policy` |
 
 **Prompts it loads** (in [`jarvis/prompts/`](../jarvis/prompts/)): `persona.md`, `voice_lookups.md`, `lookup_agent.md`, `computer_lookup.md`, `lookup_spoken.md`.
 
@@ -97,7 +97,7 @@ flowchart LR
     U -. "available(model)" .-> CB & SJ & Q
 ```
 
-**Key idea:** the brain is **text in, text out**. It never touches audio; `jarvis/voice/agent.py` plugs `CliBrain.respond` in as LiveKit's LLM step.
+**Key idea:** the brain is **text in, text out**. It never touches audio; `jarvis/apps/agent.py` plugs `CliBrain.respond` in as LiveKit's LLM step.
 
 ---
 

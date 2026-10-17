@@ -9,12 +9,12 @@ from test_in_place import env  # noqa: F401  (fixture)
 from test_learning import Reviewer, data, suggesting, talk, watcher  # noqa: F401  (fixtures and helpers)
 
 from conftest import use_profile
-from jarvis import panel, tools
-from jarvis.core import profile
-from jarvis.core.database import edits
+from jarvis import panel, projects, tools
 from jarvis.state import activity, vocabulary
 from jarvis.state.vocabulary import Entry, Vocabulary
-from jarvis.tasks import data_edits, learning, projects, runner
+from jarvis.storage import profile
+from jarvis.tasks import data_edits, learning, runner
+from jarvis.tasks.store import edits
 from jarvis.tools import core  # noqa: F401  (registers the voice tools)
 
 TODAY = f"{date.today():%Y-%m-%d}"
@@ -23,7 +23,7 @@ TODAY = f"{date.today():%Y-%m-%d}"
 @pytest.fixture
 def words(tmp_path, monkeypatch):
     use_profile(monkeypatch, tmp_path)
-    monkeypatch.setattr(vocabulary, "project_terms", lambda: [])
+    monkeypatch.setattr(vocabulary, "project_terms", lambda projects=tuple: [])
     return profile.current().vocabulary_file
 
 
@@ -125,13 +125,13 @@ def test_a_mishearing_that_is_also_a_word_to_expect_is_never_replaced():
 
 def test_project_names_are_given_as_spoken(env):
     projects.update("video-agent", aliases=["Video Agent", "the video thing"])
-    assert vocabulary.project_terms() == ["Video Agent", "other"]
+    assert vocabulary.project_terms(projects.load) == ["Video Agent", "other"]
     assert vocabulary._spoken("ai_armory-tools", []) == "ai armory tools"
 
 
 def test_load_reads_the_file_and_the_project_list(env, tmp_path, monkeypatch):
     vocabulary.add("Priya", ["Pria"])
-    v = vocabulary.load()
+    v = vocabulary.load(projects.load)
     assert v.terms == ("JARVIS", "Priya", "video agent", "other") and ("Pria", "Priya") in v.fixes
 
 
@@ -271,7 +271,7 @@ def call(name: str, body: dict | None = None):
 
 
 def test_the_panel_lists_adds_edits_and_removes_words(words, monkeypatch):
-    monkeypatch.setattr(vocabulary, "project_terms", lambda: ["JARVIS", "Video Agent"])
+    monkeypatch.setattr(vocabulary, "project_terms", lambda projects=tuple: ["JARVIS", "Video Agent"])
     shown = call("vocabulary")
     assert [e["word"] for e in shown["entries"]] == ["JARVIS"] and shown["projects"] == ["Video Agent"]
     assert shown["max"] == vocabulary.MAX_ENTRIES and shown["prompt"] is True

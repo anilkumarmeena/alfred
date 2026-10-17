@@ -1,4 +1,4 @@
-"""Tests for jarvis.core.logins: hashed passcodes, adopting JARVIS_PASSCODE, and the web server and panel using them."""
+"""Tests for jarvis.auth.logins: hashed passcodes, adopting JARVIS_PASSCODE, and the web server and panel using them."""
 
 import asyncio
 import base64
@@ -10,7 +10,8 @@ import stat
 import pytest
 
 from jarvis import panel, server
-from jarvis.core import logins, profile, vault
+from jarvis.auth import logins, vault
+from jarvis.storage import profile
 from tests.test_panel import reply
 from tests.test_vault import key  # noqa: F401  (fixture: fresh master key, empty vault)
 from tests.test_web_build import Request as TokenRequest

@@ -10,13 +10,15 @@ from livekit import rtc
 from livekit.agents import AgentSession, llm
 from livekit.plugins import silero
 
-from jarvis.brain import quick
+from jarvis import config
+from jarvis.apps import agent
+from jarvis.brain import timing
 from jarvis.brain.persona import Notes
-from jarvis.core import config
-from jarvis.voice import agent, speech, timing, turn
+from jarvis.brain.timing import CURRENT, Timings
+from jarvis.llm import quick
+from jarvis.voice import speech, turn
 from jarvis.voice.session import VoiceSession
 from jarvis.voice.speech_gate import SpeechGate
-from jarvis.voice.timing import CURRENT, Timings
 
 
 def result(text: str) -> ResultMessage:

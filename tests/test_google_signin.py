@@ -15,8 +15,8 @@ from ai_armory.toolsets.google.web import OLD
 from google_auth_oauthlib.flow import Flow
 
 from conftest import use_profile
-from jarvis import panel, server, tools
-from jarvis.core import config, credentials
+from jarvis import config, panel, server, tools
+from jarvis.auth import credentials
 from jarvis.integrations import accounts, google_signin
 from jarvis.integrations.accounts import Account
 from jarvis.state import activity

@@ -9,11 +9,13 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from conftest import use_profile
 
-from jarvis.brain import usage
-from jarvis.core import claude_logins, config, files, profile
+from conftest import use_profile
+from jarvis import config
+from jarvis.core import files
+from jarvis.llm import claude_logins, usage
 from jarvis.state import memory, vocabulary
+from jarvis.storage import profile
 from jarvis.tasks import data_edits
 
 PAUSE = 0.2  # long enough that two unlocked updates would both read before either wrote

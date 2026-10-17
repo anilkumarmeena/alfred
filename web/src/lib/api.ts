@@ -1,3 +1,4 @@
+import type { PanelAction } from "./panelActions";
 import { PASSCODE_KEY, storage } from "./storage";
 
 // POST JSON with the saved passcode (checked by every endpoint except /api/push/key).
@@ -21,6 +22,6 @@ export async function postAuthedJson(path: string, fields: Record<string, unknow
 }
 
 // Call a panel action at /api/panel/ACTION.
-export async function panelCall<T = any>(action: string, fields: Record<string, unknown> = {}): Promise<T> {
+export async function panelCall<T = any>(action: PanelAction, fields: Record<string, unknown> = {}): Promise<T> {
   return (await postAuthedJson(`/api/panel/${action}`, fields)).result as T;
 }

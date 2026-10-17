@@ -12,7 +12,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from jarvis.core import config, database, profile
+from jarvis import config
+from jarvis.storage import database, profile
 
 log = logging.getLogger("jarvis.state.voiceprints")
 

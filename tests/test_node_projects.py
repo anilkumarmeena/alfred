@@ -8,9 +8,10 @@ import pytest
 from test_in_place import env, git, make_repo  # noqa: F401  (env is a fixture)
 from test_node_offload import World, finished, world  # noqa: F401  (world is a fixture)
 
+from jarvis import projects
 from jarvis.node import machines, offload, work
 from jarvis.node.link import Refused
-from jarvis.tasks import command_jobs, projects
+from jarvis.tasks import command_jobs
 from jarvis.tasks.worker import Outcome
 from jarvis.tools import tasks as task_tools
 

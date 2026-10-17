@@ -25,7 +25,21 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from claude_agent_sdk import (
+from jarvis import projects
+from jarvis.config import (
+    DATA_DIR,
+    SCHEDULE_EFFORT,
+    TASK_CACHE_DIR,
+    TASK_EFFORT,
+    TASK_MAX_TURNS,
+    TASK_READ_DIRS,
+)
+from jarvis.core import platform
+from jarvis.integrations import mcp_servers
+from jarvis.llm import claude_logins, retry, usage
+from jarvis.llm.claude import BUILTIN_AGENTS_DENIED, LimitWatch
+from jarvis.llm.roles import Role
+from jarvis.llm.sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
@@ -39,24 +53,9 @@ from claude_agent_sdk import (
     ToolUseBlock,
     UserMessage,
 )
-
-from jarvis.brain import retry, usage
-from jarvis.brain.sdk import BUILTIN_AGENTS_DENIED, LimitWatch, jarvis_server, sdk_options
-from jarvis.core.config import (
-    DATA_DIR,
-    SCHEDULE_EFFORT,
-    SCHEDULE_MODEL,
-    TASK_CACHE_DIR,
-    TASK_EFFORT,
-    TASK_MAX_TURNS,
-    TASK_MODEL,
-    TASK_READ_DIRS,
-)
-from jarvis.core import claude_logins, platform, profile
-from jarvis.integrations import mcp_servers
 from jarvis.safety import host
 from jarvis.skills import home as skills
-from jarvis.tasks import access, project_claude, projects, repo_files
+from jarvis.tasks import access, project_claude, repo_files
 from jarvis.tasks.briefs import _system_prompt
 from jarvis.tasks.connection_calls import ConnectionGate
 from jarvis.tasks.connection_watch import Watch
@@ -70,16 +69,53 @@ from jarvis.tasks.gate import (
     _read_only_git,
     _secret_rules,
 )
-from jarvis.tasks.host_tools import HOST_RUN, JOB_STATUS, JOB_WAIT, START_JOB, _host_gate, _host_server, task_temp
-from jarvis.tasks.reporting import PAUSES, REQUEST_ACCESS, Reporter, _nudge_hook, _task_server, answer, nudge_text
-from jarvis.tasks.subagents import _AGENT_TOOLS, Subagents, _agents
 
 # Re-exported: other modules and tests import these from here
-from jarvis.tasks.host_tools import TaskJobs  # noqa: F401
-from jarvis.tasks.reporting import with_nudges  # noqa: F401
-from jarvis.tasks.subagents import RESEARCHER, SEARCHER, TESTER, result_text  # noqa: F401
+from jarvis.tasks.host_tools import (
+    HOST_RUN,
+    JOB_STATUS,
+    JOB_WAIT,
+    START_JOB,
+    TaskJobs,  # noqa: F401
+    _host_gate,
+    _host_server,
+    task_temp,
+)
+from jarvis.tasks.reporting import (
+    PAUSES,
+    REQUEST_ACCESS,
+    Reporter,
+    _nudge_hook,
+    _task_server,
+    answer,
+    nudge_text,
+    with_nudges,  # noqa: F401
+)
+from jarvis.tasks.subagents import _AGENT_TOOLS, RESEARCHER, SEARCHER, TESTER, Subagents, _agents, result_text  # noqa: F401
 
 log = logging.getLogger("jarvis.tasks.worker")
+
+
+@dataclass(frozen=True)
+class SessionTools:
+    """JARVIS's own tools for a task's session, and the session's options with tool results screened. They sit above
+    the tasks (jarvis.brain.sdk), so each process hands them in at start (jarvis.bootstrap.wire)."""
+    server: Callable[..., tuple[dict, list[str]]]
+    options: Callable[..., ClaudeAgentOptions]
+
+
+_session_tools: SessionTools | None = None
+
+
+def use(tools: SessionTools) -> None:
+    global _session_tools
+    _session_tools = tools
+
+
+def _wired() -> SessionTools:
+    if _session_tools is None:
+        raise RuntimeError("Task sessions aren't wired to JARVIS's tools: the process must call jarvis.bootstrap.wire()")
+    return _session_tools
 
 READ_ONLY_TOOLS = ["calendar_events", "calendar_event", "calendar_free_time", "gmail_search", "gmail_read",
                    "sheets_search", "sheets_read", "docs_search", "docs_read", "slides_search", "slides_read",
@@ -95,7 +131,7 @@ class Outcome:
     result: str  # final message
     error: str  # "" on success
     cost: float
-    kind: str = ""  # failure kind (jarvis.brain.retry)
+    kind: str = ""  # failure kind (jarvis.llm.retry)
     resets: float | None = None  # when the usage limit it hit resets, if Claude said
 
 
@@ -127,10 +163,10 @@ def _blank_env() -> dict[str, str]:
 
 
 def _model(task: dict) -> tuple[str, str]:
-    """(model, effort): scheduled non-code runs get SCHEDULE_MODEL; usage.available falls back if a limit is out."""
+    """(model, effort): scheduled non-code runs get the schedule role; usage.available falls back if a limit is out."""
     if task.get("job") is not None and task["kind"] != "code_change":
-        return usage.available(SCHEDULE_MODEL), SCHEDULE_EFFORT
-    return usage.available(TASK_MODEL), TASK_EFFORT
+        return usage.available(Role.SCHEDULE), SCHEDULE_EFFORT
+    return usage.available(Role.TASK), TASK_EFFORT
 
 
 def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> ClaudeAgentOptions:
@@ -148,7 +184,7 @@ def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> Claud
         cwd = Path(task["worktree"])  # the project folder when in place
         denied = _IN_PLACE_DENIED if task["in_place"] else []
         builtins = ["Read", "Glob", "Grep", "Edit", "Write", "Bash", "TodoWrite", "WebSearch", "WebFetch"]
-        read_roots, write_roots = [cwd, TASK_CACHE_DIR, host.TASK_JOBS_DIR, *TASK_READ_DIRS, profile.current().voice_logs], [cwd]
+        read_roots, write_roots = [cwd, TASK_CACHE_DIR, host.TASK_JOBS_DIR, *TASK_READ_DIRS, claude_logins.voice_logs()], [cwd]
         add_dirs = [TASK_CACHE_DIR]
         env |= _cache_env()
         task_temp(task["id"]).mkdir(parents=True, exist_ok=True)
@@ -160,7 +196,7 @@ def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> Claud
     elif kind == "code_question":
         cwd = projects.find(task["project"]).path
         builtins = ["Read", "Glob", "Grep", "Bash", "WebSearch", "WebFetch"]
-        read_roots, write_roots = [cwd, *TASK_READ_DIRS, profile.current().voice_logs], []
+        read_roots, write_roots = [cwd, *TASK_READ_DIRS, claude_logins.voice_logs()], []
         bash = _read_only_git
         # Bash is gated to read-only git; the sandbox is a second wall.
         sandbox = {"enabled": True, "autoAllowBashIfSandboxed": False, "allowUnsandboxedCommands": False,
@@ -200,11 +236,11 @@ def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> Claud
             host_gate = _host_gate(on, own, reporter)
     if "projects" in can:
         builtins += ["Read", "Glob", "Grep", "Edit", "Write"]
-        read_roots = read_roots or [own, *TASK_READ_DIRS, profile.current().voice_logs]  # research has none otherwise
+        read_roots = read_roots or [own, *TASK_READ_DIRS, claude_logins.voice_logs()]  # research has none otherwise
         more_writes = list(TASK_READ_DIRS)  # TaskGate still blocks secrets and JARVIS's own files
     if "accounts" in can:
         # docs_insert_image's local paths are checked by TaskGate.doc_images
-        mcp["jarvis"], jarvis_allowed = jarvis_server(READ_ONLY_TOOLS + ([] if task.get("read_only")
+        mcp["jarvis"], jarvis_allowed = _wired().server(READ_ONLY_TOOLS + ([] if task.get("read_only")
                                                                          else GOOGLE_EDIT_TOOLS))
         # Connections: reading is free, each change waits for the user's yes (connection_calls)
         servers = mcp_servers.session(mcp_servers.for_research(), ask_own=True)
@@ -259,7 +295,7 @@ def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> Claud
     # After each call: the user's nudges, and connections restarted since
     after = _nudge_hook(task["id"], reporter) + (live.told if live.running else [])
 
-    return sdk_options(
+    return _wired().options(
         env=env,
         cwd=str(cwd),
         add_dirs=[str(d) for d in add_dirs],

@@ -8,9 +8,9 @@ from test_in_place import env  # noqa: F401  (env is a fixture)
 from test_node_offload import World, world  # noqa: F401  (world is a fixture)
 from test_node_projects import registered, there  # noqa: F401  (there is a fixture)
 
-from jarvis.core.database import COMMAND
 from jarvis.node import offload
-from jarvis.tasks import command_jobs, hold, schedules, scheduler
+from jarvis.tasks import command_jobs, hold, scheduler, schedules
+from jarvis.tasks.store import COMMAND
 
 
 def job(folder) -> dict:

@@ -4,9 +4,10 @@ import asyncio
 
 import pytest
 
+from jarvis import config
 from jarvis.brain import persona
-from jarvis.core import config, profile
 from jarvis.state import settings
+from jarvis.storage import profile
 
 
 @pytest.fixture

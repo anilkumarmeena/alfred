@@ -8,8 +8,8 @@ import re
 from datetime import date as Date, datetime
 from pathlib import Path
 
-from jarvis.core import profile
 from jarvis.state import memory
+from jarvis.storage import profile
 
 DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 DAYS_PAGE = 30  # days per page

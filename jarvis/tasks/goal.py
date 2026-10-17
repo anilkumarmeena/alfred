@@ -1,6 +1,6 @@
 """Goal loop: check a finished run against what was asked before announcing it.
 
-`review` makes one tool-less GOAL_MODEL call over instruction, later messages, summary and evidence (diff, build/test
+`review` makes one tool-less goal-role call over instruction, later messages, summary and evidence (diff, build/test
 steps). Verdicts: complete; incomplete (sent back in-session, at most GOAL_ROUNDS per user ask, capped by
 GOAL_MAX_COST); blocked (needs the user: reported, never sent back). Each check is logged as a "goal" entry. If the
 check can't run (off, error, daily budget, bad JSON) the result passes as is. Watches and nothing-new scheduled runs
@@ -17,10 +17,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from jarvis import prompts
-from jarvis.core import proc, profile
-from jarvis.core.config import GOAL_LOOP, GOAL_MAX_COST, GOAL_MODEL, GOAL_ROUNDS
+from jarvis.config import GOAL_LOOP, GOAL_MAX_COST, GOAL_ROUNDS
+from jarvis.core import proc
+from jarvis.llm.roles import Role
 from jarvis.safety.commands import SECRET_PATTERNS
 from jarvis.state import todo
+from jarvis.storage import profile
 from jarvis.tasks import schedules
 
 log = logging.getLogger("jarvis.tasks.goal")
@@ -191,10 +193,10 @@ def parse(found: dict | None, cost: float = 0.0) -> Check | None:
 
 
 async def ask_model(text: str) -> tuple[dict | None, float]:
-    """One tool-less GOAL_MODEL call: (SCHEMA reply or None, cost)."""
-    from jarvis.brain.sdk import ask_json
+    """One tool-less goal-role call: (SCHEMA reply or None, cost)."""
+    from jarvis.llm.claude import ask_json
 
-    return await ask_json(text, SCHEMA, system(), GOAL_MODEL, effort="low")
+    return await ask_json(text, SCHEMA, system(), Role.GOAL, effort="low")
 
 
 async def review(text: str, budget: Budget) -> Check | None:

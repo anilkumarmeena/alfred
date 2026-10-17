@@ -10,10 +10,11 @@ from test_in_place import NullReporter, worker_task
 from test_mcp_servers import GH_TOKEN, GL_TOKEN, fresh, seeded  # noqa: F401  (fixture)
 from test_skills import manual, skills_home  # noqa: F401  (fixture)
 
+from jarvis.auth import vault
 from jarvis.brain import cli
-from jarvis.core import claude_logins, vault
 from jarvis.integrations import mcp_servers
 from jarvis.integrations.mcp_servers import Server, Tool
+from jarvis.llm import claude_logins
 from jarvis.skills import home
 from jarvis.tasks import worker
 from jarvis.tasks.connection_watch import Watch

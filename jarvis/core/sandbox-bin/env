@@ -1,0 +1,17 @@
+#!/bin/bash
+# `env`, first on the CLI's PATH on macOS (jarvis.core.gpu). Claude Code starts each sandboxed command as
+# `env [VAR=...] /usr/bin/sandbox-exec -p PROFILE SHELL -c COMMAND`, and its settings can't add IOKit rules, so this
+# adds Metal's to the profile: the GPU, nothing else. Any other call passes straight through to /usr/bin/env.
+gpu='
+; JARVIS: Metal (the GPU) only
+(allow iokit-open (iokit-user-client-class "AGXDeviceUserClient"))
+(allow mach-lookup (global-name "com.apple.MTLCompilerService"))'
+args=()
+for arg in "$@"; do
+  n=${#args[@]}
+  if [ "$n" -ge 2 ] && [ "${args[n-1]}" = -p ]; then
+    case ${args[n-2]} in */sandbox-exec) arg+=$gpu ;; esac
+  fi
+  args+=("$arg")
+done
+exec /usr/bin/env "${args[@]}"

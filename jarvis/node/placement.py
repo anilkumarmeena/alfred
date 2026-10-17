@@ -2,7 +2,7 @@
 
   asked    where the user said this one should run ("here", or a machine's name), read by the brain from their words
   setting  Settings › Machines › Where jobs run, per kind: this computer, a machine, or let JARVIS choose
-  choice   with "let JARVIS choose", PLACEMENT_MODEL weighs this computer and every machine that is online and able
+  choice   with "let JARVIS choose", the placement role weighs this computer and every machine that is online and able
            to take it: free slots, load, programs, and how much of each Claude account's limit is left
 
 A machine is able to take a job when it answered a ping just now, runs the same link protocol, has the programs a
@@ -20,27 +20,17 @@ from dataclasses import dataclass
 import psutil
 
 from jarvis import prompts
-from jarvis.brain import usage
-from jarvis.core import profile
-from jarvis.core.config import PLACEMENT_MODEL
+from jarvis.contracts.remote import COMMANDS, HERE, TASKS, Place  # noqa: F401  (callers find them here)
+from jarvis.llm import usage
+from jarvis.llm.roles import Role
 from jarvis.node import home, machines
 from jarvis.safety import commands
+from jarvis.storage import profile
 
 log = logging.getLogger("jarvis.node.placement")
 
-COMMANDS, TASKS = "commands", "tasks"
 CHOICE_SECONDS = 20.0
 CLOSE = 0.2  # share of a limit taken to be left when Claude warns it's getting close without saying how close
-
-
-@dataclass(frozen=True)
-class Place:
-    node: int | None = None
-    name: str = "this computer"
-    said: str = ""  # why it isn't where the user would expect, said with the start; "" when there's nothing to add
-
-
-HERE = Place()
 
 
 def usage_left(kept: dict | None = None) -> float:
@@ -169,7 +159,7 @@ def _shown(s: Standing) -> dict:
 async def _pick(kind: str, job: dict, needs: list[str], able: dict, running: int, slots: int) -> Place:
     """Let the model choose among this computer and the machines able to take it; if it can't be asked, the one with
     the most room."""
-    from jarvis.brain import sdk
+    from jarvis.llm import claude
 
     here = _here(running, slots)
     there = {str(i): {"name": m.name, "ram_gb": m.ram_gb, "programs": m.tools} | _shown(_standing(m, check))
@@ -181,8 +171,8 @@ async def _pick(kind: str, job: dict, needs: list[str], able: dict, running: int
     schema = {"type": "object", "properties": {"where": {"enum": ["here", *there]}, "why": {"type": "string"}},
               "required": ["where"]}
     try:
-        found, _ = await sdk.ask_json(json.dumps(material, ensure_ascii=False), schema,
-                                      prompts.load("placement", user_name=profile.name()), PLACEMENT_MODEL,
+        found, _ = await claude.ask_json(json.dumps(material, ensure_ascii=False), schema,
+                                      prompts.load("placement", user_name=profile.name()), Role.PLACEMENT,
                                       timeout=CHOICE_SECONDS)
     except Exception as e:
         log.warning("choosing where %s runs failed (%s); the computer with the most room takes it", job.get("title"),

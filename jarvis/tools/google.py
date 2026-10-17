@@ -2,7 +2,7 @@
 
 Importing configures the tool sets (accounts, sign-ins in secrets/google-<label>.json, time zone, name) and registers
 them; nothing is registered without an account. Sends and deletes are drafted, then done by a gated tool taking only
-the draft id, approved by spoken yes (jarvis.safety.draft_gate).
+the draft id, approved by spoken yes (jarvis.gates.draft_gate).
 
 Accounts are added and signed in from the control panel (jarvis.integrations.google_signin) or the accounts command.
 `fresh` follows those changes, so no restart is needed.
@@ -10,36 +10,11 @@ Accounts are added and signed in from the control panel (jarvis.integrations.goo
 
 from collections.abc import Callable
 
-from ai_armory import all_tools, load_many
-from ai_armory.toolsets.google import Account, GoogleSettings, configure, current
-
-from jarvis.core import profile
-from jarvis.core.config import APPROVAL_MINUTES, GOOGLE_CLIENT_SECRET
 from jarvis.integrations import accounts
-from jarvis.safety.commands import JARVIS_SECRETS
+from jarvis.integrations.accounts import google_settings as settings  # noqa: F401  (tests read it here)
+from jarvis.integrations.armory import all_tools, configure, current, load_many
 
 from . import register_toolsets, unregister
-
-SIGN_IN = "the Sign in button beside the {label} account on the control panel's Google accounts page"
-IMAGE_FOLDER = "JARVIS doc images"  # Drive staging folder for local images inserted into docs
-
-
-def settings(found: accounts.Accounts) -> GoogleSettings:
-    """Tool-set settings for these accounts and the current profile; an account's note tells the model its purpose."""
-    mine = profile.current()
-    return GoogleSettings(
-        accounts=[Account(a.label, a.email, a.note, a.chat) for a in found.accounts],
-        default=found.default,
-        token_dir=mine.secrets,
-        timezone=mine.timezone,
-        user_name=mine.name,
-        sign_in_command=SIGN_IN,
-        client_secret=GOOGLE_CLIENT_SECRET,
-        draft_minutes=2 * APPROVAL_MINUTES,  # time to answer, then to go ahead after the yes
-        image_folder=IMAGE_FOLDER,
-        blocked_paths=[str(p) for p in JARVIS_SECRETS],  # never uploaded into a doc
-    )
-
 
 # A conversation's tool list is fixed when it starts (prompt cache); fresh() takes changes for the next one, and the
 # voice brain restarts its CLI on a change (jarvis.brain.cli.CliBrain.start).

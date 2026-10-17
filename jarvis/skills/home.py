@@ -33,9 +33,9 @@ from pathlib import Path
 
 import yaml
 
-from jarvis.core import database, profile
 from jarvis.core.files import write_atomic
 from jarvis.safety.host import alive
+from jarvis.storage import database, profile
 
 log = logging.getLogger("jarvis.skills")
 

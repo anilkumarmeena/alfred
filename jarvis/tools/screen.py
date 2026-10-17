@@ -8,10 +8,11 @@ Not available to background tasks.
 import asyncio
 import re
 
-from jarvis.core import platform, profile
+from jarvis.core import platform
 from jarvis.safety import consent
 from jarvis.safety.commands import approves
 from jarvis.state import conversation, pictures
+from jarvis.storage import profile
 
 from . import WithPictures, tool
 

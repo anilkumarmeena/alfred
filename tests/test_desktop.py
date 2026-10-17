@@ -57,7 +57,7 @@ def test_on_the_mac_user_folders_are_the_usual_ones(monkeypatch):
 
 @pytest.mark.skipif(not platform.MAC, reason="the Mac's folders")
 def test_on_the_mac_files_and_audio_go_where_they_always_did(monkeypatch):
-    from jarvis.core import config
+    from jarvis import config
     from jarvis.tools import files
 
     assert files.LOOK_IN == ["~/Downloads", "~/Desktop", "~/Documents"]

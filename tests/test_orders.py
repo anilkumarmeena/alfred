@@ -9,14 +9,14 @@ from test_in_place import env  # noqa: F401  (a fixture)
 from test_nudges import fake_run, finishes, settle
 from test_shell import ask
 
-from jarvis.core import profile
-from jarvis.core.database import APPROVED, CANCELLED, PENDING, SPENT
+from jarvis.gates.shell import ShellGate
 from jarvis.safety import approvals
 from jarvis.safety.approvals import Heard
 from jarvis.safety.commands import agreed_to, ordered, orders, same_risk
-from jarvis.safety.shell import ShellGate
 from jarvis.state import conversation
+from jarvis.storage import profile
 from jarvis.tasks import client, runner
+from jarvis.tasks.store import APPROVED, CANCELLED, PENDING, SPENT
 from jarvis.tasks.worker import Outcome
 from jarvis.tools import tasks as task_tools
 from jarvis.voice import session as voice_session

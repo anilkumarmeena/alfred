@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 from typing import Protocol
 
+from jarvis.safety.risk import Risk
+
 UNSEEN = "runs code it can't see"
 SECRETS = "touches secrets"
 NETWORK = "sends data off the computer"
@@ -204,11 +206,11 @@ class _Python:
         if name in _PY_DELETES or method in _METHOD_DELETES:
             return "deletes files"
         if name in _PY_PERMISSIONS or method in _METHOD_PERMISSIONS:
-            return "changes permissions"
+            return Risk.PERMISSIONS
         if name in _PY_KILLS:
-            return "stops a process"
+            return Risk.STOPS
         if _under(name, _PY_INSTALLS):
-            return "installs software"
+            return Risk.INSTALLS
         if _under(name, _PY_UNSEEN) or name.startswith(_PY_EXEC):
             return UNSEEN
         if name in _PY_DYNAMIC:
@@ -409,9 +411,9 @@ def javascript(source: str, path: Path | None, cwd: Path | None, ctx: Context) -
             or "fs-extra" in modules and _JS_EXTRA_DELETES.search(source)):
         whys.append("deletes files")
     if _JS_PERMISSION_CALLS.search(source):
-        whys.append("changes permissions")
+        whys.append(Risk.PERMISSIONS)
     if _JS_KILLS.search(source):
-        whys.append("stops a process")
+        whys.append(Risk.STOPS)
     if modules & _JS_SPAWNS:
         whys += _js_spawns(source, ctx)
     if _JS_WRITES.search(source):

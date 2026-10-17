@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 import httpx
 
-from jarvis.core import vault
+from jarvis.auth import vault
 from jarvis.integrations.mcp_servers import Server
 
 log = logging.getLogger("jarvis.integrations.mcp_oauth")

@@ -18,7 +18,7 @@ network), and it can never be given more.
 
 import json
 
-from jarvis.core.config import TASK_ARTIFACTS
+from jarvis.config import TASK_ARTIFACTS
 
 # Each completes the question "may it ...?" put to the user
 GRANTS = {

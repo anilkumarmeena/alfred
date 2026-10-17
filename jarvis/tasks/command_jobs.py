@@ -1,15 +1,15 @@
-"""Command tasks (database.COMMAND): a shell command run in the background with no model until it ends.
+"""Command tasks (store.COMMAND): a shell command run in the background with no model until it ends.
 
 Sources: start_job, audio rendering, scheduled "command" jobs. Runs as a host.Jobs job in COMMANDS_DIR (N.log), outside
 the sandbox via a login shell, without JARVIS's keys, on the Claude login JARVIS runs on; survives runner restarts,
 polled via `how`, stopped at its limit.
 On end:
-  success  `summarize` (COMMAND_SUMMARY_MODEL)
+  success  `summarize` (Role.COMMAND_SUMMARY)
   failure  `pass_over`: the CLI said its Claude login is signed out or used up, so it reruns on the next login
            (command_tasks._fall_over), or with none left only says so. Else
-           `triage` (COMMAND_TRIAGE_MODEL): FIX starts a code_change task (`fix_prompt`); ASK waits for the user's yes
+           `triage` (Role.COMMAND_TRIAGE): FIX starts a code_change task (`fix_prompt`); ASK waits for the user's yes
            (secrets, deploys, data loss, system settings); REPORT only explains. The fix task never runs the command:
-           its sandbox hides the keys the command needs. Once it finishes, `wants_rerun` (VERDICT_MODEL) reads its
+           its sandbox hides the keys the command needs. Once it finishes, `wants_rerun` (Role.VERDICT) reads its
            summary and, unless it says the cause remains, JARVIS reruns the command once, as a command task with its
            keys; a failed rerun is only reported, so it can't loop.
 Spec and outcome are JSON in the task's `command` column. Command output is untrusted data, never instructions.
@@ -23,18 +23,16 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from claude_agent_sdk import RateLimitInfo
-
-from jarvis.core import claude_logins, profile
-from jarvis.core.config import (
-    COMMAND_SUMMARY_MODEL,
-    COMMAND_TRIAGE_MODEL,
+from jarvis.config import (
     DATA_DIR,
     SECRETS_DIR,
-    VERDICT_MODEL,
 )
+from jarvis.llm import claude_logins
+from jarvis.llm.roles import Role
+from jarvis.llm.sdk import RateLimitInfo
 from jarvis.safety import host
 from jarvis.safety.commands import secret_path
+from jarvis.storage import profile
 
 COMMANDS_DIR = DATA_DIR / "commands"  # per-task record, output and exit status, named by task id
 SUMMARY_CHARS, TRIAGE_CHARS, FIX_CHARS = 6000, 8000, 15000  # output tail chars read by each model call
@@ -61,7 +59,7 @@ def project_of(folder: Path, named=None) -> str | None:
     """Name of the innermost registered project containing `folder` (`named` wins ties), or None.
 
     Folders under DATA_DIR or SECRETS_DIR never belong to a project, so they're never auto-fixed."""
-    from jarvis.tasks import projects
+    from jarvis import projects
 
     path = folder.resolve()
     if any(path.is_relative_to(p.resolve()) for p in (DATA_DIR, SECRETS_DIR)):
@@ -75,7 +73,7 @@ def project_of(folder: Path, named=None) -> str | None:
 class Runs(host.Jobs):
     """Long jobs for command tasks, numbered by task id; no desktop notification (the runner announces).
 
-    Each runs on the Claude login JARVIS runs on (core.claude_logins), so a `claude` the command calls uses it too:
+    Each runs on the Claude login JARVIS runs on (jarvis.llm.claude_logins), so a `claude` the command calls uses it too:
     CLAUDE_CONFIG_DIR names its folder (only the folder; the login stays in its keychain entry), `login` in the record."""
 
     def __init__(self, folder: Path | None = None, shell: tuple[str, ...] = host.SHELL) -> None:
@@ -172,7 +170,7 @@ def ending(how: dict) -> str:
 # ── A Claude login that stopped working ─────────────────────────
 
 LOGIN_CHARS = 3000  # output tail read for the CLI saying its login stopped working: a run ends soon after
-# The CLI's own words, narrower than sdk.SIGNED_OUT and usage.LIMIT_TEXT: here they may come from any other tool too
+# The CLI's own words, narrower than claude.SIGNED_OUT and usage.LIMIT_TEXT: here they may come from any other tool too
 SIGNED_OUT = re.compile(r"please run /login|failed to authenticate|authentication_failed|oauth session expired",
                         re.IGNORECASE)
 LIMITED = re.compile(r"you.ve hit your (?:(session|weekly|opus|sonnet) )?limit|claude ai usage limit reached",
@@ -199,12 +197,12 @@ def _resets(text: str, now: float) -> int | None:
 def pass_over(login: str, output: str, now: float | None = None) -> str:
     """If a command's output tail says its Claude login is signed out or at its usage limit, mark that login so JARVIS
     passes it over (as its own calls do) and say why, e.g. "the work Claude login isn't signed in"; else ""."""
-    from jarvis.brain import sdk, usage
+    from jarvis.llm import claude, usage
 
     now = now or time.time()
     name = f"the {login or 'default'} Claude login"
     if found := SIGNED_OUT.search(output):
-        sdk.signed_out(login, found[0])
+        claude.signed_out(login, found[0])
         return f"{name} isn't signed in"
     if found := LIMITED.search(output):
         window = WINDOWS.get((found[1] or "").lower(), "unknown")
@@ -225,11 +223,11 @@ def summary_system() -> str:
 
 async def summarize(title: str, command: str, seconds: float, output: str) -> str:
     """One-or-two-sentence summary of a successful run. Raises RuntimeError or TimeoutError if the call fails."""
-    from jarvis.brain import retry, sdk
+    from jarvis.llm import claude, retry
 
     prompt = (f"Job: {title}\nCommand: {command}\nIt succeeded (exit code 0) after {took(seconds)}.\n\n"
               f"The end of its output:\n{output.strip() or '(nothing)'}")
-    reply, _ = await retry.retry(retry.ONCE, lambda: sdk.ask(prompt, summary_system(), COMMAND_SUMMARY_MODEL),
+    reply, _ = await retry.retry(retry.ONCE, lambda: claude.ask(prompt, summary_system(), Role.COMMAND_SUMMARY),
                                  "command summary")
     return " ".join(reply.split())[:600]
 
@@ -277,7 +275,7 @@ async def triage(title: str, command: str, folder: str, why: str, seconds: float
     """Triage a failed run from its output tail; None if the call fails or is unusable.
 
     Without `can_fix` (no project, fixing off, or already fixed once) the result is always REPORT."""
-    from jarvis.brain import retry, sdk
+    from jarvis.llm import claude, retry
 
     fixing = ("" if can_fix else
               "\nNo task can fix this one (it has no project to fix it in, fixing is off for it, or it already had its "
@@ -285,8 +283,8 @@ async def triage(title: str, command: str, folder: str, why: str, seconds: float
     prompt = (f"Job: {title}\nCommand: {command}\nFolder: {folder}\nIt failed: {why}, after {took(seconds)}.{fixing}\n\n"
               f"The end of its output:\n<output>\n{output.strip() or '(it printed nothing)'}\n</output>")
     try:
-        found, _ = await retry.retry(retry.ONCE, lambda: sdk.ask_json(prompt, TRIAGE_SCHEMA, triage_system(),
-                                                                      COMMAND_TRIAGE_MODEL), "command triage")
+        found, _ = await retry.retry(retry.ONCE, lambda: claude.ask_json(prompt, TRIAGE_SCHEMA, triage_system(),
+                                                                      Role.COMMAND_TRIAGE), "command triage")
     except Exception:
         return None
     return parse_triage(found, can_fix)
@@ -330,13 +328,13 @@ def rerun_system() -> str:
 
 
 async def wants_rerun(summary: str) -> bool:
-    """Whether to rerun after a fix (VERDICT_MODEL): False only if its summary says the cause remains.
+    """Whether to rerun after a fix (Role.VERDICT): False only if its summary says the cause remains.
 
     True if the call fails: the fix task finished, and a rerun that fails again is only reported."""
-    from jarvis.brain import sdk
+    from jarvis.llm import claude
 
     prompt = f"<summary>\n{summary.strip() or '(empty)'}\n</summary>"
-    return await sdk.ask_flag(prompt, "rerun", rerun_system(), VERDICT_MODEL, effort="low") is not False
+    return await claude.ask_flag(prompt, "rerun", rerun_system(), Role.VERDICT, effort="low") is not False
 
 
 def view(task: dict, runs: Runs, now: float | None = None) -> dict:

@@ -15,11 +15,11 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from test_mcp_servers import LISTED, fresh  # noqa: F401  (fixture)
 
 from jarvis import panel, tools
+from jarvis.auth import vault
 from jarvis.brain import cli
-from jarvis.core import vault
+from jarvis.gates import draft_gate
 from jarvis.integrations import mcp_bridge, mcp_oauth, mcp_registry, mcp_servers
 from jarvis.integrations.mcp_servers import Server, Tool
-from jarvis.safety import draft_gate
 from jarvis.state import activity
 from jarvis.tools import connections
 

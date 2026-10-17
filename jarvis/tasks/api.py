@@ -6,9 +6,9 @@ from typing import TYPE_CHECKING
 
 from aiohttp import web
 
-from jarvis.node.link import MAX_MESSAGE, WebSocketChannel
+from jarvis import projects
+from jarvis.contracts.remote import MAX_MESSAGE
 from jarvis.safety import remembered
-from jarvis.tasks import projects
 from jarvis.tasks.approvals import NotAllowed
 from jarvis.tasks.runner_base import SHUTTING_DOWN
 
@@ -146,7 +146,7 @@ def routes(r: "Runner") -> list[web.RouteDef]:
     async def node_link(req: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(max_msg_size=MAX_MESSAGE)
         await ws.prepare(req)
-        await r.hub.accept(WebSocketChannel(ws))
+        await r.hub.accept_websocket(ws)
         return ws
 
     async def list_machines(req: web.Request) -> web.Response:

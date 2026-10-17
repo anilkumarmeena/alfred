@@ -4,10 +4,10 @@ Covers keeping, applying and dismissing suggestions (POST /tasks/ID/edits), lear
 hidden review task's edits, and the to-do changes a finished task makes.
 """
 
-from jarvis.core.database import edits
 from jarvis.state import activity as bell, memory, todo
 from jarvis.tasks import announce, data_edits, goal, learning
 from jarvis.tasks.runner_base import RunnerBase
+from jarvis.tasks.store import edits
 
 # Report text announced when a learning review leaves edits pending
 LEARNED_REPORT = "It read our last conversation for what's worth keeping in memory, the to-do list or skills."

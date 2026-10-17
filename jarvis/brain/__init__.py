@@ -1,4 +1,4 @@
-"""The brain: Claude with tools and memory, streaming its reply as text (cli.py, persona in persona.py)."""
+"""The voice brain: Claude with JARVIS's tools and memory, streaming its spoken reply (cli.py), plus its background lookups, turn budget and persona."""
 
 from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING, Protocol

@@ -24,11 +24,11 @@ import zlib
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
+from types import EllipsisType
 
 import numpy as np
 
-from jarvis.core.config import (
-    SPEECH_GATE,
+from jarvis.config import (
     SPEECH_GATE_AUDIO_DIR,
     SPEECH_GATE_AUDIO_KEEP,
     SPEECH_GATE_FAINT_DBFS,
@@ -44,13 +44,13 @@ from jarvis.core.config import (
     SPEECH_GATE_PHANTOM_DBFS,
     SPEECH_GATE_PHANTOM_SPEECH_SECONDS,
     SPEECH_GATE_PHANTOMS,
-    SPEECH_GATE_SAVE_AUDIO,
     SPEECH_GATE_SAVE_SHORT,
     SPEECH_GATE_SHORT_SECONDS,
     SPEECH_GATE_SHORT_SPEECH_SECONDS,
     SPEECH_GATE_UNSURE_SPEECH_SECONDS,
     SPEECH_GATE_WEAK_SPEECH_SECONDS,
 )
+from jarvis.state import preferences
 
 log = logging.getLogger("jarvis.voice.speech_gate")
 
@@ -195,14 +195,19 @@ def save_clip(audio: np.ndarray, folder: Path, at: float, keep: int) -> Path:
 
 
 class SpeechGate:
-    def __init__(self, mode: str = SPEECH_GATE, thresholds: Thresholds | None = None,
+    def __init__(self, mode: str | None = None, thresholds: Thresholds | None = None,
                  speech_probs: Callable[[np.ndarray], np.ndarray] | None = None,
                  record: Path | None = SPEECH_GATE_LOG,
-                 audio_dir: Path | None = (SPEECH_GATE_AUDIO_DIR if SPEECH_GATE_SAVE_AUDIO or SPEECH_GATE_SAVE_SHORT
-                                           else None),
-                 keep_audio: int = SPEECH_GATE_AUDIO_KEEP, save_all: bool = SPEECH_GATE_SAVE_AUDIO,
+                 audio_dir: Path | None | EllipsisType = ...,
+                 keep_audio: int = SPEECH_GATE_AUDIO_KEEP, save_all: bool | None = None,
                  short: tuple[float, float] = (SPEECH_GATE_SHORT_SECONDS, SPEECH_GATE_SHORT_SPEECH_SECONDS)) -> None:
-        self.mode = mode
+        # Defaults: the speech-gate preference, and saving per its mode (audio_dir ... = the usual folder if saving)
+        self.mode = mode or preferences.speech_gate()
+        if save_all is None:
+            save_all = preferences.speech_gate_save_audio()
+        if audio_dir is ...:
+            saving = preferences.speech_gate_save_audio() or SPEECH_GATE_SAVE_SHORT
+            audio_dir = SPEECH_GATE_AUDIO_DIR if saving else None
         self.thresholds = thresholds or Thresholds()
         self._probs = speech_probs or SileroProbs()
         self._record = record

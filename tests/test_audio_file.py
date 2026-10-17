@@ -13,12 +13,13 @@ import numpy as np
 import pytest
 
 from conftest import use_profile
-from jarvis import server, tools
-from jarvis.core import config, platform
-from jarvis.state import shared_files
+from jarvis import config, server, tools
+from jarvis.apps import audio_file as audio_job
+from jarvis.core import platform
+from jarvis.core.speakable import speakable
+from jarvis.media import audio_file as af
+from jarvis.state import preferences, shared_files
 from jarvis.tasks import client as task_client, worker
-from jarvis.voice import audio_file as af
-from jarvis.voice.speakable import speakable
 
 
 def fake_speak(text: str, voice: str, speed: float) -> np.ndarray:
@@ -292,7 +293,7 @@ def test_sent_to_the_phone_as_a_push_that_plays_it(work, monkeypatch):
 
     from jarvis.notify import push
     monkeypatch.setattr(push, "send_push", send_push)
-    said = af.make(spec(work, phone=True), fake_speak, ["bm_george"])
+    said = af.make(spec(work, phone=True), fake_speak, ["bm_george"], audio_job.deliver)
     assert said.endswith("Sent to the phone.")
     [(title, body, url, tag)] = pushed
     assert title == "Audio ready" and body == "Test: 1 second. Tap to listen."
@@ -301,10 +302,10 @@ def test_sent_to_the_phone_as_a_push_that_plays_it(work, monkeypatch):
 
     pushed.clear()
     monkeypatch.setattr(push, "send_push", lambda *a, **k: asyncio.sleep(0, 0))
-    assert af.make(spec(work, phone=True), fake_speak, ["bm_george"]).endswith(
+    assert af.make(spec(work, phone=True), fake_speak, ["bm_george"], audio_job.deliver).endswith(
         "no phone has JARVIS's notifications on.")
     monkeypatch.setattr(config, "PUSH_ENABLED", False)
-    assert "notifications are off on the computer" in af.make(spec(work, phone=True), fake_speak, ["bm_george"])
+    assert "notifications are off on the computer" in af.make(spec(work, phone=True), fake_speak, ["bm_george"], audio_job.deliver)
 
 
 class Request:
@@ -346,8 +347,8 @@ def jobs(work, monkeypatch):
     monkeypatch.setattr(config, "AUDIO_DIR", work / "Downloads")
     monkeypatch.setattr(config, "AUDIO_FORMAT", "m4a")
     monkeypatch.setattr(af, "encoders", lambda fmt: [lambda wav, out: ["true"]])
-    monkeypatch.setattr(config, "tts_voice", lambda: "bm_george")
-    monkeypatch.setattr(config, "tts_speed", lambda: 1.0)
+    monkeypatch.setattr(preferences, "tts_voice", lambda: "bm_george")
+    monkeypatch.setattr(preferences, "tts_speed", lambda: 1.0)
     return fake
 
 
@@ -364,7 +365,7 @@ def test_the_tool_starts_a_job_and_says_how_long_and_where(jobs, work):
     [(command, title, folder, summarize, auto_fix, report)] = jobs.launched
     assert title == "the audio file Monday briefing" and folder == str(config.ROOT)
     assert report and not summarize and not auto_fix  # its last line says what it made; nothing to fix if it fails
-    assert " -m jarvis.voice.audio_file " in command
+    assert " -m jarvis.apps.audio_file " in command
     [file] = (work / "audio").glob("*.json")
     assert oct(file.stat().st_mode & 0o777) == "0o600"  # private: holds the user's text
     assert str(file) in command

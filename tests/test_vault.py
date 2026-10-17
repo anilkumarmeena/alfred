@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from jarvis.core import config, vault
+from jarvis import config
+from jarvis.auth import vault
 from jarvis.state import settings
 
 

@@ -24,7 +24,7 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
-from jarvis.integrations import browser
+from jarvis.safety import urls
 from jarvis.skills import home, review
 
 log = logging.getLogger("jarvis.skills.install")
@@ -122,8 +122,8 @@ def parse(text: str) -> Source:
     if parts.scheme.lower() != "https":
         raise ValueError("Skills are fetched only over https: give a GitHub link or an https link to a zip.")
     try:
-        browser.check_url(text)
-    except browser.Refused as e:
+        urls.check_url(text)
+    except urls.Refused as e:
         raise ValueError(str(e)) from None
     host = (parts.hostname or "").lower()
     if host in _GITHUB:
@@ -139,9 +139,9 @@ def parse(text: str) -> Source:
 async def _guard(request: httpx.Request) -> None:
     """httpx hook for every request incl. redirects: https only, no local addresses."""
     if request.url.scheme != "https":
-        raise browser.Refused("A redirect left https.")
-    browser.check_url(str(request.url))
-    await browser.address(request.url.host, request.url.port or 443)
+        raise urls.Refused("A redirect left https.")
+    urls.check_url(str(request.url))
+    await urls.address(request.url.host, request.url.port or 443)
 
 
 class NotFound(Exception):
@@ -165,7 +165,7 @@ async def download(url: str, transport: httpx.AsyncBaseTransport | None = None) 
                     if len(data) > MAX_DOWNLOAD:
                         raise ValueError(f"The download is over {MAX_DOWNLOAD // 2**20} MB, too big for a skill.")
                 return bytes(data)
-        except browser.Refused as e:
+        except urls.Refused as e:
             raise ValueError(str(e)) from None
         except httpx.HTTPError as e:
             raise ValueError(f"The download failed: {type(e).__name__}.") from None

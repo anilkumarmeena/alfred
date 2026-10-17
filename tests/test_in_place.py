@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 
 from conftest import use_profile, use_task_cache
-from jarvis.tasks import events, git_ops, merge_check, projects, runner, worker
+from jarvis import projects
+from jarvis.tasks import events, git_ops, merge_check, runner, worker
 from jarvis.tasks.worker import Outcome
 from jarvis.tools import tasks as task_tools
 

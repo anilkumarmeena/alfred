@@ -9,10 +9,12 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny, Result
 from test_draft_gate import chat_draft, clock  # noqa: F401  (a fixture)
 from test_shell import COMMAND, Clock, ask
 
-from jarvis.safety import consent, draft_gate, remembered
+from jarvis.gates import draft_gate
+from jarvis.gates.shell import QUESTION, ShellGate
+from jarvis.llm.standby import Standby
+from jarvis.safety import consent, remembered
 from jarvis.safety.approvals import Heard, RuleOffer, VoiceApprovals
 from jarvis.safety.consent import KINDS, NO, UNCLEAR, Verdict
-from jarvis.safety.shell import QUESTION, ShellGate
 from jarvis.state import conversation
 from jarvis.tools import screen
 from jarvis.voice.floor import Floor
@@ -50,7 +52,7 @@ def model(monkeypatch):
     monkeypatch.setattr(consent, "CONSENT_ENABLED", True)  # conftest disables it for other tests
     monkeypatch.setattr(consent, "ask_model", fake)
     monkeypatch.setattr(consent, "_kept", {})
-    monkeypatch.setattr(consent, "_standby", None)
+    monkeypatch.setattr(consent, "_sessions", Standby("test", "prompt", 600, connect=lambda _model: consent._connect()))
     return fake
 
 

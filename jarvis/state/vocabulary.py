@@ -13,15 +13,16 @@ the learning review all change the file, so each change happens under its file l
 """
 
 import re
+from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import cache
 from pathlib import Path
 
-from jarvis.core import profile
 from jarvis.core.files import locked, write_atomic
 from jarvis.safety import scan
+from jarvis.storage import profile
 
 MAX_ENTRIES = 60
 MAX_HEARD = 6  # latest mishearings kept per entry
@@ -245,12 +246,11 @@ def _spoken(name: str, aliases: list[str]) -> str:
     return cased or" ".join(name.replace("-", " ").replace("_", " ").split())
 
 
-def project_terms() -> list[str]:
-    """Spoken project names; [] on any error."""
+def project_terms(projects: Callable[[], Iterable] = tuple) -> list[str]:
+    """Spoken names of the projects `projects()` gives (each with .name and .aliases, as jarvis.projects.load does);
+    [] on any error."""
     try:
-        from jarvis.tasks import projects
-
-        return [_spoken(p.name, p.aliases) for p in projects.load()]
+        return [_spoken(p.name, p.aliases) for p in projects()]
     except Exception:
         return []
 
@@ -302,10 +302,10 @@ def build(found: list[Entry], projects: list[str]) -> Vocabulary:
     return Vocabulary(tuple(terms), tuple(fixes))
 
 
-def load() -> Vocabulary:
-    """Current Vocabulary for speech recognition."""
+def load(projects: Callable[[], Iterable] = tuple) -> Vocabulary:
+    """Current Vocabulary for speech recognition, with the names of the projects `projects()` gives."""
     try:
         found = entries()
     except OSError:
         found = []
-    return build(found, project_terms())
+    return build(found, project_terms(projects))

@@ -19,15 +19,16 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+from jarvis import projects
+from jarvis.config import ASSISTANT_NAME, WORKTREES_DIR
 from jarvis.core import proc
-from jarvis.core.config import ASSISTANT_NAME, WORKTREES_DIR
-from jarvis.core.database import ACTIVE
 from jarvis.safety import remembered
 from jarvis.state import activity as bell
-from jarvis.tasks import merge_check, projects
+from jarvis.tasks import merge_check
 from jarvis.tasks.approvals import session_key
 from jarvis.tasks.host_tools import few
 from jarvis.tasks.runner_base import RunnerBase
+from jarvis.tasks.store import ACTIVE
 
 log = logging.getLogger("jarvis.tasks.runner")
 # Skipped when snapshotting a non-git folder

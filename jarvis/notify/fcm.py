@@ -19,10 +19,10 @@ import httpx
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-from jarvis.core import profile
-from jarvis.core.config import FCM_SERVICE_ACCOUNT_FILE
+from jarvis.config import FCM_SERVICE_ACCOUNT_FILE
 from jarvis.notify import apns
 from jarvis.notify.push import SEND_TIMEOUT, TTL
+from jarvis.storage import profile
 
 log = logging.getLogger("jarvis.notify.fcm")
 TOKEN_URL = "https://oauth2.googleapis.com/token"  # fixed: a key file can't redirect the signed assertion elsewhere

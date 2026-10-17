@@ -11,9 +11,9 @@ import pytest
 from test_mcp_servers import fresh  # noqa: F401  (fixture)
 
 from conftest import use_profile
-from jarvis.core import database, profile
 from jarvis.integrations import mcp_servers
 from jarvis.integrations.mcp_servers import Server, Tool
+from jarvis.storage import database, profile
 from jarvis.tasks import schedules, tool_watch
 from jarvis.tasks.scheduler import ProbeFailed
 

@@ -8,18 +8,18 @@ import tarfile
 import httpx
 import pytest
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny, ToolPermissionContext
-from conftest import use_task_cache
 from test_approvals import announced, drained, events, pushes  # noqa: F401  (pushes is a fixture)
 from test_in_place import NullReporter, env, worker_task  # noqa: F401  (env is a fixture)
 from test_mcp_servers import GL_TOKEN, fresh, gitlab, seeded  # noqa: F401  (fresh is a fixture)
 
-from jarvis.core import profile
-from jarvis.core.database import APPROVED, nudges
+from conftest import use_task_cache
+from jarvis.gates import mcp_gate
 from jarvis.integrations.mcp_servers import Server, Tool
-from jarvis.safety import mcp_gate
+from jarvis.storage import profile
 from jarvis.tasks import approvals, repo_files, runner, worker
 from jarvis.tasks.connection_calls import NEVER, WHY, ConnectionGate, call_item
 from jarvis.tasks.gate import TaskGate
+from jarvis.tasks.store import APPROVED, nudges
 
 THREAD = "mcp__gitlab__create_merge_request_thread"
 TODO = "mcp__gitlab__mark_todo_done"

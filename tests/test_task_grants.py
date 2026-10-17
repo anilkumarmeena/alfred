@@ -11,7 +11,7 @@ from test_task_access import call, denied_paths, mac  # noqa: F401  (mac is a fi
 
 from jarvis import tools
 from jarvis.brain import persona, sdk
-from jarvis.core import profile
+from jarvis.storage import profile
 from jarvis.tasks import access, briefs, client, gate, reporting, runner, worker
 from jarvis.tasks.worker import Outcome
 from jarvis.tools import tasks as task_tools

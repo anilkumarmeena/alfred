@@ -5,10 +5,13 @@
   --install  also (re)install and start the services: launchd agents from deploy/*.plist on macOS, systemd user
              units from deploy/systemd/*.service on Linux
   start      load installed services, installing missing ones
+  install    rewrite and reload every service (no setup steps)
   stop       unload services (they stay installed)
   status     print each service's state
   labels     print the service labels
   node-install / node-stop   on a second machine: its one service, which runs python -m jarvis.node serve
+  move-home  move .env, data, secrets, models and logs out of the checkout into JARVIS_HOME (default ~/.jarvis);
+             run with the services stopped (make home-move does both)
 
 Services this checkout installed under old labels (e.g. a changed JARVIS_SERVICE_PREFIX) are stale: stop unloads them;
 start and --install remove them before loading the current ones.
@@ -27,11 +30,13 @@ from string import Template
 
 from dotenv import load_dotenv
 
-from jarvis.core import config, credentials, logins, platform, vault
-from jarvis.core.config import ROOT, SECRETS_DIR
+from jarvis import config
+from jarvis.auth import credentials, logins, vault
+from jarvis.config import HOME_DIR, LOGS_DIR, ROOT, SECRETS_DIR
+from jarvis.core import platform
 from jarvis.core.files import write_atomic
 
-ENV = ROOT / ".env"
+ENV = HOME_DIR / ".env"
 LIVEKIT_CONFIG = SECRETS_DIR / "livekit.yaml"
 LAUNCH_AGENTS = Path.home() / "Library/LaunchAgents"
 SYSTEMD_USER = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd/user"
@@ -98,12 +103,13 @@ def livekit_server() -> str:
 
 
 def _fill(template: Path, name: str) -> str:
-    """`template` with ${LABEL}, ${ROOT}, ${HOME}, ${NODE} (current node's bin dir plus ":", or ""), ${LIVEKIT}
-    (the livekit-server binary) and ${LOGS} (where launchd writes service logs) substituted."""
+    """`template` with ${LABEL}, ${ROOT} (the code), ${JARVIS_HOME} (the install's settings and data), ${HOME},
+    ${NODE} (current node's bin dir plus ":", or ""), ${LIVEKIT} (the livekit-server binary) and ${LOGS} (where launchd
+    writes service logs) substituted."""
     node = shutil.which("node")
     return Template(template.read_text()).substitute(
-        LABEL=config.service_label(name), ROOT=ROOT, HOME=Path.home(), NODE=f"{Path(node).parent}:" if node else "",
-        LIVEKIT=livekit_server(), LOGS=SERVICE_LOGS)
+        LABEL=config.service_label(name), ROOT=ROOT, JARVIS_HOME=HOME_DIR, HOME=Path.home(),
+        NODE=f"{Path(node).parent}:" if node else "", LIVEKIT=livekit_server(), LOGS=SERVICE_LOGS)
 
 
 def service_plist(name: str) -> str:
@@ -136,7 +142,7 @@ def _write(name: str) -> Path:
     """Write the service's plist or unit, creating its folder and logs/ if needed."""
     dest = installed(name)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    (ROOT / "logs").mkdir(exist_ok=True)
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
     if not _systemd():
         _link_log(name)
     dest.write_text(service_unit(name) if _systemd() else service_plist(name))
@@ -145,7 +151,7 @@ def _write(name: str) -> Path:
 
 def _link_log(name: str) -> None:
     """Make logs/<name>.log a link to the service log in SERVICE_LOGS, moving an existing log's history there."""
-    link, target = ROOT / "logs" / f"{name}.log", SERVICE_LOGS / f"{name}.log"
+    link, target = LOGS_DIR / f"{name}.log", SERVICE_LOGS / f"{name}.log"
     SERVICE_LOGS.mkdir(parents=True, exist_ok=True)
     if link.is_symlink() and link.resolve() == target:
         return
@@ -176,7 +182,7 @@ def stale() -> list[Path]:
         if path in current or _service(path) not in SERVICES:
             continue
         logs = _log_file(path)
-        if isinstance(logs, str) and Path(logs).parent in (ROOT / "logs", SERVICE_LOGS):
+        if isinstance(logs, str) and Path(logs).parent in (LOGS_DIR, SERVICE_LOGS):
             found.append(path)
     return found
 
@@ -327,6 +333,59 @@ def stop_services() -> None:
 NODE = "node"  # a second machine's one service (deploy/node.plist, deploy/systemd/node.service), apart from SERVICES
 
 
+HOME_ITEMS = (".env", "config.toml", "data", "secrets", "models", "logs")  # what an install keeps (jarvis.config.files)
+
+
+def move_home(dest: Path | None = None, root: Path = ROOT) -> list[str]:
+    """Move an install's own files from the checkout into `dest` (JARVIS_HOME, else ~/.jarvis), so the checkout holds
+    only code. Leaves a data link behind for the absolute paths kept in the database, and repairs the git worktrees
+    tasks made in data/worktrees. Returns what moved; refuses before moving anything if `dest` already has one (empty
+    folders don't count: importing jarvis.config makes data and secrets) or one in the checkout is a link elsewhere."""
+    dest = dest or Path(os.environ.get("JARVIS_HOME", "").strip() or Path.home() / ".jarvis").expanduser()
+    present = [name for name in HOME_ITEMS if (root / name).exists() or (root / name).is_symlink()]
+    moved_already = [name for name in present
+                     if (root / name).is_symlink() and (root / name).resolve() == (dest / name).resolve()]
+    if links := [name for name in present if (root / name).is_symlink() and name not in moved_already]:
+        raise SystemExit(f"{', '.join(links)} in {root} link elsewhere; move what they point to by hand")
+    items = [name for name in present if name not in moved_already]
+    if clash := [name for name in items if (dest / name).exists() and not _empty_dir(dest / name)]:
+        raise SystemExit(f"{dest} already has {', '.join(clash)}; move or remove it first")
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in items:
+        if _empty_dir(dest / name):
+            (dest / name).rmdir()
+        shutil.move(root / name, dest / name)
+    if "data" in items:
+        (root / "data").symlink_to(dest / "data")
+        worktrees = dest / "data" / "worktrees"
+        if worktrees.is_dir() and (root / ".git").exists():
+            found = [str(p) for p in worktrees.iterdir() if (p / ".git").is_file()]
+            if found:
+                subprocess.run(["git", "-C", str(root), "worktree", "repair", *found], check=False)
+    return items
+
+
+def _empty_dir(path: Path) -> bool:
+    return path.is_dir() and not path.is_symlink() and not any(path.iterdir())
+
+
+def remember_home(dest: Path, user_home: Path | None = None) -> bool:
+    """Link ~/.jarvis to a home elsewhere, so commands and services run without JARVIS_HOME still find it
+    (jarvis.config.files.home). False if ~/.jarvis is already there."""
+    own = (user_home or Path.home()) / ".jarvis"
+    if own.exists() or own.is_symlink() or own.resolve() == dest.resolve():
+        return False
+    own.symlink_to(dest.resolve())
+    return True
+
+
+def _move_home_command() -> None:
+    moved = move_home()
+    print("moved", ", ".join(moved) or "nothing")
+    if (given := os.environ.get("JARVIS_HOME", "").strip()) and remember_home(Path(given).expanduser()):
+        print(f"linked ~/.jarvis to {given}")
+
+
 def install_node() -> None:
     """On a second machine: (re)write and start its one service. Exits 1 if it fails to start."""
     if _systemd():
@@ -387,13 +446,15 @@ def print_status() -> None:
 def main() -> None:
     services = {"start": start_services, "stop": stop_services, "status": print_status,
                 "labels": lambda: print(" ".join(config.service_label(name) for name in SERVICES)),
-                "node-install": install_node, "node-stop": stop_node}
+                "node-install": install_node, "node-stop": stop_node,
+                "install": install_services, "move-home": _move_home_command}
     arg = sys.argv[1] if len(sys.argv) > 1 else ""
     if arg in ("-h", "--help", "help"):
         return print(__doc__.strip())
     if command := services.get(arg):
         return command()
     if not ENV.exists():
+        ENV.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / ".env.example", ENV)
     text = ENV.read_text()
     # First-setup keys and passcode go into .env, then adopt() below moves them to the vault and logins

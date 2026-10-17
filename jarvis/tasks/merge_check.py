@@ -21,10 +21,10 @@ import time
 from collections.abc import Collection, Sequence
 from pathlib import Path
 
+from jarvis import projects
+from jarvis.config import WORKTREES_DIR
 from jarvis.core import proc
-from jarvis.core.config import WORKTREES_DIR
 from jarvis.core.files import write_atomic
-from jarvis.tasks import projects
 
 TIMEOUT = 600  # seconds for one run of the suite
 RECORDS = "jarvis-tested"  # folder in the repo's git dir: <tree>.json per run of the suite

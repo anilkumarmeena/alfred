@@ -4,12 +4,12 @@ import asyncio
 
 from claude_agent_sdk import ResultMessage, StreamEvent
 
-from jarvis.brain import cli, quick
+from jarvis.brain import cli, timing
 from jarvis.brain.route import Router
+from jarvis.brain.timing import CURRENT, Timings
+from jarvis.llm import quick
 from jarvis.state import memory
-from jarvis.voice import timing
 from jarvis.voice.clauses import ClauseTokenizer
-from jarvis.voice.timing import CURRENT, Timings
 
 
 async def streamed(text: str) -> list[str]:

@@ -16,13 +16,13 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from jarvis.core import profile
-from jarvis.core.config import TASK_APPROVAL_HOURS
-from jarvis.core.database import APPROVED, CANCELLED, DENIED, EXPIRED, PENDING, SPENT, WAIT_APPROVAL
+from jarvis.config import TASK_APPROVAL_HOURS
 from jarvis.safety import remembered
 from jarvis.safety.commands import holds_commit, ordered, orders
 from jarvis.state import activity as bell
+from jarvis.storage import profile
 from jarvis.tasks.runner_base import RunnerBase
+from jarvis.tasks.store import APPROVED, CANCELLED, DENIED, EXPIRED, PENDING, SPENT, WAIT_APPROVAL
 
 log = logging.getLogger("jarvis.tasks.runner")
 

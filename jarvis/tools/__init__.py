@@ -1,4 +1,4 @@
-"""Tool registry.
+"""The tool registry: everything the brain can call, each a thin adapter over the layers below.
 
 Tools are plain functions (sync or async) registered with @tool, or AI Armory tool sets via register_toolsets.
 A tool with `enabled` is offered only while on. The brain serves `all_tools()` as an MCP server and calls `run()`.
@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from collections.abc import Awaitable, Iterable
 from typing import Any, Callable
 
-import ai_armory
+from jarvis.integrations import armory as ai_armory
 
 from jarvis.tasks.client import RunnerUnavailable
 

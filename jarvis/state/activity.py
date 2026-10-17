@@ -11,7 +11,7 @@ import sqlite3
 import time
 from contextlib import AbstractContextManager
 
-from jarvis.core import database
+from jarvis.storage import database
 
 log = logging.getLogger("jarvis.state.activity")
 

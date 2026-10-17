@@ -14,7 +14,7 @@ import re
 from livekit.agents.tokenize import SentenceStream, SentenceTokenizer, token_stream
 from livekit.agents.tokenize.blingfire import _split_sentences
 
-from jarvis.voice import timing
+from jarvis.brain import timing
 
 MAX_WORDS = 12  # cut longer sentences; joined pieces stay within it
 MIN_WORDS = 4  # no shorter piece unless the whole sentence is

@@ -15,8 +15,8 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from jarvis.core import profile
-from jarvis.core.config import ASSISTANT_NAME
+from jarvis.config import ASSISTANT_NAME
+from jarvis.storage import profile
 
 DATA, INSTRUCTIONS = "data", "instructions"  # stored data vs text meant to instruct
 EXCERPT = 80  # chars of context quoted per finding

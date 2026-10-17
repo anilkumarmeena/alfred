@@ -13,7 +13,7 @@ from livekit.agents import APIConnectionError
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
-from jarvis.core import whisper
+from jarvis.media import whisper
 from jarvis.state.vocabulary import Vocabulary
 from jarvis.voice import speech
 from jarvis.voice.speech_gate import Measure, SpeechGate
@@ -230,7 +230,7 @@ def test_kokoro_loads_the_chosen_model_or_the_first_fallback_there_is(tmp_path):
 
 def test_the_full_kokoro_model_is_the_default():
     """The 8-bit model rendered 30-60% slower on an M2 Air, slower than speech under load."""
-    from jarvis.core import config
+    from jarvis import config
 
     if not os.environ.get("JARVIS_TTS_MODEL"):
         assert config.TTS_MODEL.name == "kokoro-v1.0.onnx"

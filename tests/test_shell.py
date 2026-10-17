@@ -16,9 +16,9 @@ from claude_agent_sdk import (
 from mcp import Client
 
 from jarvis.brain import cli
-from jarvis.core.config import APPROVAL_MINUTES
-from jarvis.safety import shell
-from jarvis.safety.shell import ShellGate, approves, refuses, risky
+from jarvis.config import APPROVAL_MINUTES
+from jarvis.gates import shell
+from jarvis.gates.shell import ShellGate, approves, refuses, risky
 from jarvis.state import memory
 from jarvis.tasks import client as task_client
 

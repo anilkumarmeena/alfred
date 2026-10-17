@@ -15,7 +15,7 @@ build with, and uv for updates. Label and folders are filled in by jarvis.setup_
         <string>serve</string>
     </array>
     <key>EnvironmentVariables</key>
-    <dict><key>PATH</key><string>${HOME}/.local/bin:${HOME}/.venv/bin:/opt/homebrew/bin:/usr/local/go/bin:${NODE}/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+    <dict><key>JARVIS_HOME</key><string>${JARVIS_HOME}</string><key>PATH</key><string>${HOME}/.local/bin:${HOME}/.venv/bin:/opt/homebrew/bin:/usr/local/go/bin:${NODE}/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ThrottleInterval</key><integer>10</integer>

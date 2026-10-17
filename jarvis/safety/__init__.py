@@ -1,1 +1,1 @@
-"""What may run: the command rules, the host sandbox, approvals, and the gates around the shell, drafts and MCP calls."""
+"""What may run, be read or be said: the command rules, script reading, the host sandbox, which addresses may be fetched, reading a spoken yes or no, remembered approvals and the hidden-instruction scan. The gates that apply them to each tool call are jarvis.gates."""

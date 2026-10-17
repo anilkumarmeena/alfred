@@ -17,11 +17,10 @@ A connection added mid-run comes with the task's next run.
 import asyncio
 import logging
 
-from claude_agent_sdk import HookMatcher
-
-from jarvis.brain.sdk import refusing
 from jarvis.integrations import mcp_servers
 from jarvis.integrations.mcp_servers import Server
+from jarvis.llm.claude import refusing
+from jarvis.llm.sdk import HookMatcher
 
 log = logging.getLogger("jarvis.tasks.connection_watch")
 

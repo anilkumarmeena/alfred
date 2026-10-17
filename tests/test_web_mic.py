@@ -8,8 +8,7 @@ import subprocess
 
 import pytest
 
-from jarvis import server
-from jarvis.core import config
+from jarvis import config, server
 
 WEB = config.ROOT / "web"
 

@@ -6,13 +6,10 @@ from contextlib import asynccontextmanager
 
 import aiohttp
 
-from jarvis.core.config import RUNNER_SOCKET
-from jarvis.node.link import MAX_MESSAGE
+from jarvis.config import RUNNER_SOCKET
+from jarvis.contracts.remote import MAX_MESSAGE
+from jarvis.contracts.runner import RunnerUnavailable  # noqa: F401  (callers catch it here)
 from jarvis.tasks import merge_check
-
-
-class RunnerUnavailable(RuntimeError):
-    pass
 
 
 class NotAllowed(ValueError):

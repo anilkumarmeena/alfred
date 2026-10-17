@@ -24,10 +24,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from jarvis import tools
-from jarvis.core import profile
-from jarvis.core.config import INJECTION_TASK_SECONDS, TOOL_WAIT, injection_check_on, injection_model
-from jarvis.safety import injection
+from jarvis.config import INJECTION_TASK_SECONDS, TOOL_WAIT
+from jarvis.gates import injection
 from jarvis.state import conversation
+from jarvis.state.preferences import injection_check_on, injection_model
+from jarvis.storage import profile
 from jarvis.tasks.command_jobs import took
 
 log = logging.getLogger("jarvis.brain.kept")

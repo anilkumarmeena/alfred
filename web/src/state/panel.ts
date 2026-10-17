@@ -2,6 +2,7 @@
 // Follows runner events on /api/events: approval card pop-ups, task list refreshes, the activity bell.
 import { computed, effect, signal } from "@preact/signals";
 import { panelCall, Unauthorized } from "../lib/api";
+import type { PanelAction } from "../lib/panelActions";
 import { build } from "../lib/build";
 import { backoff, napper } from "../lib/retry";
 import { jobItem, jobOf, type Quiet, type Schedule, type ScheduleDetail } from "../lib/schedule";
@@ -220,7 +221,7 @@ export const needYou = computed(() => approvals.value.length + questions.value.l
 export const unseen = computed(() => tasks.value.filter((t) => !t.seen && !ACTIVE.includes(t.status)));
 
 // Run a panel action; on failure toast the error and return null.
-export async function act<T = any>(action: string, fields: Record<string, unknown> = {}, done?: string): Promise<T | null> {
+export async function act<T = any>(action: PanelAction, fields: Record<string, unknown> = {}, done?: string): Promise<T | null> {
   try {
     const result = await panelCall<T>(action, fields);
     if (done) toast(done);
@@ -252,7 +253,7 @@ export function unfresh(...ids: number[]) {
   if (ids.some((id) => now.has(id))) freshTodos.value = new Set([...now].filter((id) => !ids.includes(id)));
 }
 // A to-do action from this device; the list it returns is shown, never highlighted
-export async function todoAct(action: string, fields: Record<string, unknown> = {}, done?: string): Promise<Todo[] | null> {
+export async function todoAct(action: PanelAction, fields: Record<string, unknown> = {}, done?: string): Promise<Todo[] | null> {
   ownTodoCalls++;
   try {
     const r = await act<Todo[]>(action, fields, done);

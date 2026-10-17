@@ -17,7 +17,7 @@
   uv run python -m jarvis.tasks.runner approve 12 always    and remember it: session or always, exact (default) or kind
 
 Concepts:
-  slots       MAX_TASKS run at once; command and connection tasks take no slot
+  slots       the max_tasks preference run at once; command and connection tasks take no slot
   in place    default for code_change: edits the project folder, one task per project at a time; uncommitted work is
               first saved under refs/jarvis/. in_place=false (always for JARVIS's own repo): worktree + branch per task,
               committed at run end, never pushed; merged or discarded via the API
@@ -45,27 +45,65 @@ import signal
 import sys
 import time
 import warnings
+from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
 
 from aiohttp import web
-from claude_agent_sdk import CanUseToolShadowedWarning
 
-from jarvis.brain import retry, usage
-from jarvis.core import claude_logins, profile
-from jarvis.core.config import (
+from jarvis import projects
+from jarvis.config import (
     GOAL_DAILY_CHECKS,
     LEARNING_ENABLED,
-    MAX_TASKS,
     NOTICES_ENABLED,
     PUSH_ENABLED,
     RESUME_TASKS,
     RUNNER_SOCKET,
     SCHEDULER_ENABLED,
     TASK_CONTINUES,
-    TASK_MODEL,
 )
-from jarvis.core.database import (
+from jarvis.contracts import remote
+from jarvis.contracts.remote import HERE, HERE_WORD, TASKS, Offline, Place
+from jarvis.llm import claude_logins, retry, roles, usage
+from jarvis.llm.roles import Role
+from jarvis.llm.sdk import CanUseToolShadowedWarning
+from jarvis.safety import host
+from jarvis.state import activity as bell, preferences, todo as todos
+from jarvis.storage import profile
+from jarvis.tasks import (
+    access,
+    announce,
+    api,
+    client,
+    command_jobs,
+    data_edits,
+    goal,
+    learning,
+    notices,
+    scheduler,
+    stall,
+)
+
+# Re-exported: tests import these from here
+from jarvis.tasks.approvals import (  # noqa: F401
+    ACCESS_QUESTION,
+    Approvals,
+    NotAllowed,
+    approval_question,
+    approval_result,
+    approval_summary,
+)
+from jarvis.tasks.chains import Chains, on_all
+from jarvis.tasks.command_tasks import CommandTasks
+from jarvis.tasks.events import (
+    Events,
+    bell_entry,  # noqa: F401
+)
+from jarvis.tasks.git_ops import GitOps
+from jarvis.tasks.host_tools import TaskJobs, few
+from jarvis.tasks.local import NoLinks, NoMachines, NoOffload
+from jarvis.tasks.reporting import nudge_text, with_nudges
+from jarvis.tasks.store import (
     COMMAND,
     CONNECTION,
     KINDS,
@@ -77,38 +115,8 @@ from jarvis.core.database import (
     minutes_since_update,
     nudges,
 )
-from jarvis.node import machines, placement
-from jarvis.node.hub import Hub
-from jarvis.node.offload import Offline, Offload
-from jarvis.safety import host
-from jarvis.state import activity as bell, todo as todos
-from jarvis.tasks import (
-    access,
-    announce,
-    api,
-    client,
-    command_jobs,
-    data_edits,
-    goal,
-    learning,
-    notices,
-    projects,
-    scheduler,
-    stall,
-)
-from jarvis.tasks.approvals import ACCESS_QUESTION, Approvals, approval_question, approval_summary
-from jarvis.tasks.chains import Chains, on_all
-from jarvis.tasks.command_tasks import CommandTasks
-from jarvis.tasks.events import Events
-from jarvis.tasks.git_ops import GitOps
-from jarvis.tasks.host_tools import TaskJobs, few
-from jarvis.tasks.reporting import nudge_text, with_nudges
 from jarvis.tasks.task_edits import TaskEdits
 from jarvis.tasks.worker import STEPS_OUT, Outcome, run
-
-# Re-exported: tests import these from here
-from jarvis.tasks.approvals import NotAllowed, approval_result  # noqa: F401
-from jarvis.tasks.events import bell_entry  # noqa: F401
 
 log = logging.getLogger("jarvis.tasks.runner")
 # The worker deliberately allows web, to-do and reporting tools outright; everything else meets the gate.
@@ -143,9 +151,10 @@ def _waits_for_reset(task: dict) -> float | None:
 class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
     """The task runner: mixins plus task start/reply/stop, the run loop, restart and shutdown."""
 
-    def __init__(self, capacity: int = MAX_TASKS) -> None:
+    def __init__(self, capacity: int | None = None,
+                 machines: Callable[["Runner"], tuple[remote.Links, remote.Offload, remote.Machines]] | None = None) -> None:
         self.store = Store()
-        self.capacity = capacity
+        self.capacity = capacity = capacity or preferences.max_tasks()
         self.slots = asyncio.Semaphore(capacity)
         self.jobs: dict[int, asyncio.Task] = {}
         self.in_line: set[int] = set()  # tasks holding or next in line for a slot
@@ -167,8 +176,9 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
         self.prompts: dict[int, str] = {}  # launch prompt per queued/running task
         self.services: list[asyncio.Task] = []  # notices/scheduler/learning loops
         self.closing = False  # shutdown begun: no new work
-        self.hub = Hub()  # links to the user's other machines (jarvis.node)
-        self.offload = Offload(self, self.hub)  # sending them work
+        # The user's other machines (jarvis.contracts.remote): their links, sending them work, the paired ones. Wired
+        # by the runner's process (jarvis.apps.runner); without them everything runs on this computer.
+        self.hub, self.offload, self.machines = machines(self) if machines else (NoLinks(), NoOffload(), NoMachines())
         self.placing: dict[int, asyncio.Task] = {}  # tasks and commands whose machine is being chosen
         self.placed: dict[int, str] = {}  # what to say about where each new one runs, for its start reply
         self.limit_waits: dict[int, float] = {}  # tasks queued until a usage limit resets -> its reset time
@@ -383,17 +393,17 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
         if lives and not placeable:
             raise ValueError(f"{name} lives on {self.offload.name(lives)}, where accounts and other projects aren't: "
                              "start a task here for what needs them.")
-        if machine and machine.strip().lower() != machines.HERE and not lives:
+        if machine and machine.strip().lower() != HERE_WORD and not lives:
             if not placeable:
                 raise ValueError(f"A {kind} task that reads accounts or other projects runs on this computer, where they are.")
-            machines.find(machine)  # an unknown name is said now, before anything starts
+            self.machines.find(machine)  # an unknown name is said now, before anything starts
         task = self.store.create(kind, title, instruction, name, in_place, job, hidden, grants, fixes=fixes,
                                  todo=item and item["id"], read_only=read_only)
         self.store.log(task["id"], "start", instruction)
         if lives:  # it runs where its project lives, whatever the setting
-            self._placed(task["id"], placement.Place(lives, self.offload.name(lives),
+            self._placed(task["id"], Place(lives, self.offload.name(lives),
                                                      f"It's running on {self.offload.name(lives)}, where {name} lives."))
-        elif placeable and (machine or machines.paired()):
+        elif placeable and (machine or self.machines.paired()):
             self.placing[task["id"]] = placing = asyncio.create_task(self._place_task(task, machine))
             placing.add_done_callback(lambda _: self.placing.pop(task["id"], None))
         if item:
@@ -526,13 +536,13 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
         job = {"kind": task["kind"], "title": task["title"], "instruction": task["instruction"][:800],
                "project": task["project"]}
         try:
-            place = await self.offload.place(placement.TASKS, job, machine)
+            place = await self.offload.place(TASKS, job, machine)
         except Exception as e:  # never stops the task: it runs here
             log.warning("task %s: choosing its machine failed: %s", task["id"], e)
-            place = placement.HERE
+            place = HERE
         self._placed(task["id"], place)
 
-    def _placed(self, task_id: int, place: placement.Place) -> None:
+    def _placed(self, task_id: int, place: Place) -> None:
         """Record where a new task or command runs, and what to say about it."""
         said = place.said or (f"It's running on {place.name}." if place.node else "")
         if place.node:
@@ -850,7 +860,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
             after, said = None, (f"Task {task_id}, {task['title']}, hit Claude's usage limit, so it carries on on the "
                                  f"{other or 'default'} Claude login.")
         elif (reported and task_id not in self.limit_resumed and not task["node"] and not usage.used_up_until()
-                and usage.available(TASK_MODEL) != TASK_MODEL):
+                and usage.available(model := roles.model(Role.TASK)) != model):
             self.limit_resumed[task_id] = now
             after, said = None, (f"Task {task_id}, {task['title']}, hit Claude's usage limit for its model, so it "
                                  "carries on with a lighter one.")  # at once: no reset to wait for
@@ -905,8 +915,9 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
         self.wakes.pop(task_id, None)
 
 
-async def serve() -> None:
-    runner = Runner()
+async def serve(runner: "Runner | None" = None) -> None:
+    """Serve `runner` (default: one with no other machines) on the runner socket until stopped."""
+    runner = runner or Runner()
     app = api.app(runner)
     # tcp_keepalive off: meaningless on a Unix socket and raises EINVAL on macOS for already-closed clients.
     # shutdown_timeout=1: event streams never end on their own.
@@ -918,7 +929,7 @@ async def serve() -> None:
         await web.UnixSite(site_runner, str(RUNNER_SOCKET)).start()
     finally:
         os.umask(old)
-    log.info("task runner on %s, %d at once", RUNNER_SOCKET, MAX_TASKS)
+    log.info("task runner on %s, %d at once", RUNNER_SOCKET, runner.capacity)
     if runner.resuming:
         log.info("resuming tasks %s, cut off by the last shutdown", ", ".join(str(i) for i, _ in runner.resuming))
     runner.start_background()
@@ -1009,6 +1020,7 @@ async def _cli(args: list[str]) -> None:
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         asyncio.run(_cli(sys.argv[1:]))
-    else:
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
-        asyncio.run(serve())
+    else:  # the runner's service: wired up by its process
+        from jarvis.apps import runner as process
+
+        process.main()

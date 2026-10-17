@@ -1,4 +1,4 @@
-"""Tests for jarvis.safety.draft_gate: Google sends/deletes (Chat, invites, Doc, Sheet tab) wait for a spoken yes."""
+"""Tests for jarvis.gates.draft_gate: Google sends/deletes (Chat, invites, Doc, Sheet tab) wait for a spoken yes."""
 
 import asyncio
 
@@ -8,8 +8,8 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny, Result
 
 from jarvis import tools
 from jarvis.brain import cli
-from jarvis.core.config import APPROVAL_MINUTES
-from jarvis.safety import draft_gate
+from jarvis.config import APPROVAL_MINUTES
+from jarvis.gates import draft_gate
 from jarvis.state import memory
 
 

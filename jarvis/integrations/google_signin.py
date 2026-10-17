@@ -4,17 +4,15 @@ The sign-in itself is AI Armory's (ai_armory.toolsets.google.web.WebSignIns): ke
 one-time state, where Google sends it back (a Desktop app client to http://127.0.0.1:WEB_PORT/api/google/callback, a
 phone pasting that address back; a Web app client to the panel's own address), saving the token, checking each API
 and the callback page. Tokens are written by AI Armory, never shown or logged. What's JARVIS's here: the client JSON
-(jarvis.core.credentials), the accounts (jarvis.integrations.accounts) and their emails, and the activity line.
+(jarvis.auth.credentials), the accounts (jarvis.integrations.accounts) and their emails, and the activity line.
 """
 
 import logging
 
-from ai_armory.toolsets.google import checks
-from ai_armory.toolsets.google.checks import Outcome
-from ai_armory.toolsets.google.web import WebSignIns
-
-from jarvis.core import config, credentials
+from jarvis import config
+from jarvis.auth import credentials
 from jarvis.integrations import accounts
+from jarvis.integrations.armory import Outcome, WebSignIns, checks
 from jarvis.state import activity
 
 log = logging.getLogger("jarvis.integrations.google_signin")

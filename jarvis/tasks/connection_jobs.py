@@ -1,4 +1,4 @@
-"""Connection tasks (database.CONNECTION): an MCP call that outlasted CONNECTION_WAIT, tracked in the background.
+"""Connection tasks (store.CONNECTION): an MCP call that outlasted CONNECTION_WAIT, tracked in the background.
 
 The MCP relay does the work and reports start, progress and end via the runner API. The runner lists it (no task
 slot), lets task_stop cancel it (the relay polls), ends it if the relay dies, and announces a `summarize`d result;
@@ -7,8 +7,8 @@ the full result is kept as the task summary. Call results are untrusted data, ne
 
 import os
 
-from jarvis.core import profile
-from jarvis.core.config import COMMAND_SUMMARY_MODEL
+from jarvis.llm.roles import Role
+from jarvis.storage import profile
 from jarvis.tasks.command_jobs import spec, took
 
 SUMMARY_CHARS = 6000  # result chars the summary reads
@@ -32,10 +32,10 @@ def alive(task: dict) -> bool:
 
 async def summarize(title: str, instruction: str, failed: bool, seconds: float, result: str) -> str:
     """One-or-two-sentence summary of the call's result. Raises RuntimeError or TimeoutError if the call fails."""
-    from jarvis.brain import retry, sdk
+    from jarvis.llm import claude, retry
 
     prompt = (f"Call: {title} ({instruction[:500]})\nIt {'failed' if failed else 'finished'} after {took(seconds)}."
               f"\n\nWhat it returned:\n{result[:SUMMARY_CHARS].strip() or '(nothing)'}")
-    reply, _ = await retry.retry(retry.ONCE, lambda: sdk.ask(prompt, summary_system(), COMMAND_SUMMARY_MODEL),
+    reply, _ = await retry.retry(retry.ONCE, lambda: claude.ask(prompt, summary_system(), Role.COMMAND_SUMMARY),
                                  "connection summary")
     return " ".join(reply.split())[:600]

@@ -2,7 +2,7 @@
 
   resume  carries on stopped tasks, named ones or every one stopped (or failed) in the last RESUME_HOURS, through the
           runner's reply, as a follow-up would
-  todo    starts tasks for to-do items, named ones or the next `count` open ones no task has taken. One PLAN_MODEL
+  todo    starts tasks for to-do items, named ones or the next `count` open ones no task has taken. One schedule-role
           call turns the items into tasks (kind, project, instruction), passing over those that need the user; each
           task is linked to its item, so the runner settles the item as the task finishes. The job's text, the user's
           standing instructions, ends every instruction as given; a code_change task's also names FINISH_SKILL
@@ -15,16 +15,15 @@ import logging
 from dataclasses import dataclass
 
 from jarvis import prompts
-from jarvis.core import profile
-from jarvis.core.config import SCHEDULE_MODEL
-from jarvis.core.database import KINDS
+from jarvis.llm.roles import Role
 from jarvis.state import memory, todo
+from jarvis.storage import profile
 from jarvis.tasks import schedules
+from jarvis.tasks.store import KINDS
 
 log = logging.getLogger("jarvis.tasks.unattended")
 RESUME_HOURS = 7 * 24  # "every stopped task": those stopped in the last week
 OPEN_ITEMS = 30  # open items the planner sees when picking the next few
-PLAN_MODEL = SCHEDULE_MODEL
 PLAN_SECONDS = 180
 FINISH_SKILL = "finish-code-change"  # the JARVIS skill every code_change task ends with
 _NOT_RESUMED = {"queued": "is already queued", "running": "is already running",
@@ -118,8 +117,8 @@ _PLAN = {
 
 
 def _material(items: list[dict], want: int, named: bool, job: dict) -> str:
+    from jarvis import projects
     from jarvis.skills import home as skills
-    from jarvis.tasks import projects
 
     return json.dumps({
         "items": [{"n": n, "text": item["text"]} for n, item in enumerate(items, 1)],
@@ -138,10 +137,10 @@ def system() -> str:
 
 async def plan(items: list[dict], want: int, named: bool, job: dict) -> dict | None:
     """The planner's {"tasks", "left"} for `items`, or None if the call failed."""
-    from jarvis.brain import sdk
+    from jarvis.llm import claude
 
     try:
-        found, _ = await sdk.ask_json(_material(items, want, named, job), _PLAN, system(), PLAN_MODEL,
+        found, _ = await claude.ask_json(_material(items, want, named, job), _PLAN, system(), Role.SCHEDULE,
                                       timeout=PLAN_SECONDS)
     except Exception as e:
         log.warning("planning tasks for to-do items failed: %s", type(e).__name__)

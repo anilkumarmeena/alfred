@@ -9,8 +9,8 @@ import pytest
 from test_in_place import add_new_file, branches, env  # noqa: F401  (env is a fixture)
 from test_nudges import until
 
-from jarvis.core.database import WAIT_AFTER
 from jarvis.tasks import git_ops, runner
+from jarvis.tasks.store import WAIT_AFTER
 from jarvis.tasks.worker import Outcome
 from jarvis.tools import tasks as task_tools
 

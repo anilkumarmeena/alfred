@@ -2,7 +2,7 @@
 
 Reading tools are allowed outright (mcp_servers.session). A write or own-inbox tool on one of the task's connections is
 refused at first and becomes an approval request (jarvis.tasks.approvals), announced like a risky command: JARVIS reads
-out what it would do (mcp_gate.action, built from the tool's `says` phrase and the call's own arguments, never the
+out what it would do (mcp_words.action, built from the tool's `says` phrase and the call's own arguments, never the
 model's words) and the phone's Approve and Deny buttons answer it. A yes lets the identical call, with exactly the same
 arguments, through once. Orders and remembered rules never cover these calls. Unlisted and blocked tools are refused.
 """
@@ -10,11 +10,10 @@ arguments, through once. Orders and remembered rules never cover these calls. Un
 import json
 import logging
 
-from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
-
-from jarvis.core import profile
+from jarvis.integrations import mcp_words
 from jarvis.integrations.mcp_servers import Server
-from jarvis.safety import mcp_gate
+from jarvis.llm.sdk import PermissionResultAllow, PermissionResultDeny
+from jarvis.storage import profile
 from jarvis.tasks.host_tools import answer
 
 log = logging.getLogger("jarvis.tasks.connection_calls")
@@ -27,7 +26,7 @@ def call_item(server: Server, tool: str, args: dict) -> dict:
     """Approval request item for a call: the full tool name, what it does, the connection and the exact arguments.
 
     `command` and `folder` hold what the approval card and push show; the arguments make the match exact."""
-    return {"tool": server.tool(tool), "command": mcp_gate.action(server, tool, args), "folder": server.label,
+    return {"tool": server.tool(tool), "command": mcp_words.action(server, tool, args), "folder": server.label,
             "why": WHY, "connection": server.label, "args": json.loads(json.dumps(args)), "remember": {"never": NEVER}}
 
 

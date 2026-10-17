@@ -10,7 +10,7 @@ D-Bus (Secret Service, systemd-run). Network and other writes stay open (Xcode, 
 .env keys and credential-named vars but keeps SSH_AUTH_SOCK. Approved brew/port installs (commands.own_sandbox) can't
 nest and run `walls=False` on macOS.
 
-  uv run python -m jarvis.safety.host check    runs the walls' own checks on this computer
+  uv run python -m jarvis.apps.host_check check    runs the walls' own checks on this computer (make host-check)
 """
 
 import asyncio
@@ -21,7 +21,6 @@ import logging
 import os
 import pwd
 import re
-import shlex
 import shutil
 import signal
 import subprocess
@@ -34,9 +33,11 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-from jarvis.core import credentials, logins, platform, profile as profiles
-from jarvis.core.config import DATA_DIR, DB_FILE, ROOT, RUNNER_SOCKET, TASK_CACHE_DIR, WORKTREES_DIR
+from jarvis.auth import credentials, logins
+from jarvis.config import DATA_DIR, HOME_DIR, ROOT, RUNNER_SOCKET, TASK_CACHE_DIR, WORKTREES_DIR
+from jarvis.core import platform
 from jarvis.core.files import write_atomic
+from jarvis.llm import claude_logins
 from jarvis.safety.commands import HOME_SECRETS, JARVIS_SECRETS, SECRET_DIRS, secret_file_names
 
 log = logging.getLogger("jarvis.safety.host")
@@ -113,25 +114,26 @@ def profile(home: Path | str | None = None) -> str:
     """Seatbelt profile for a task's host commands."""
     home = _real(home or Path.home())
     root = _real(ROOT)
+    own = list(dict.fromkeys([root, _real(HOME_DIR)]))  # the checkout, and JARVIS_HOME when that's elsewhere
     secret_paths = [_real(p) for p in JARVIS_SECRETS] + [_real(p.replace("~", home, 1)) for p in HOME_SECRETS]
     reads = _any(
         *(f"(subpath {_str(p)})" for p in dict.fromkeys(secret_paths)),
         f'(regex #"^{_rx(home)}/(.*/)?{_SECRET_DIR_NAMES}(/|$)")',
         f'(regex #"^{_rx(home)}/(.*/)?{_SECRET_FILE_NAMES}$")',
         f'(require-all (regex #"^{_rx(home)}/.*\\.pem$") (require-not (regex #"{_PEM_KEPT}")))',
-        f'(regex #"^{_rx(root)}/(.*/)?{_SECRET_FILE_NAMES}$")',
+        *(f'(regex #"^{_rx(p)}/(.*/)?{_SECRET_FILE_NAMES}$")' for p in own),
     )
     git = f"{root}/.git"
     writable = _any(*(f"(subpath {_str(_real(p))})" for p in (WORKTREES_DIR, TASK_CACHE_DIR, TASK_DATA_DIR)),
                     f"(subpath {_str(git)})")
     writes = _any(
-        f"(require-all (subpath {_str(root)}) (require-not {writable}))",
+        *(f"(require-all (subpath {_str(p)}) (require-not {writable}))" for p in own),
         f"(subpath {_str(git + '/hooks')})", f"(literal {_str(git + '/config')})",
         *(f"(subpath {_str(p)})" for p in dict.fromkeys(secret_paths)),
         *(f"(literal {_str(f'{home}/{name}')})" for name in _STARTUP_FILES),
         *(f"(subpath {_str(f'{home}/{name}')})" for name in _STARTUP_DIRS),
     )
-    readable = _any(f"(subpath {_str(_real(profiles.current().voice_logs))})",
+    readable = _any(f"(subpath {_str(_real(claude_logins.voice_logs()))})",
                     *(f"(literal {_str(f'{home}/.ssh/{name}')})" for name in _SSH_READABLE))
     sock = _real(RUNNER_SOCKET)
     return "\n".join([
@@ -148,7 +150,7 @@ def profile(home: Path | str | None = None) -> str:
 
 def env_keys() -> set[str]:
     """Names of JARVIS's own settings and keys: .env plus vault-held vars that get re-exported into the env."""
-    return set(dotenv_values(ROOT / ".env")) | {*credentials.VARS, logins.VAR}
+    return set(dotenv_values(HOME_DIR / ".env")) | {*credentials.VARS, logins.VAR}
 
 
 def scrubbed_env() -> dict[str, str]:
@@ -318,6 +320,7 @@ def bwrap_args(home: Path | str | None = None) -> list[str]:
 
     # Writes: JARVIS's folder only in task worktrees, cache, task folders and git objects (not hooks or config)
     put(root, RO)
+    put(_real(HOME_DIR), RO)
     if os.path.dirname(sock) == data:
         rebuild(data, RO, left_out=[os.path.basename(sock)])
     else:
@@ -337,11 +340,11 @@ def bwrap_args(home: Path | str | None = None) -> list[str]:
     secret_paths = [_real(p) for p in JARVIS_SECRETS] + [_real(p.replace("~", home, 1)) for p in HOME_SECRETS]
     for path in secret_paths:
         put(path, MASK)
-    shown = [_real(profiles.current().voice_logs), *(_real(f"{home}/.ssh/{name}") for name in _SSH_READABLE)]
+    shown = [_real(claude_logins.voice_logs()), *(_real(f"{home}/.ssh/{name}") for name in _SSH_READABLE)]
     if agent := os.environ.get("SSH_AUTH_SOCK"):
         shown.append(_real(agent))  # the agent signs without giving out keys, even from inside ~/.ssh
     walked = {p for p, rule in rules.items() if rule == MASK} | set(shown)
-    for path in _secret_matches([root, home], walked):
+    for path in _secret_matches(list(dict.fromkeys([root, _real(HOME_DIR), home])), walked):
         put(_real(path), MASK)
     # The session bus: the Secret Service hands out keyring passwords, systemd-run starts anything outside the walls
     runtime = _real(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
@@ -863,127 +866,3 @@ class Jobs:
 
 
 # ── Checking the walls on this computer ─────────────────────────
-
-_SCP_REMOTE = re.compile(r"((?:[^@/:\s]+@)?[^@/:\s]+):")  # git's short SSH form, user@host:path
-
-
-def _ssh_remote(url: str) -> str:
-    """Where an SSH git remote signs in (ssh://user@host:port, or user@host), or '' for any other remote."""
-    if re.match(r"(git\+)?ssh(\+git)?://", url):
-        return "ssh://" + url.split("://", 1)[1].split("/", 1)[0]
-    m = _SCP_REMOTE.match(url)
-    return m[1] if m and "://" not in url else ""
-
-
-def _git_hosts() -> list[str]:
-    """Where the SSH git remotes of JARVIS's own repo and the user's projects on this computer sign in, each once."""
-    from jarvis.tasks import projects
-
-    try:
-        folders = [ROOT, *(p.path for p in projects.load() if p.node is None)]
-    except Exception:  # an unreadable project list leaves JARVIS's own repo
-        folders = [ROOT]
-    found: list[str] = []
-    for folder in folders:
-        try:
-            urls = subprocess.run(["git", "-C", str(folder), "config", "--get-regexp", r"^remote\..*\.url$"],
-                                  capture_output=True, text=True, timeout=10).stdout
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-        for line in urls.splitlines():
-            if (where := _ssh_remote(line.partition(" ")[2].strip())) and where not in found:
-                found.append(where)
-    return found
-
-
-def _ssh_checks() -> list[tuple[str, str, bool]]:
-    """Signing in over SSH through the agent to each of the user's own git hosts; none when no remote uses SSH.
-    ssh exits 255 only when it couldn't connect or sign in; otherwise with what the host's shell returned."""
-    return [(f"signs in to {where} over SSH, through the agent",
-             f"ssh -o BatchMode=yes -o ConnectTimeout=15 -T {shlex.quote(where)} </dev/null >/dev/null 2>&1; "
-             "test $? -ne 255", True) for where in _git_hosts()]
-
-
-def _mac_checks() -> list[tuple[str, str, bool]]:  # (what, command, should succeed)
-    return [
-        ("reads JARVIS's .env", f"head -c1 {ROOT / '.env'}", False),
-        ("reads JARVIS's .env.example (a template)", f"head -c1 {ROOT / '.env.example'}", True),
-        ("reads secrets/", f"ls {JARVIS_SECRETS[0]}", False),
-        ("lists ~/.ssh", "ls ~/.ssh", False),
-        ("reads an SSH key file", "head -c1 ~/.ssh/id_ed25519 || head -c1 ~/.ssh/id_rsa || head -c1 ~/.ssh/id_ecdsa", False),
-        ("reaches the SSH agent", "ssh-add -l >/dev/null 2>&1; test $? -ne 2", True),
-        *_ssh_checks(),
-        ("reads the keychain files", "ls ~/Library/Keychains", False),
-        ("writes tasks.db", f"touch {DB_FILE}", False),
-        ("writes in JARVIS's folder", f"touch {ROOT / '.host-check'} && rm {ROOT / '.host-check'}", False),
-        ("reaches the runner's socket", f"curl -s --max-time 5 --unix-socket {RUNNER_SOCKET} http://runner/tasks", False),
-        ("keeps JARVIS's keys out of its environment", 'test -z "$JARVIS_PASSCODE$LIVEKIT_API_SECRET"', True),
-        ("reads other processes' environments (ps eww)", f"{PS} eww -p 1 >/dev/null", False),
-        ("reads the voice session logs", f"ls {profiles.current().voice_logs}", True),
-        ("reads tasks.db", f"sqlite3 -readonly {DB_FILE} 'select count(*) from tasks'", True),
-        ("writes the task cache", f"touch {TASK_CACHE_DIR / '.host-check'} && rm {TASK_CACHE_DIR / '.host-check'}", True),
-        ("reaches PyPI over HTTPS", "curl -sI --max-time 20 https://pypi.org/simple/ | head -1 | grep -q 200", True),
-        ("finds the code-signing identities", "security find-identity -v -p codesigning | grep -Eq '^ *[1-9][0-9]* valid'", True),
-    ]
-
-
-def _linux_checks() -> list[tuple[str, str, bool]]:  # (what, command, should succeed)
-    # A hidden folder is an empty tmpfs and a hidden file /dev/null, so "blocked" means nothing seen, not an error
-    db_read = (f"sqlite3 -readonly {DB_FILE} 'select count(*) from tasks' || python3 -c 'import sqlite3, sys; "
-               f"sqlite3.connect(\"file:\" + sys.argv[1] + \"?mode=ro\", uri=True).execute(\"select count(*) from tasks\")' {DB_FILE}")
-    return [
-        ("reads JARVIS's .env", f"head -c1 {ROOT / '.env'} | grep -q ''", False),
-        ("reads JARVIS's .env.example (a template)", f"head -c1 {ROOT / '.env.example'} | grep -q ''", True),
-        # The voice logs are bound back inside the hidden secrets/, so their parent folders show (empty): files count
-        ("sees a file in secrets/", f"find {JARVIS_SECRETS[0]} -type f -not -path "
-                                    f"'{_real(profiles.current().voice_logs)}/*' | grep -q .", False),
-        ("sees more of ~/.ssh than known_hosts and config", "ls -A ~/.ssh | grep -vxE 'known_hosts2?|config' | grep -q .",
-         False),
-        ("reads an SSH key file", "head -c1 ~/.ssh/id_ed25519 || head -c1 ~/.ssh/id_rsa || head -c1 ~/.ssh/id_ecdsa", False),
-        ("reaches the SSH agent", "ssh-add -l >/dev/null 2>&1; test $? -ne 2", True),
-        *_ssh_checks(),
-        ("sees the keyring files", "ls -A ~/.local/share/keyrings | grep -q .", False),
-        ("reaches the session bus (Secret Service, systemd-run)", 'test -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus"',
-         False),
-        ("writes tasks.db", f"touch {DB_FILE}", False),
-        ("writes in JARVIS's folder", f"touch {ROOT / '.host-check'} && rm {ROOT / '.host-check'}", False),
-        ("creates a file at the top of home (a shell start-up file)", "touch ~/.host-check && rm ~/.host-check", False),
-        ("writes systemd user units", ("mkdir -p ~/.config/systemd/user && touch ~/.config/systemd/user/.host-check "
-                                       "&& rm ~/.config/systemd/user/.host-check"), False),
-        ("reaches the runner's socket", f"curl -s --max-time 5 --unix-socket {RUNNER_SOCKET} http://runner/tasks", False),
-        ("keeps JARVIS's keys out of its environment", 'test -z "$JARVIS_PASSCODE$LIVEKIT_API_SECRET"', True),
-        ("reads other processes' environments (/proc)", f"head -c1 /proc/{os.getpid()}/environ | grep -q ''", False),
-        ("gains root through sudo", "sudo -n true", False),
-        ("reads the voice session logs", f"ls {profiles.current().voice_logs}", True),
-        ("reads tasks.db", db_read, True),
-        ("writes the task cache", f"touch {TASK_CACHE_DIR / '.host-check'} && rm {TASK_CACHE_DIR / '.host-check'}", True),
-        ("reaches PyPI over HTTPS", "curl -sI --max-time 20 https://pypi.org/simple/ | head -1 | grep -q 200", True),
-    ]
-
-
-def _checks() -> list[tuple[str, str, bool]]:
-    return _mac_checks() if platform.MAC else _linux_checks()
-
-
-async def check() -> bool:
-    """Run each check under the profile; True if all behave as expected."""
-    good = True
-    for what, command, should in _checks():
-        try:
-            ran = await run(command, TASK_CACHE_DIR if TASK_CACHE_DIR.is_dir() else Path.home(), timeout=60)
-        except RuntimeError as e:  # the walls can't go up here
-            print(f"FAIL  {e}")
-            return False
-        worked = ran.code == 0
-        ok = worked == should
-        good &= ok
-        print(f"{'ok  ' if ok else 'FAIL'}  {what}: {'works' if worked else 'blocked'}"
-              + ("" if ok else f" (expected {'works' if should else 'blocked'})\n      {ran.output.strip()[:300]}"))
-    return good
-
-
-if __name__ == "__main__":
-    if sys.argv[1:] != ["check"]:
-        raise SystemExit(__doc__)
-    TASK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    raise SystemExit(0 if asyncio.run(check()) else 1)

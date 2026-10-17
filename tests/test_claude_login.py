@@ -8,15 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from jarvis import claude_login
-from jarvis.brain import sdk, usage
-from jarvis.core import claude_logins, config
-from jarvis.core.config import ROOT
+from jarvis import claude_login, config
+from jarvis.brain import sdk
+from jarvis.config import ROOT
+from jarvis.llm import claude, claude_logins, usage
 
 
 def config_dirs(**env: str) -> list[str]:
     """CLAUDE_OWN_CONFIG_DIR and CLAUDE_CONFIG_DIR as a fresh process reads them (set-but-empty = unset, not .env)."""
-    code = "from jarvis.core import config; print(config.CLAUDE_OWN_CONFIG_DIR); print(config.CLAUDE_CONFIG_DIR)"
+    code = "from jarvis import config; print(config.CLAUDE_OWN_CONFIG_DIR); print(config.CLAUDE_CONFIG_DIR)"
     env = os.environ | {"JARVIS_CLAUDE_CONFIG_DIR": "", "CLAUDE_CONFIG_DIR": ""} | env
     return subprocess.run([sys.executable, "-c", code], env=env, cwd=ROOT, capture_output=True, text=True,
                           check=True).stdout.splitlines()
@@ -137,7 +137,7 @@ def test_with_every_login_used_up_jarvis_stays_on_the_first(logins_dir, monkeypa
 
 def test_a_login_that_fails_to_authenticate_is_passed_over_until_it_works_again(logins_dir):
     claude_logins.make("work")
-    watch = sdk.LimitWatch("test", login="")
+    watch = claude.LimitWatch("test", login="")
     watch.describe("Failed to authenticate: OAuth session expired and could not be refreshed")
     assert claude_logins.active() == "work" and "sign-in" in claude_logins.skipped("")
     watch.describe("Some other error")
@@ -148,7 +148,7 @@ def test_a_login_that_fails_to_authenticate_is_passed_over_until_it_works_again(
 def test_usage_is_recorded_under_the_login_a_call_ran_on(logins_dir, monkeypatch, tmp_path):
     monkeypatch.setattr(usage, "USAGE_FILE", tmp_path / "usage.json")
     claude_logins.make("work")
-    sdk.record(Info(), sdk.sdk_options(login="work"))
+    claude.record(Info(), sdk.sdk_options(login="work"))
     assert "seven_day" in usage.of("work") and usage.of("") == {}
     assert json.loads((tmp_path / "usage-work.json").read_text())["seven_day"]["status"] == "rejected"
 

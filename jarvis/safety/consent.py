@@ -1,7 +1,7 @@
 """Classify a spoken reply to a yes/no question: yes (with scope), no, or unclear.
 
 - Word lists (commands.yes_scope, refuses) decide first; their clear no always wins.
-- Otherwise one tool-less CONSENT_MODEL call sees only: the user's own words, one of the fixed KINDS, and `about`
+- Otherwise one tool-less consent-role call sees only: the user's own words, one of the fixed KINDS, and `about`
   (built in code from the command or draft kind, never from tool output). Failure or > CONSENT_SECONDS is unclear.
 - Unclear is never a yes; the question stays open.
 - `later`: other talk intervened, so a yes must plainly say go ahead (commands.tells_approve).
@@ -16,7 +16,9 @@ import re
 import time
 from dataclasses import dataclass
 
-from jarvis.core.config import CONSENT_ENABLED, CONSENT_MODEL, CONSENT_SECONDS
+from jarvis.config import CONSENT_ENABLED, CONSENT_SECONDS
+from jarvis.llm.roles import Role
+from jarvis.llm.standby import Standby
 from jarvis.safety.commands import (
     SCOPES,
     approves,
@@ -84,8 +86,9 @@ class Verdict:
 
 NO, UNCLEAR = Verdict("no"), Verdict("unclear")
 _kept: dict[tuple[str, str, str, bool], tuple[float, Verdict]] = {}
-_standby: asyncio.Task | None = None  # warmed CLI session for the next check
-_background: set[asyncio.Task] = set()  # closing sessions and the idle timer
+# Single-use sessions, one warmed ahead for the next check; _connect is looked up per call so tests can fake it
+_sessions = Standby("yes or no check", PROMPT, _IDLE_SECONDS, connect=lambda _model: _connect())
+_background: set[asyncio.Task] = set()  # checks given up on, winding down
 
 
 def words(said: str, kind: str = "", later: bool = False) -> Verdict | None:
@@ -180,27 +183,11 @@ def parse(answer: str) -> Verdict | None:
 
 
 async def ask_model(prompt: str) -> str:
-    """One tool-less CONSENT_MODEL call, on the warmed session if any; returns its text.
+    """One tool-less consent-role call, on the warmed session if any; returns its text.
 
     Raises RuntimeError on failure. The session is closed afterwards in the background.
     """
-    from claude_agent_sdk import RateLimitEvent, ResultMessage
-
-    from jarvis.brain import sdk
-
-    client = await _session()
-    try:
-        await client.query(prompt)
-        async for m in client.receive_response():
-            if isinstance(m, RateLimitEvent):
-                sdk.record(m.rate_limit_info, client.options)  # under the login it ran on
-            elif isinstance(m, ResultMessage):
-                if m.is_error:
-                    raise RuntimeError(f"the model call failed: {m.subtype}")
-                return m.result or ""
-        raise RuntimeError("the model call ended without a reply")
-    finally:
-        _close(client)
+    return await _sessions.ask(prompt, Role.CONSENT)
 
 
 def warm() -> None:
@@ -208,81 +195,22 @@ def warm() -> None:
 
     One at a time; closed after _IDLE_SECONDS if unused. No-op outside a running event loop.
     """
-    global _standby
-    if not CONSENT_ENABLED:
-        return
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    if _standby is not None and _standby.get_loop() is loop and not _failed(_standby):
-        return
-    _standby = loop.create_task(_connect())
-    _standby.add_done_callback(_started)
-    _keep(loop.create_task(_expire(_standby)))
+    if CONSENT_ENABLED:
+        _sessions.warm(Role.CONSENT)
 
 
 async def close() -> None:
     """Close any unused warmed session at conversation end."""
-    global _standby
-    task, _standby = _standby, None
-    if task is None or task.get_loop() is not asyncio.get_running_loop():
-        return
-    if not task.done():
-        task.cancel()  # still starting: the SDK cleans up
-    elif not _failed(task):
-        _close(task.result())
-
-
-async def _session():
-    """Take the warmed session (awaiting startup) or connect a new one; single-use either way."""
-    global _standby
-    task, _standby = _standby, None
-    if task is None or task.get_loop() is not asyncio.get_running_loop() or _failed(task):
-        return await _connect()
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:  # timed out during startup: close it once started
-        task.add_done_callback(lambda t: None if _failed(t) else _close(t.result()))
-        raise
+    await _sessions.close()
 
 
 async def _connect():
-    from claude_agent_sdk import ClaudeSDKClient
+    from jarvis.llm.claude import short_options
+    from jarvis.llm.sdk import ClaudeSDKClient
 
-    from jarvis.brain.sdk import short_options
-
-    client = ClaudeSDKClient(short_options(PROMPT, CONSENT_MODEL))
+    client = ClaudeSDKClient(short_options(PROMPT, Role.CONSENT))
     await client.connect()  # on failure the SDK cleans up
     return client
-
-
-async def _expire(task: asyncio.Task) -> None:
-    await asyncio.sleep(_IDLE_SECONDS)
-    if _standby is task:
-        await close()
-
-
-def _started(task: asyncio.Task) -> None:
-    """Log a warmed session's startup failure; the check will connect its own."""
-    if not task.cancelled() and (e := task.exception()) is not None:
-        log.warning("starting a session for the yes or no check failed: %s", type(e).__name__)
-
-
-def _failed(task: asyncio.Task) -> bool:
-    return task.done() and (task.cancelled() or task.exception() is not None)
-
-
-def _close(client) -> None:
-    """Disconnect a session in the background."""
-
-    async def disconnect() -> None:
-        try:
-            await client.disconnect()
-        except Exception as e:
-            log.debug("closing a yes or no check's session failed: %s", type(e).__name__)
-
-    _keep(asyncio.get_running_loop().create_task(disconnect()))
 
 
 def _keep(task: asyncio.Task) -> None:

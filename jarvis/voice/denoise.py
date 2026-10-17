@@ -19,7 +19,7 @@ from livekit import rtc
 from livekit.agents import vad
 from livekit.agents.voice import room_io
 
-from jarvis.core.config import DENOISE, DENOISE_ATTEN_DB, DENOISE_MODEL
+from jarvis.config import DENOISE, DENOISE_ATTEN_DB, DENOISE_MODEL
 
 log = logging.getLogger("jarvis.voice.denoise")
 

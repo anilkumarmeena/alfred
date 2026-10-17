@@ -4,8 +4,8 @@ left."""
 import time
 from datetime import datetime
 
-from jarvis.brain import usage
-from jarvis.core import profile
+from jarvis.llm import usage
+from jarvis.storage import profile
 from jarvis.tasks import command_jobs, hold, schedules
 from jarvis.tasks.scheduler import RETRY_MINUTES
 

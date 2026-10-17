@@ -10,14 +10,14 @@ import pytest
 from test_approvals import drained, events
 
 from conftest import use_profile
-from jarvis import tools
+from jarvis import config, tools
 from jarvis.brain import sdk
-from jarvis.core import config
-from jarvis.core.database import CONNECTION
 from jarvis.integrations import mcp_relay, mcp_servers
 from jarvis.integrations.mcp_relay import Relay
 from jarvis.integrations.mcp_servers import Server, Tool
+from jarvis.llm import claude
 from jarvis.tasks import client, connection_jobs, events as task_events, runner
+from jarvis.tasks.store import CONNECTION
 
 SERVER = Server("acme", "Acme", tools={"find": Tool("read"), "report": Tool("read"), "post": Tool("write", "post")})
 LISTED = [{"name": "find", "annotations": {"title": "Find"}},
@@ -358,7 +358,7 @@ def summed(monkeypatch, tmp_path):
     async def no_notify(title, text):
         pass
 
-    monkeypatch.setattr(sdk, "ask", ask)
+    monkeypatch.setattr(claude, "ask", ask)
     monkeypatch.setattr(task_events, "mac_notify", no_notify)
     monkeypatch.setattr(task_events, "PUSH_ENABLED", False)
     return asked
@@ -417,5 +417,5 @@ def test_only_tools_that_change_nothing_are_marked_read_only_for_the_cli():
     assert {"task_list", "todo_list", "file_read", "conversation_search", "schedule_list"} <= reads
     assert not reads & {"task_start", "task_stop", "remember", "browser_open", "voice_enroll"}
     assert not [t.name for t in tools.all_tools() if t.reads and (t.gated or t.changes or t.shell)]
-    assert sdk._sdk_tool(tools.get("task_list")).annotations is sdk.READS
+    assert sdk._sdk_tool(tools.get("task_list")).annotations is claude.READS
     assert sdk._sdk_tool(tools.get("task_start")).annotations is None

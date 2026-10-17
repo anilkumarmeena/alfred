@@ -4,7 +4,8 @@ import pytest
 
 from jarvis import prompts, tools
 from jarvis.brain import persona
-from jarvis.core import platform, profile
+from jarvis.core import platform
+from jarvis.storage import profile
 
 
 def test_a_prompt_is_filled_in_and_its_comment_left_out(tmp_path, monkeypatch):
@@ -30,7 +31,7 @@ def test_any_prompt_may_name_the_os_without_being_given_it(tmp_path, monkeypatch
 
 def test_every_prompt_file_loads_where_it_is_used():
     from jarvis.brain import cli, side
-    from jarvis.safety import injection
+    from jarvis.gates import injection
     from jarvis.skills import review
     from jarvis.tasks import announce, briefs, goal, learning, unattended
 

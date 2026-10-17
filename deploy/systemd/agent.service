@@ -8,11 +8,12 @@ Description=JARVIS voice agent (${LABEL})
 Type=exec
 WorkingDirectory=${ROOT}
 Environment="PATH=${HOME}/.local/bin:${NODE}/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+Environment="JARVIS_HOME=${JARVIS_HOME}"
 ExecStart=/bin/sh -c 'if systemd-inhibit --what=sleep:idle --who=JARVIS --why=check true 2>/dev/null; then exec systemd-inhibit --what=sleep:idle --who=JARVIS "--why=Voice assistant" "${ROOT}/.venv/bin/python" -m jarvis.voice.agent start; else exec "${ROOT}/.venv/bin/python" -m jarvis.voice.agent start; fi'
 Restart=always
 RestartSec=10
-StandardOutput=append:${ROOT}/logs/agent.log
-StandardError=append:${ROOT}/logs/agent.log
+StandardOutput=append:${JARVIS_HOME}/logs/agent.log
+StandardError=append:${JARVIS_HOME}/logs/agent.log
 
 [Install]
 WantedBy=default.target

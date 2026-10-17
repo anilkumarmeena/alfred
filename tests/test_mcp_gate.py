@@ -1,4 +1,4 @@
-"""Tests for jarvis.safety.mcp_gate: what's read out for an MCP write call, and holding it for a spoken yes."""
+"""Tests for jarvis.gates.mcp_gate: what's read out for an MCP write call, and holding it for a spoken yes."""
 
 import asyncio
 import json
@@ -6,11 +6,11 @@ import json
 import pytest
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
-from jarvis.core import profile
-from jarvis.core.config import APPROVAL_MINUTES
+from jarvis.config import APPROVAL_MINUTES
+from jarvis.gates import mcp_gate
 from jarvis.integrations import mcp_servers
 from jarvis.integrations.mcp_servers import Server, Tool
-from jarvis.safety import mcp_gate
+from jarvis.storage import profile
 
 # GitHub and GitLab with hand-written `says` phrases, as plain server rows
 GITHUB = Server("github", "GitHub", command="github-mcp-server", tools={

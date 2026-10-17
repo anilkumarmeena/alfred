@@ -6,9 +6,9 @@ Tool usage lives in each tool's description, not here. Voice-independent.
 from datetime import datetime
 
 from jarvis import prompts
-from jarvis.core import profile
 from jarvis.integrations import accounts
 from jarvis.state import conversation, memory, settings
+from jarvis.storage import profile
 from jarvis.tools import google
 
 

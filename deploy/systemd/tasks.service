@@ -7,13 +7,14 @@ Description=JARVIS task runner (${LABEL})
 Type=exec
 WorkingDirectory=${ROOT}
 Environment="PATH=${HOME}/.local/bin:${HOME}/.venv/bin:/usr/local/go/bin:${NODE}/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+Environment="JARVIS_HOME=${JARVIS_HOME}"
 ExecStart="${ROOT}/.venv/bin/python" -m jarvis.tasks.runner
 Restart=always
 RestartSec=10
 Nice=10
 IOSchedulingClass=idle
-StandardOutput=append:${ROOT}/logs/tasks.log
-StandardError=append:${ROOT}/logs/tasks.log
+StandardOutput=append:${JARVIS_HOME}/logs/tasks.log
+StandardError=append:${JARVIS_HOME}/logs/tasks.log
 
 [Install]
 WantedBy=default.target

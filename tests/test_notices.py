@@ -9,8 +9,9 @@ from datetime import datetime, time
 import pytest
 
 from conftest import use_profile
-from jarvis.core import config, profile
+from jarvis import config
 from jarvis.state import settings
+from jarvis.storage import profile
 from jarvis.tasks import hold, notices
 from jarvis.tasks.hold import in_quiet_hours, parse_quiet_hours
 from jarvis.tasks.notices import Notice, Notices
@@ -334,7 +335,7 @@ def test_task_notices():
 def test_usage_warnings_are_said_once_per_window(tmp_path, monkeypatch):
     from claude_agent_sdk import RateLimitInfo
 
-    from jarvis.brain import usage
+    from jarvis.llm import usage
 
     use_profile(monkeypatch, tmp_path)
     monkeypatch.setattr(usage, "USAGE_FILE", tmp_path / "usage.json")

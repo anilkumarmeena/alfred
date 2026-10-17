@@ -18,17 +18,22 @@ SCRATCH = Path(tempfile.mkdtemp(prefix="jarvis-tests-"))
 atexit.register(shutil.rmtree, SCRATCH, True)
 os.environ["JARVIS_DATA_DIR"] = str(SCRATCH / "data")
 os.environ["JARVIS_DB_FILE"] = str(SCRATCH / "data" / "tasks.db")
+(SCRATCH / "config.toml").write_text("")  # only the shipped defaults, never this machine's config.toml
+os.environ["JARVIS_CONFIG"] = str(SCRATCH / "config.toml")
 os.environ["JARVIS_GOAL_LOOP"] = "0"  # test_goal enables it with a fake check
 os.environ["JARVIS_CONSENT"] = "0"  # test_consent fakes the model call
 os.environ["JARVIS_ANNOUNCE"] = "0"  # test_announce fakes the model call
 os.environ["JARVIS_INJECTION_CHECK"] = "0"  # test_injection fakes the check
 os.environ["JARVIS_TODO_MATCH"] = "0"  # test_todo fakes the model call
 
-# Must follow the env setup above: jarvis.core.config reads JARVIS_DATA_DIR on import
-from jarvis.core import config, credentials, logins, profile, transcribe, vault  # noqa: E402
+# Must follow the env setup above: jarvis.config reads JARVIS_DATA_DIR on import
+from jarvis import bootstrap, config  # noqa: E402
+from jarvis.auth import credentials, logins, vault
 from jarvis.integrations import accounts  # noqa: E402
+from jarvis.media import transcribe
 from jarvis.safety import host  # noqa: E402
 from jarvis.state import conversation, settings  # noqa: E402
+from jarvis.storage import profile
 from jarvis.tasks import merge_check  # noqa: E402
 
 PROFILE = profile.Profile("test", "Sam", config.mac_timezone() or "UTC", config.DATA_DIR, config.DB_FILE,
@@ -37,6 +42,7 @@ profile.activate(PROFILE)
 transcribe.LOG_FILE = SCRATCH / "transcribe.log"  # keep errors out of the checkout's logs/
 config.CLAUDE_LOGINS_DIR = SCRATCH / "claude-logins"  # never this computer's Claude logins
 host.JOB_POLL = 0.05  # jobs' ends are seen at once, not up to 2 s later
+bootstrap.wire()  # as every process does at start: task sessions and watches get JARVIS's tools
 
 
 def use_profile(monkeypatch: pytest.MonkeyPatch, data: Path | None = None, **changes) -> profile.Profile:

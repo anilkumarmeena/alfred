@@ -9,8 +9,9 @@ from pathlib import Path
 import pytest
 from test_in_place import add_new_file, branches, env, git, jarvis, run_worktree_task  # noqa: F401  (fixtures)
 
+from jarvis import projects
 from jarvis.core import proc
-from jarvis.tasks import merge_check, projects
+from jarvis.tasks import merge_check
 
 NEW = "tests/test_new.py::test_it"
 OLD = "tests/test_old.py::test_flaky"

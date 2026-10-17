@@ -1,4 +1,4 @@
-"""Tests for jarvis.brain.usage: shared usage-limit state and its effects: lighter model, held runs, warnings."""
+"""Tests for jarvis.llm.usage: shared usage-limit state and its effects: lighter model, held runs, warnings."""
 
 import asyncio
 import json
@@ -8,9 +8,8 @@ import pytest
 from claude_agent_sdk import RateLimitEvent, RateLimitInfo
 
 from jarvis import tools
-from jarvis.brain import sdk, usage
-from jarvis.core import profile
-from jarvis.core.config import FAST_MODEL, HELPER_MODEL
+from jarvis.llm import claude, roles, usage
+from jarvis.storage import profile
 
 NOW = datetime(2026, 10, 6, 13, 0, tzinfo=profile.tz()).timestamp()  # a Tuesday, 13:00
 
@@ -73,10 +72,10 @@ def test_used_up_with_no_reset_time_holds_for_half_an_hour():
 def test_a_models_own_limit_moves_to_a_lighter_model():
     said("rejected", kind="seven_day_opus", hours=48)
     assert usage.out(NOW) is None  # other models carry on, so nothing is held
-    assert usage.available("claude-opus-5-5", NOW) == HELPER_MODEL
-    assert usage.available(HELPER_MODEL, NOW) == HELPER_MODEL
+    assert usage.available("claude-opus-5-5", NOW) == roles.model("balanced")
+    assert usage.available(roles.model("balanced"), NOW) == roles.model("balanced")
     said("rejected", kind="seven_day_sonnet", hours=48)
-    assert usage.available("claude-opus-5-5", NOW) == FAST_MODEL  # and on down, when Sonnet's is out too
+    assert usage.available("claude-opus-5-5", NOW) == roles.model("fast")  # and on down, when Sonnet's is out too
 
 
 def test_warnings_are_keyed_per_window_so_each_is_said_once():
@@ -103,7 +102,7 @@ def test_usage_left_says_what_is_known(monkeypatch):
 
 
 def test_the_limit_watch_records_what_the_cli_says(usage_file):
-    watch = sdk.LimitWatch("test")
+    watch = claude.LimitWatch("test")
     watch.saw(RateLimitEvent(RateLimitInfo(status="allowed_warning", rate_limit_type="five_hour", utilization=0.8,
                                            resets_at=int(NOW + 600)), "u1", "s1"))
     assert json.loads(usage_file.read_text())["five_hour"]["utilization"] == 0.8
@@ -111,7 +110,7 @@ def test_the_limit_watch_records_what_the_cli_says(usage_file):
 
 
 def test_a_window_extra_usage_carries_on_past_isnt_what_stopped_a_run(usage_file):
-    watch = sdk.LimitWatch("test")
+    watch = claude.LimitWatch("test")
     watch.saw(RateLimitEvent(RateLimitInfo(status="rejected", rate_limit_type="five_hour", resets_at=int(NOW + 600),
                                            overage_status="allowed"), "u1", "s1"))
     assert watch.rejected is None and watch.describe("tool failed") is None

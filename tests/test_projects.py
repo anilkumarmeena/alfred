@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from jarvis import tools
-from jarvis.tasks import projects, runner
+from jarvis import projects, tools
+from jarvis.tasks import runner
 from jarvis.tasks.worker import READ_ONLY_TOOLS
 from tests.test_in_place import env, fake_run, git, listed, make_repo, settle  # noqa: F401  (env is a fixture)
 

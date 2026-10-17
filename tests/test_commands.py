@@ -5,8 +5,9 @@ import re
 
 import pytest
 
-from jarvis.core.config import ROOT
-from jarvis.safety import commands, shell
+from jarvis.config import ROOT
+from jarvis.gates import shell
+from jarvis.safety import commands
 from jarvis.safety.commands import describe, names_secret, reads_environment, refused, risky
 
 

@@ -1,4 +1,4 @@
-"""Tests for jarvis.voice.timing: LiveKit measures and JARVIS marks, one record per turn when spoken or cut off."""
+"""Tests for jarvis.brain.timing: LiveKit measures and JARVIS marks, one record per turn when spoken or cut off."""
 
 import asyncio
 import json
@@ -7,11 +7,11 @@ import pytest
 from claude_agent_sdk import ResultMessage, StreamEvent
 from livekit.agents import llm
 
-from jarvis.brain import cli
+from jarvis.apps import agent
+from jarvis.brain import cli, timing
+from jarvis.brain.timing import CURRENT, Timings
 from jarvis.state import memory
-from jarvis.voice import agent, timing
 from jarvis.voice.session import VoiceSession
-from jarvis.voice.timing import CURRENT, Timings
 
 
 class Clock:

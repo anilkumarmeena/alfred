@@ -9,7 +9,9 @@ and labels their activity.
 
 from dataclasses import replace
 
-from claude_agent_sdk import (
+from jarvis.llm import roles
+from jarvis.llm.roles import Role
+from jarvis.llm.sdk import (
     TERMINAL_TASK_STATUSES,
     AgentDefinition,
     TaskStartedMessage,
@@ -17,9 +19,7 @@ from claude_agent_sdk import (
     ToolResultBlock,
     ToolUseBlock,
 )
-
-from jarvis.core import profile
-from jarvis.core.config import TASK_HELPER_MODEL, TASK_SEARCH_MODEL
+from jarvis.storage import profile
 from jarvis.tasks.reporting import Reporter
 
 _AGENT_TOOLS = {"Agent", "Task"}  # the bundled CLI may still call it Task
@@ -36,7 +36,7 @@ SEARCHER = AgentDefinition(
 {_HELPER_RULES}
 - Quote only the lines that matter, and say when something you were asked about doesn't exist.""",
     tools=["Read", "Glob", "Grep"],
-    model=TASK_SEARCH_MODEL,
+    model=roles.model(Role.TASK_SEARCH),
     maxTurns=30,
 )
 
@@ -50,7 +50,7 @@ pyproject.toml), run what you were asked to, and read failing tests and tracebac
   change source or test files to make them pass.
 - Report the exact command you ran, the pass and fail counts, and for each failure the test, the error and the likely cause.""",
     tools=["Read", "Glob", "Grep", "Bash"],
-    model=TASK_HELPER_MODEL,
+    model=roles.model(Role.TASK_HELPER),
     maxTurns=40,
 )
 
@@ -62,7 +62,7 @@ and prefer recent, primary sources.
 {_HELPER_RULES}
 - Say how sure you are, where sources disagree, and give the URLs you relied on.""",
     tools=["WebSearch", "WebFetch"],
-    model=TASK_HELPER_MODEL,
+    model=roles.model(Role.TASK_HELPER),
     maxTurns=30,
 )
 

@@ -17,12 +17,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from jarvis.brain import usage
-from jarvis.core import profile
-from jarvis.core.config import DATA_DIR, ROOT
+from jarvis.config import DATA_DIR, ROOT
+from jarvis.llm import usage
 from jarvis.node import bundles, keys, link, machines
 from jarvis.node.link import Channel, Link, LinkDown, Refused
 from jarvis.node.transfer import Outbox
+from jarvis.storage import profile
 
 log = logging.getLogger("jarvis.node.hub")
 
@@ -129,6 +129,10 @@ class Hub:
     def connected(self, node: int) -> Link | None:
         conn = self.conns.get(node)
         return conn.link if conn and conn.link.up else None
+
+    async def accept_websocket(self, ws) -> None:
+        """A machine linking in through the runner's socket (jarvis.tasks.api)."""
+        await self.accept(link.WebSocketChannel(ws))
 
     async def close(self) -> None:
         for conn in list(self.conns.values()):

@@ -1,4 +1,4 @@
-"""Tests for jarvis.core.database: connections, ordered migrations, batched task-step writes."""
+"""Tests for jarvis.storage.database: connections, ordered migrations, batched task-step writes."""
 
 import asyncio
 import sqlite3
@@ -7,9 +7,9 @@ import time
 
 import pytest
 
-from jarvis.core import database
-from jarvis.core.database import Store
+from jarvis.storage import database
 from jarvis.tasks import runner
+from jarvis.tasks.store import Store
 
 NOTES = "create table notes (id integer primary key, text text not null)"
 

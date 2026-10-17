@@ -6,12 +6,12 @@ import pytest
 from ai_armory.toolsets.google import GoogleSettings, current
 
 from conftest import use_profile
-from jarvis import tools
+from jarvis import config, tools
 from jarvis.brain import cli
-from jarvis.core import config, profile
+from jarvis.gates import draft_gate
 from jarvis.integrations import accounts
-from jarvis.safety import draft_gate
 from jarvis.safety.commands import JARVIS_SECRETS
+from jarvis.storage import profile
 from jarvis.tasks import worker
 from jarvis.tools import google
 

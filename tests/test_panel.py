@@ -8,14 +8,14 @@ import pytest
 from test_in_place import env  # noqa: F401  (fixture)
 
 from conftest import use_profile
-from jarvis import panel, server
-from jarvis.core import config
-from jarvis.core.database import APPROVED
+from jarvis import config, panel, server
 from jarvis.integrations import accounts
 from jarvis.notify import push
+from jarvis.panel import system as panel_system
 from jarvis.safety.commands import describe
-from jarvis.state import memory, settings, todo
+from jarvis.state import memory, preferences, settings, todo
 from jarvis.tasks import api, client, runner, schedules
+from jarvis.tasks.store import APPROVED
 
 TODAY = f"{date.today():%Y-%m-%d}"
 IPHONE = {"endpoint": "https://web.push.apple.com/abc", "keys": {"p256dh": "B" * 87, "auth": "A" * 22}}
@@ -159,15 +159,15 @@ def test_preferences_kept_from_the_panel_and_read_by_config(prefs):
     shown = call("preferences")
     assert shown["preferences"]["voice"] == {"value": "", "default": "bm_george", "env": ""}
     assert "bm_george" in shown["voices"] and all(v[:2] in ("af", "am", "bf", "bm") for v in shown["voices"])
-    assert config.tts_voice() == "bm_george" and config.speech_gate() == "enforce"
+    assert preferences.tts_voice() == "bm_george" and preferences.speech_gate() == "enforce"
 
     call("preference_save", {"key": "voice_speed", "value": "1.10"})
     shown = call("preference_save", {"key": "speech_gate", "value": "Shadow"})
     assert shown["preferences"]["voice_speed"]["value"] == "1.1" and shown["preferences"]["speech_gate"]["value"] == "shadow"
-    assert (config.tts_speed(), config.speech_gate()) == (1.1, "shadow")
+    assert (preferences.tts_speed(), preferences.speech_gate()) == (1.1, "shadow")
 
     call("preference_save", {"key": "voice_speed", "value": ""})  # back to the default
-    assert config.tts_speed() == 1.05 and settings.get("voice_speed") == ""
+    assert preferences.tts_speed() == 1.05 and settings.get("voice_speed") == ""
 
 
 def test_quiet_hours_kept_from_the_panel(prefs):
@@ -182,10 +182,10 @@ def test_quiet_hours_kept_from_the_panel(prefs):
 def test_a_voice_picked_in_the_panel_is_spoken_unless_env_sets_one(prefs, monkeypatch):
     assert {"bm_george", "bm_lewis", "af_heart"} <= set(call("preferences")["voices"])
     call("preference_save", {"key": "voice", "value": "bm_lewis"})
-    assert config.tts_voice() == "bm_lewis"
+    assert preferences.tts_voice() == "bm_lewis"
 
     monkeypatch.setenv("JARVIS_TTS_VOICE", "af_heart")  # .env wins
-    assert config.tts_voice() == "af_heart" and call("preferences")["preferences"]["voice"]["env"] == "af_heart"
+    assert preferences.tts_voice() == "af_heart" and call("preferences")["preferences"]["voice"]["env"] == "af_heart"
 
 
 @pytest.mark.parametrize("key, value", [("timezone", "Mars/Olympus"), ("voice", "zz_nobody"), ("voice_speed", "5"),
@@ -367,7 +367,7 @@ def test_jobs_are_paused_resumed_and_cancelled_from_the_panel(db):
 
 
 def test_do_not_disturb_from_the_panel(db, monkeypatch):
-    from jarvis.brain import usage
+    from jarvis.llm import usage
 
     monkeypatch.setattr(usage, "USAGE_FILE", db / "usage.json")
     assert call("hold_status")["hold"] is None
@@ -480,10 +480,10 @@ def test_system_asks_launchd_by_full_label(db, monkeypatch):
         asked.append(label)
         return {"name": label, "state": "running"}
 
-    monkeypatch.setattr(panel, "_launchd", launchd)
-    monkeypatch.setattr(panel.setup_local, "MANAGER", "launchd")
-    monkeypatch.setattr(panel.shutil, "which", lambda cmd: "/bin/launchctl")
-    monkeypatch.setattr(panel, "_vault", lambda: {"state": "ok", "secrets": 0})
+    monkeypatch.setattr(panel_system, "_launchd", launchd)
+    monkeypatch.setattr(panel_system.setup_local, "MANAGER", "launchd")
+    monkeypatch.setattr(panel_system.shutil, "which", lambda cmd: "/bin/launchctl")
+    monkeypatch.setattr(panel_system, "_vault", lambda: {"state": "ok", "secrets": 0})
     call("system")
     assert asked == [config.service_label(name) for name in config.SERVICE_NAMES]
     assert all(label.startswith(config.SERVICE_PREFIX + ".") for label in asked)
@@ -495,7 +495,7 @@ def test_on_linux_system_reads_systemd_user_units(db, monkeypatch):
                       "ExecMainStartTimestampMonotonic=0\n",
              "web": "LoadState=not-found\nActiveState=inactive\nExecMainStatus=0\n"}
     asked = []
-    ago = min(3600, panel.time.monotonic() / 2)  # an hour ago, or less on a computer up for less
+    ago = min(3600, panel_system.time.monotonic() / 2)  # an hour ago, or less on a computer up for less
 
     class Proc:
         def __init__(self, out: str):
@@ -507,16 +507,16 @@ def test_on_linux_system_reads_systemd_user_units(db, monkeypatch):
     async def exec_(*cmd, **kwargs):
         asked.append(cmd)
         name = cmd[-1].removesuffix(".service").rpartition(".")[2]
-        started = int((panel.time.monotonic() - ago) * 1e6)
+        started = int((panel_system.time.monotonic() - ago) * 1e6)
         return Proc(shown.get(name, "").format(started))
 
-    monkeypatch.setattr(panel.setup_local, "MANAGER", "systemd")
-    monkeypatch.setattr(panel.shutil, "which", lambda cmd: "/usr/bin/systemctl" if cmd == "systemctl" else None)
-    monkeypatch.setattr(panel.asyncio, "create_subprocess_exec", exec_)
-    monkeypatch.setattr(panel, "_vault", lambda: {"state": "ok", "secrets": 0})
+    monkeypatch.setattr(panel_system.setup_local, "MANAGER", "systemd")
+    monkeypatch.setattr(panel_system.shutil, "which", lambda cmd: "/usr/bin/systemctl" if cmd == "systemctl" else None)
+    monkeypatch.setattr(panel_system.asyncio, "create_subprocess_exec", exec_)
+    monkeypatch.setattr(panel_system, "_vault", lambda: {"state": "ok", "secrets": 0})
     livekit, agent, web, tasks = call("system")["services"]
     assert asked[0][:3] == ("systemctl", "--user", "show")
     assert asked[0][-1] == config.service_label("livekit") + ".service"
-    assert livekit["state"] == "running" and abs(panel.time.time() - ago - livekit["since"]) < 5
+    assert livekit["state"] == "running" and abs(panel_system.time.time() - ago - livekit["since"]) < 5
     assert agent == {"name": "Voice agent", "state": "stopped", "exit": 1}
     assert web == {"name": "Web", "state": "not loaded"} and tasks == {"name": "Task runner", "state": "not loaded"}

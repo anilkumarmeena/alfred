@@ -3,9 +3,9 @@ check can't see still asks."""
 
 import pytest
 
-from jarvis.core.database import same_command
 from jarvis.safety import commands
 from jarvis.safety.commands import describe, refused, risky, seen
+from jarvis.tasks.store import same_command
 
 UNSEEN = "runs code it can't see"
 

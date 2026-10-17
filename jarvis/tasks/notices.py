@@ -1,7 +1,7 @@
 """Notices: JARVIS's news about itself, said unasked, every MINUTES inside the task runner.
 
   tasks        a question unanswered for MINUTES, a run cut off by a restart, a task gone quiet (jarvis.tasks.stall)
-  usage        Claude's usage limits nearly or all used, once per limit window (jarvis.brain.usage)
+  usage        Claude's usage limits nearly or all used, once per limit window (jarvis.llm.usage)
   connections  a connection whose sign-in check fails: the tool its row names, called hourly (mcp_servers.check)
 
 Beyond those sign-in checks it watches no service: what to watch is each user's choice, made with scheduled jobs
@@ -20,9 +20,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from jarvis.core import profile
 from jarvis.core.files import write_atomic
 from jarvis.notify.push import Push, task_target
+from jarvis.storage import profile
 from jarvis.tasks import hold
 from jarvis.tasks.scheduler import sentence
 
@@ -226,7 +226,7 @@ def task_notices(store, stalls: Callable[[float], list[dict]] | None = None, min
 
 
 async def usage_notices(now: datetime) -> list[Notice]:
-    from jarvis.brain import usage
+    from jarvis.llm import usage
 
     return [Notice(key, "usage", text) for key, text in usage.alerts(now.timestamp())]
 

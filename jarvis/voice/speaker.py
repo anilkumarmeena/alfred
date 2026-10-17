@@ -30,8 +30,8 @@ from pathlib import Path
 
 import numpy as np
 
-from jarvis.core import config
-from jarvis.core.config import (
+from jarvis import config
+from jarvis.config import (
     SPEAKER_ADAPT,
     SPEAKER_ADAPT_MARGIN,
     SPEAKER_ENROLL_MIN_SECONDS,
@@ -47,7 +47,7 @@ from jarvis.core.config import (
     SPEAKER_SHORT_MARGIN,
     SPEAKER_SHORT_SECONDS,
 )
-from jarvis.state import voiceprints
+from jarvis.state import preferences, voiceprints
 from jarvis.state.voiceprints import OWNER, Voiceprint
 
 log = logging.getLogger("jarvis.voice.speaker")
@@ -625,7 +625,7 @@ def record_mic(seconds: float) -> np.ndarray:
 
 
 def _status() -> None:
-    print(f"Speaker check: {config.speaker_check()}, threshold {config.speaker_threshold():g}. Model: "
+    print(f"Speaker check: {preferences.speaker_check()}, threshold {preferences.speaker_threshold():g}. Model: "
           f"{SPEAKER_MODEL.name}{'' if SPEAKER_MODEL.is_file() else ' (missing: run make models)'}.")
     found = voiceprints.every()
     for p in found:
@@ -653,7 +653,7 @@ def _test(seconds: float, record: Callable[[float], np.ndarray]) -> None:
     print("Say something...")
     speech = speech_only(record(seconds), silero())
     embedding, said = Embedder()(speech), len(speech) / RATE
-    needed = Thresholds(threshold=config.speaker_threshold()).needed(said)
+    needed = Thresholds(threshold=preferences.speaker_threshold()).needed(said)
     for p in prints:
         score = cosine(embedding, p.embedding)
         print(f"  {p.name}: {score:.2f} (needs {needed:.2f} for {said:.1f} s of speech; "

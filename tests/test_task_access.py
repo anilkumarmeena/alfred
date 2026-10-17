@@ -9,8 +9,10 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from test_in_place import NullReporter, worker_task
 
 from conftest import use_task_cache
-from jarvis.core import platform, profile
-from jarvis.safety import commands, shell
+from jarvis.core import platform
+from jarvis.gates import shell
+from jarvis.llm import claude_logins
+from jarvis.safety import commands
 from jarvis.tasks import access, briefs, gate, worker
 
 
@@ -38,7 +40,7 @@ def mac(tmp_path, monkeypatch):
     monkeypatch.setattr(briefs, "TASK_READ_DIRS", [projects])
     monkeypatch.setattr(gate, "SECRETS_DIR", secrets)
     monkeypatch.setattr(gate, "CLAUDE_CONFIG_DIR", str(claude))
-    monkeypatch.setattr(profile.Profile, "voice_logs", property(lambda _: logs))
+    monkeypatch.setattr(claude_logins, "voice_logs", lambda who=None: logs)
     use_task_cache(monkeypatch, tmp_path / "cache")
     worktree = jarvis / "data" / "worktrees" / "jarvis-9"
     worktree.mkdir(parents=True)
@@ -105,6 +107,15 @@ def test_deny_rules_hide_secrets_from_the_sandbox_too(mac):
     assert {f"{projects}/{p}" for p in commands.SECRET_PATTERNS} <= set(rules)
     assert f"{projects}/video/**/secrets/**" in rules
     assert "~/.ssh/**" in rules
+
+
+def test_deny_rules_hide_the_installs_env_when_it_lives_outside_the_checkout(mac, tmp_path, monkeypatch):
+    home = tmp_path / "jarvis-home"  # JARVIS_HOME after make home-move: under no read folder
+    monkeypatch.setattr(gate, "HOME_DIR", home)
+    monkeypatch.setattr(commands, "JARVIS_SECRETS", [*commands.JARVIS_SECRETS, home / ".env"])
+    rules = denied_paths(worker._options(worker_task(worktree=str(mac["worktree"])), NullReporter()))
+    there = home.resolve()
+    assert f"{there}/.env" in rules and f"{there}/**/.env" in rules and f"{there}/**/*.pem" in rules
 
 
 def test_deny_rules_leave_the_session_logs_readable(mac):

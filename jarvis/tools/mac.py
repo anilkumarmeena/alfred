@@ -4,9 +4,8 @@ Each runs a macOS program with argv, never through a shell. Clipboard content is
 Linux gets JARVIS's own desktop tools instead (jarvis.tools.desktop).
 """
 
-from ai_armory import load_many
-
 from jarvis.core import platform
+from jarvis.integrations.armory import load_many
 
 from . import register_toolsets
 

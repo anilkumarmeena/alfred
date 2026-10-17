@@ -1,4 +1,4 @@
-"""Tests for jarvis.brain.retry: typed failure kinds, Policy schedules, retry(), and sdk.ask timeouts."""
+"""Tests for jarvis.llm.retry: typed failure kinds, Policy schedules, retry(), and claude.ask timeouts."""
 
 import asyncio
 import logging
@@ -20,8 +20,8 @@ from claude_agent_sdk import (
 from test_in_place import NullReporter
 from test_nudges import FakeClient, result, worker_run
 
-from jarvis.brain import retry, sdk
-from jarvis.brain.retry import ERROR, LIMIT, PASSING, CallFailed, Policy
+from jarvis.llm import claude, retry
+from jarvis.llm.retry import ERROR, LIMIT, PASSING, CallFailed, Policy
 from jarvis.tasks import client
 from jarvis.voice import session
 
@@ -144,12 +144,12 @@ def test_once_is_one_try():
 
 def test_retries_are_logged_by_type_and_kind_alone(caplog):
     calls = Calls(CallFailed("a secret prompt leaked into the message", PASSING))
-    with caplog.at_level(logging.INFO, logger="jarvis.brain.retry"):
+    with caplog.at_level(logging.INFO, logger="jarvis.llm.retry"):
         asyncio.run(retry.retry(Policy(waits=(5,)), calls, "the summary", calls.sleep))
     assert "the summary failed (passing: CallFailed)" in caplog.text and "secret" not in caplog.text
 
 
-# ── sdk.ask: typed failures and timeouts ────────────────────────
+# ── claude.ask: typed failures and timeouts ────────────────────────
 
 
 def ended(**fields) -> ResultMessage:
@@ -182,24 +182,24 @@ def fake_query(monkeypatch, *messages, hang: bool = False):
     ([ended(subtype="error_during_execution")], ERROR),
 ])
 def test_a_failed_ask_says_what_kind_of_failure_it_was(monkeypatch, tmp_path, messages, kind):
-    monkeypatch.setattr(sdk.usage, "USAGE_FILE", tmp_path / "usage.json")
+    monkeypatch.setattr(claude.usage, "USAGE_FILE", tmp_path / "usage.json")
     fake_query(monkeypatch, *messages)
     with pytest.raises(CallFailed) as failed:
-        asyncio.run(sdk.ask("Sum it up.", "s", "claude-x"))
+        asyncio.run(claude.ask("Sum it up.", "s", "claude-x"))
     assert failed.value.kind == kind and isinstance(failed.value, RuntimeError)  # callers' except RuntimeError hold
 
 
 def test_every_ask_has_a_timeout(monkeypatch):
-    assert sdk.ASK_SECONDS > 0
+    assert claude.ASK_SECONDS > 0
     fake_query(monkeypatch, hang=True)
     with pytest.raises(TimeoutError):
-        asyncio.run(sdk.ask("Sum it up.", "s", "claude-x", timeout=0.05))
+        asyncio.run(claude.ask("Sum it up.", "s", "claude-x", timeout=0.05))
 
 
 def test_the_summaries_fail_rather_than_hang(monkeypatch):
     from jarvis.tasks import command_jobs, connection_jobs
 
-    monkeypatch.setattr(sdk.ask, "__defaults__", (0.05,))  # ASK_SECONDS, as the default timeout
+    monkeypatch.setattr(claude.ask, "__defaults__", (0.05,))  # ASK_SECONDS, as the default timeout
     fake_query(monkeypatch, hang=True)
     with pytest.raises(TimeoutError):
         asyncio.run(command_jobs.summarize("Build", "make", 5, "ok"))
@@ -218,7 +218,7 @@ def test_the_summaries_fail_rather_than_hang(monkeypatch):
     ([result("It broke.", 0.1, error=True)], ERROR),
 ])
 def test_a_task_run_failure_carries_its_kind(monkeypatch, tmp_path, ending, kind):
-    monkeypatch.setattr(sdk.usage, "USAGE_FILE", tmp_path / "usage.json")
+    monkeypatch.setattr(claude.usage, "USAGE_FILE", tmp_path / "usage.json")
     outcome = worker_run(monkeypatch, FakeClient(ending), NullReporter())
     assert outcome.error and outcome.kind == kind
 

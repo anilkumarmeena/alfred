@@ -1,6 +1,6 @@
-from jarvis.core import profile
 from jarvis.safety import scan
 from jarvis.state import conversation, memory, todo, vocabulary
+from jarvis.storage import profile
 
 from . import tool
 

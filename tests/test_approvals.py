@@ -12,8 +12,15 @@ from test_nudges import fake_run, finishes, settle, until
 from jarvis import server, tools
 from jarvis.brain.persona import Notes
 from jarvis.brain.sdk import jarvis_server
-from jarvis.core import profile
-from jarvis.core.database import (
+from jarvis.gates import shell
+from jarvis.notify import apns
+from jarvis.safety import remembered
+from jarvis.safety.approvals import Heard, VoiceApprovals, answered
+from jarvis.safety.commands import describe, tells_approve, tells_deny
+from jarvis.state import conversation
+from jarvis.storage import profile
+from jarvis.tasks import api, approvals, client, events as task_events, runner, worker
+from jarvis.tasks.store import (
     APPROVED,
     CANCELLED,
     DENIED,
@@ -24,12 +31,6 @@ from jarvis.core.database import (
     WAIT_QUESTION,
     nudges,
 )
-from jarvis.notify import apns
-from jarvis.safety import remembered, shell
-from jarvis.safety.approvals import Heard, VoiceApprovals, answered
-from jarvis.safety.commands import describe, tells_approve, tells_deny
-from jarvis.state import conversation
-from jarvis.tasks import api, approvals, client, events as task_events, runner, worker
 from jarvis.tasks.worker import Outcome
 from jarvis.tools import tasks as task_tools
 

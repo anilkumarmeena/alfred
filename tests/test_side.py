@@ -18,13 +18,15 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from jarvis import tools
+from jarvis import projects, tools
 from jarvis.brain import cli, side
-from jarvis.core.config import LOOKUP_MODEL, SECRETS_DIR
-from jarvis.core.database import KINDS
-from jarvis.safety import shell
+from jarvis.config import SECRETS_DIR
+from jarvis.gates import shell
+from jarvis.llm import roles
+from jarvis.llm.roles import Role
 from jarvis.state import conversation, memory
-from jarvis.tasks import access, client, projects, worker
+from jarvis.tasks import access, client, worker
+from jarvis.tasks.store import KINDS
 
 
 @pytest.fixture(autouse=True)
@@ -65,7 +67,7 @@ MARKDOWN_ANSWER = """## Wake word
 
 The wake word is **hey jarvis**.
 
-It's set in `jarvis/core/config.py` at line 88.
+It's set in `jarvis/config/__init__.py` at line 88.
 
 - It can be changed with a setting.
 - It's checked on the computer.
@@ -97,7 +99,7 @@ def unspeakable(text: str) -> bool:
 @pytest.fixture
 def wording(monkeypatch):
     """The wording model, on and faked: replies with `wording.reply` (or raises it) and records each call."""
-    from jarvis.brain import sdk, usage
+    from jarvis.llm import claude, usage
 
     model = SimpleNamespace(reply="", calls=[])
 
@@ -109,12 +111,12 @@ def wording(monkeypatch):
 
     monkeypatch.setattr(side, "ANNOUNCE_ENABLED", True)
     monkeypatch.setattr(usage, "out", lambda now=None: None)
-    monkeypatch.setattr(sdk, "ask", ask)
+    monkeypatch.setattr(claude, "ask", ask)
     return model
 
 
 def test_a_markdown_answer_is_announced_as_a_short_summary_once_with_the_detail_kept_for_the_brain(wording):
-    wording.reply = ("**The wake word is hey jarvis.** It's set in the config file, at `jarvis/core/config.py`. "
+    wording.reply = ("**The wake word is hey jarvis.** It's set in the config file, at `jarvis/config/__init__.py`. "
                      "You can change it with a setting. Want me to?")
     text, note = announced(MARKDOWN_ANSWER)
     assert text == ("On the wake word: The wake word is hey jarvis. You can change it with a setting. "
@@ -138,9 +140,9 @@ def test_without_the_wording_model_a_markdown_answer_is_trimmed_to_a_few_plain_s
 
 
 def test_a_file_lookup_s_source_line_goes_to_the_brain_and_a_plain_answer_needs_no_model(wording):
-    text, note = announced("The web server listens on port 8080.\nSource: jarvis/core/config.py:42")
+    text, note = announced("The web server listens on port 8080.\nSource: jarvis/config/__init__.py:42")
     assert text == "On the wake word: The web server listens on port 8080."
-    assert note == "Not said aloud, for follow-up questions: Source: jarvis/core/config.py:42"
+    assert note == "Not said aloud, for follow-up questions: Source: jarvis/config/__init__.py:42"
     assert wording.calls == []
 
 
@@ -409,7 +411,7 @@ def test_a_file_lookup_runs_on_the_lookup_model_with_every_read_gated(monkeypatc
     monkeypatch.setattr(shell, "scratch_dir", lambda: tmp_path / "scratch")
     assert asyncio.run(side.find("Which port does the web server use?")) == "Port 8080, in config.py."
     options = seen["options"]
-    assert options.model == LOOKUP_MODEL and options.tools == side.FILE_READS and options.allowed_tools == []
+    assert options.model == roles.model(Role.LOOKUP) and options.tools == side.FILE_READS and options.allowed_tools == []
     assert isinstance(options.can_use_tool, side.Reads) and options.max_turns == side.LOOKUP_TURNS
     assert options.cwd == str(tmp_path / "scratch") and (tmp_path / "scratch").is_dir()
 
@@ -443,7 +445,7 @@ def test_a_computer_lookup_runs_only_sandboxed_commands_on_the_lookup_model(monk
     assert asyncio.run(side.check("Does the computer need a restart?")) == ("It's been up three days, with plenty "
                                                                              "of memory free.")
     options = seen["options"]
-    assert options.model == LOOKUP_MODEL and options.tools == ["Bash"] and options.allowed_tools == []
+    assert options.model == roles.model(Role.LOOKUP) and options.tools == ["Bash"] and options.allowed_tools == []
     assert options.sandbox["enabled"] and options.sandbox["allowUnsandboxedCommands"] is False
     assert options.sandbox["network"] == {"allowedDomains": []} and options.cwd == str(tmp_path / "scratch")
     assert options.env["BASH_MAX_TIMEOUT_MS"] == str(side.CHECK_SECONDS * 1000)  # a hung command can't spend it all

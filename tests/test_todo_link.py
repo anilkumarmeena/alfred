@@ -9,11 +9,11 @@ from test_in_place import env  # noqa: F401  (env is a fixture)
 from test_nudges import fake_run, finishes, settle
 
 from jarvis import tools
-from jarvis.core import profile
-from jarvis.core.database import edits
 from jarvis.state import todo
+from jarvis.storage import profile
 from jarvis.tasks import announce, briefs, data_edits, goal, runner
 from jarvis.tasks.goal import BLOCKED, COMPLETE, Check
+from jarvis.tasks.store import edits
 from jarvis.tools import tasks as task_tools
 
 

@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable
 
 import httpx
 
-from jarvis.core import vault
+from jarvis.auth import vault
 from jarvis.integrations import mcp_oauth
 from jarvis.integrations.mcp_servers import _FIELD, Server
 

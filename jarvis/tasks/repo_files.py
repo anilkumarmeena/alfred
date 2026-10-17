@@ -20,12 +20,12 @@ from pathlib import Path
 from urllib.parse import quote, urljoin
 
 import httpx
-from claude_agent_sdk import create_sdk_mcp_server, tool as sdk_tool
 
-from jarvis.brain.sdk import READS
-from jarvis.core import vault
+from jarvis.auth import vault
 from jarvis.integrations import mcp_servers
 from jarvis.integrations.mcp_servers import Server
+from jarvis.llm.claude import READS
+from jarvis.llm.sdk import create_sdk_mcp_server, tool as sdk_tool
 from jarvis.tasks.host_tools import task_temp, text
 
 log = logging.getLogger("jarvis.tasks.repo_files")

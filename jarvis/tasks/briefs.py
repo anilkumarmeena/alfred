@@ -4,12 +4,13 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from jarvis import prompts
-from jarvis.brain.sdk import ATTRIBUTION
-from jarvis.core import profile
-from jarvis.core.config import ROOT, TASK_CACHE_DIR, TASK_READ_DIRS
+from jarvis.config import ROOT, TASK_CACHE_DIR, TASK_READ_DIRS
 from jarvis.integrations import mcp_servers
+from jarvis.llm import claude_logins
+from jarvis.llm.claude import ATTRIBUTION
 from jarvis.skills import home as skills
 from jarvis.state import todo
+from jarvis.storage import profile
 from jarvis.tasks import access, project_claude, repo_files
 from jarvis.tasks.host_tools import task_temp
 from jarvis.tasks.subagents import _agents
@@ -28,7 +29,7 @@ def _host_brief(task_id: int) -> str:
 def _also_readable() -> str:
     folders = " and ".join(str(d) for d in TASK_READ_DIRS)
     return (f"\n- You can also read, but not change, {profile.name()}'s other projects in {folders}, and JARVIS's voice session "
-            f"logs in {profile.current().voice_logs}. No need to ask for files there to be copied in. Secrets stay blocked: .env "
+            f"logs in {claude_logins.voice_logs()}. No need to ask for files there to be copied in. Secrets stay blocked: .env "
             "files, keys, credentials and secrets folders.")
 
 

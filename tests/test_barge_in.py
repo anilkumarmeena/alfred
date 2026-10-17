@@ -8,7 +8,7 @@ import pytest
 from livekit import rtc
 from livekit.agents import vad
 
-from jarvis.core import config
+from jarvis import config
 from jarvis.state.voiceprints import Voiceprint
 from jarvis.voice import speaker
 from jarvis.voice.barge_in import BargeIn, BargeInVAD

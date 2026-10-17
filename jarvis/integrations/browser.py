@@ -1,7 +1,7 @@
 """JARVIS's own web browser: Chrome (else bundled Chromium) via Playwright, for pages needing logins or JavaScript.
 
 Uses a dedicated profile (data/browser/profile), never the user's; the user logs in there and logins persist. The
-profile is treated as secret (safety.commands.JARVIS_SECRETS). Window shown unless config.browser_headless().
+profile is treated as secret (safety.commands.JARVIS_SECRETS). Window shown unless preferences.browser_headless().
 
 Read-only tools: open, text, accessibility outline, links, screenshot, back, close. Any future action that buys,
 submits or sends must be registered `gated` so it waits for a spoken yes.
@@ -13,16 +13,16 @@ the checked IP. Captchas and bot checks are reported (`bot_check`), never bypass
 
 import asyncio
 import base64
-import ipaddress
 import logging
 import re
 import secrets
-import socket
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from jarvis.core import config, profile
+from jarvis.safety.urls import SCHEMES, Refused, address, check_url, local_host  # noqa: F401  (callers find them here)
+from jarvis.state import preferences
+from jarvis.storage import profile
 
 log = logging.getLogger("jarvis.integrations.browser")
 
@@ -36,83 +36,9 @@ SIGNED_IN_PAGE = ("<!doctype html><title>Signed in</title><body style='font:16px
 
 # ── Address checks ──────────────────────────────────────────────
 
-SCHEMES = ("http", "https")
-# Names that only resolve on this computer or its LAN
-LOCAL_NAMES = ("localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback", "broadcasthost")
-LOCAL_SUFFIXES = (".localhost", ".local", ".lan", ".home", ".internal", ".intranet", ".corp", ".home.arpa",
-                  ".ts.net", ".tailscale.net")
-
-
-class Refused(Exception):
-    """Address refused; the message says why."""
-
-
 class Unavailable(Exception):
     """Browser can't start (not installed or profile in use); the message says what to do."""
 
-
-def _ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
-    try:
-        ip = ipaddress.ip_address(host.strip("[]").split("%")[0])
-    except ValueError:
-        return None
-    return ip.ipv4_mapped or ip if isinstance(ip, ipaddress.IPv6Address) else ip
-
-
-def local_address(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    """Not a public internet address: loopback, private, link-local (cloud metadata), CGNAT/Tailscale, multicast,
-    reserved."""
-    return not ip.is_global or ip.is_multicast
-
-
-def local_host(host: str) -> bool:
-    """Whether a host is local by name or literal address. Numeric forms browsers accept (2130706433, 127.1) count
-    as addresses."""
-    host = host.lower().rstrip(".")
-    if not host:
-        return True
-    if (ip := _ip(host)) is not None:
-        return local_address(ip)
-    if re.fullmatch(r"(0x[0-9a-f]+|\d+)(\.(0x[0-9a-f]+|\d+)){0,3}", host):
-        try:
-            return local_address(ipaddress.ip_address(socket.inet_aton(host)))
-        except OSError:
-            return True
-    return "." not in host or host in LOCAL_NAMES or host.endswith(LOCAL_SUFFIXES)
-
-
-def check_url(url: str) -> str:
-    """Normalised URL (https:// added if bare). Raises Refused for non-web or local addresses."""
-    url = url.strip()
-    if not url:
-        raise Refused("No address given.")
-    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", url) or re.match(r"^[^/:]+:\d+(/|$)", url):
-        url = "https://" + url  # example.com, example.com:8080/x
-    parts = urlsplit(url)
-    if parts.scheme.lower() not in SCHEMES:
-        raise Refused(f"Only web pages (http and https) can be opened, not {parts.scheme}: addresses.")
-    if parts.username or parts.password:
-        raise Refused("Addresses with a login in them aren't opened.")
-    if local_host(parts.hostname or ""):
-        raise Refused("Addresses on this computer or its local network aren't opened.")
-    return url
-
-
-async def address(host: str, port: int) -> str:
-    """IP to connect to for `host`. Raises Refused if the host or any resolved address is local, OSError if it
-    doesn't resolve."""
-    if local_host(host):
-        raise Refused(f"{host} is on this computer or its local network.")
-    if (ip := _ip(host)) is not None:
-        return str(ip)
-    found = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    ips = [_ip(str(info[4][0])) for info in found]
-    if not ips or any(ip is None or local_address(ip) for ip in ips):
-        raise Refused(f"{host} looks up to an address on this computer or its local network.")
-    return str(ips[0])
-
-
-# ── Guard proxy ─────────────────────────────────────────────────
 
 NEEDS_LOGIN = (b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"JARVIS\"\r\n"
                b"Content-Length: 0\r\nConnection: close\r\n\r\n")
@@ -245,7 +171,7 @@ def bot_check(title: str, text: str, frames: list[str], status: int | None = Non
 
 
 def blocked_note(why: str) -> str:
-    where = ("in JARVIS's browser window, then ask again" if not config.browser_headless() else
+    where = ("in JARVIS's browser window, then ask again" if not preferences.browser_headless() else
              "by opening it themselves, or by showing JARVIS's browser window in Settings and asking again")
     return (f"This looks like a captcha or bot check ({why}). Don't try to get past it or to another copy of the "
             f"page: tell {profile.name()} it's blocked. They can deal with it themselves {where}.")
@@ -339,7 +265,7 @@ class Browser:
         except ImportError:
             raise Unavailable(INSTALL) from None
         (folder := self._folder or profile.current().browser_profile).mkdir(parents=True, exist_ok=True)
-        headless = config.browser_headless() and not shown
+        headless = preferences.browser_headless() and not shown
         self.headless = headless
         await self.guard.start()
         # Route everything through the guard, including WebRTC, which would otherwise use UDP directly

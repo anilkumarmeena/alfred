@@ -24,9 +24,9 @@ from py_vapid import Vapid
 from py_vapid.utils import b64urlencode
 from pywebpush import WebPushException, webpush_async
 
-from jarvis.core import profile
-from jarvis.core.config import PUSH_CONTACT, VAPID_KEY_FILE
+from jarvis.config import PUSH_CONTACT, VAPID_KEY_FILE
 from jarvis.core.files import locked, write_atomic
+from jarvis.storage import profile
 
 if TYPE_CHECKING:
     from jarvis.notify import apns, fcm

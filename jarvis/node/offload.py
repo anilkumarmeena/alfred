@@ -25,11 +25,11 @@ import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from jarvis.core import profile
-from jarvis.core.config import DATA_DIR, NODE_LOST_MINUTES, NODE_SYNC_MAX_GB, NODE_WAIT_MINUTES
-from jarvis.core.database import ACTIVE, COMMAND
+from jarvis import projects
+from jarvis.config import DATA_DIR, NODE_LOST_MINUTES, NODE_SYNC_MAX_GB, NODE_WAIT_MINUTES
+from jarvis.contracts.remote import Offline, TurnedDown  # noqa: F401  (callers find them here)
 from jarvis.core.files import write_atomic
 from jarvis.node import bundles, machines, placement, sync, transfer
 from jarvis.node.hub import Hub
@@ -37,8 +37,10 @@ from jarvis.node.link import Link, LinkDown, Refused
 from jarvis.safety import commands, remembered
 from jarvis.skills import home as skills
 from jarvis.state import activity as bell
-from jarvis.tasks import command_jobs, hold, projects, scheduler, schedules
+from jarvis.storage import profile
+from jarvis.tasks import command_jobs, hold, scheduler, schedules
 from jarvis.tasks.host_tools import HOST_COMMANDS
+from jarvis.tasks.store import ACTIVE, COMMAND
 from jarvis.tasks.worker import Outcome
 
 if TYPE_CHECKING:
@@ -58,14 +60,6 @@ STATE = DATA_DIR / "node"
 # Task fields a machine needs to run one, nothing more
 TASK_FIELDS = ("id", "kind", "title", "instruction", "project", "in_place", "branch", "base", "session_id", "job",
                "grants", "todo", "status")
-
-
-class Offline(RuntimeError):
-    """The task's machine didn't come back in time."""
-
-
-class TurnedDown(RuntimeError):
-    """The machine's own check refused the command: it runs nowhere."""
 
 
 @dataclass
@@ -825,3 +819,10 @@ class Offload:
 
         if self.working().get(node):
             self.runner._background(note())
+
+
+def wire(runner: "Runner") -> tuple[Hub, Offload, Any]:
+    """The other machines for a task runner (jarvis.contracts.remote): their links, sending them work, and the paired
+    machine list. Handed to Runner by its process (jarvis.apps.runner)."""
+    hub = Hub()
+    return hub, Offload(runner, hub), machines

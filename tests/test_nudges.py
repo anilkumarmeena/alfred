@@ -7,9 +7,9 @@ from claude_agent_sdk import AssistantMessage, ResultMessage, ToolUseBlock
 from test_in_place import NullReporter, env, worker_task  # noqa: F401  (env is a fixture)
 
 from conftest import use_task_cache
-from jarvis.core import profile
-from jarvis.core.database import nudges
+from jarvis.storage import profile
 from jarvis.tasks import runner, worker
+from jarvis.tasks.store import nudges
 from jarvis.tasks.worker import Outcome, nudge_text, with_nudges
 from jarvis.tools import tasks as task_tools
 

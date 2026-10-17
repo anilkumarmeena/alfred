@@ -25,8 +25,13 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from jarvis.core import database, profile
+from jarvis.config import APPROVAL_MINUTES, GOOGLE_CLIENT_SECRET
+from jarvis.storage import database, profile
+
+if TYPE_CHECKING:
+    from jarvis.integrations.armory import GoogleSettings
 
 log = logging.getLogger("jarvis.integrations.accounts")
 
@@ -235,17 +240,40 @@ def show(accounts: Accounts) -> str:
     return "\n".join(lines)
 
 
+# AI Armory's Google toolset settings (google_settings): how its tools say to sign in, and its Drive staging folder
+SIGN_IN = "the Sign in button beside the {label} account on the control panel's Google accounts page"
+IMAGE_FOLDER = "JARVIS doc images"  # Drive staging folder for local images inserted into docs
+
+
+def google_settings(found: Accounts) -> "GoogleSettings":
+    """Tool-set settings for these accounts and the current profile; an account's note tells the model its purpose."""
+    from jarvis.integrations.armory import Account, GoogleSettings
+    from jarvis.safety.commands import JARVIS_SECRETS
+
+    mine = profile.current()
+    return GoogleSettings(
+        accounts=[Account(a.label, a.email, a.note, a.chat) for a in found.accounts],
+        default=found.default,
+        token_dir=mine.secrets,
+        timezone=mine.timezone,
+        user_name=mine.name,
+        sign_in_command=SIGN_IN,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        draft_minutes=2 * APPROVAL_MINUTES,  # time to answer, then to go ahead after the yes
+        image_folder=IMAGE_FOLDER,
+        blocked_paths=[str(p) for p in JARVIS_SECRETS],  # never uploaded into a doc
+    )
+
+
 def configure_google(found: Accounts) -> None:
     """Configure AI Armory's Google toolset with these accounts, as jarvis.tools.google does."""
-    from ai_armory.toolsets.google import configure
+    from jarvis.integrations.armory import configure
 
-    from jarvis.tools import google
-
-    configure(google.settings(found))
+    configure(google_settings(found))
 
 
 def _check_chat(label: str) -> int:
-    from ai_armory.toolsets.google import auth
+    from jarvis.integrations.armory import auth
 
     found = load()
     if label not in found.chat_labels:

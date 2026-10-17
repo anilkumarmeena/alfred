@@ -1,0 +1,56 @@
+# Which Claude model JARVIS uses for each job. The code asks for a role ("announce", "task"), never a model id.
+#
+# Override any of this in ~/.jarvis/config.toml under the same tables with a "models." prefix, e.g.
+#   [models.tiers]
+#   fast = "claude-haiku-5-5"
+# or for one role from the environment (.env), with the variable named beside it below.
+
+# The three tiers every role draws on
+[tiers]
+deep = "claude-opus-5-5"              # the voice brain and code tasks
+balanced = "claude-sonnet-5"          # judgment: test runs, web research, triage, scheduled runs
+fast = "claude-haiku-4-5-20251001"    # quick checks and lookups
+
+# Role -> a tier, another role, or a literal model id. Empty = no model of its own (see the role).
+[roles]
+voice = "deep"                 # JARVIS_CLI_MODEL: the spoken conversation
+voice_quick = ""               # JARVIS_VOICE_QUICK_MODEL: voice turns judged to need no tools; empty = always voice
+lookup = "fast"                # JARVIS_LOOKUP_MODEL: read-only file lookups during a spoken turn
+side = "balanced"              # JARVIS_SIDE_MODEL: background lookups handed off by the voice brain
+consent = "fast"               # JARVIS_CONSENT_MODEL: reads a spoken yes/no the word lists can't
+injection = "fast"             # JARVIS_INJECTION_MODEL (also a Settings preference): screens tool results
+task = "deep"                  # JARVIS_TASK_MODEL: background tasks
+task_search = "fast"           # JARVIS_TASK_SEARCH_MODEL: a task's read-only code-search subagent
+task_helper = "balanced"       # JARVIS_TASK_HELPER_MODEL: a task's test-runner and web-research subagents
+goal = "task"                  # JARVIS_GOAL_MODEL: checks a finished task against its request
+announce = "fast"              # JARVIS_ANNOUNCE_MODEL: words a task's spoken ending
+placement = "fast"             # JARVIS_PLACEMENT_MODEL: picks which machine runs a job
+schedule = "balanced"          # JARVIS_SCHEDULE_MODEL: routine scheduled runs and watches
+verdict = "fast"               # JARVIS_VERDICT_MODEL: yes/no verdicts on a scheduled run's summary
+command_summary = "fast"       # JARVIS_COMMAND_SUMMARY_MODEL: sums up a command that worked
+command_triage = "balanced"    # JARVIS_COMMAND_TRIAGE_MODEL: says why a command failed and what to do
+learning = "fast"              # JARVIS_LEARNING_MODEL: suggests memory edits after a conversation
+todo_match = "fast"            # JARVIS_TODO_MATCH_MODEL: whether a new to-do repeats one on the list
+skill_review = "balanced"      # JARVIS_SKILL_REVIEW_MODEL: reviews an installed skill's scripts
+sign_in_check = "fast"         # checks a Claude login works (make claude-login)
+moment = "fast"                # when to speak an update unasked (a warm session)
+route = "fast"                 # whether a voice turn can go to voice_quick (a warm session)
+
+# Tiers offered for the injection check in Settings (.env may name any model)
+[choices]
+injection = ["fast", "balanced"]
+
+# Model families, matched by name in a model id. A family with a usage window of its own (Claude's weekly Opus or
+# Sonnet limit) falls back to the lighter tier while that window is used up.
+[families.opus]
+match = "opus"
+window = "seven_day_opus"
+lighter = "balanced"
+
+[families.sonnet]
+match = "sonnet"
+window = "seven_day_sonnet"
+lighter = "fast"
+
+[families.haiku]
+match = "haiku"

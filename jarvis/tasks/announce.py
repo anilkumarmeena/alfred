@@ -1,4 +1,4 @@
-"""Spoken announcement of a task's end: a sentence or two worded by one tool-less ANNOUNCE_MODEL call.
+"""Spoken announcement of a task's end: a sentence or two worded by one tool-less announce-role call.
 
 Input is an `Ending`: outcome and report, what the goal check found missing, what JARVIS already did, and pending
 suggested edits. `lead` (words already fit to say) is kept verbatim and the rest appended. Falls back to `plain`
@@ -14,9 +14,10 @@ import re
 from dataclasses import dataclass, field
 
 from jarvis import prompts
-from jarvis.brain import usage
-from jarvis.core import profile
-from jarvis.core.config import ANNOUNCE_ENABLED, ANNOUNCE_MODEL, ANNOUNCE_SECONDS
+from jarvis.config import ANNOUNCE_ENABLED, ANNOUNCE_SECONDS
+from jarvis.llm import usage
+from jarvis.llm.roles import Role
+from jarvis.storage import profile
 from jarvis.tasks import data_edits
 from jarvis.tasks.scheduler import headline, sentence
 
@@ -99,10 +100,10 @@ def plain(e: Ending) -> str:
 
 
 async def ask_model(text: str) -> str:
-    """One tool-less ANNOUNCE_MODEL call; returns its reply."""
-    from jarvis.brain.sdk import ask
+    """One tool-less announce-role call; returns its reply."""
+    from jarvis.llm.claude import ask
 
-    reply, _ = await ask(text, system(), ANNOUNCE_MODEL, effort="low")
+    reply, _ = await ask(text, system(), Role.ANNOUNCE, effort="low")
     return reply
 
 

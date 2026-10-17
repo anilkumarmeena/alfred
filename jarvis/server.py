@@ -1,6 +1,6 @@
 """Web front end for the phone and browsers: uv run python -m jarvis.server
 
-Serves web/dist and, for a valid login passcode (jarvis.core.logins), issues LiveKit tokens, stores Web Push and APNs
+Serves web/dist and, for a valid login passcode (jarvis.auth.logins), issues LiveKit tokens, stores Web Push and APNs
 registrations, accepts photos (/api/picture), phone debug logs (/api/log) and control panel actions
 (/api/panel/ACTION). /api/events streams runner events and activity as JSON lines. Exceptions to passcode auth:
 /api/approvals/ID uses the push's one-time nonce; /api/files/TOKEN is a capability link; /api/google/callback is where
@@ -28,8 +28,8 @@ from aiohttp import web
 from livekit import api
 
 from jarvis import panel
-from jarvis.core import credentials, logins, vault
-from jarvis.core.config import LIVEKIT_URL, PUSH_ENABLED, ROOT, WEB_PORT
+from jarvis.auth import credentials, logins, vault
+from jarvis.config import LIVEKIT_URL, PUSH_ENABLED, ROOT, WEB_PORT
 from jarvis.integrations import google_signin
 from jarvis.node import link as node_link, machines
 from jarvis.notify import apns, fcm, push
@@ -412,7 +412,10 @@ def app() -> web.Application:
 
 
 if __name__ == "__main__":
+    from jarvis import bootstrap
+
     logging.basicConfig(level=logging.INFO)
+    bootstrap.wire()  # the panel's schedule changes check watches against JARVIS's tools
     # Move remaining .env credentials into the vault; JARVIS_PASSCODE becomes the first login
     for label in credentials.adopt():
         log.warning("moved the %s from .env into the vault", label)

@@ -2,9 +2,9 @@
 the conversation carries on.
 
 Three kinds, all short read-only sessions that need no approval:
-  background_lookup  web search/fetch and read-only JARVIS tools on SIDE_MODEL; always in the background.
-  file_lookup        Read, Glob and Grep on LOOKUP_MODEL, at most LOOKUP_READS reads.
-  computer_lookup    shell commands on LOOKUP_MODEL, held in the sandbox (no network, no writes outside the scratch
+  background_lookup  web search/fetch and read-only JARVIS tools on the side role; always in the background.
+  file_lookup        Read, Glob and Grep on the lookup role, at most LOOKUP_READS reads.
+  computer_lookup    shell commands on the lookup role, held in the sandbox (no network, no writes outside the scratch
                      dir, no secrets), at most LOOKUP_READS commands of CHECK_SECONDS each.
 The last two answer in the turn if they're in within the turn's LOOKUP_WAIT budget (shared by every such lookup in
 that turn); otherwise they carry on in the background like the first.
@@ -22,23 +22,20 @@ import time
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 
-from claude_agent_sdk import AssistantMessage, PermissionResultAllow, PermissionResultDeny, TextBlock, ToolUseBlock
-
 from jarvis import prompts, tools
-from jarvis.core import profile
-from jarvis.core.config import (
+from jarvis.config import (
     ANNOUNCE_ENABLED,
-    ANNOUNCE_MODEL,
     ANNOUNCE_SECONDS,
-    LOOKUP_MODEL,
     LOOKUP_WAIT,
     NEW_PROJECTS_DIR,
     ROOT,
     SIDE_MINUTES,
-    SIDE_MODEL,
 )
+from jarvis.core.speakable import speakable
+from jarvis.llm.roles import Role
+from jarvis.llm.sdk import AssistantMessage, PermissionResultAllow, PermissionResultDeny, TextBlock, ToolUseBlock
 from jarvis.safety.commands import names_secret, reads_environment
-from jarvis.voice.speakable import speakable
+from jarvis.storage import profile
 
 log = logging.getLogger("jarvis.brain.side")
 
@@ -103,10 +100,10 @@ async def spoken(found: str) -> tuple[str, str]:
     """A lookup's answer as (words to say, detail for the brain alone).
 
     Said as it is if already short plain speech (minus a file lookup's "Source:" line, which becomes the detail);
-    otherwise worded down by ANNOUNCE_MODEL, with the whole answer as the detail. Trimmed by hand when that's off,
+    otherwise worded down by the announce role, with the whole answer as the detail. Trimmed by hand when that's off,
     fails or is slow, and the model's words are trimmed too, so nothing unspeakable gets through."""
-    from jarvis.brain import usage
-    from jarvis.brain.sdk import ask
+    from jarvis.llm import usage
+    from jarvis.llm.claude import ask
 
     answer = _SOURCE.sub("", found).strip()
     trimmed = _trimmed(answer)
@@ -115,7 +112,7 @@ async def spoken(found: str) -> tuple[str, str]:
     said = ""
     if ANNOUNCE_ENABLED and not usage.out():
         try:
-            reply, _ = await ask(f"<answer>{found[:ANSWER_MOST]}</answer>", spoken_system(), ANNOUNCE_MODEL,
+            reply, _ = await ask(f"<answer>{found[:ANSWER_MOST]}</answer>", spoken_system(), Role.ANNOUNCE,
                                  timeout=ANNOUNCE_SECONDS, effort="low")
             said = _trimmed(reply)
         except Exception as e:  # log the type only: no answer content
@@ -189,17 +186,15 @@ def _noted(m: AssistantMessage) -> list[str]:
 
 async def _answer(brief: str, options) -> str:
     """One side session's reply, its steps kept in `_steps` as it goes. RuntimeError on failure."""
-    import claude_agent_sdk  # resolved at call time so tests can fake query
-
-    from jarvis.brain import sdk
+    from jarvis.llm import claude, sdk
 
     reply, steps = "", _steps.get()
-    async for m in claude_agent_sdk.query(prompt=brief, options=options):
+    async for m in sdk.query(prompt=brief, options=options):
         if isinstance(m, AssistantMessage) and steps is not None:
             steps += _noted(m)
-        elif isinstance(m, claude_agent_sdk.RateLimitEvent):
-            sdk.record(m.rate_limit_info, options)  # under the login it ran on
-        elif isinstance(m, claude_agent_sdk.ResultMessage):
+        elif isinstance(m, sdk.RateLimitEvent):
+            claude.record(m.rate_limit_info, options)  # under the login it ran on
+        elif isinstance(m, sdk.ResultMessage):
             if m.is_error:
                 raise RuntimeError(f"the side job failed: {m.subtype}")
             reply = m.result or ""
@@ -208,12 +203,12 @@ async def _answer(brief: str, options) -> str:
 
 async def look(brief: str) -> str:
     """Run one background_lookup job; returns its spoken answer. RuntimeError on failure."""
-    from jarvis.brain import usage
     from jarvis.brain.sdk import jarvis_server, sdk_options
+    from jarvis.llm import usage
 
     server, allowed = jarvis_server(reads)  # picked after it takes changed Google accounts
     return await _answer(brief, sdk_options(
-        model=usage.available(SIDE_MODEL), system_prompt=system(), cwd=str(profile.current().data), max_turns=MAX_TURNS,
+        model=usage.available(Role.SIDE), system_prompt=system(), cwd=str(profile.current().data), max_turns=MAX_TURNS,
         tools=WEB, mcp_servers={"jarvis": server}, allowed_tools=WEB + allowed,
         permission_mode="dontAsk",  # only the reads above
     ))
@@ -221,13 +216,13 @@ async def look(brief: str) -> str:
 
 async def find(brief: str) -> str:
     """Run one file_lookup job; returns its answer. RuntimeError on failure."""
-    from jarvis.brain import usage
     from jarvis.brain.sdk import sdk_options
-    from jarvis.safety import shell
+    from jarvis.gates import shell
+    from jarvis.llm import usage
 
     (scratch := shell.scratch_dir()).mkdir(parents=True, exist_ok=True)
     return await _answer(brief, sdk_options(
-        model=usage.available(LOOKUP_MODEL), system_prompt=lookup_system(), cwd=str(scratch),
+        model=usage.available(Role.LOOKUP), system_prompt=lookup_system(), cwd=str(scratch),
         max_turns=LOOKUP_TURNS, tools=FILE_READS, allowed_tools=[], permission_mode="default",
         can_use_tool=Reads(),  # every read meets it
     ))
@@ -235,15 +230,16 @@ async def find(brief: str) -> str:
 
 async def check(brief: str) -> str:
     """Run one computer_lookup job; returns its answer. RuntimeError on failure."""
-    from jarvis.brain import usage
-    from jarvis.brain.sdk import refusing, sdk_options
-    from jarvis.safety import shell
+    from jarvis.brain.sdk import sdk_options
+    from jarvis.gates import shell
+    from jarvis.llm import usage
+    from jarvis.llm.claude import refusing
 
     (scratch := shell.scratch_dir()).mkdir(parents=True, exist_ok=True)
     timeout = str(CHECK_SECONDS * 1000)
     return await _answer(brief, sdk_options(
         env={"BASH_DEFAULT_TIMEOUT_MS": timeout, "BASH_MAX_TIMEOUT_MS": timeout},
-        model=usage.available(LOOKUP_MODEL), system_prompt=check_system(), cwd=str(scratch),
+        model=usage.available(Role.LOOKUP), system_prompt=check_system(), cwd=str(scratch),
         max_turns=LOOKUP_TURNS, tools=["Bash"], allowed_tools=[], permission_mode="default",
         sandbox=shell.SANDBOX | {"allowUnsandboxedCommands": False},  # never leaves it, even when asked to
         settings=shell.SETTINGS,  # secrets unreadable in the sandbox
@@ -254,7 +250,7 @@ async def check(brief: str) -> str:
 def _carrier(lookup: str, brief: str) -> tuple[str, str | None, list[str]]:
     """(kind, project, access) of the read-only task that carries on `lookup`, reaching what it could and no more: a
     file lookup is a code_question on the project its brief points at."""
-    from jarvis.tasks import projects
+    from jarvis import projects
 
     if lookup == "background_lookup":
         return "research", None, ["accounts"]  # read-only: no edits to Sheets or Docs

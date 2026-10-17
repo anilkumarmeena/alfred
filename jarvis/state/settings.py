@@ -17,50 +17,22 @@ import logging
 import os
 import sqlite3
 import sys
-from contextlib import AbstractContextManager
 from pathlib import Path
 
 import numpy as np
 
-from jarvis.core import config, database, profile
+from jarvis import config
+from jarvis.state import preferences as prefs
+from jarvis.storage import profile
+from jarvis.storage.settings_table import get, put  # noqa: F401  (this module is where callers find them)
 
 log = logging.getLogger("jarvis.state.settings")
 
 RESTART = "Restart the services for JARVIS to see the change: make services-restart"
 
-_SCHEMA = """
-create table settings (
-    key text primary key,
-    value text not null
-)"""
-_MIGRATIONS = (
-    "select 1",  # 2: dropped the retired heartbeat's sources; kept as a no-op so later versions keep their numbers
-)
-
-
 def tidy(text: str) -> str:
     """Trim lines and drop blank ones."""
     return "\n".join(l for l in (l.strip() for l in text.splitlines()) if l)
-
-
-def _db() -> AbstractContextManager[sqlite3.Connection]:
-    return database.table("settings", _SCHEMA, migrations=_MIGRATIONS)
-
-
-def get(key: str, default: str = "") -> str:
-    with _db() as db:
-        row = db.execute("select value from settings where key = ?", (key,)).fetchone()
-    return row[0] if row else default
-
-
-def put(key: str, value: str) -> None:
-    """Set `key`; an empty value deletes it."""
-    with _db() as db:
-        if value:
-            db.execute("insert into settings values (?, ?) on conflict(key) do update set value = excluded.value",
-                       (key, value))
-        else:
-            db.execute("delete from settings where key = ?", (key,))
 
 
 def about() -> str:
@@ -81,7 +53,7 @@ def set_about(text: str) -> str:
 
 # ── Preferences ─────────────────────────────────────────────────
 
-VOICES_FILE = config.ROOT / "models/voices-v1.0.bin"
+VOICES_FILE = config.TTS_VOICES_FILE
 ACCENTS = {"a": "American", "b": "British"}
 
 
@@ -92,7 +64,7 @@ def voices() -> list[str]:
             names = found.files
     except (OSError, ValueError):
         names = []
-    return sorted(n for n in names if n[:1] in ACCENTS and n[1:3] in ("f_", "m_")) or [config.tts_voice()]
+    return sorted(n for n in names if n[:1] in ACCENTS and n[1:3] in ("f_", "m_")) or [prefs.tts_voice()]
 
 
 def _clean(key: str, value: str) -> str:
@@ -132,11 +104,10 @@ def _clean(key: str, value: str) -> str:
             raise ValueError(f"The browser window is {' or '.join(config.BROWSER_WINDOWS)}.")
         return value.lower()
     if key == "quiet_hours":
-        from jarvis.tasks import hold  # circular import
         if value.lower() in config.OFF:
             return "off"
         try:
-            start, end = hold.window(value)
+            start, end = prefs.quiet_window(value)
         except ValueError:
             raise ValueError("Give quiet hours as two different times, like 23:00-08:00, or off.") from None
         return f"{start:%H:%M}-{end:%H:%M}"

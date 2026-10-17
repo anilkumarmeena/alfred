@@ -12,11 +12,13 @@ import shlex
 import sys
 import time
 
-from jarvis.core import config, platform
+from jarvis import config
+from jarvis.core import platform
 from jarvis.core.files import write_atomic
+from jarvis.core.speakable import speakable
+from jarvis.media import audio_file as render
+from jarvis.state import preferences
 from jarvis.tasks import client
-from jarvis.voice import audio_file as render
-from jarvis.voice.speakable import speakable
 
 from . import tool
 from .files import read_file
@@ -74,7 +76,7 @@ async def audio_file(text: str = "", path: str = "", title: str = "", format: st
         how = "brew install ffmpeg" if platform.MAC else "install it with the system's package manager"
         raise ValueError(f"No {fmt} encoder on this computer: {fmt} needs {render.programs(fmt)} ({how})"
                          + (". m4a works without it." if fmt != "m4a" and render.can_make("m4a") else "."))
-    voice = voice.strip() or config.tts_voice()
+    voice = voice.strip() or preferences.tts_voice()
     if not re.fullmatch(r"[a-z]{2}_[a-z0-9]+", voice):
         raise ValueError(f"{voice} isn't a Kokoro voice name; they look like bm_george or af_heart.")
     named = ""
@@ -88,12 +90,12 @@ async def audio_file(text: str = "", path: str = "", title: str = "", format: st
                          "go in one file. Split it.")
     name = render.file_name(title or named or _first_words(spoken))
     out = render.free_path(config.AUDIO_DIR, name, fmt)
-    speed = config.tts_speed()
+    speed = preferences.tts_speed()
     render.work_dir().mkdir(parents=True, exist_ok=True)
     spec = render.work_dir() / f"{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}.json"
     write_atomic(spec, json.dumps({"text": spoken, "out": str(out), "format": fmt, "voice": voice, "speed": speed,
                                    "title": name, "phone": phone}), mode=0o600)
-    command = f"{shlex.quote(sys.executable)} -m jarvis.voice.audio_file {shlex.quote(str(spec))}"
+    command = f"{shlex.quote(sys.executable)} -m jarvis.apps.audio_file {shlex.quote(str(spec))}"
     try:  # last line reports the result; no auto-fix
         job = await client.start_command(command, f"the audio file {name}", str(config.ROOT), summarize=False,
                                          auto_fix=False, report=True)

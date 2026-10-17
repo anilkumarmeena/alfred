@@ -8,12 +8,12 @@ from test_in_place import NullReporter, env, worker_task  # noqa: F401  (env is 
 from test_nudges import fake_run, settle
 
 from conftest import use_task_cache
-from jarvis import tools
+from jarvis import projects, tools
 from jarvis.brain import persona
-from jarvis.core import profile
-from jarvis.core.database import edits
 from jarvis.state import memory, todo
-from jarvis.tasks import announce, client, data_edits, projects, reporting, runner, worker
+from jarvis.storage import profile
+from jarvis.tasks import announce, client, data_edits, reporting, runner, worker
+from jarvis.tasks.store import edits
 from jarvis.tasks.worker import Outcome
 from jarvis.tools import tasks as task_tools
 
@@ -352,7 +352,7 @@ def test_the_task_tool_says_what_it_noted_or_what_to_fix(data, monkeypatch):
 
 
 def test_a_suggested_to_do_the_list_has_is_refused_or_merged_into_it(data, monkeypatch):
-    from jarvis.brain import sdk
+    from jarvis.llm import claude
 
     async def judged(prompt, *args, **options):
         return {"same": 1, "merged": "Build the iPhone app, with push notifications"}, 0.0
@@ -367,7 +367,7 @@ def test_a_suggested_to_do_the_list_has_is_refused_or_merged_into_it(data, monke
                     f"Not suggested: it's already done (ticked off {TODAY}): 'Old'. If part of it is still to do, "
                     "suggest only that part."]
     monkeypatch.setattr(todo, "TODO_MATCH_ENABLED", True)
-    monkeypatch.setattr(sdk, "ask_json", judged)
+    monkeypatch.setattr(claude, "ask_json", judged)
     merged = asyncio.run(propose({"action": "todo_add", "item": "Build an iPhone app with push notifications",
                                   "reason": "Push needs it."}))
     assert merged["content"][0]["text"].startswith("Suggested as edit 1: reword the to-do matching 'Build the iPhone "

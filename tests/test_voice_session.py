@@ -6,8 +6,8 @@ import asyncio
 import pytest
 
 from jarvis.brain.kept import Kept
-from jarvis.core import profile
 from jarvis.state import conversation
+from jarvis.storage import profile
 from jarvis.tasks import client
 from jarvis.voice import floor as floor_module, session as voice_session
 from jarvis.voice.floor import Floor

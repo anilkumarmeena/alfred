@@ -11,7 +11,7 @@ from test_in_place import worker_task
 from test_task_host import Asking
 
 from conftest import use_task_cache
-from jarvis.brain.sdk import BUILTIN_AGENTS_DENIED
+from jarvis.llm.claude import BUILTIN_AGENTS_DENIED
 from jarvis.tasks import project_claude, worker
 
 SCOUT = """---

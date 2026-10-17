@@ -9,10 +9,9 @@ that's a check for computer_lookup. Hand-offs themselves always run.
 import time
 from collections.abc import Callable
 
-from claude_agent_sdk import HookMatcher
-
-from jarvis.brain.sdk import refusing
-from jarvis.core.config import TURN_SECONDS, TURN_TOOLS
+from jarvis.config import TURN_SECONDS, TURN_TOOLS
+from jarvis.llm.claude import refusing
+from jarvis.llm.sdk import HookMatcher
 from jarvis.safety.commands import programs
 
 # Calls that hand work off rather than do it, stop background work the user asked to stop, and loading deferred tools

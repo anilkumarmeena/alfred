@@ -54,9 +54,10 @@ from pathlib import Path
 from shutil import which
 from urllib.parse import urlsplit
 
-from jarvis.core import credentials, database, logins, profile, vault
-from jarvis.core.config import ROOT, TOOL_SEARCH
+from jarvis.auth import credentials, logins, vault
+from jarvis.config import ROOT, TOOL_SEARCH
 from jarvis.safety import host
+from jarvis.storage import database, profile
 
 log = logging.getLogger("jarvis.integrations.mcp_servers")
 
@@ -433,7 +434,7 @@ def for_research() -> list[Server]:
 
 def launcher(name: str, *flags: str) -> dict:
     """CLI stdio config that starts a server via the launcher; names only the server."""
-    return {"type": "stdio", "command": sys.executable, "args": ["-m", "jarvis.integrations.mcp_launch", name, *flags],
+    return {"type": "stdio", "command": sys.executable, "args": ["-m", "jarvis.apps.mcp_launch", name, *flags],
             "env": {"PYTHONPATH": str(ROOT), "PATH": os.environ.get("PATH", "")}}
 
 
@@ -543,7 +544,7 @@ class _Probe:
     """The server started bare via the launcher (even if disabled or unreviewed), spoken to in JSON-RPC lines."""
 
     def __init__(self, server: Server, read_only: bool) -> None:
-        self.proc = subprocess.Popen([sys.executable, "-m", "jarvis.integrations.mcp_launch", server.name, "--probe",
+        self.proc = subprocess.Popen([sys.executable, "-m", "jarvis.apps.mcp_launch", server.name, "--probe",
                                       *(["--read-only"] * read_only)],
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                      env=os.environ | session_env() | launcher(server.name)["env"],

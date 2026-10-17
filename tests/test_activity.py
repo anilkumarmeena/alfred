@@ -9,10 +9,10 @@ import pytest
 from conftest import use_profile
 from jarvis import panel, tools
 from jarvis.brain import cli
-from jarvis.core import database, profile
+from jarvis.gates import mcp_gate
 from jarvis.integrations.mcp_servers import Server, Tool
-from jarvis.safety import mcp_gate
 from jarvis.state import activity
+from jarvis.storage import database, profile
 from jarvis.tasks import runner
 
 ACME = Server("acme", "Acme", command="acme-mcp",

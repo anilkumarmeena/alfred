@@ -19,7 +19,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from jarvis.core import platform, profile
+from jarvis.core import platform
+from jarvis.storage import profile
 
 log = logging.getLogger("jarvis.pictures")
 

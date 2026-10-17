@@ -12,14 +12,15 @@ from test_in_place import env  # noqa: F401  (fixture)
 from test_nudges import fake_run, finishes, settle
 
 from conftest import ACCOUNTS, use_profile, use_task_cache
-from jarvis import tools
-from jarvis.brain import retry
-from jarvis.core import config, database, profile
-from jarvis.core.database import Store
+from jarvis import config, tools
 from jarvis.integrations import accounts
+from jarvis.llm import retry, roles
+from jarvis.llm.roles import Role
 from jarvis.state import settings
-from jarvis.tasks import runner, schedules, scheduler, worker
+from jarvis.storage import database, profile
+from jarvis.tasks import runner, scheduler, schedules, worker
 from jarvis.tasks.scheduler import Found, Reading, Scheduler
+from jarvis.tasks.store import Store
 
 # A Tuesday, 09:15
 NOW = datetime(2026, 10, 6, 9, 15, tzinfo=profile.tz())
@@ -44,7 +45,7 @@ def flags(monkeypatch):
         queued = fake.answers.get(field, [])
         return queued.pop(0) if queued else None
 
-    monkeypatch.setattr("jarvis.brain.sdk.ask_flag", ask_flag)
+    monkeypatch.setattr("jarvis.llm.claude.ask_flag", ask_flag)
     return fake
 
 
@@ -519,7 +520,7 @@ def judged(monkeypatch):
             raise RuntimeError("the model call failed")
         return fake.answers.pop(0), 0.0
 
-    monkeypatch.setattr("jarvis.brain.sdk.ask_json", ask_json)
+    monkeypatch.setattr("jarvis.llm.claude.ask_json", ask_json)
     return fake
 
 
@@ -866,9 +867,9 @@ def test_a_restart_drops_a_watch_check_quietly_but_not_a_task(env):
 
 def test_scheduled_runs_use_the_lighter_model(env):
     research = {"kind": "research", "job": 3}
-    assert worker._model(research) == (worker.SCHEDULE_MODEL, worker.SCHEDULE_EFFORT)
-    assert worker._model({"kind": "code_change", "job": 3}) == (worker.TASK_MODEL, worker.TASK_EFFORT)
-    assert worker._model({"kind": "research", "job": None}) == (worker.TASK_MODEL, worker.TASK_EFFORT)
+    assert worker._model(research) == (roles.model(Role.SCHEDULE), worker.SCHEDULE_EFFORT)
+    assert worker._model({"kind": "code_change", "job": 3}) == (roles.model(Role.TASK), worker.TASK_EFFORT)
+    assert worker._model({"kind": "research", "job": None}) == (roles.model(Role.TASK), worker.TASK_EFFORT)
 
 
 # ── Storage ─────────────────────────────────────────────────────
@@ -1131,7 +1132,7 @@ def limit_used_up(resets_at: float, kind: str = "five_hour", utilization: float 
                   status: str = "rejected") -> None:
     from claude_agent_sdk import RateLimitInfo
 
-    from jarvis.brain import usage
+    from jarvis.llm import usage
 
     usage.record(RateLimitInfo(status=status, resets_at=int(resets_at), rate_limit_type=kind,
                                utilization=utilization), now=NOW.timestamp())
@@ -1139,7 +1140,7 @@ def limit_used_up(resets_at: float, kind: str = "five_hour", utilization: float 
 
 @pytest.fixture
 def usage_file(tmp_path, monkeypatch):
-    from jarvis.brain import usage
+    from jarvis.llm import usage
 
     monkeypatch.setattr(usage, "USAGE_FILE", tmp_path / "usage.json")
     return tmp_path / "usage.json"

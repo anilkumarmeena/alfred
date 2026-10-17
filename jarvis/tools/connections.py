@@ -15,13 +15,13 @@ import logging
 from dataclasses import replace
 from urllib.parse import urlsplit
 
-from ai_armory.toolsets.google import drafts
-
-from jarvis.core import profile, vault
+from jarvis.auth import vault
 from jarvis.integrations import mcp_oauth, mcp_registry, mcp_servers
+from jarvis.integrations.armory import drafts
 from jarvis.integrations.mcp_servers import Server, Tool
 from jarvis.safety import host
 from jarvis.state import activity
+from jarvis.storage import profile
 
 from . import tool
 

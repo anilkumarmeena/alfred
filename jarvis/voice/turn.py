@@ -12,8 +12,8 @@ import logging
 import time
 from dataclasses import asdict, dataclass, fields
 
-from jarvis.core import profile
-from jarvis.core.config import WHISPER_UNSURE_LOGPROB
+from jarvis.config import WHISPER_UNSURE_LOGPROB
+from jarvis.storage import profile
 
 log = logging.getLogger("jarvis.voice.turn")
 

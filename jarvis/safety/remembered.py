@@ -14,8 +14,9 @@ import re
 import time
 from pathlib import Path
 
-from jarvis.core import database
 from jarvis.safety.commands import Own, names_secret, program, reads_environment, risky_pieces
+from jarvis.safety.risk import Risk
+from jarvis.storage import database
 
 log = logging.getLogger("jarvis.safety.remembered")
 
@@ -23,8 +24,8 @@ SCOPES = ("session", "always")
 BREADTHS = ("exact", "kind")
 SESSION_HOURS = 12
 # Risk kinds a rule may cover; every other kind always asks
-REMEMBERABLE = {"installs software", "stops a process", "changes permissions", "changes the iPhone", "changes a simulator"}
-_NUMBERED = {"stops a process"}  # pids vary per run: exact rules match any number
+REMEMBERABLE = {Risk.INSTALLS, Risk.STOPS, Risk.PERMISSIONS, Risk.IPHONE, Risk.SIMULATOR}
+_NUMBERED = {Risk.STOPS}  # pids vary per run: exact rules match any number
 ANY_NUMBER = "#"
 _NOT_LITERAL = re.compile(r"[$`*?\[\]{}\\\n]")  # the shell could expand it
 

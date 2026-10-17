@@ -4,7 +4,7 @@ Models load once in LiveKit's shared inference process (runners registered here)
 over IPC, so concurrent calls share one Whisper and one Kokoro. Requests are serialized, and each runner locks too.
 If that process is down or a model failed to load, STT/TTS raise APIConnectionError instead of hanging.
 
-Whisper runs on MLX (Apple GPU) on Apple silicon and on faster-whisper elsewhere (jarvis.core.whisper). It is
+Whisper runs on MLX (Apple GPU) on Apple silicon and on faster-whisper elsewhere (jarvis.media.whisper). It is
 prompted with the user's vocabulary, and known mishearings are fixed after the speech gate. Memory is kept lean: MLX's
 buffer cache is capped (JARVIS_MLX_CACHE_MB) and Kokoro's ORT arena is off by default.
 """
@@ -25,18 +25,17 @@ from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 
-from jarvis.core import whisper
-from jarvis.core.config import (
+from jarvis.config import (
     MLX_CACHE_MB,
-    ROOT,
     STT_MODEL,
     TTS_MEMORY_ARENA,
     TTS_MODEL,
     TTS_MODEL_FALLBACKS,
-    TTS_SPEED,
     TTS_THREADS,
-    TTS_VOICE,
+    TTS_VOICES_FILE,
 )
+from jarvis.media import whisper
+from jarvis.state import preferences
 from jarvis.state.vocabulary import Vocabulary
 from jarvis.voice.clauses import ClauseTokenizer
 from jarvis.voice.speaker import SpeakerCheck
@@ -198,8 +197,8 @@ class KokoroRunner(_InferenceRunner):
         from kokoro_onnx import Kokoro
 
         model, threads = kokoro_model(), kokoro_threads()
-        self._kokoro = Kokoro.from_session(kokoro_session(model, threads), str(ROOT / "models/voices-v1.0.bin"))
-        self._render("Ready.", TTS_VOICE, TTS_SPEED, timed=False)  # first synthesis is slow
+        self._kokoro = Kokoro.from_session(kokoro_session(model, threads), str(TTS_VOICES_FILE))
+        self._render("Ready.", preferences.tts_voice(), preferences.tts_speed(), timed=False)  # first synthesis is slow
         log.info("shared speech process: Kokoro loaded (%s, %s, memory arena %s)", model.name,
                  f"{threads} threads" if threads else "ONNX Runtime's default threads",
                  "on" if TTS_MEMORY_ARENA else "off")
@@ -379,10 +378,11 @@ class WhisperSTT(stt.STT):
 class KokoroTTS(tts.TTS):
     """Whole-piece TTS, fed one sentence or clause at a time via streaming(). `executor` replaces it in tests."""
 
-    def __init__(self, voice: str = TTS_VOICE, speed: float = TTS_SPEED,
+    def __init__(self, voice: str | None = None, speed: float | None = None,
                  executor: InferenceExecutor | None = None) -> None:
         super().__init__(capabilities=tts.TTSCapabilities(streaming=False), sample_rate=KOKORO_RATE, num_channels=1)
-        self._voice, self._speed = voice, speed
+        self._voice = voice or preferences.tts_voice()
+        self._speed = preferences.tts_speed() if speed is None else speed
         self._executor = executor
         self._lock = asyncio.Lock()
 

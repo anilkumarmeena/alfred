@@ -12,10 +12,10 @@
 
 import asyncio
 
-from jarvis.core import profile
 from jarvis.safety import consent, remembered
 from jarvis.safety.commands import ordered, said_breadth, tells_approve, tells_deny
 from jarvis.safety.consent import Verdict
+from jarvis.storage import profile
 
 
 class VoiceApprovals:

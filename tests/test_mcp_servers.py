@@ -10,16 +10,19 @@ from contextlib import closing
 from dataclasses import replace
 
 import pytest
-from conftest import use_profile
 from test_in_place import NullReporter, worker_task
 
-from jarvis import tools
-from jarvis.brain import cli, sdk
-from jarvis.core import config, database, vault
+from conftest import use_profile
+from jarvis import config, tools
+from jarvis.apps import mcp_launch as launcher
+from jarvis.auth import vault
+from jarvis.brain import cli
+from jarvis.gates import shell
 from jarvis.integrations import mcp_launch, mcp_relay, mcp_servers
 from jarvis.integrations.mcp_servers import Server, Tool
-from jarvis.safety import shell
+from jarvis.llm import claude
 from jarvis.state import settings
+from jarvis.storage import database
 from jarvis.tasks import worker
 
 GH_TOKEN, GL_TOKEN = "ghp_not_a_real_token", "glpat-not-a-real-token"
@@ -248,7 +251,7 @@ def test_an_unsorted_server_is_offered_to_no_session_even_when_on(fresh):
     assert "sorted" in mcp_servers.missing(mcp_servers.get("acme"))
     assert mcp_servers.missing(mcp_servers.get("acme"), reviewed=False) == ""
     with pytest.raises(SystemExit, match="no enabled MCP server acme"):
-        mcp_launch.main(["acme"])
+        launcher.main(["acme"])
 
 
 def test_tools_sort_from_the_command_line_marks_it_sorted(fresh, monkeypatch, capsys):
@@ -276,7 +279,7 @@ def test_an_http_server_with_a_key_or_a_sign_in_is_reached_through_the_launcher(
     vault.put("wiki.oauth", json.dumps({"access_token": "a"}))
     got = mcp_servers.session(mcp_servers.for_voice())
     for name in ("notes", "wiki"):
-        assert got.configs[name]["args"] == ["-m", "jarvis.integrations.mcp_launch", name]
+        assert got.configs[name]["args"] == ["-m", "jarvis.apps.mcp_launch", name]
     assert "k-123" not in json.dumps(got.configs) and mcp_servers.session_env()["NOTES_KEY"] == ""
     assert mcp_servers.remove("wiki") == ["wiki.oauth"] and not vault.has("wiki.oauth")
 
@@ -390,7 +393,7 @@ def test_the_mcp_config_names_the_server_never_a_secret(fresh):
     seeded()
     configs = mcp_servers.session(mcp_servers.for_voice()).configs
     for name, c in configs.items():
-        assert c["command"] == sys.executable and c["args"] == ["-m", "jarvis.integrations.mcp_launch", name]
+        assert c["command"] == sys.executable and c["args"] == ["-m", "jarvis.apps.mcp_launch", name]
     text = json.dumps(configs)
     assert GH_TOKEN not in text and GL_TOKEN not in text and config.MASTER_KEY not in text
 
@@ -428,7 +431,7 @@ def test_every_server_goes_through_the_launcher_and_the_voice_brains_wait_with_i
                             tools={"search": Tool("read")}), new=True)
     seeded(gitlab_on=False)
     got = mcp_servers.session(mcp_servers.for_voice(), wait=20)
-    assert got.configs["docs"]["args"] == ["-m", "jarvis.integrations.mcp_launch", "docs", "--wait=20"]
+    assert got.configs["docs"]["args"] == ["-m", "jarvis.apps.mcp_launch", "docs", "--wait=20"]
     assert got.configs["github"]["args"][-1] == "--wait=20" and "mcp__docs__search" in got.allowed
     research = mcp_servers.session(mcp_servers.for_research(), ask_own=True)
     assert research.configs["github"]["args"][-1] == "github"  # tasks wait for their calls
@@ -445,7 +448,7 @@ def test_the_voice_brain_loads_connections_tools_on_demand_and_its_own_up_front(
     opts = cli._options(brain.shell, brain.jobs)
     assert opts.mcp_servers["github"]["alwaysLoad"] is False and opts.mcp_servers["gitlab"]["alwaysLoad"] is False
     assert opts.mcp_servers["jarvis"]["alwaysLoad"] is True and opts.mcp_servers["shell"]["alwaysLoad"] is True
-    assert sdk.TOOL_SEARCH_TOOL in opts.tools and sdk.TOOL_SEARCH_TOOL in opts.allowed_tools
+    assert claude.TOOL_SEARCH_TOOL in opts.tools and claude.TOOL_SEARCH_TOOL in opts.allowed_tools
     assert opts.env["ENABLE_TOOL_SEARCH"] == "true"
     assert "ToolSearch" in opts.system_prompt and "GitHub (mcp__github__…)" in opts.system_prompt
 
@@ -477,9 +480,9 @@ def test_tool_search_off_loads_every_tool_up_front_as_before(fresh, monkeypatch)
 
 
 def test_a_threshold_is_passed_to_the_cli_as_it_is(monkeypatch):
-    monkeypatch.setattr(sdk, "TOOL_SEARCH", "auto:5")
+    monkeypatch.setattr(claude, "TOOL_SEARCH", "auto:5")
     own = {"type": "sdk", "name": "jarvis", "instance": object()}
-    got = sdk.on_demand({"tools": ["Bash"], "allowed_tools": ["WebSearch"], "env": {"A": "1"},
+    got = claude.on_demand({"tools": ["Bash"], "allowed_tools": ["WebSearch"], "env": {"A": "1"},
                          "mcp_servers": {"jarvis": own, "acme": {"type": "http", "url": "https://x", "alwaysLoad": False}}})
     assert got["env"] == {"A": "1", "ENABLE_TOOL_SEARCH": "auto:5"} and got["tools"] == ["Bash", "ToolSearch"]
     assert got["allowed_tools"] == ["WebSearch", "ToolSearch"]
@@ -506,8 +509,8 @@ def test_the_launcher_decrypts_only_that_servers_secrets_into_its_environment(fr
 
 
 def test_the_launcher_starts_with_every_setting_blank_as_task_sessions_give_it():
-    names = set(re.findall(r'os\.environ\.get\("(\w+)"', (config.ROOT / "jarvis/core/config.py").read_text()))
-    said = python("from jarvis.integrations import mcp_launch; mcp_launch.main([])", **dict.fromkeys(names, ""))
+    names = set(re.findall(r'os\.environ\.get\("(\w+)"', (config.ROOT / "jarvis/config/__init__.py").read_text()))
+    said = python("from jarvis.apps import mcp_launch; mcp_launch.main([])", **dict.fromkeys(names, ""))
     assert "Traceback" not in said.stderr and "Starts one MCP server" in said.stderr
 
 
@@ -522,7 +525,7 @@ def test_the_launcher_relays_the_server_and_refuses_one_thats_off(fresh, monkeyp
     seeded(gitlab_on=False)
     relayed, detached = [], []
 
-    async def serve(server, wait, how):
+    async def serve(server, wait, how, runner=None):
         relayed.append((server.name, wait, how[0]))
         return 0
 
@@ -530,21 +533,21 @@ def test_the_launcher_relays_the_server_and_refuses_one_thats_off(fresh, monkeyp
     monkeypatch.setattr(mcp_relay, "detach", lambda: detached.append(True))
     for flags in ([], ["--wait=20"]):
         with pytest.raises(SystemExit) as ended:
-            mcp_launch.main(["github", *flags])
+            launcher.main(["github", *flags])
         assert ended.value.code == 0
     assert relayed == [("github", 0.0, ["/opt/bin/github-mcp-server", "stdio", "--toolsets=repos,pull_requests"]),
                        ("github", 20.0, ["/opt/bin/github-mcp-server", "stdio", "--toolsets=repos,pull_requests"])]
     assert detached == [True]  # only a session whose calls may carry on in the background outlives it
     with pytest.raises(SystemExit, match="no enabled MCP server gitlab"):
-        mcp_launch.main(["gitlab"])
+        launcher.main(["gitlab"])
 
 
 def test_the_launcher_execs_a_server_listed_for_sorting_with_no_relay(fresh, monkeypatch):
     seeded()
     ran = []
-    monkeypatch.setattr(mcp_launch.os, "execvpe", lambda program, argv, env: ran.append(argv))
+    monkeypatch.setattr(launcher.os, "execvpe", lambda program, argv, env: ran.append(argv))
     monkeypatch.setattr(mcp_relay, "serve", lambda *a: pytest.fail("relayed"))
-    mcp_launch.main(["github", "--probe"])  # its own markings, for sorting its tools, unchanged
+    launcher.main(["github", "--probe"])  # its own markings, for sorting its tools, unchanged
     assert ran[0][0] == "/opt/bin/github-mcp-server"
 
 
@@ -552,7 +555,7 @@ def test_the_launcher_says_when_a_secret_wont_open(fresh, monkeypatch):
     seeded(gitlab_on=False)
     monkeypatch.setattr(config, "MASTER_KEY", vault.new_key())
     with pytest.raises(SystemExit, match="isn't the key"):
-        mcp_launch.main(["github"])
+        launcher.main(["github"])
 
 
 # ── The command ─────────────────────────────────────────────────

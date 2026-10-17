@@ -20,9 +20,11 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from jarvis.brain.quick import Quick, found, untagged
-from jarvis.core import profile
+from jarvis.core.speakable import asks_question  # noqa: F401  (callers find it here)
+from jarvis.llm.quick import Quick, found, untagged
+from jarvis.llm.roles import Role
 from jarvis.safety import consent
+from jarvis.storage import profile
 
 log = logging.getLogger("jarvis.voice.floor")
 
@@ -37,11 +39,6 @@ STALE_MINUTES = 5  # dropped this long after its time
 OLD_MINUTES = 3  # older items say "From N minutes ago"
 RECENT_LINES = 8  # conversation lines shown to the model
 CUT_IN = "Sorry to cut in: "
-
-
-def asks_question(text: str) -> bool:
-    """True if `text` ends with a question."""
-    return text.rstrip().rstrip("\"')]").endswith("?")
 
 
 class Floor:
@@ -189,7 +186,7 @@ class Moment:
     CHOICES = ("now", "cut_in", "pause", "phone")
 
     def __init__(self, quick: Quick | None = None, seconds: float = 4.0) -> None:
-        self.quick = quick or Quick("moment check", moment_system())
+        self.quick = quick or Quick("moment check", moment_system(), Role.MOMENT)
         self.seconds = seconds
 
     async def decide(self, items: list[Announcement], floor: Floor, now: float) -> list[str] | None:

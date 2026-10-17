@@ -53,7 +53,7 @@ def test_no_minutes_no_watching():
 
 
 def test_child_processes_hand_freed_memory_back(monkeypatch):
-    from jarvis.voice import agent
+    from jarvis.apps import agent
 
     monkeypatch.delenv("MallocLargeCache", raising=False)
     monkeypatch.setattr(agent.config, "VOICE_MALLOC_LARGE_CACHE", True)
@@ -78,7 +78,7 @@ def test_libproc_is_only_looked_for_on_macos(monkeypatch):
 
 def test_on_linux_glibc_keeps_large_blocks_returnable(monkeypatch):
     """glibc's mmap threshold otherwise grows to the largest block freed, and later ones stay on the heap."""
-    from jarvis.voice import agent
+    from jarvis.apps import agent
 
     monkeypatch.delenv("MALLOC_MMAP_THRESHOLD_", raising=False)
     monkeypatch.delenv("MallocLargeCache", raising=False)

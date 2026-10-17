@@ -4,14 +4,14 @@ import asyncio
 import json
 
 import pytest
-from fake_cli import Hold, result, text, tool_call
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
+from fake_cli import Hold, result, text, tool_call
 from jarvis import tools
 from jarvis.brain import kept as kept_module
 from jarvis.brain.kept import Call, Kept, prompt, summary
+from jarvis.gates.shell import ShellGate
 from jarvis.safety import commands
-from jarvis.safety.shell import ShellGate
 from jarvis.state import conversation, memory
 
 MERGE = tools.Tool("task_merge", "", {}, [], lambda: None)

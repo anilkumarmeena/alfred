@@ -23,7 +23,8 @@ from contextlib import AbstractContextManager, closing
 from datetime import datetime, time as clock_time, timedelta
 from pathlib import Path
 
-from jarvis.core import database, profile
+from jarvis.storage import database, profile
+from jarvis.tasks import store
 
 KINDS = ("reminder", "task", "watch", "command", "resume", "todo")
 WORK = ("resume", "todo")  # kinds that resume or start the user's own tasks
@@ -403,7 +404,7 @@ def _what(kind: str, task_kind: str, project: str, probe: str, target: str, expe
         if task_kind != "research":
             if not project:
                 raise ValueError(f"A {task_kind} job needs a project.")
-            from jarvis.tasks import projects
+            from jarvis import projects
 
             out["project"] = projects.find(project).name
     return out
@@ -414,8 +415,8 @@ def place(folder: str, project: str = "") -> tuple[str, str | None]:
 
     `folder` may use ~ or be relative to the named project; defaults to the project's folder. Secret folders refused.
     """
+    from jarvis import projects
     from jarvis.safety.commands import secret_path
-    from jarvis.tasks import projects
     from jarvis.tasks.command_jobs import project_of
 
     named = projects.find(project) if project.strip() else None
@@ -554,7 +555,7 @@ def _picks(kind: str, tasks: list[int] | None, failed: bool, todos: list[str] | 
         found = _tasks_named(ids)
         if missing := [i for i in ids if i not in found]:
             raise ValueError(f"There's no task {', '.join(map(str, missing))}.")
-        if odd := [found[i] for i in ids if found[i]["kind"] not in database.KINDS]:
+        if odd := [found[i] for i in ids if found[i]["kind"] not in store.KINDS]:
             raise ValueError(f"Task {odd[0]['id']}, {odd[0]['title']}, is a {odd[0]['kind']} task, which can't be "
                              "resumed: only code and research tasks carry on.")
         return json.dumps({"tasks": ids})

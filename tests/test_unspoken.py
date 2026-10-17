@@ -112,7 +112,7 @@ def test_a_flush_marker_passes_through_after_what_was_held():
 def test_what_jarvis_shows_and_says_goes_through_the_check(monkeypatch):
     from livekit.agents import Agent
 
-    from jarvis.voice.agent import JarvisAgent
+    from jarvis.apps.agent import JarvisAgent
 
     async def main():
         async def text():

@@ -5,16 +5,15 @@
 
 import logging
 
-from ai_armory.toolsets.mac import notify as mac_notify
-
+from jarvis.config import PUSH_ENABLED
 from jarvis.core import desktop, platform
-from jarvis.core.config import PUSH_ENABLED
-from jarvis.core.database import APPROVED, DENIED
+from jarvis.integrations.armory import mac_notify
 from jarvis.notify.push import send_push, task_target
 from jarvis.state import activity as bell
 from jarvis.tasks import hold
 from jarvis.tasks.approvals import _VIA, SETTLED, _commands
 from jarvis.tasks.runner_base import RunnerBase
+from jarvis.tasks.store import APPROVED, DENIED
 
 log = logging.getLogger("jarvis.tasks.runner")
 # Statuses that alert the user, with their push title

@@ -10,9 +10,9 @@ import pytest
 import jarvis
 from conftest import use_profile
 from jarvis.brain import persona
-from jarvis.core import profile
 from jarvis.integrations import accounts
 from jarvis.state import settings
+from jarvis.storage import profile
 from jarvis.tools import google
 
 JARVIS = Path(jarvis.__file__).parent

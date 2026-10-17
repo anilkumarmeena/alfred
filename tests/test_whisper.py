@@ -1,4 +1,4 @@
-"""Tests for jarvis.core.whisper: MLX on Apple silicon, faster-whisper elsewhere, one result shape from both."""
+"""Tests for jarvis.media.whisper: MLX on Apple silicon, faster-whisper elsewhere, one result shape from both."""
 
 import sys
 import types
@@ -8,7 +8,7 @@ from typing import ClassVar
 import numpy as np
 import pytest
 
-from jarvis.core import transcribe, whisper
+from jarvis.media import transcribe, whisper
 from jarvis.voice import speech
 
 
