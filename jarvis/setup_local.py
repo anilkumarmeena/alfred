@@ -15,6 +15,8 @@
   uninstall [--all [--yes]]   remove every service (a node's too) and the service logs folder; --all also deletes
              the install's data, settings, secrets, models and Claude logins and the checkout's build files, after
              you type "delete" (--yes skips that). The code stays.
+  clean      empty logs/ (and the service logs), and, unless a task is running, delete the task caches and machine
+             transfers left in data/node/spool; safe while the services run
 
 Services this checkout installed under old labels (e.g. a changed JARVIS_SERVICE_PREFIX) are stale: stop unloads them;
 start and --install remove them before loading the current ones.
@@ -28,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import time
+from contextlib import closing
 from pathlib import Path
 from string import Template
 
@@ -434,8 +437,9 @@ def uninstall_services() -> list[str]:
     return removed
 
 
-def _unlink_logs(logs: Path = LOGS_DIR, service_logs: Path = SERVICE_LOGS) -> None:
+def _unlink_logs(logs: Path | None = None, service_logs: Path | None = None) -> None:
     """Move the logs launchd wrote in `service_logs` back into `logs`, in place of their links (_link_log)."""
+    logs, service_logs = logs or LOGS_DIR, service_logs or SERVICE_LOGS  # read now, so tests can redirect them
     if not service_logs.is_dir():
         return
     for target in sorted(service_logs.glob("*.log")):
@@ -571,6 +575,71 @@ def uninstall(everything: bool = False, yes: bool = False, ask=input) -> None:
         print(f"- {hint}")
 
 
+def _size(path: Path) -> int:
+    """Bytes in a file or folder (a link's target, for a link to a file); 0 if it's gone."""
+    try:
+        if not path.is_dir() or path.is_symlink():
+            return path.stat().st_size if path.is_file() else 0
+        return sum(f.lstat().st_size for f in path.rglob("*") if f.is_file() and not f.is_symlink())
+    except OSError:
+        return 0
+
+
+def _tasks_running() -> bool:
+    """Whether a task is running (its commands use the task caches; a machine transfer, the spool). True if the task
+    database can't say, to be safe."""
+    import sqlite3
+
+    from jarvis.storage import database, profile
+
+    if not profile.current().db.exists():
+        return False
+    try:
+        with closing(database.connect()) as db:
+            return db.execute("select 1 from tasks where status = 'running' limit 1").fetchone() is not None
+    except sqlite3.OperationalError as e:
+        return "no such table" not in str(e)  # a fresh install: no tasks yet
+    except sqlite3.Error:
+        return True
+
+
+def clean(logs: Path | None = None, service_logs: Path | None = None, data: Path | None = None,
+          running: bool | None = None) -> int:
+    """Free what JARVIS rebuilds or never reads back: empty logs/ (files are emptied, not removed, as running
+    services keep writing to them; folders such as the speech gate's saved clips go), and, unless a task is
+    running, the sandboxed commands' build caches and temp files (data/task-cache) and machine transfers left in
+    data/node/spool. Never the database, settings, secrets, memory, models or task records. Returns bytes freed."""
+    logs, service_logs, data = logs or LOGS_DIR, service_logs or SERVICE_LOGS, data or config.DATA_DIR
+    freed, emptied = 0, set()
+    for path in [*_children(logs), *(service_logs.glob("*.log") if service_logs.is_dir() else [])]:
+        if path.is_dir() and not path.is_symlink():
+            freed += _size(path)
+            shutil.rmtree(path, ignore_errors=True)
+        elif path.is_file() and (target := path.resolve()) not in emptied:
+            emptied.add(target)
+            freed += _size(target)
+            target.write_bytes(b"")
+    if running if running is not None else _tasks_running():
+        print("A task is running, so its caches and transfers stay: rerun make clean when it's done")
+        return freed
+    for path in [*_children(data / "task-cache"), *_children(data / "node" / "spool")]:
+        freed += _size(path)
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            path.unlink(missing_ok=True)
+    return freed
+
+
+def _children(folder: Path) -> list[Path]:
+    return sorted(folder.iterdir()) if folder.is_dir() else []
+
+
+def _clean_command() -> None:
+    freed = clean()
+    print(f"freed {freed / 1e9:.1f} GB" if freed >= 1e8 else f"freed {freed / 1e6:.1f} MB")
+
+
 def _uninstall_command() -> None:
     flags = set(sys.argv[2:])
     uninstall(everything="--all" in flags, yes="--yes" in flags)
@@ -617,7 +686,8 @@ def main() -> None:
     services = {"start": start_services, "stop": stop_services, "status": print_status,
                 "labels": lambda: print(" ".join(config.service_label(name) for name in SERVICES)),
                 "node-install": install_node, "node-stop": stop_node,
-                "install": install_services, "move-home": _move_home_command, "uninstall": _uninstall_command}
+                "install": install_services, "move-home": _move_home_command, "uninstall": _uninstall_command,
+                "clean": _clean_command}
     arg = sys.argv[1] if len(sys.argv) > 1 else ""
     if arg in ("-h", "--help", "help"):
         return print(__doc__.strip())

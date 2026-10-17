@@ -439,6 +439,7 @@ def test_uninstall_removes_every_service_and_keeps_none_for_login(tmp_path, monk
     monkeypatch.setattr(setup_local, "LAUNCH_AGENTS", agents)
     monkeypatch.setattr(setup_local, "MANAGER", "launchd")
     monkeypatch.setattr(setup_local, "SERVICE_LOGS", tmp_path / "Library/Logs/com.jarvis")
+    monkeypatch.setattr(setup_local, "LOGS_DIR", tmp_path / "logs")  # never this computer's own logs
     monkeypatch.setattr(setup_local, "_launchctl", lambda action, plist: stopped.append((action, plist.stem)) or "")
     for name in ("agent", "web", "node"):
         setup_local.installed(name).write_text("<plist/>")
@@ -491,3 +492,31 @@ def test_uninstall_all_deletes_nothing_without_a_yes(tmp_path, monkeypatch):
     with pytest.raises(SystemExit, match="Nothing deleted"):
         setup_local.uninstall(everything=True, ask=lambda prompt: "yes")  # only "delete" counts
     assert doomed.is_dir()
+
+
+def test_clean_empties_the_logs_and_drops_the_caches_never_the_data(tmp_path):
+    logs, service_logs, data = tmp_path / "logs", tmp_path / "Library/Logs/com.jarvis", tmp_path / "data"
+    for folder in (logs / "speech-gate-audio", service_logs, data / "task-cache/uv/wheels", data / "node/spool"):
+        folder.mkdir(parents=True)
+    (service_logs / "agent.log").write_text("x" * 100)
+    (logs / "agent.log").symlink_to(service_logs / "agent.log")
+    (logs / "voice-turns.jsonl").write_text("{}\n")
+    (logs / "speech-gate-audio/clip.wav").write_bytes(b"\0" * 50)
+    (data / "task-cache/uv/wheels/a.whl").write_bytes(b"\0" * 1000)
+    (data / "node/spool/owner-t1.tar").write_bytes(b"\0" * 2000)
+    (data / "tasks.db").write_bytes(b"keep")
+    freed = setup_local.clean(logs, service_logs, data, running=False)
+    assert freed == 100 + 3 + 50 + 1000 + 2000
+    # Logs are emptied in place (running services keep writing to them), links kept; folders go
+    assert (logs / "agent.log").is_symlink() and (service_logs / "agent.log").read_text() == ""
+    assert (logs / "voice-turns.jsonl").read_text() == "" and not (logs / "speech-gate-audio").exists()
+    assert not any((data / "task-cache").iterdir()) and not any((data / "node/spool").iterdir())
+    assert (data / "tasks.db").read_bytes() == b"keep"
+
+
+def test_clean_keeps_the_caches_while_a_task_runs(tmp_path, capsys):
+    cache = tmp_path / "data/task-cache/npm"
+    cache.mkdir(parents=True)
+    (cache / "pkg.tgz").write_bytes(b"\0" * 10)
+    assert setup_local.clean(tmp_path / "logs", tmp_path / "service-logs", tmp_path / "data", running=True) == 0
+    assert (cache / "pkg.tgz").exists() and "A task is running" in capsys.readouterr().out

@@ -385,6 +385,6 @@ check: ## Compile, type-check, import all
 	$(NPM) run typecheck
 	$(UV) python -c "import jarvis.apps.agent, jarvis.server, jarvis.setup_local, jarvis.integrations.accounts, jarvis.state.settings, jarvis.brain.cli, jarvis.tasks.runner, jarvis.tasks.notices; from jarvis import tools; print(len(tools.all_tools()), 'tools, imports ok')"
 
-clean: ## Remove caches and logs
-	find . -name __pycache__ -not -path './.venv/*' -prune -exec rm -rf {} +
-	rm -f "$(LOGS_DIR)"/*.log
+clean: ## Free space: empty the logs, delete Python and task caches and leftover transfers (keeps all data)
+	@find . \( -name .venv -o -name node_modules -o -name data \) -prune -o -name __pycache__ -prune -exec rm -rf {} +
+	@$(SERVICE_CTL) clean

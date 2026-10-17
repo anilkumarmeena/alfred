@@ -340,4 +340,4 @@ What a lower layer names so a higher one can fill it in (`jarvis/contracts/`), w
 | Housekeeping | `make artifact-check` | Test artifact publishing (FILE=page.html) |
 | Housekeeping | `make features` | Write docs/features.md: every part, tool, model role and process, from the code |
 | Housekeeping | `make check` | Compile, type-check, import all |
-| Housekeeping | `make clean` | Remove caches and logs |
+| Housekeeping | `make clean` | Free space: empty the logs, delete Python and task caches and leftover transfers (keeps all data) |
