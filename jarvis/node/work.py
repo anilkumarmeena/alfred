@@ -394,7 +394,7 @@ class Work:
             raise Refused(str(e)) from None
 
     async def folder_check(self, body: dict) -> dict:
-        """{"path", "name"}: a folder for a project living here, made if missing -> {"path", "state"}."""
+        """{"path", "name"}: a folder for a project living here, made if missing -> {"path", "state", "repos"}."""
         path = str(body.get("path") or "") or str(projects._default_path(str(body["name"])))
         folder = self.own_folder(path)
         try:
@@ -402,7 +402,8 @@ class Work:
         except ValueError as e:
             raise Refused(str(e)) from None
         folder.mkdir(parents=True, exist_ok=True)
-        return {"path": str(folder), "state": await asyncio.to_thread(projects.git_state, folder)}
+        return {"path": str(folder), "state": await asyncio.to_thread(projects.git_state, folder),
+                "repos": await asyncio.to_thread(projects.child_repos, folder)}
 
     def _folder_step(self, op: str):
         """A git step (git_ops.OPS) on a project living here, every folder it names checked first."""

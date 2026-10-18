@@ -62,11 +62,16 @@ def _snapshot(folder: Path) -> dict[str, list[int]]:
     return files
 
 
-def _file_changes(before: dict, after: dict) -> str:
+def _outside_git(repos: list[str]) -> str:
+    """How a change report for a folder that isn't a repo begins: it holds none, or `repos`."""
+    return f"across its git repos {', '.join(repos)}; " if repos else "not a git repo; "
+
+
+def _file_changes(before: dict, after: dict, repos: list[str]) -> str:
     groups = [("created", sorted(after.keys() - before.keys())),
               ("modified", sorted(k for k in after.keys() & before.keys() if after[k] != before[k])),
               ("deleted", sorted(before.keys() - after.keys()))]
-    return "not a git repo; " + ("; ".join(f"{label} {few(names)}" for label, names in groups if names) or "no changes")
+    return _outside_git(repos) + ("; ".join(f"{label} {few(names)}" for label, names in groups if names) or "no changes")
 
 
 # ── The git steps, by folder path (here, or on the machine a project lives on) ──
@@ -89,24 +94,37 @@ async def worktree_op(body: dict) -> dict:
 async def enter_op(body: dict) -> dict:
     """{"folder", "task", "snapshot": bool}: before an in-place run, save uncommitted work under refs/jarvis/.
 
-    Returns {"branch", "base", "at", "saved"} for a git folder; {"snapshot"} (when asked) for one without git. Repos
-    with no commits use git's empty tree as base."""
+    Returns {"branch", "base", "at", "saved"} for a git folder; {"snapshot"} (when asked) for one without git, and
+    for one holding git repos (MULTI) {"repos", "saved"} too, each repo's work saved. Repos with no commits use git's
+    empty tree as base."""
     folder, task_id = Path(body["folder"]), body["task"]
     state = await asyncio.to_thread(projects.git_state, folder)
-    if state == projects.NO_GIT:
-        return {"git": False} | ({"snapshot": await asyncio.to_thread(_snapshot, folder)} if body.get("snapshot") else {})
-    saved = ""
+    ref, saved = f"refs/jarvis/task-{task_id}-{int(time.time())}", ""
+    if state in (projects.NO_GIT, projects.MULTI):
+        found = {"git": False}
+        if state == projects.MULTI:
+            repos = await asyncio.to_thread(projects.child_repos, folder)
+            kept = [repo for repo in repos if await asyncio.to_thread(projects.git_state, folder / repo) == projects.GIT
+                    and await _save_work(folder / repo, task_id, ref)]
+            found |= {"repos": repos, "saved": f"{ref} in {', '.join(kept)}" if kept else ""}
+        return found | ({"snapshot": await asyncio.to_thread(_snapshot, folder)} if body.get("snapshot") else {})
     if state == projects.NO_COMMITS:
         branch = await _git(folder, "symbolic-ref", "--short", "-q", "HEAD")
         base, at = await _git(folder, "hash-object", "-t", "tree", "/dev/null"), "with no commits yet"
     else:
         head, branch = (await _git(folder, "rev-parse", "HEAD", "--abbrev-ref", "HEAD")).split("\n")
-        # stash create: commit of tracked changes without touching files, index or stash list
-        if stashed := await _git(folder, "stash", "create", f"JARVIS: uncommitted work before task {task_id}"):
-            saved = f"refs/jarvis/task-{task_id}-{int(time.time())}"
-            await _git(folder, "update-ref", saved, stashed)
+        if stashed := await _save_work(folder, task_id, ref):
+            saved = ref
         base, at = stashed or head, f"at {head[:7]}"
     return {"git": True, "branch": None if branch == "HEAD" else branch, "base": base, "at": at, "saved": saved}
+
+
+async def _save_work(repo: Path, task_id: int | str, ref: str) -> str:
+    """Save a repo's uncommitted tracked changes as `ref`: the commit made, or "" if there were none."""
+    # stash create: commit of tracked changes without touching files, index or stash list
+    if stashed := await _git(repo, "stash", "create", f"JARVIS: uncommitted work before task {task_id}"):
+        await _git(repo, "update-ref", ref, stashed)
+    return stashed
 
 
 async def changes_op(body: dict) -> dict:
@@ -114,10 +132,11 @@ async def changes_op(body: dict) -> dict:
     folder = Path(body["folder"])
     if not folder.exists():
         return {"said": "project folder missing"}
-    if not body.get("base"):  # wasn't a git repo at start
+    if not body.get("base"):  # wasn't a git repo at start, though it may hold some
+        repos = await asyncio.to_thread(projects.child_repos, folder)
         if (before := body.get("snapshot")) is None:
-            return {"said": "not a git repo; its files weren't recorded before this run, so the changes aren't known"}
-        return {"said": _file_changes(before, await asyncio.to_thread(_snapshot, folder))}
+            return {"said": _outside_git(repos) + "its files weren't recorded before this run, so the changes aren't known"}
+        return {"said": _file_changes(before, await asyncio.to_thread(_snapshot, folder), repos)}
     parts = [await _git(folder, "diff", "--shortstat", body["base"])]
     if untracked := len((await _git(folder, "ls-files", "--others", "--exclude-standard")).splitlines()):
         parts.append(f"{untracked} untracked file{'s' if untracked > 1 else ''} in the folder")
@@ -447,21 +466,24 @@ class GitOps(RunnerBase):
     async def _enter_folder(self, task: dict) -> None:
         """Before each in-place run: save uncommitted work to refs/jarvis/; on the first run record branch and base.
 
-        Non-git folders get a file snapshot (no base); repos with no commits use git's empty tree as base."""
+        Non-git folders get a file snapshot (no base), as do those holding repos, each repo's work saved; repos with no
+        commits use git's empty tree as base."""
         folder = task["worktree"] or str(projects.find(task["project"]).path)
         found = await self._op(self._lives_on(task), "enter", {"folder": folder, "task": task["id"],
                                                                "snapshot": task["id"] not in self.snapshots})
+        if found.get("saved"):
+            self.store.log(task["id"], "saved", f"uncommitted changes in {folder} saved to {found['saved']} before "
+                                                "this run")
         if not found["git"]:
             if "snapshot" in found:
                 self.snapshots[task["id"]] = found["snapshot"]
             if not task["worktree"]:
+                what = (f"which isn't a git repo but holds the git repos {', '.join(found['repos'])}"
+                        if found.get("repos") else "which isn't a git repo")
                 self.store.set(task["id"], worktree=folder, branch=None, base=None)
-                self.store.log(task["id"], "in place", f"working in {folder}, which isn't a git repo; "
-                                                       "the files it changes are listed when it ends")
+                self.store.log(task["id"], "in place", f"working in {folder}, {what}; the files it changes are listed "
+                                                       "when it ends")
             return
-        if found["saved"]:
-            self.store.log(task["id"], "saved", f"uncommitted changes in {folder} saved to {found['saved']} before "
-                                                "this run")
         if not task["worktree"]:
             branch = found["branch"]
             self.store.set(task["id"], worktree=folder, branch=branch, base=found["base"])

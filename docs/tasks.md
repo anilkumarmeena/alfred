@@ -92,6 +92,7 @@ Work can wait for other work: say "once that's merged, start the rebuild" or "wh
 | **In place** (default) | Straight into the project's folder, **uncommitted** for you to review, unless you ask it to commit ("fix it and commit"); one task at a time per project |
 | **Worktree** (`projects set NAME --worktrees`) | Own worktree and `jarvis/<id>-...` branch per task, **committed but never pushed** |
 | **JARVIS's own repo** | Always uses worktrees |
+| **A folder of several repos** (say a `frontend` and a `backend` repo side by side) | Always in place: the task is told its repos and uses git in each; worktrees and setting up git over them are refused |
 
 ### What tasks can and can't see
 

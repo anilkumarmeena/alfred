@@ -1,4 +1,5 @@
-"""Tests for the project list: registering, aliases, changing and removing, folders without git, project_git_init."""
+"""Tests for the project list: registering, aliases, changing and removing, folders without git or holding several
+repos, project_git_init."""
 
 import asyncio
 import json
@@ -9,8 +10,9 @@ from pathlib import Path
 import pytest
 
 from jarvis import projects, tools
-from jarvis.tasks import runner
+from jarvis.tasks import briefs, runner
 from jarvis.tasks.worker import READ_ONLY_TOOLS
+from jarvis.tools import tasks as task_tools
 from tests.test_in_place import env, fake_run, git, listed, make_repo, settle  # noqa: F401  (env is a fixture)
 
 
@@ -461,3 +463,104 @@ def test_the_command_line_lists_adds_changes_and_removes(home, capsys):
     projects.main(["remove", "notes"])
     assert capsys.readouterr().out.startswith("Removed notes from the project list")
     assert list(entries()) == ["video-agent", "other"]
+
+
+# ── Folders holding several repos ───────────────────────────────
+
+
+def several_repos(home) -> Path:
+    """~/products/split: frontend and backend repos, apps/web one level deeper, and folders that aren't repos or don't
+    count (a plain one, a dependency's, a hidden one)."""
+    top = home["tmp"] / "products" / "split"
+    for repo in ("frontend", "backend", "apps/web", "node_modules/dep", ".cache/thing"):
+        (top / repo).parent.mkdir(parents=True, exist_ok=True)
+        make_repo(top / repo)
+    (top / "docs").mkdir()
+    (top / "README.md").write_text("two repos\n")
+    return top
+
+
+def test_a_folder_of_repos_is_found_with_its_repos_and_a_repo_holds_none(home):
+    top = several_repos(home)
+    assert projects.child_repos(top) == ["apps/web", "backend", "frontend"]
+    assert projects.git_state(top) == projects.MULTI
+    assert projects.child_repos(top / "frontend") == []  # a repo's own inner repos would be submodules
+    assert projects.child_repos(top / "docs") == [] and projects.git_state(top / "docs") == projects.NO_GIT
+
+
+def test_a_folder_of_repos_registers_in_place_as_multi_leaving_them_as_they_are(home, capsys):
+    top = several_repos(home)
+    head = git(top / "frontend", "rev-parse", "HEAD")
+    out = projects.register("split", "~/products/split", in_place=False)
+    assert out["in_place"] is True and out["git"] == "multi" and out["repos"] == ["apps/web", "backend", "frontend"]
+    assert not (top / ".git").exists() and git(top / "frontend", "rev-parse", "HEAD") == head
+    shown = {p["name"]: p for p in task_tools.projects_list()}
+    assert shown["split"]["git"] == "multi" and shown["split"]["repos"] == ["apps/web", "backend", "frontend"]
+    assert "git" not in shown["other"]  # a plain repo says nothing extra
+    projects.main([])
+    assert "  git repos in it: apps/web, backend, frontend" in capsys.readouterr().out.splitlines()
+
+
+def test_git_init_refuses_a_folder_of_repos_and_makes_none(home):
+    top = several_repos(home)
+    projects.register("split", "~/products/split")
+    with pytest.raises(ValueError, match=r"holds separate git repos \(apps/web, backend, frontend\)"):
+        projects.init_git("split")
+    assert not (top / ".git").exists() and not (top / ".gitignore").exists()
+
+
+def test_a_folder_of_repos_cant_have_worktrees(home, monkeypatch):
+    several_repos(home)
+    projects.register("split", "~/products/split")
+    with pytest.raises(ValueError, match="holds several .* Keep in_place true"):
+        projects.update("split", in_place=False)
+    assert entries()["split"]["in_place"] is True
+    listed("split-wt", home["tmp"] / "products" / "split", in_place=False)  # say, set before it held repos
+    seen = fake_run(monkeypatch)
+
+    async def main():
+        r = runner.Runner()
+        with pytest.raises(ValueError, match="can't work on a branch of its own"):
+            r.start("code_change", "x", "Do it", "split-wt")
+        return r
+
+    assert asyncio.run(main()).store.recent() == [] and seen["tasks"] == []
+
+
+def test_an_in_place_task_in_a_folder_of_repos_saves_each_repos_work_and_lists_its_changes(home, monkeypatch):
+    top = several_repos(home)
+    (top / "backend" / "app.py").write_text("print('mine')\n")  # the user's own uncommitted work
+    projects.register("split", "~/products/split")
+
+    def edit(where: Path, task: dict) -> None:
+        (where / "frontend" / "app.py").write_text("print('new')\n")
+        (where / "backend" / "api.py").write_text("x = 1\n")
+
+    seen = fake_run(monkeypatch, edit)
+
+    async def main():
+        r = runner.Runner()
+        task = r.start("code_change", "both", "Change both", "split")
+        await settle(r)
+        return r.store.get(task["id"]), r
+
+    task, r = asyncio.run(main())
+    assert Path(seen["tasks"][0]["worktree"]).resolve() == top.resolve()
+    assert task["status"] == "done" and task["base"] is None
+    assert task["changes"] == ("across its git repos apps/web, backend, frontend; created backend/api.py; "
+                               "modified frontend/app.py")
+    saved = git(top / "backend", "for-each-ref", "--format=%(refname)", "refs/jarvis/")
+    assert saved.startswith(f"refs/jarvis/task-{task['id']}-")
+    assert git(top / "frontend", "for-each-ref", "refs/jarvis/") == ""  # it had nothing uncommitted
+    history = " ".join(e["text"] for e in r.store.history(task["id"]))
+    assert "holds the git repos apps/web, backend, frontend" in history and f"{saved} in backend" in history
+    assert not (top / ".git").exists()
+
+
+def test_a_task_in_a_folder_of_repos_is_told_them(home):
+    top = several_repos(home)
+    task = {"id": 9, "kind": "code_change", "project": "split", "in_place": 1, "branch": None, "base": None}
+    prompt = briefs._system_prompt(task, top)["append"]
+    assert "holds separate ones, each with its own history: apps/web, backend, frontend" in prompt
+    assert "git -C <repo>" in prompt and "isn't a git repository yet" not in prompt
+    assert "isn't a git repository yet" in briefs._system_prompt(task, top / "docs")["append"]

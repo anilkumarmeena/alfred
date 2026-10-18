@@ -71,6 +71,7 @@ function Card({ p }: { p: Project }) {
         <Mode inPlace={inPlace.value} fixed={p.jarvis || (!p.machine && p.git !== "repo")} set={(v) => { inPlace.value = v; }} />
         <p class="hint">{p.jarvis ? "JARVIS always uses a worktree for itself."
           : p.machine ? `Its folder is on ${p.machine}, and its tasks and jobs run there.`
+          : p.git === "multi" ? `It holds separate git repos (${p.repos?.join(", ")}), so tasks here work in place and use git in each.`
           : p.git !== "repo" ? "Worktrees need git history, so tasks here work in place."
           : "In place: tasks edit the folder and leave changes uncommitted. Worktree: each gets its own branch to merge."}</p>
         <div class="acts">

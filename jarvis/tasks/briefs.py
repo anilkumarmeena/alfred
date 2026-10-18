@@ -3,7 +3,7 @@
 from collections.abc import Iterable
 from pathlib import Path
 
-from jarvis import prompts
+from jarvis import projects, prompts
 from jarvis.config import ROOT, TASK_CACHE_DIR, TASK_READ_DIRS
 from jarvis.integrations import mcp_servers
 from jarvis.llm import claude_logins
@@ -148,7 +148,11 @@ def _system_prompt(task: dict, cwd: Path, setup: project_claude.Setup | None = N
     pages = _artifact_brief(own) if "artifacts" in can else ""
     granted = _grants_brief(task, cwd, own, can) + _skills_brief(list(mine)) + _todo_brief(task)
     if kind == "code_change" and task["in_place"]:
-        if not task["base"]:
+        if not task["base"] and (repos := projects.child_repos(cwd)):
+            on = (f"a folder that isn't a git repository itself but holds separate ones, each with its own history: "
+                  f"{', '.join(repos)}. Use git inside each repo's folder (git -C <repo> status, diff, log, and commit "
+                  "when asked, each repo you changed on its own), never in this parent folder, and don't run git init here")
+        elif not task["base"]:
             on = "a folder that isn't a git repository yet. Don't run git init: git gets set up later, when asked for"
         else:
             on = f"on branch {task['branch']}" if task["branch"] else "on a detached HEAD"

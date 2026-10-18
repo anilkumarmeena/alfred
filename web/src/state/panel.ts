@@ -54,6 +54,7 @@ export interface Todo { id: number; text: string; done: boolean; created: number
 export interface Project {
   name: string; path: string; aliases: string[]; about: string; in_place: boolean; jarvis: boolean; exists: boolean;
   git: string | null; changed: number | null;
+  repos?: string[];  // for git "multi": the git repos its folder holds, not being one itself
   machine?: string;  // the other machine it lives on; its folder is there
 }
 export interface Account { label: string; email: string; note: string; chat: boolean; default: boolean; signed_in: boolean }

@@ -27,9 +27,17 @@ async def _project(p: projects.Project) -> dict:
         return {"name": p.name, "path": str(p.path), "aliases": p.aliases, "about": p.about, "in_place": p.in_place,
                 "jarvis": False, "exists": True, "git": None, "changed": None, "machine": machines.where(str(p.node))}
     state = await asyncio.to_thread(projects.git_state, p.path)
+    repos = await asyncio.to_thread(projects.child_repos, p.path) if state == projects.MULTI else []
+    if state == projects.GIT:
+        changed = await _changed(p.path)
+    elif repos:  # summed over its repos, unknown if any is
+        counts = await asyncio.gather(*(_changed(p.path / r) for r in repos))
+        changed = None if None in counts else sum(n or 0 for n in counts)
+    else:
+        changed = None
     return {"name": p.name, "path": projects.shown(p.path), "aliases": p.aliases, "about": p.about,
             "in_place": p.in_place, "jarvis": projects.is_jarvis(p.path), "exists": p.path.is_dir(), "git": state,
-            "changed": await _changed(p.path) if state == projects.GIT else None}
+            "repos": repos, "changed": changed}
 
 
 @action

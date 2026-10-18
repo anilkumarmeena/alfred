@@ -3,7 +3,8 @@
 Names match ignoring case, spaces and punctuation ("at las" finds "atlas"); aliases cover common mishearings.
 code_change tasks edit the project folder in place by default; in_place=false gives each task a worktree and branch.
 JARVIS's own repo always uses worktrees (a task must not edit the running code). Folders without commits are always
-in place. register/update/remove never touch git; init_git sets it up on request.
+in place, as are folders that aren't a repo but hold several (MULTI: a frontend and a backend repo side by side), whose
+tasks use git in each. register/update/remove never touch git; init_git sets it up on request.
 
     uv run python -m jarvis.projects                       list the projects
     uv run python -m jarvis.projects add NAME [--path P] [--aliases "a, b"] [--about T] [--worktrees]
@@ -28,7 +29,8 @@ from jarvis.storage import database
 ALLOWED_ROOT = Path.home()  # projects must live under here
 PROTECTED = [DATA_DIR, SECRETS_DIR, *([HOME_DIR] if HOME_DIR != ROOT else [])]  # never a project (nor JARVIS_HOME)
 JARVIS_REPO = ROOT  # always worktree mode
-NO_GIT, NO_COMMITS, GIT = "none", "no commits", "repo"
+NO_GIT, NO_COMMITS, GIT, MULTI = "none", "no commits", "repo", "multi"  # MULTI: not a repo, but holds repos
+_GIT_SAID = {NO_GIT: "none", NO_COMMITS: "initialised, no commits yet", GIT: "existing repo, left as is", MULTI: "multi"}
 # Dependency/cache folders, never part of a task's work regardless of .gitignore
 CACHE_DIRS = ("node_modules", "venv", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".next")
 # What a task's commit takes in (git add -A): its folder, less what's excluded even if .gitignore misses it
@@ -135,10 +137,38 @@ def _git(folder: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def git_state(folder: Path) -> str:
-    """NO_GIT, NO_COMMITS or GIT."""
+    """NO_GIT, NO_COMMITS, GIT or MULTI."""
     if not folder.is_dir() or _git(folder, "rev-parse", "--git-dir").returncode:
-        return NO_GIT
+        return MULTI if child_repos(folder) else NO_GIT
     return GIT if _git(folder, "rev-parse", "--verify", "-q", "HEAD").returncode == 0 else NO_COMMITS
+
+
+def _subfolders(folder: Path) -> list[Path]:
+    """Subfolders that could hold a repo: not hidden, caches or links (which may lead out of the folder)."""
+    try:
+        return sorted(p for p in folder.iterdir() if p.is_dir() and not p.is_symlink()
+                      and not p.name.startswith(".") and p.name not in CACHE_DIRS)
+    except OSError:
+        return []
+
+
+def child_repos(folder: Path) -> list[str]:
+    """The git repos a folder holds when it isn't one itself, as paths in it: subfolders with a .git ("api"), and for
+    the others, theirs ("apps/web"). [] for a repo, whose own may be submodules."""
+    if (folder / ".git").exists():
+        return []
+    found = []
+    for sub in _subfolders(folder):
+        if (sub / ".git").exists():
+            found.append(sub.name)
+        else:
+            found += [f"{sub.name}/{deeper.name}" for deeper in _subfolders(sub) if (deeper / ".git").exists()]
+    return found
+
+
+def git_said(state: str, repos: list[str] | None = None) -> dict:
+    """A project's git state as register reports it: {"git"}, and the repos it holds for MULTI."""
+    return {"git": _GIT_SAID[state]} | ({"repos": repos or []} if state == MULTI else {})
 
 
 def worktree_problem(p: Project) -> str | None:
@@ -146,6 +176,9 @@ def worktree_problem(p: Project) -> str | None:
     state = git_state(p.path)
     if state == GIT:
         return None
+    if state == MULTI:
+        return (f"{p.name} isn't one git repository but holds several ({', '.join(child_repos(p.path))}), so a task "
+                "can't work on a branch of its own there. Keep in_place true for it: its tasks use git in each repo.")
     why = "isn't a git repository" if state == NO_GIT else "has no git commits yet"
     return (f"{p.name} {why}, so a task can't work on its own branch there. "
             "Set in_place to true for it, or set up git for it first.")
@@ -172,6 +205,9 @@ def init_git(name: str) -> dict:
     state = git_state(folder)
     if state == GIT:
         raise ValueError(f"{p.name} already has git set up, with commits.")
+    if repos := child_repos(folder):  # a repo over them would take theirs in as embedded repos
+        raise ValueError(f"{p.name}'s folder holds separate git repos ({', '.join(repos)}), each with its own history, "
+                         "so it doesn't get one over them. Its tasks work in place and use git in each repo.")
     if state == NO_GIT:
         _run_git(folder, "init", "-q")
     gitignore = folder / ".gitignore"
@@ -276,9 +312,9 @@ def _clean_entry(name: object, about: object, aliases: object) -> tuple[str, str
 
 
 def register_there(name: str, node: int, folder: str, state: str, aliases: list[str] | None = None, about: str = "",
-                   in_place: bool = IN_PLACE_DEFAULT) -> dict:
+                   in_place: bool = IN_PLACE_DEFAULT, repos: list[str] | None = None) -> dict:
     """Add a project that lives on machine `node`, at `folder` as that machine checked it (absolute, in its home;
-    `state` its git state there)."""
+    `state` its git state there, `repos` those it holds for MULTI)."""
     name, about, aliases = _clean_entry(name, about, aliases)
     in_place = in_place or state != GIT
     with _db() as db:
@@ -290,8 +326,7 @@ def register_there(name: str, node: int, folder: str, state: str, aliases: list[
         db.execute("insert into projects (name, path, aliases, about, in_place, node) values (?, ?, ?, ?, ?, ?)",
                    (name, folder, json.dumps(aliases, ensure_ascii=False), about, int(in_place), node))
         db.execute("commit")
-    return {"name": name, "path": folder, "in_place": in_place, "node": node,
-            "git": {NO_GIT: "none", NO_COMMITS: "initialised, no commits yet", GIT: "existing repo, left as is"}[state]}
+    return {"name": name, "path": folder, "in_place": in_place, "node": node} | git_said(state, repos)
 
 
 def register(name: str, path: str | None = None, aliases: list[str] | None = None, about: str = "",
@@ -323,8 +358,8 @@ def register(name: str, path: str | None = None, aliases: list[str] | None = Non
             if created:
                 folder.rmdir()
             raise
-    return {"name": name, "path": str(folder), "created_folder": created, "in_place": in_place,
-            "git": {NO_GIT: "none", NO_COMMITS: "initialised, no commits yet", GIT: "existing repo, left as is"}[state]}
+    repos = child_repos(folder) if state == MULTI else None
+    return {"name": name, "path": str(folder), "created_folder": created, "in_place": in_place} | git_said(state, repos)
 
 
 def update(name: str, path: str | None = None, aliases: list[str] | None = None, about: str | None = None,
@@ -398,6 +433,8 @@ def show(known: list[Project]) -> str:
     lines = []
     for p in known:
         lines.append(f"{p.name}: {shown(p.path)}, {'in place' if p.in_place else 'a worktree and branch per task'}")
+        if p.node is None and (repos := child_repos(p.path)):
+            lines.append(f"  git repos in it: {', '.join(repos)}")
         if p.aliases:
             lines.append(f"  aliases: {', '.join(p.aliases)}")
         if p.about:

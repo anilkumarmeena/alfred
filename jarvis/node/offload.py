@@ -263,7 +263,7 @@ class Offload:
         found = machines.find(machine)
         checked = await self.folder_op(found.id, "check", {"path": path or "", "name": name})
         made = await asyncio.to_thread(projects.register_there, name, found.id, checked["path"], checked["state"],
-                                       aliases, about, in_place)
+                                       aliases, about, in_place, checked.get("repos"))
         return made | {"machine": found.name}
 
     async def folder_op(self, node: int, op: str, body: dict) -> dict:

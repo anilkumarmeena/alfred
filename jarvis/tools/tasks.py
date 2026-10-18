@@ -479,10 +479,13 @@ async def task_edits(id: int, action: str, edits: list[int]) -> dict:
       "is. in_place true (the default) means code changes happen directly in the project's folder, uncommitted, "
       "one task at a time; in_place false means each task gets its own git branch in a separate worktree. "
       "JARVIS's own project is always in_place false. lives_on names the other machine a project lives on: its "
-      "folder is there, and its tasks and jobs run there.", reads=True, screened=False)
+      "folder is there, and its tasks and jobs run there. git \"multi\" marks a folder that isn't a git repo itself "
+      "but holds several (repos lists them, e.g. a frontend and a backend): its tasks work in place and use git in "
+      "each.", reads=True, screened=False)
 def projects_list() -> list[dict]:
     return [{"name": p.name, "path": str(p.path) if p.node else projects.shown(p.path), "aliases": p.aliases,
              "about": p.about, "in_place": p.in_place} | ({"lives_on": machines.where(str(p.node))} if p.node else {})
+            | (projects.git_said(projects.MULTI, repos) if not p.node and (repos := projects.child_repos(p.path)) else {})
             for p in projects.load()]
 
 
@@ -490,8 +493,9 @@ def projects_list() -> list[dict]:
     "project_register",
     "Add a project that code tasks can work on, to start a new project or add a folder as one: makes its folder if "
     "it doesn't exist and adds it to the project list. Doesn't set up git (project_git_init, later); a folder "
-    "without git is always in_place, and JARVIS's own repo never is. A routine change: when the user asks for it, go "
-    "ahead, asking first only if the name or folder is unclear, then say in a sentence its name, its folder and "
+    "without git is always in_place, and JARVIS's own repo never is. A folder holding several git repos rather than "
+    "being one comes back as git \"multi\" with its repos, always in_place, and needs no git set up. A routine "
+    "change: when the user asks for it, go ahead, asking first only if the name or folder is unclear, then say in a sentence its name, its folder and "
     "whether code tasks work in place.",
     {
         "name": {"type": "string", "description": "The project's spoken name, e.g. 'astro-agent'."},
@@ -516,8 +520,8 @@ async def project_register(name: str, path: str = "", aliases: list[str] | None 
 @tool(
     "project_git_init",
     "Set up git for a registered project that has none, or has no commits: git init, a default .gitignore if it "
-    "lacks one (node_modules, .env, venv and the like), and a first commit of its current files. "
-    "Only when the user asks for it; then say in one sentence that its current files became the first commit.",
+    "lacks one (node_modules, .env, venv and the like), and a first commit of its current files. Refused for a "
+    "folder holding git repos of its own (git \"multi\"). Only when the user asks for it; then say in one sentence that its current files became the first commit.",
     {"name": {"type": "string", "description": "Project name from projects_list."}},
     ["name"],
     said="Set up git for {name}",
