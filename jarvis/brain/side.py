@@ -6,6 +6,7 @@ Three kinds, all short read-only sessions that need no approval:
   file_lookup        Read, Glob and Grep on the lookup role, at most LOOKUP_READS reads.
   computer_lookup    shell commands on the lookup role, held in the sandbox (no network, no writes outside the scratch
                      dir, no secrets), at most LOOKUP_READS commands of CHECK_SECONDS each.
+Both of the last two can also read JARVIS's own database (db_server, jarvis.storage.readonly), each query one step.
 The last two answer in the turn if they're in within the turn's LOOKUP_WAIT budget (shared by every such lookup in
 that turn); otherwise they carry on in the background like the first.
 Background answers are announced via the floor, said as at most SAID_SENTENCES plain sentences (`spoken`); the
@@ -32,10 +33,19 @@ from jarvis.config import (
     SIDE_MINUTES,
 )
 from jarvis.core.speakable import speakable
+from jarvis.llm.claude import READS
 from jarvis.llm.roles import Role
-from jarvis.llm.sdk import AssistantMessage, PermissionResultAllow, PermissionResultDeny, TextBlock, ToolUseBlock
+from jarvis.llm.sdk import (
+    AssistantMessage,
+    PermissionResultAllow,
+    PermissionResultDeny,
+    TextBlock,
+    ToolUseBlock,
+    create_sdk_mcp_server,
+    tool as sdk_tool,
+)
 from jarvis.safety.commands import names_secret, reads_environment
-from jarvis.storage import profile
+from jarvis.storage import profile, readonly
 
 log = logging.getLogger("jarvis.brain.side")
 
@@ -43,6 +53,8 @@ MAX_JOBS = 2
 MAX_TURNS = 12
 WEB = ["WebSearch", "WebFetch"]
 FILE_READS = ["Read", "Glob", "Grep"]
+DB = "db"  # the lookups' MCP server for JARVIS's database: tools mcp__db__tables and mcp__db__query
+DB_READS = [f"mcp__{DB}__tables", f"mcp__{DB}__query"]
 LOOKUP_READS = 12  # a file lookup's reads; then it's told to answer with what it has
 LOOKUP_TURNS = LOOKUP_READS + 4  # backstop, leaving it turns to answer
 CHECK_SECONDS = 20  # one command of a computer lookup; a hung one (a network wait) mustn't spend the whole job
@@ -125,14 +137,55 @@ def reads(t: tools.Tool) -> bool:
     return (t.armory is not None and not (t.changes or t.gated)) or t.name == "conversation_search"
 
 
+def db_server():
+    """The lookups' "db" MCP server: read-only queries on JARVIS's database."""
+    return create_sdk_mcp_server(DB, tools=db_tools())
+
+
+def db_tools() -> list:
+    """The "db" server's tools, run off the event loop: the conversation mustn't wait on a query."""
+    from jarvis.tasks.host_tools import text
+
+    async def run(read, *args) -> dict:
+        try:
+            return text(await asyncio.to_thread(read, *args))
+        except readonly.Refused as e:
+            return text(f"Not read: {e}", error=True)
+
+    @sdk_tool(
+        "tables",
+        "JARVIS's own database (tasks, their log, projects, to-dos, schedules...): with no table, each table you can "
+        "read and its columns; with one, how it was made, with what its columns mean. Look before you query.",
+        {"type": "object", "properties": {"table": {"type": "string", "description": "Optional: one table's name."}}},
+        READS,
+    )
+    async def tables(args: dict) -> dict:
+        return await run(readonly.schema, str(args.get("table") or "").strip())
+
+    @sdk_tool(
+        "query",
+        f"Run one read-only SQLite SELECT on JARVIS's database; at most {readonly.ROWS} rows come back, so count and "
+        "sum in SQL rather than reading rows. Times are Unix seconds: datetime(at, 'unixepoch', 'localtime') shows "
+        "one. Writes, PRAGMA, ATTACH and the tables holding secrets are refused.",
+        {"type": "object", "properties": {"sql": {"type": "string", "description": "One SELECT (WITH is fine)."}},
+         "required": ["sql"]},
+        READS,
+    )
+    async def query(args: dict) -> dict:
+        return await run(readonly.query, str(args.get("sql") or ""))
+
+    return [tables, query]
+
+
 class Reads:
-    """A file lookup's permission callback: Read, Glob and Grep, never on secrets, at most `limit` of them."""
+    """A file lookup's permission callback: Read, Glob, Grep and the database's reads, never on secrets, at most
+    `limit` of them."""
 
     def __init__(self, limit: int = LOOKUP_READS) -> None:
         self.left = limit
 
     async def __call__(self, name: str, args: dict, _ctx) -> PermissionResultAllow | PermissionResultDeny:
-        if name not in FILE_READS:
+        if name not in FILE_READS + DB_READS:
             return PermissionResultDeny(message=f"{name} isn't available.")
         if names_secret(" ".join(str(v) for v in args.values())):
             return PermissionResultDeny(message="Secrets stay out of reach.")
@@ -143,16 +196,16 @@ class Reads:
 
 
 class Commands:
-    """What a computer lookup's PreToolUse hook refuses: anything but Bash, a command naming a secret or reading
-    another process's environment, and commands past `limit`. A hook, not can_use_tool, since sandboxed Bash never
-    reaches that; the sandbox holds what commands can reach."""
+    """What a computer lookup's PreToolUse hook refuses: anything but Bash and the database's reads, a command naming a
+    secret or reading another process's environment, and steps past `limit`. A hook, not can_use_tool, since
+    sandboxed Bash never reaches that; the sandbox holds what commands can reach."""
 
     def __init__(self, limit: int = LOOKUP_READS) -> None:
         self.left = limit
 
     def refused(self, name: str, args: dict) -> str:
-        command = str(args.get("command") or "")
-        if name != "Bash":
+        command = " ".join(str(v) for v in args.values()) if name in DB_READS else str(args.get("command") or "")
+        if name != "Bash" and name not in DB_READS:
             return f"{name} isn't available."
         if names_secret(command) or reads_environment(command):
             return "Secrets stay out of reach."
@@ -223,8 +276,8 @@ async def find(brief: str) -> str:
     (scratch := shell.scratch_dir()).mkdir(parents=True, exist_ok=True)
     return await _answer(brief, sdk_options(
         model=usage.available(Role.LOOKUP), system_prompt=lookup_system(), cwd=str(scratch),
-        max_turns=LOOKUP_TURNS, tools=FILE_READS, allowed_tools=[], permission_mode="default",
-        can_use_tool=Reads(),  # every read meets it
+        max_turns=LOOKUP_TURNS, tools=FILE_READS, mcp_servers={DB: db_server()}, allowed_tools=[],
+        permission_mode="default", can_use_tool=Reads(),  # every read meets it
     ))
 
 
@@ -240,7 +293,9 @@ async def check(brief: str) -> str:
     return await _answer(brief, sdk_options(
         env={"BASH_DEFAULT_TIMEOUT_MS": timeout, "BASH_MAX_TIMEOUT_MS": timeout},
         model=usage.available(Role.LOOKUP), system_prompt=check_system(), cwd=str(scratch),
-        max_turns=LOOKUP_TURNS, tools=["Bash"], allowed_tools=[], permission_mode="default",
+        max_turns=LOOKUP_TURNS, tools=["Bash"], mcp_servers={DB: db_server()},
+        allowed_tools=DB_READS,  # past can_use_tool, still counted and screened by the hook
+        permission_mode="default",
         sandbox=shell.SANDBOX | {"allowUnsandboxedCommands": False},  # never leaves it, even when asked to
         settings=shell.SETTINGS,  # secrets unreadable in the sandbox
         can_use_tool=_refuse, hooks={"PreToolUse": refusing(Commands().refused)},

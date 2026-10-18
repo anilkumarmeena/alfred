@@ -155,8 +155,7 @@ def test_the_file_lookup_knows_the_layout_and_starts_from_the_repo():
     assert f"JARVIS's folder, {ROOT}" in prompt
     for where in ("memory.md", "conversations/YYYY-MM-DD.md", "tasks.db", "secrets/"):
         assert where in prompt
-    assert ("the project list and the to-do list (a database you can't read: say to use task_list or task_status, "
-            "projects_list for the projects and their folders, or todo_list") in prompt
+    assert "the project list and the to-do list (read it with tables and query, not Read or Grep)" in prompt
     assert "projects.toml" not in prompt and "improvements.md" not in prompt
     for path in ("jarvis/", "server.py", "web/", "tests/", "docs/architecture.md", "deploy/", "README.md", "Makefile"):
         assert path in prompt, path

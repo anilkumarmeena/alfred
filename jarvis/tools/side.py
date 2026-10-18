@@ -44,7 +44,8 @@ async def background_lookup(brief: str, about: str) -> str:
     "Find something in files on the computer, since you can't search files yourself: what a config says, where "
     "something is defined, a project's version, a line in a log, note or conversation log. A fast helper searches "
     "and answers in a sentence or two, with the file. Give it the folder to look in (projects_list has each "
-    "project's folder); with none it searches JARVIS's own folder, and it knows where JARVIS keeps its data. A quick "
+    "project's folder); with none it searches JARVIS's own folder, and it knows where JARVIS keeps its data, "
+    "including its database (what a task cost, what it did and when). A quick "
     "find comes back in this turn; one that takes longer than a few seconds carries on in the background and its "
     "answer is announced when ready. It only reads; file_read reads one document or picture you can name, and how "
     "a feature works across files or what's wrong with some code is a code_question task.",

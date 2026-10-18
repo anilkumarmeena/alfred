@@ -399,6 +399,33 @@ def test_a_file_lookup_reads_only_non_secrets_and_only_so_many():
     assert isinstance(spent, PermissionResultDeny) and "answer now with what you found" in spent.message
 
 
+def test_a_file_lookup_s_database_reads_count_as_steps_too():
+    reads = side.Reads(limit=1)
+    run = lambda name, args: asyncio.run(reads(name, args, None))  # noqa: E731
+    assert isinstance(run("mcp__db__query", {"sql": "select cost from tasks where id = 3"}), PermissionResultAllow)
+    assert isinstance(run("mcp__db__tables", {}), PermissionResultDeny)
+    other = asyncio.run(side.Reads()("mcp__jarvis__task_stop", {"id": 3}, None))
+    assert isinstance(other, PermissionResultDeny) and "isn't available" in other.message
+
+
+def test_the_database_tools_answer_a_query_and_refuse_a_write(own_profile):
+    from jarvis.storage import database
+
+    with database.table("tasks", "create table tasks (id integer primary key, title text, cost real)") as c:
+        c.execute("insert into tasks values (383, 'multi-repo project folders', 11.49)")
+    tables, query = side.db_tools()
+
+    def call(t, args):
+        return asyncio.run(t.handler(args))
+
+    found = call(query, {"sql": "select title, cost from tasks where id = 383"})
+    assert not found.get("is_error") and "multi-repo project folders\t11.49" in found["content"][0]["text"]
+    refused = call(query, {"sql": "update tasks set cost = 0"})
+    assert refused["is_error"] and refused["content"][0]["text"].startswith("Not read:")
+    assert "tasks: id, title, cost" in call(tables, {})["content"][0]["text"]
+    assert call(query, {"sql": "select cost from tasks"})["content"][0]["text"] == "cost\n11.49"
+
+
 def test_a_file_lookup_runs_on_the_lookup_model_with_every_read_gated(monkeypatch, tmp_path):
     seen = {}
 
@@ -414,6 +441,7 @@ def test_a_file_lookup_runs_on_the_lookup_model_with_every_read_gated(monkeypatc
     assert options.model == roles.model(Role.LOOKUP) and options.tools == side.FILE_READS and options.allowed_tools == []
     assert isinstance(options.can_use_tool, side.Reads) and options.max_turns == side.LOOKUP_TURNS
     assert options.cwd == str(tmp_path / "scratch") and (tmp_path / "scratch").is_dir()
+    assert list(options.mcp_servers) == [side.DB]  # its database reads, gated like the rest
 
 
 def test_the_file_lookup_tool_uses_the_conversation_s_jobs(monkeypatch):
@@ -445,7 +473,8 @@ def test_a_computer_lookup_runs_only_sandboxed_commands_on_the_lookup_model(monk
     assert asyncio.run(side.check("Does the computer need a restart?")) == ("It's been up three days, with plenty "
                                                                              "of memory free.")
     options = seen["options"]
-    assert options.model == roles.model(Role.LOOKUP) and options.tools == ["Bash"] and options.allowed_tools == []
+    assert options.model == roles.model(Role.LOOKUP) and options.tools == ["Bash"]
+    assert options.allowed_tools == side.DB_READS and list(options.mcp_servers) == [side.DB]
     assert options.sandbox["enabled"] and options.sandbox["allowUnsandboxedCommands"] is False
     assert options.sandbox["network"] == {"allowedDomains": []} and options.cwd == str(tmp_path / "scratch")
     assert options.env["BASH_MAX_TIMEOUT_MS"] == str(side.CHECK_SECONDS * 1000)  # a hung command can't spend it all
@@ -460,8 +489,9 @@ def test_a_computer_lookup_runs_only_so_many_commands_and_none_naming_secrets():
     for name, args in (("Edit", {"file_path": "/Users/x/a.py"}), ("Read", {"file_path": "/Users/x/a.py"}),
                        ("Bash", {"command": f"cat {SECRETS_DIR}/google.json"}), ("Bash", {"command": "cat ~/.ssh/id_rsa"})):
         assert commands.refused(name, args), (name, args)
-    assert commands.refused("Bash", {"command": "uptime"}) == commands.refused("Bash", {"command": "df -h /"}) == ""
-    assert "answer now" in commands.refused("Bash", {"command": "vm_stat"})
+    assert commands.refused("Bash", {"command": "uptime"}) == commands.refused("mcp__db__tables", {}) == ""
+    assert "answer now" in commands.refused("mcp__db__query", {"sql": "select count(*) from tasks"})
+    assert commands.refused("mcp__jarvis__task_stop", {"id": 3})
 
 
 def test_the_computer_lookup_tool_answers_in_the_turn_when_quick_and_else_carries_on(monkeypatch):
