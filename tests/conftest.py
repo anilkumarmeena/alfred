@@ -58,9 +58,9 @@ def use_profile(monkeypatch: pytest.MonkeyPatch, data: Path | None = None, **cha
 
 def use_task_cache(monkeypatch: pytest.MonkeyPatch, folder: Path) -> Path:
     """Point TASK_CACHE_DIR at `folder` in every module that reads it."""
-    from alfred.tasks import briefs, host_tools, worker
+    from alfred.tasks import briefs, gate, host_tools, worker
 
-    for module in (worker, host_tools, briefs):
+    for module in (worker, host_tools, briefs, gate):
         monkeypatch.setattr(module, "TASK_CACHE_DIR", folder)
     return folder
 

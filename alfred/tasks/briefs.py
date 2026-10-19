@@ -15,6 +15,11 @@ from alfred.tasks import access, project_claude, repo_files
 from alfred.tasks.host_tools import task_temp
 from alfred.tasks.subagents import _agents
 
+# Alfred checks a finished change against what its log shows, and a run in the background or a subagent shows no result
+FINAL_CHECK = ("\n- After your last edit, run the project's tests (or build) once more yourself, with Bash in the "
+               "foreground, not in the background or through a subagent, so Alfred's check of your result sees them "
+               "finish; give the outcome (\"212 passed\") in your summary.")
+
 
 def brief() -> str:
     """Shared brief for every task, for the current profile."""
@@ -192,5 +197,7 @@ def _system_prompt(task: dict, cwd: Path, setup: project_claude.Setup | None = N
         return f"""You research and gather information for {profile.name()}, using web search and their tools: you can read their mail, calendar, Google Chat, the tools they've connected (mcp__<server>__<tool>, loaded with ToolSearch when you need one), their Google Sheets, Docs and Slides, and search Google Drive, and you can edit their Google Sheets and Docs when the work calls for it. {_google_limits()} {limits}.
 
 {brief()}{pages}{granted}"""
+    if kind == "code_change":
+        extra += FINAL_CHECK
     return {"type": "preset", "preset": "claude_code",
             "append": brief() + extra + pages + granted + _also_readable() + _project_brief(setup, _agents(kind))}

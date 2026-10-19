@@ -15,6 +15,7 @@ from alfred.config.files import ConfigError
 ENV = {
     "voice": "ALFRED_CLI_MODEL", "voice_quick": "ALFRED_VOICE_QUICK_MODEL", "lookup": "ALFRED_LOOKUP_MODEL",
     "side": "ALFRED_SIDE_MODEL", "consent": "ALFRED_CONSENT_MODEL", "task": "ALFRED_TASK_MODEL",
+    "research": "ALFRED_RESEARCH_MODEL",
     "task_search": "ALFRED_TASK_SEARCH_MODEL", "task_helper": "ALFRED_TASK_HELPER_MODEL", "goal": "ALFRED_GOAL_MODEL",
     "announce": "ALFRED_ANNOUNCE_MODEL", "placement": "ALFRED_PLACEMENT_MODEL", "schedule": "ALFRED_SCHEDULE_MODEL",
     "verdict": "ALFRED_VERDICT_MODEL", "command_summary": "ALFRED_COMMAND_SUMMARY_MODEL",

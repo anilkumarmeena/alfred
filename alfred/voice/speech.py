@@ -44,7 +44,7 @@ from alfred.state.vocabulary import Vocabulary
 from alfred.voice import speech_gate
 from alfred.voice.clauses import ClauseTokenizer
 from alfred.voice.speaker import SpeakerCheck
-from alfred.voice.speech_gate import SileroProbs, SpeechGate
+from alfred.voice.speech_gate import SileroProbs, SpeechGate, compression_ratio
 
 log = logging.getLogger("alfred.voice.speech")
 
@@ -62,6 +62,10 @@ MLX_LOCK = threading.Lock()  # Whisper and Kokoro on the Apple GPU: one at a tim
 # Tokens a clip may decode: a margin plus a generous rate of speech (timestamps included), up to Whisper's own cap.
 # A hallucinated loop ("I was a man, I was a man…") stops there, not at the window's end.
 TOKENS_BASE, TOKENS_PER_SECOND, TOKENS_MOST = 20, 8, 224
+# A dropped clip scoring within this of the speaker check's needed score is still transcribed, so the speaker log shows
+# what was said by voices close to the user's (tuning); the rest skip Whisper.
+NEAR_MISS = 0.05
+EARLY_KEPT = 4  # utterances heard early awaiting their clip; older ones are given up
 
 
 def transcribe(audio: np.ndarray, model: str = STT_MODEL, prompt: str = "") -> dict:
@@ -297,7 +301,7 @@ def _to_whisper_audio(buffer: utils.AudioBuffer) -> np.ndarray:
 class WhisperSTT(stt.STT):
     """Batch STT on VAD-cut utterances, filtered by the speech gate and speaker check.
 
-    The speaker check runs alongside Whisper; other voices are dropped. During voice enrollment clips feed the
+    The speaker check runs first and other voices are dropped without Whisper. During voice enrollment clips feed the
     voiceprint instead. Whisper runs in the shared process; `executor` replaces it in tests."""
 
     def __init__(self, model: str = STT_MODEL, gate: SpeechGate | None = None,
@@ -313,6 +317,9 @@ class WhisperSTT(stt.STT):
         self.hearing = 0  # in-flight clips; holds announcements and the turn's end
         self.heard_at = 0.0  # monotonic time the last clip finished
         self.clips: list[dict] = []  # passed clips this turn (take_clips)
+        # Utterances heard early (alfred.voice.early), by where their speech starts: (offset, bytes) of the clip's audio
+        self._early: dict[tuple[int, bytes], asyncio.Future] = {}
+        self._early_probs = SileroProbs()  # the early speaker check's own Silero: a clip may be measured alongside
 
     @property
     def gate(self) -> SpeechGate:
@@ -341,10 +348,64 @@ class WhisperSTT(stt.STT):
     def provider(self) -> str:
         return whisper.backend()
 
-    async def _transcribe(self, audio: np.ndarray) -> dict:
-        """{text, no_speech, avg_logprob} from the shared process."""
-        heard = json.loads(await _infer(self._executor, WHISPER_METHOD, whisper_request(audio, self._prompt)))
+    async def _transcribe(self, audio: np.ndarray, prompt: str | None = None) -> dict:
+        """{text, no_speech, avg_logprob} from the shared process; prompted with the vocabulary unless `prompt`."""
+        said = self._prompt if prompt is None else prompt
+        heard = json.loads(await _infer(self._executor, WHISPER_METHOD, whisper_request(audio, said)))
         return {"text": heard["text"], "no_speech": heard.get("no_speech"), "avg_logprob": heard.get("avg_logprob")}
+
+    async def _heard(self, audio: np.ndarray) -> dict:
+        """Whisper's words for a clip. A short clip can lead prompted Whisper into a loop of the prompt's words
+        ("JARVIS, JARVIS, JARVIS, …") or a run of one sound, which the gate would drop: then it hears it once more,
+        unprompted. On the MacBook Air that recovered "Hi Jarvis", "Yeah, sure." and "Yeah, it is done."."""
+        heard = await self._transcribe(audio)
+        text = heard["text"]
+        if self._prompt and (compression_ratio(text) > self._gate.thresholds.max_compression
+                             or self._vocabulary.echo(text)):
+            heard = await self._transcribe(audio, prompt="")
+            log.info("Whisper looped on the prompt (%r); unprompted it heard %r", text[:60], heard["text"])
+        return heard
+
+    def hear_early(self, onset: tuple[int, bytes], buffer: utils.AudioBuffer) -> None:
+        """Start hearing an utterance so far, before the VAD ends its clip (alfred.voice.early). The clip whose audio
+        has `onset` (offset, bytes: where its speech starts) uses these words, unless drop_early(onset) came first."""
+        self.drop_early(onset)
+        while len(self._early) >= EARLY_KEPT:
+            self._early.pop(next(iter(self._early))).cancel()
+        self._early[onset] = asyncio.ensure_future(self._guess(buffer))
+
+    def drop_early(self, onset: tuple[int, bytes]) -> None:
+        """Give up the early hearing of `onset`'s utterance: speech went on, so its clip will be longer."""
+        if (guess := self._early.pop(onset, None)) is not None:
+            guess.cancel()
+
+    async def _guess(self, buffer: utils.AudioBuffer) -> dict | None:
+        """Whisper's words for an utterance so far; None if it sounds like another voice (its clip skips Whisper)."""
+        audio = await asyncio.to_thread(_to_whisper_audio, buffer)
+        if self._speaker.on and not await asyncio.to_thread(self._speaker.likely, audio, self._early_probs):
+            return None
+        return await self._heard(audio)
+
+    def _heard_early(self, buffer: utils.AudioBuffer) -> asyncio.Future | None:
+        """The early hearing of this clip's utterance, taken (each is used once), or None."""
+        if not self._early:
+            return None
+        data = rtc.combine_audio_frames(buffer).data.tobytes()
+        for onset in list(self._early):
+            offset, sound = onset
+            if data[offset:offset + len(sound)] == sound:
+                return self._early.pop(onset)
+        return None
+
+    @staticmethod
+    async def _words(guess: asyncio.Future | None) -> dict | None:
+        """Words heard early, if any came (not another voice, nor failed)."""
+        if guess is None or guess.cancelled():
+            return None
+        try:
+            return await guess
+        except APIConnectionError:
+            return None
 
     def warm_up(self) -> None:
         self._gate.measure(np.zeros(WHISPER_RATE, dtype=np.float32))  # loads its VAD
@@ -354,23 +415,30 @@ class WhisperSTT(stt.STT):
         audio = _to_whisper_audio(buffer)
         return audio, self._gate.measure(audio)
 
-    async def _hear(self, buffer: utils.AudioBuffer) -> str:
+    async def _hear(self, buffer: utils.AudioBuffer, early: asyncio.Future | None = None) -> str:
+        """The clip's words for the brain, or "" to ignore it. `early`: Whisper started on it before it ended."""
         # off the event loop, which carries live audio
         audio, measured = await asyncio.to_thread(self._measure, buffer)
         if self._speaker.enrolling:
+            if early is not None:
+                early.cancel()
             return await self._enroll(audio)
-        # speaker check on this process's CPU while Whisper runs in the shared one
-        judging = asyncio.ensure_future(asyncio.to_thread(self._speaker.judge, audio)) if self._speaker.on else None
-        try:
-            heard = await self._transcribe(audio)
-        finally:
-            judged = await judging if judging is not None else None
+        # The speaker check first (~25 ms): another voice's clip, two in three on the MacBook Air, skips Whisper, which
+        # would hold this call's next clip and Kokoro's GPU for ~1 s. Near misses are still heard, for the log.
+        judged = await asyncio.to_thread(self._speaker.judge, audio) if self._speaker.on else None
+        if judged is not None and judged.drop:
+            if early is not None:
+                early.cancel()
+            near = judged.score is not None and judged.score >= judged.needed - NEAR_MISS
+            await asyncio.to_thread(self._speaker.record, judged, (await self._heard(audio))["text"] if near else None)
+            return ""  # another voice: stay silent
+        heard = await self._words(early)
+        heard_early = heard is not None
+        heard = heard or await self._heard(audio)
         text = heard["text"]
-        passes = judged is None or not judged.drop  # another voice: stay silent
-        if passes:
-            echo = bool(self._prompt) and self._vocabulary.echo(text)
-            passes = await asyncio.to_thread(self._gate.passes, measured, text, heard["no_speech"], audio,
-                                             avg_logprob=heard["avg_logprob"], echo=echo)
+        echo = bool(self._prompt) and self._vocabulary.echo(text)
+        passes = await asyncio.to_thread(self._gate.passes, measured, text, heard["no_speech"], audio,
+                                         avg_logprob=heard["avg_logprob"], echo=echo)
         if judged is not None:
             await asyncio.to_thread(self._speaker.record, judged, text)
         if not passes:
@@ -380,7 +448,7 @@ class WhisperSTT(stt.STT):
         # Silero's speech seconds: the gate's, else the speaker check's, else unknown (both off)
         speech = measured.speech_seconds if measured is not None else judged.speech_seconds if judged else None
         self.clips.append({"words": len(fixed.split()), "logprob": heard["avg_logprob"], "speaker": self._who(judged),
-                           "speech": speech})
+                           "speech": speech, "early": heard_early})
         return fixed
 
     def _who(self, judged) -> str | None:
@@ -390,7 +458,7 @@ class WhisperSTT(stt.STT):
         return self._speaker.prints[0].name if judged.reference == "this call" else judged.reference
 
     def take_clips(self) -> list[dict]:
-        """Return and clear clips since the last call: [{words, logprob, speaker, speech (Silero seconds)}]."""
+        """Return and clear clips since the last call: [{words, logprob, speaker, speech (Silero seconds), early}]."""
         clips, self.clips = self.clips, []
         return clips
 
@@ -406,9 +474,10 @@ class WhisperSTT(stt.STT):
     async def _recognize_impl(self, buffer: utils.AudioBuffer, *, language: NotGivenOr[str] = NOT_GIVEN,
                               conn_options: APIConnectOptions) -> stt.SpeechEvent:
         self.hearing += 1
+        early = self._heard_early(buffer)
         try:
             async with self._lock:
-                text = await self._hear(buffer)
+                text = await self._hear(buffer, early)
         finally:
             self.hearing -= 1
             self.heard_at = time.monotonic()

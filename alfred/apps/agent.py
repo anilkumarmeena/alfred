@@ -36,7 +36,7 @@ from alfred.llm.roles import Role
 from alfred.notify import push
 from alfred.state import conversation, preferences, vocabulary, voiceprints
 from alfred.storage import profile
-from alfred.voice import denoise, quiet, ram, speech, turn, unspoken
+from alfred.voice import denoise, early, quiet, ram, speech, turn, unspoken
 from alfred.voice.barge_in import BargeIn, BargeInVAD
 from alfred.voice.floor import Moment
 from alfred.voice.session import VoiceSession
@@ -142,11 +142,12 @@ async def entrypoint(ctx: JobContext) -> None:
     stt = ctx.proc.userdata["stt"]
     barge = BargeIn(stt.speaker)  # while replying, only the user's voice interrupts
     pacing = turn.Pacing()  # each speaker's pace, for the brain's hints
+    vad = BargeInVAD(denoise.session_vad(ctx.proc.userdata["vad"], ctx.proc.userdata["denoise"]), barge)
     session = AgentSession(
-        stt=stt,
+        stt=early.adapter(stt, vad),  # Whisper starts at a short pause, before the VAD ends the clip
         llm=BrainPlaceholder(),
         tts=ctx.proc.userdata["tts_stream"],
-        vad=BargeInVAD(denoise.session_vad(ctx.proc.userdata["vad"], ctx.proc.userdata["denoise"]), barge),
+        vad=vad,
         turn_handling=turn_handling(stt),
     )
     # Read per call so Settings changes (or a new voiceprint) need no restart

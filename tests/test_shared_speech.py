@@ -316,3 +316,35 @@ def test_kokoro_session_limits_threads_and_stops_them_spinning(monkeypatch, tmp_
     made = fake_session(monkeypatch)
     speech.kokoro_session(tmp_path / "kokoro.onnx", threads)
     assert made["threads"] == threads and made["spinning"] == "0"
+
+
+class PromptedExecutor:
+    """Whisper that loops on the prompt's words when prompted, as on short clips, and hears it right unprompted."""
+
+    def __init__(self, prompted: str) -> None:
+        self.prompted, self.prompts = prompted, []
+
+    async def do_inference(self, method: str, data: bytes) -> bytes:
+        prompt = speech.read_whisper_request(data)[1]
+        self.prompts.append(prompt)
+        return json.dumps({"text": self.prompted if prompt else "Hi Jarvis.", "no_speech": 0.0,
+                           "avg_logprob": -0.3}).encode()
+
+
+@pytest.mark.parametrize("prompted", ["JARVIS, JARVIS, JARVIS, JARVIS, JARVIS, JARVIS, JARVIS, JARVIS, JARVIS.",
+                                      "JARVIS, AI Armory, splitmoney.",  # only the prompt's words: an echo
+                                      "Jai Jai Jaijaijaijaijaijaijaijaijaijaijaijaijaijaijaijaijaijai."])
+def test_a_loop_on_the_prompt_is_heard_again_unprompted(prompted):
+    executor = PromptedExecutor(prompted)
+    stt = speech.WhisperSTT(gate=off_gate(), executor=executor)
+    stt.use_vocabulary(Vocabulary(terms=("JARVIS", "AI Armory", "splitmoney")))
+    assert asyncio.run(stt._heard(np.zeros(160, np.float32)))["text"] == "Hi Jarvis."
+    assert executor.prompts == ["JARVIS, AI Armory, splitmoney.", ""]
+
+
+def test_words_that_dont_loop_are_heard_once():
+    executor = PromptedExecutor("Let's work on splitmoney, and JARVIS too.")
+    stt = speech.WhisperSTT(gate=off_gate(), executor=executor)
+    stt.use_vocabulary(Vocabulary(terms=("JARVIS", "AI Armory", "splitmoney")))
+    assert asyncio.run(stt._heard(np.zeros(160, np.float32)))["text"] == "Let's work on splitmoney, and JARVIS too."
+    assert len(executor.prompts) == 1

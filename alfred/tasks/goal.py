@@ -23,7 +23,7 @@ from alfred.llm.roles import Role
 from alfred.safety.commands import SECRET_PATTERNS
 from alfred.state import todo
 from alfred.storage import profile
-from alfred.tasks import schedules
+from alfred.tasks import merge_check, schedules
 
 log = logging.getLogger("alfred.tasks.goal")
 
@@ -36,6 +36,7 @@ LOG_ENTRIES = 1000  # log entries (steps included) the check scans
 MOST = {"instruction": 6000, "messages": 3000, "summary": 8000, "diff": 12000, "log": 3000}
 SAID_MOST = 300  # max chars of `left` spoken
 OPEN_TODOS = 40  # open to-dos shown when the task has no linked to-do
+TESTS_SHOWN = 10  # failing tests named from a recorded run of the suite
 # Log steps that look like building, testing or checking
 _CHECKING = re.compile(r"\b(tests?|pytest|unittest|jest|vitest|playwright|build|make|lint|ruff|mypy|pyright|tsc|"
                        r"typecheck|compileall|xcodebuild|swift|cargo|gradle|npm|pnpm|yarn|go (?:test|build|vet))\b", re.IGNORECASE)
@@ -135,7 +136,8 @@ async def _git(folder: str, *args: str) -> str:
 
 
 async def evidence(task: dict, changes: str) -> str:
-    """Evidence for a code_change: `changes`, plus (in git) stat, untracked files and diff vs base, minus secrets."""
+    """Evidence for a code_change: `changes`, plus (in git) stat, untracked files and diff vs base, minus secrets, and
+    the suite's own record of a run on exactly the final code (merge_check.tested), if there is one."""
     if task["kind"] != "code_change":
         return ""
     parts = [f"Changes: {changes or 'none recorded'}"]
@@ -148,7 +150,23 @@ async def evidence(task: dict, changes: str) -> str:
         if untracked:
             parts += [f"Untracked files:\n{_clip(untracked, 1500)}"]
         parts += [f"Diff against where it began:\n{_clip(diff, MOST['diff']) or 'empty'}"]
+    if folder and Path(folder).exists() and (record := await asyncio.to_thread(merge_check.tested, Path(folder))):
+        parts += [suite_run(record)]
     return "\n\n".join(parts)
+
+
+def suite_run(record: dict) -> str:
+    """A run of the test suite on exactly the final code (merge_check's record), in words."""
+    failed = sorted(set(record["failed"]) - merge_check.ENV_ONLY)
+    ran = len(record["ran"])
+    said = (f"Test suite, as recorded by the test run itself on exactly this final code: {ran} test{'s' * (ran != 1)} "
+            "passed or were skipped")
+    if expected := len(set(record["failed"]) & merge_check.ENV_ONLY):
+        said += f", {expected} failed only for want of local files a task doesn't have, as expected"
+    if not failed:
+        return said + ", and none failed."
+    more = f" and {len(failed) - TESTS_SHOWN} more" if len(failed) > TESTS_SHOWN else ""
+    return said + f", and {len(failed)} failed: {', '.join(failed[:TESTS_SHOWN])}{more}."
 
 
 def todos(task: dict) -> list[dict]:

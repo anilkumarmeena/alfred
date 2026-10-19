@@ -233,6 +233,7 @@ NEW_PROJECTS_DIR = Path(_env("ALFRED_NEW_PROJECTS_DIR") or PROJECTS_HOME).expand
 WORKTREES_DIR = DATA_DIR / "worktrees"
 TASK_CACHE_DIR = DATA_DIR / "task-cache"  # build and package caches for sandboxed commands
 TASK_EFFORT = text("tasks.effort", "ALFRED_TASK_EFFORT")
+TASK_ANSWER_EFFORT = text("tasks.answer_effort", "ALFRED_TASK_ANSWER_EFFORT")  # research and code questions
 TASK_MAX_TURNS = whole("tasks.max_turns", "ALFRED_TASK_MAX_TURNS")
 # Times a run that ran out of turns is carried on by itself per user ask (alfred.tasks.runner); 0 = never
 TASK_CONTINUES = whole("tasks.continues", "ALFRED_TASK_CONTINUES", 0, 20)
@@ -342,6 +343,9 @@ WHISPER_UNSURE_LOGPROB = number("voice.whisper_unsure_logprob", "ALFRED_WHISPER_
 VAD_MIN_SPEECH = number("voice.vad_min_speech", "ALFRED_VAD_MIN_SPEECH")
 # Silence that ends an utterance (LiveKit default). Floor on every reply's latency; lower = more mid-sentence cuts.
 VAD_MIN_SILENCE = number("voice.vad_min_silence", "ALFRED_VAD_MIN_SILENCE", 0.3, 2.0)
+# Silence in seconds after which Whisper starts on the utterance so far, before the VAD ends the clip (alfred.voice.early):
+# its words are ready that much sooner when nothing more is said. 0 = off; at least VAD_MIN_SILENCE is off too.
+WHISPER_EARLY = number("voice.whisper_early", "ALFRED_WHISPER_EARLY", 0.0, 2.0)
 VAD_THRESHOLD = number("voice.vad_threshold", "ALFRED_VAD_THRESHOLD")
 VOICE_TURNS_LOG = LOGS_DIR / "voice-turns.jsonl"  # per-stage turn timing
 

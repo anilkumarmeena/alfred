@@ -113,6 +113,16 @@ def record(folder: Path, tree: str, ran: Collection[str], failed: Collection[str
     write_atomic(file, json.dumps({"ran": sorted(ran), "failed": sorted(failed)}))
 
 
+def tested(folder: Path) -> dict | None:
+    """The record of a run of the suite on `folder`'s code as it is now ({"ran": [...], "failed": [...]}), or None."""
+    if not (tree := code_tree(folder)) or not (records := _records(folder)):
+        return None
+    try:
+        return json.loads((records / f"{tree}.json").read_text())
+    except (OSError, ValueError):
+        return None
+
+
 async def passed(folder: Path, venv: Path, branch: str) -> bool:
     """Whether every test `branch` (checked out in `folder`) collects has already been run on exactly its code, with
     no failures but ENV_ONLY's. Costs a collection (seconds), not a run of the suite."""

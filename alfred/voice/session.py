@@ -150,9 +150,11 @@ class VoiceSession:
         self._words = []
         if self._reply is not None:
             self._reply.over = True  # what LiveKit reports from now on isn't of it
-        who, logprob, voiced = turn.clips_heard(self.stt.take_clips() if self.stt is not None else [])
+        clips = self.stt.take_clips() if self.stt is not None else []
+        who, logprob, voiced = turn.clips_heard(clips)
+        early = sum(1 for c in clips if c.get("early"))  # clips whose words Whisper had before the VAD ended them
         how = ({"speaker": who} | ({"logprob": round(logprob, 3)} if logprob is not None else {})
-               | ({"voiced": voiced} if voiced is not None else {}))
+               | ({"voiced": voiced} if voiced is not None else {}) | ({"early": early} if clips else {}))
         cut = self.timings.heard(said, metrics, how)
         if self.pacing is not None:
             self.pacing.use(who)

@@ -14,7 +14,7 @@ import shlex
 from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 
-from alfred.config import CLAUDE_CONFIG_DIR, HOME_DIR, ROOT, SECRETS_DIR
+from alfred.config import CLAUDE_CONFIG_DIR, HOME_DIR, ROOT, SECRETS_DIR, TASK_CACHE_DIR
 from alfred.llm import claude_logins
 from alfred.llm.claude import deny
 from alfred.llm.sdk import HookMatcher, PermissionResultAllow, PermissionResultDeny, ToolPermissionContext
@@ -47,9 +47,13 @@ DOC_IMAGES = "mcp__alfred__docs_insert_image"  # uploads local image files, so t
 # Patterns come from alfred.safety.commands, shared with the voice shell and host profile.
 
 def _secret(path: Path) -> bool:
-    """Whether resolved `path` is secret (secrets folders, .env, keys, credentials); voice logs are exempt."""
+    """Whether resolved `path` is secret (secrets folders, .env, keys, credentials); voice logs are exempt, and so are
+    names that only look secret inside the task cache (package caches, written only by sandboxed commands)."""
     if path.is_relative_to(claude_logins.voice_logs().resolve()):
         return False
+    if path.is_relative_to(TASK_CACHE_DIR.resolve()):
+        return any(path.is_relative_to(Path(d).expanduser().resolve())
+                   for d in (*commands.ALFRED_SECRETS, *commands.HOME_SECRETS))
     return commands.secret_path(path)
 
 
@@ -67,16 +71,29 @@ def _hide_except(root: Path, keep: Path) -> list[Path]:
     return hidden
 
 
-def _secret_folders(folder: Path, keep: Path) -> list[str]:
-    """Deny rules for every secrets/ folder under `folder`, skipping the path to `keep` (see `_hide_except`)."""
-    if not keep.is_relative_to(folder):
+def _secret_folders(folder: Path, keep: tuple[Path, ...]) -> list[str]:
+    """Deny rules for every secrets/ folder under `folder`, skipping the paths to `keep` (see `_hide_except`)."""
+    if not any(k.is_relative_to(folder) for k in keep):
         return [f"Read(/{folder}/**/secrets/**)"] + ([f"Read(/{folder}/**)"] if folder.name == "secrets" else [])
-    if keep == folder:
+    if folder in keep:
         return []
     try:
         return [r for entry in folder.iterdir() if entry.is_dir() for r in _secret_folders(entry, keep)]
     except OSError:
         return []
+
+
+def _secret_files(folder: Path, skip: Path) -> list[str]:
+    """Deny rules for secret files (SECRET_PATTERNS) anywhere under `folder` except in `skip`, walking down to it."""
+    if not skip.is_relative_to(folder):
+        return [f"Read(/{folder}/{p})" for p in commands.SECRET_PATTERNS]
+    if skip == folder:
+        return []
+    rules = [f"Read(/{folder}/{p.removeprefix('**/')})" for p in commands.SECRET_PATTERNS]  # its own files
+    try:
+        return rules + [r for entry in folder.iterdir() if entry.is_dir() for r in _secret_files(entry, skip)]
+    except OSError:
+        return rules
 
 
 def _secret_rules(read_dirs: list[Path]) -> dict:
@@ -90,9 +107,11 @@ def _secret_rules(read_dirs: list[Path]) -> dict:
     walled = (SECRETS_DIR.resolve(), Path(CLAUDE_CONFIG_DIR).resolve())
     own = dict.fromkeys(Path(p).resolve() for p in commands.ALFRED_SECRETS)
     rules += [r for p in own if p not in walled for r in (f"Read(/{p})", f"Read(/{p}/**)")]
+    # The task cache is left out: package caches (Go, Gradle, typeshed) hold names that only look secret
+    cache = TASK_CACHE_DIR.resolve()
     for folder in dict.fromkeys([*(d.resolve() for d in read_dirs), HOME_DIR.resolve()]):
-        rules += [f"Read(/{folder}/{pattern})" for pattern in commands.SECRET_PATTERNS]
-        rules += _secret_folders(folder, SECRETS_DIR.resolve())
+        rules += _secret_files(folder, cache)
+        rules += _secret_folders(folder, (SECRETS_DIR.resolve(), cache))
     return {"permissions": {"deny": list(dict.fromkeys(rules))}}
 
 
@@ -183,7 +202,9 @@ class TaskGate:
             where = " and ".join(str(r) for r in roots + (self.more_writes if name in _WRITES else [])) or "nothing"
             return PermissionResultDeny(message=f"{name} is limited to {where} in this task.")
         if name == "Bash":
-            if self.bash is None:
+            if self.bash is None:  # sandboxed: the CLI asks for some commands anyway (its own path checks)
+                if not args.get("dangerouslyDisableSandbox"):
+                    return PermissionResultAllow()  # the sandbox's walls still apply
                 return PermissionResultDeny(message="Commands must run inside the sandbox.")
             if self.bash(args.get("command", "")):
                 return PermissionResultAllow()

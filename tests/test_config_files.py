@@ -78,7 +78,7 @@ def test_every_shipped_tier_has_a_price():
 
 
 def test_the_shipped_defaults_give_every_role_the_code_asks_for():
-    for role in ("voice", "lookup", "side", "consent", "injection", "task", "task_search", "task_helper", "goal",
+    for role in ("voice", "lookup", "side", "consent", "injection", "task", "research", "task_search", "task_helper", "goal",
                  "announce", "placement", "schedule", "verdict", "command_summary", "command_triage", "learning",
                  "todo_match", "skill_review", "sign_in_check"):
         config.MODELS.role(role)

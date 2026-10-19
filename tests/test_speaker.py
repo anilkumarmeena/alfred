@@ -472,12 +472,21 @@ def pipeline(text: str, c: SpeakerCheck) -> tuple[speech.WhisperSTT, FakeExecuto
     return speech.WhisperSTT(gate=SpeechGate("off", record=None, audio_dir=None), executor=executor, speaker=c), executor
 
 
-def test_someone_elses_words_never_reach_the_brain(tmp_path):
+def test_someone_elses_words_never_reach_the_brain_nor_whisper(tmp_path):
+    """Two in three clips on the MacBook Air were other voices: each held the call's next clip ~1 s in Whisper."""
     c, _ = check(tmp_path=tmp_path)
     stt, executor = pipeline("As then the URL it has six membership classes", c)
-    assert hear(stt, clip(3, 0.05)) == "" and executor.calls == 1  # transcribed alongside, then dropped
+    assert hear(stt, clip(3, 0.05)) == "" and executor.calls == 0
     [line] = (tmp_path / "speaker.jsonl").read_text().splitlines()
-    assert json.loads(line)["verdict"] == "dropped"
+    assert json.loads(line)["verdict"] == "dropped" and json.loads(line)["text"] is None
+
+
+def test_a_near_miss_is_still_dropped_but_its_words_are_logged(tmp_path):
+    c, _ = check(tmp_path=tmp_path)  # needs 0.35
+    stt, executor = pipeline("Can you check the build?", c)
+    assert hear(stt, clip(3, 0.32)) == "" and executor.calls == 1
+    entry = json.loads((tmp_path / "speaker.jsonl").read_text())
+    assert entry["verdict"] == "dropped" and entry["text"] == "Can you check the build?"
 
 
 def test_the_users_words_go_through_and_are_logged(tmp_path):
@@ -581,3 +590,25 @@ def test_the_command_line_enrolls_shows_tests_and_forgets(monkeypatch, capsys, t
     assert "owner: 1.00" in capsys.readouterr().out
     assert speaker.main(["remove"]) == 0 and "Forgotten." in capsys.readouterr().out
     assert speaker.main(["remove"]) == 0 and "There's no voiceprint" in capsys.readouterr().out
+
+
+def test_likely_says_what_judge_would_and_remembers_nothing():
+    """The early hearing's check (alfred.voice.early): it mustn't count as hearing the user, nor adapt."""
+    c, _ = check()
+    assert c.likely(clip(3, 0.7)) and not c.likely(clip(3, 0.05))
+    assert c._user_at is None and c._other_at is None and c._session == []
+    assert c.judge(clip(3, 0.7)).verdict == "kept" and c._user_at is not None
+
+
+def test_another_voices_early_hearing_costs_no_whisper(tmp_path):
+    c, _ = check(tmp_path=tmp_path)
+    stt, executor = pipeline("As then the URL it has six membership classes", c)
+    pcm = (np.clip(clip(3, 0.05), -1, 1) * 32767).astype(np.int16)
+
+    async def run() -> str:
+        stt.hear_early((0, pcm.tobytes()[:3200]), [rtc.AudioFrame(pcm.tobytes(), RATE, 1, len(pcm))])
+        event = await stt._recognize_impl([rtc.AudioFrame(pcm.tobytes(), RATE, 1, len(pcm))],
+                                          conn_options=DEFAULT_API_CONNECT_OPTIONS)
+        return event.alternatives[0].text
+
+    assert asyncio.run(run()) == "" and executor.calls == 0

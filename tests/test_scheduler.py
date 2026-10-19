@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
@@ -869,7 +870,10 @@ def test_scheduled_runs_use_the_lighter_model(env):
     research = {"kind": "research", "job": 3}
     assert worker._model(research) == (roles.model(Role.SCHEDULE), worker.SCHEDULE_EFFORT)
     assert worker._model({"kind": "code_change", "job": 3}) == (roles.model(Role.TASK), worker.TASK_EFFORT)
-    assert worker._model({"kind": "research", "job": None}) == (roles.model(Role.TASK), worker.TASK_EFFORT)
+    assert worker._model({"kind": "research", "job": None}) == (roles.model(Role.RESEARCH), worker.TASK_ANSWER_EFFORT)
+    assert worker._model({"kind": "code_question", "job": None}) == (roles.model(Role.TASK), worker.TASK_ANSWER_EFFORT)
+    assert worker._model({"kind": "code_change", "job": None}) == (roles.model(Role.TASK), worker.TASK_EFFORT)
+    assert "sonnet" in roles.model(Role.RESEARCH) and worker.TASK_ANSWER_EFFORT == "medium"
 
 
 # ── Storage ─────────────────────────────────────────────────────
@@ -922,6 +926,42 @@ def test_tidying_removes_ended_tasks_temp_folders_after_a_week(db, tmp_path, mon
     asyncio.run(Scheduler(type("R", (), {"store": store})(), None).prune())
     assert not folders["ended"].exists() and not folders["gone"].exists()
     assert folders["running"].exists() and folders["recent"].exists() and (temp / "task-notes").exists()
+
+
+def test_tidying_removes_one_shot_calls_transcripts_after_a_day(db, tmp_path, monkeypatch):
+    monkeypatch.setattr(scheduler, "DATA_DIR", data := tmp_path / "data")
+    monkeypatch.setattr(config, "CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))  # the default login's folder
+    calls = tmp_path / "claude" / "projects" / str(data).replace("/", "-").replace("_", "-").replace(".", "-")
+    task = calls.with_name(calls.name + "-tasks-7")  # a task's session, resumed by a follow-up
+    for d in (calls, task):
+        d.mkdir(parents=True)
+    old, new, kept = calls / "old.jsonl", calls / "new.jsonl", task / "old.jsonl"
+    for f in (old, new, kept):
+        f.write_text("{}")
+    for f in (old, kept):
+        os.utime(f, (0, 0))
+    asyncio.run(Scheduler(type("R", (), {"store": Store()})(), None).prune())
+    assert not old.exists() and new.exists() and kept.exists()
+
+
+def test_the_task_caches_uv_packages_are_pruned_weekly_while_no_task_runs(db, tmp_path, monkeypatch):
+    cache = tmp_path / "cache"
+    (cache / "uv").mkdir(parents=True)
+    monkeypatch.setattr(scheduler, "TASK_CACHE_DIR", cache)
+    ran = []
+
+    async def run_try(*argv, env=None, **_):
+        ran.append((argv, env["UV_CACHE_DIR"]))
+        return 0, "Removed 12 files (40.0MiB)"
+
+    monkeypatch.setattr(scheduler.proc, "run_try", run_try)
+    busy = type("R", (), {"store": Store(), "jobs": {1: None}})()
+    asyncio.run(Scheduler(busy, None).prune())
+    assert ran == []  # a running task may be installing from it
+    idle = type("R", (), {"store": Store(), "jobs": {}})()
+    asyncio.run(Scheduler(idle, None).prune())
+    asyncio.run(Scheduler(idle, None).prune())  # within the week: not again
+    assert ran == [(("uv", "cache", "prune"), str(cache / "uv"))]
 
 
 # ── The voice tools ─────────────────────────────────────────────

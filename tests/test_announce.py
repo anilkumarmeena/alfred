@@ -33,6 +33,7 @@ class Model:
 def model(monkeypatch):
     fake = Model()
     monkeypatch.setattr(announce, "ask_model", fake)
+    monkeypatch.setattr(announce, "warm", lambda: None)  # no real CLI
     monkeypatch.setattr(announce, "ANNOUNCE_ENABLED", True)
     monkeypatch.setattr(usage, "out", lambda now=None: None)
     return fake
@@ -142,6 +143,39 @@ def test_a_slow_model_gives_way_to_fixed_words(model, monkeypatch):
     assert said(Ending("the build", DONE, "Found X.")) == "Your task, the build, is done. Found X."
 
 
+def test_the_wording_runs_on_the_session_warmed_as_the_run_ended(monkeypatch):
+    from alfred.llm import quick
+    from alfred.llm.standby import Standby
+
+    started, sent = [], []
+
+    class Client:
+        async def disconnect(self):
+            pass
+
+    async def connect(prompt):
+        started.append(prompt)
+        return Client()
+
+    async def exchange(client, text):
+        sent.append(client)
+        return "Done."
+
+    monkeypatch.setattr(announce, "_sessions", Standby("test", "", 60, connect=connect))
+    monkeypatch.setattr(quick, "exchange", exchange)
+    monkeypatch.setattr("alfred.llm.standby.exchange", exchange)
+    monkeypatch.setattr(announce, "ANNOUNCE_ENABLED", True)
+    monkeypatch.setattr(usage, "out", lambda now=None: None)
+
+    async def main():
+        announce.warm()
+        await asyncio.sleep(0)  # starts while the goal check runs
+        return await announce.spoken(Ending("the build", DONE, "Found X."))
+
+    assert asyncio.run(main()) == "Done."
+    assert started == [announce.system()] and len(sent) == 1  # one session, started ahead
+
+
 # ── In the runner and the voice brain ───────────────────────────
 
 
@@ -192,7 +226,7 @@ def test_a_greeting_says_an_update_in_whole_sentences_and_a_question_whole():
 
 def test_spoken_task_updates_are_worded_by_the_cheapest_model(monkeypatch):
     from alfred.brain import side
-    from alfred.llm import claude, roles
+    from alfred.llm import claude, roles, sdk, standby
     from alfred.llm.roles import Role
 
     asked = []
@@ -201,9 +235,26 @@ def test_spoken_task_updates_are_worded_by_the_cheapest_model(monkeypatch):
         asked.append(role)
         return "It's done.", 0.0
 
+    class Client:  # a task's ending is worded on a session of its own
+        def __init__(self, options):
+            pass
+
+        async def connect(self):
+            pass
+
+        async def disconnect(self):
+            pass
+
+    async def exchange(client, text):
+        return "It's done."
+
+    real = claude.short_options
+    monkeypatch.setattr(claude, "short_options", lambda prompt, role, **kw: asked.append(role) or real(prompt, role, **kw))
+    monkeypatch.setattr(sdk, "ClaudeSDKClient", Client)
+    monkeypatch.setattr(standby, "exchange", exchange)
     monkeypatch.setattr(claude, "ask", ask)
     monkeypatch.setattr(side, "ANNOUNCE_ENABLED", True)
-    monkeypatch.setattr(usage, "out", lambda now=None: None)
+    monkeypatch.setattr(usage, "out", lambda now=None, **_: None)
     asyncio.run(announce.ask_model("<task>Fix the login</task>"))
     asyncio.run(side.spoken("## Found\n\n- The **login** page was fixed in `auth.py`, and its tests pass. " * 3))
     cheapest = roles.model("fast")

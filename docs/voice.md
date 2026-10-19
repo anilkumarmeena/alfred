@@ -20,8 +20,8 @@ flowchart TB
         direction LR
         Mic(["🎤 Your mic<br/>phone · browser"]) --> NF["🔉 Noise filter<br/>DeepFilterNet 3"]
         NF --> VAD["⌛ VAD + end of turn<br/>Silero · LiveKit"]
-        VAD --> STT["📝 Whisper<br/>MLX · faster-whisper"]
-        VAD --> Spk["🔐 Speaker check<br/>alongside Whisper"]
+        VAD --> Spk["🔐 Speaker check<br/>before Whisper"]
+        Spk -->|"your voice"| STT["📝 Whisper<br/>MLX · faster-whisper"]
     end
 
     subgraph Answer["💬 Answering"]
@@ -125,6 +125,8 @@ Whisper runs on whichever backend suits the machine, picked at start:
 - **CPU speed:** `small.en` takes **0.61 s per 5 s clip** on an M-series CPU; expect **~1–1.5 s** on a 4–8 core x86. Large models would take several seconds a clip on a CPU, hence the smaller default.
 - **Weak CPU?** `ALFRED_STT=base.en` trades a little accuracy for speed.
 - **GPU** needs CUDA 12's cuBLAS and cuDNN 9, from the system or pip (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`). If it fails to load, Alfred falls back to the CPU and logs why; `ALFRED_STT_DEVICE=cpu` skips trying.
+- **A loop on the prompt is heard again.** On a short clip the vocabulary prompt can lead Whisper into repeating its words ("JARVIS, JARVIS, JARVIS…") or one sound, which the gate drops; Whisper then hears the clip once more unprompted. On the Air that recovered "Hi Jarvis", "Yeah, sure." and "Yeah, it is done."
+- **Whisper starts early.** At `ALFRED_WHISPER_EARLY` (0.25 s) of silence it starts on the utterance so far (`alfred/voice/early.py`); if you say nothing more, the clip the VAD ends at 0.55 s uses those words, **~0.3 s sooner**. If you go on, that run is dropped and starts again at your next pause. `make voice-timing` records how many clips were heard early (`early`).
 - **Kokoro on MLX:** kokoro-onnx still makes the phonemes and joins the pieces, so the voice sounds the same; only the model runs on the GPU (`alfred/voice/kokoro_mlx.py`). A 6-word piece takes **0.21 s instead of 0.64 s** on an M2 Air. It shares one lock with Whisper, so the two never use the GPU at once. If its weights are missing it falls back to the CPU and logs why.
 - **Before Kokoro**, everything said (and shown as text) passes `alfred/voice/unspoken.py`, which drops the brain's private notes and says internal details plainly; see [The Brain](brain.md#-one-turn-end-to-end).
 - **Recordings** use their own model, multilingual (`small` on a CPU): see [`ALFRED_TRANSCRIBE_MODEL`](configuration.md#-speech-in-and-out).
@@ -196,7 +198,7 @@ Real speech from someone else (a TV, a colleague on a call) would otherwise reac
 > [!NOTE]
 > **Without a voiceprint, nothing changes.** If the model fails, clips go through as if no voiceprint existed, and the agent log says so.
 
-- **How.** A [WeSpeaker ResNet34](https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM) embedding (25 MB, ONNX) of each utterance's speech, compared with your voiceprint by cosine similarity. It runs on the **CPU alongside Whisper**, so it adds no wait.
+- **How.** A [WeSpeaker ResNet34](https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM) embedding (25 MB, ONNX) of each utterance's speech, compared with your voiceprint by cosine similarity. It runs on the **CPU before Whisper** (~25 ms on an M2 Air), so another voice's clip skips Whisper: two in three clips on the Air, each of which held the next clip and the GPU for ~1 s. A clip within 0.05 of the needed score is still transcribed, so the log shows what near misses said.
 - **Stored** in `data/tasks.db` (`voiceprints` table), never in the code.
 
 ### Enrolling
@@ -323,6 +325,7 @@ make voice-timing HOURS=2    # the last two
 | `spoke` | How long Alfred spoke |
 | `ended` | **spoken**, **interrupted**, **unspoken** (you went on before it was heard; `resumed` is your pause) or **closed** |
 | `speaker`, `logprob` | Who spoke and how well Whisper heard it |
+| `early` | How many of the turn's clips Whisper had heard before the VAD ended them ([Whisper starts early](#-whisper-in-kokoro-out)) |
 | `barge` | Your words cut Alfred's last reply off: **remark**, **point** (a question) or **unsure** (left to the brain) |
 
 </details>

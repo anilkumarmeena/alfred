@@ -144,6 +144,35 @@ def test_code_change_commands_reach_any_host_but_stay_boxed_in(mac, in_place):
     assert "any host" in opts.system_prompt["append"]
 
 
+@pytest.mark.parametrize("in_place", [0, 1])
+def test_sandboxed_commands_the_cli_still_asks_about_run_unless_they_ask_to_leave(mac, in_place):
+    opts = worker._options(worker_task(worktree=str(mac["worktree"]), in_place=in_place), NullReporter())
+    assert isinstance(call(opts, "Bash", command="rm -rf /tmp/x/build"), PermissionResultAllow)  # the walls still hold
+    denied = call(opts, "Bash", command="ls", dangerouslyDisableSandbox=True)
+    assert isinstance(denied, PermissionResultDeny) and "inside the sandbox" in denied.message
+
+
+def test_names_that_only_look_secret_in_the_task_cache_stay_readable(mac, monkeypatch):
+    cache = use_task_cache(monkeypatch, mac["projects"] / "alfred" / "data" / "task-cache")  # as installed: in a read folder
+    found = {"go": cache / "go-mod" / "k8s.io" / "api" / "secrets" / "types.go", "stub": cache / "uv" / "credentials",
+             "pem": cache / "go-mod" / "crypto" / "testdata" / "test.pem"}
+    for file in found.values():
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text("x")
+    opts = worker._options(worker_task(worktree=str(mac["worktree"])), NullReporter())
+    for name, file in found.items():
+        assert isinstance(call(opts, "Read", file_path=str(file)), PermissionResultAllow), name
+    rules = denied_paths(opts)
+    there = str(cache.resolve())
+    assert not [r for r in rules if r.startswith(there) or there.startswith(r.split("*")[0].rstrip("/") + "/")
+                and "**" in r], "a rule reaches into the cache"
+    projects, data = str(mac["projects"].resolve()), str((cache.parent).resolve())
+    assert f"{projects}/video/**/.env" in rules and f"{projects}/alfred/.env" in rules  # everywhere else, still hidden
+    assert f"{data}/*.pem" in rules and f"{projects}/video/**/secrets/**" in rules
+    for name in ("env", "env_local", "nested", "key", "token"):
+        assert isinstance(call(opts, "Read", file_path=str(mac[name])), PermissionResultDeny), name
+
+
 def test_code_questions_and_the_voice_shell_keep_the_network_closed(mac, monkeypatch):
     monkeypatch.setattr(worker.projects, "find", lambda name: type("P", (), {"path": mac["worktree"]}))
     opts = worker._options(worker_task(kind="code_question", worktree=str(mac["worktree"])), NullReporter())

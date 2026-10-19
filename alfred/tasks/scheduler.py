@@ -17,8 +17,10 @@ model runs also wait out Claude's usage limit (alfred.llm.usage).
 """
 
 import asyncio
+import contextlib
 import json
 import logging
+import os
 import re
 import shutil
 import time
@@ -27,7 +29,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from alfred.config import DATA_DIR
+from alfred.config import DATA_DIR, TASK_CACHE_DIR
+from alfred.core import proc
 from alfred.llm import claude_logins, retry, usage
 from alfred.llm.roles import Role
 from alfred.storage import profile
@@ -43,6 +46,8 @@ PROBE_TIMEOUT = 120  # a tool probe may start a connection's server, then ask a 
 PAGE_BYTES = 2_000_000  # url probe read cap
 HIDDEN_DAYS, FINISHED_DAYS = 3, 30  # retention for hidden runs and finished jobs
 TEMP_DAYS = 7  # an ended task's temp folder is kept this long, for follow-ups
+CALL_DAYS = 1  # transcripts of one-shot model calls (checks, wordings) are kept this long: nothing resumes them
+UV_PRUNE_DAYS = 7  # the task cache's uv packages no task uses any more are pruned this often
 PRUNE_SECONDS = 6 * 3600
 NOTEPAD = "NOTEPAD:"
 NOTEPAD_CHARS = 1500
@@ -557,13 +562,17 @@ class Scheduler:
     # ── Pruning ─────────────────────────────────────────────────
 
     async def prune(self) -> None:
-        """Delete old hidden runs (with folders and Claude sessions), old finished jobs and ended tasks' temp folders."""
+        """Delete old hidden runs (with folders and Claude sessions), old finished jobs, ended tasks' temp folders and
+        old one-shot calls' transcripts; prune the task cache's uv packages weekly, while no task runs."""
         ids = self.runner.store.prune_hidden(HIDDEN_DAYS)  # runner's connection: must stay on the loop thread
         temps = self._ended_temps()
         jobs = await asyncio.to_thread(self._tidy, ids, temps)
-        if ids or jobs or temps:
-            log.info("scheduler: forgot %d hidden runs, %d finished jobs and %d task temp folders", len(ids), jobs,
-                     len(temps))
+        calls = await asyncio.to_thread(self._old_calls)
+        if ids or jobs or temps or calls:
+            log.info("scheduler: forgot %d hidden runs, %d finished jobs, %d task temp folders and %d model calls' "
+                     "transcripts", len(ids), jobs, len(temps), calls)
+        if not getattr(self.runner, "jobs", None):  # a running task may be installing from the cache
+            await self._prune_uv()
 
     def _ended_temps(self) -> list[Path]:
         """Temp folders of tasks that ended over TEMP_DAYS ago, or are gone (forgotten runs). On the loop thread."""
@@ -591,3 +600,31 @@ class Scheduler:
         for folder in temps:
             shutil.rmtree(folder, ignore_errors=True)
         return schedules.prune(FINISHED_DAYS)
+
+    @staticmethod
+    def _old_calls() -> int:
+        """Delete the transcripts of one-shot model calls (alfred.llm.claude.short_options runs them in DATA_DIR)
+        last written over CALL_DAYS ago, in every login; returns how many."""
+        before, gone = time.time() - CALL_DAYS * 86400, 0
+        name = re.sub(r"[^A-Za-z0-9]", "-", str(DATA_DIR))  # the CLI's folder for that cwd
+        for login in claude_logins.folders():
+            for found in (login / "projects" / name).glob("*.jsonl"):
+                with contextlib.suppress(OSError):
+                    if found.stat().st_mtime < before:
+                        found.unlink()
+                        gone += 1
+        return gone
+
+    @staticmethod
+    async def _prune_uv() -> None:
+        """`uv cache prune` on the task cache's uv packages, at most every UV_PRUNE_DAYS (a marker file's age)."""
+        cache, mark = TASK_CACHE_DIR / "uv", TASK_CACHE_DIR / ".uv-pruned"
+        if not cache.is_dir() or (mark.exists() and time.time() - mark.stat().st_mtime < UV_PRUNE_DAYS * 86400):
+            return
+        mark.touch()
+        code, out = await proc.run_try("uv", "cache", "prune", timeout=600,
+                                       env=os.environ | {"UV_CACHE_DIR": str(cache)})
+        if code:
+            log.warning("pruning the task cache's uv packages failed: %s", " ".join(out.splitlines()[-2:])[:300])
+        else:
+            log.info("pruned the task cache's uv packages: %s", " ".join(out.splitlines()[-1:])[:200])

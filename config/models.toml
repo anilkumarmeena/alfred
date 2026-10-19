@@ -8,7 +8,7 @@
 # The three tiers every role draws on
 [tiers]
 deep = "claude-opus-5-5"              # the voice brain and code tasks
-balanced = "claude-sonnet-5"          # judgment: test runs, web research, triage, scheduled runs
+balanced = "claude-sonnet-5"          # judgment: research tasks, test runs, triage, scheduled runs
 fast = "claude-haiku-5-5"             # quick checks and lookups
 
 # Role -> a tier, another role, or a literal model id. Empty = no model of its own (see the role).
@@ -20,6 +20,7 @@ side = "balanced"              # ALFRED_SIDE_MODEL: background lookups handed of
 consent = "fast"               # ALFRED_CONSENT_MODEL: reads a spoken yes/no the word lists can't
 injection = "fast"             # ALFRED_INJECTION_MODEL (also a Settings preference): screens tool results
 task = "deep"                  # ALFRED_TASK_MODEL: background tasks
+research = "balanced"          # ALFRED_RESEARCH_MODEL: research tasks (not scheduled; those are schedule's)
 task_search = "fast"           # ALFRED_TASK_SEARCH_MODEL: a task's read-only code-search subagent
 task_helper = "balanced"       # ALFRED_TASK_HELPER_MODEL: a task's test-runner and web-research subagents
 goal = "task"                  # ALFRED_GOAL_MODEL: checks a finished task against its request

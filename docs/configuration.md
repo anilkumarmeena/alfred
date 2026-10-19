@@ -163,6 +163,7 @@ uv run python -m alfred.state.settings prefs voice bm_lewis  # change one
 | `ALFRED_TTS_THREADS` | One fewer than performance cores (every core counts on Linux), 2–4 | Kokoro's ONNX Runtime threads; `0` uses every core |
 | `ALFRED_TURN_SILENCE` | `0.8` | Seconds after you stop speaking before your turn ends (up to 5; never sooner than `ALFRED_VAD_MIN_SILENCE`); it also waits for Whisper's words |
 | `ALFRED_VAD_MIN_SILENCE` | `0.55` | Silence that ends an utterance; the floor under every reply's wait |
+| `ALFRED_WHISPER_EARLY` | `0.25` | Silence after which Whisper starts on the utterance so far, so its words are ready that much sooner when you've finished (`0` off; at least `ALFRED_VAD_MIN_SILENCE` is off too) |
 | `ALFRED_VAD_MIN_SPEECH`<br>`ALFRED_VAD_THRESHOLD` | `0.2`<br>`0.5` | Unbroken speech before an utterance starts; probability that counts as speech |
 | `ALFRED_WHISPER_UNSURE_LOGPROB` | `-1.0` | Below this average log-probability a turn is marked unsure, so Alfred checks back |
 | `ALFRED_DENOISE` | `on` | Noise filter: `on` everywhere, `vad` only for the VAD, `off` |
@@ -296,6 +297,7 @@ Answers only your enrolled voice. What each case means is in **[🗣️ Voice](v
 | `ALFRED_MAX_TASKS` | `6` | Tasks running at once (1–12); the rest queue |
 | `ALFRED_RESUME_TASKS` | `3` | Tasks cut off by a runner restart that resume by themselves (0–12) |
 | `ALFRED_TASK_MODEL`<br>`ALFRED_TASK_EFFORT` | Opus<br>`high` | Model and effort for background tasks |
+| `ALFRED_RESEARCH_MODEL`<br>`ALFRED_TASK_ANSWER_EFFORT` | Sonnet<br>`medium` | Model for research tasks; effort for research and code questions, which change no code (code questions keep the task model) |
 | `ALFRED_TASK_MAX_TURNS` | `150` | Most model turns in one task run |
 | `ALFRED_TASK_CONTINUES` | `3` | Times a task that runs out of turns carries on by itself before it stops and says so (0–20, `0` never) |
 | `ALFRED_TASK_SEARCH_MODEL` | Haiku | A task's read-only code-search subagent |
@@ -308,7 +310,7 @@ Answers only your enrolled voice. What each case means is in **[🗣️ Voice](v
 | `ALFRED_GOAL_MODEL`<br>`ALFRED_GOAL_ROUNDS` | Task model<br>`2` | The check's model, and send-backs per request (0–5) |
 | `ALFRED_GOAL_MAX_COST` | `0` (no limit) | Stop sending back past this many CLI-reported dollars |
 | `ALFRED_GOAL_DAILY_CHECKS` | `100` | Most goal checks per 24 hours |
-| `ALFRED_ANNOUNCE`<br>`ALFRED_ANNOUNCE_MODEL`<br>`ALFRED_ANNOUNCE_SECONDS` | `on`<br>Haiku<br>`30` | Word a task's end, and a background lookup's answer that isn't already short plain speech, with a short model call; else fixed wording, or the answer trimmed to plain sentences |
+| `ALFRED_ANNOUNCE`<br>`ALFRED_ANNOUNCE_MODEL`<br>`ALFRED_ANNOUNCE_SECONDS` | `on`<br>Haiku<br>`30` | Word a task's end, and a background lookup's answer that isn't already short plain speech, with a short model call; else fixed wording, or the answer trimmed to plain sentences. A task's end waits at most 8 s, on a session started as its run ends |
 
 - **Projects folder:** if this checkout sits directly in your home folder, the default is `~/Projects`.
 - **Read-only folders:** secrets inside stay hidden; set but empty means none.

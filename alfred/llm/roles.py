@@ -13,6 +13,7 @@ class Role(StrEnum):
     CONSENT = "consent"  # a spoken yes/no the word lists can't read
     INJECTION = "injection"  # screening tool results (its model is also a preference)
     TASK = "task"  # background tasks
+    RESEARCH = "research"  # research tasks
     TASK_SEARCH = "task_search"  # a task's code-search subagent
     TASK_HELPER = "task_helper"  # a task's test-runner and web-research subagents
     GOAL = "goal"  # a finished task checked against its request

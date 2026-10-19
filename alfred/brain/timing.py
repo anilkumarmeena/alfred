@@ -8,7 +8,8 @@ or cut off. Stages are seconds since the user stopped speaking (or a typed turn 
   brain        reply started (llm_node)    first_audio  Alfred's voice started
   sent         prompt sent to claude CLI   done         model reply ended
 
-Other fields: speech (LiveKit's start-to-stop span), voiced (speech seconds in the clips heard), words, tts_first,
+Other fields: speech (LiveKit's start-to-stop span), voiced (speech seconds in the clips heard), early (of those clips,
+how many Whisper heard before the VAD ended them, alfred.voice.early), words, tts_first,
 ack (said before first tool), lead_in (said for the model when it said nothing first), tools, tool_names, spoke, ended (spoken|interrupted|unspoken|closed), resumed (unspoken
 only), speaker, logprob, piece (words in first spoken piece), model (when not the voice brain's own), barge
 (remark|point|unsure: the turn cut the last reply off).

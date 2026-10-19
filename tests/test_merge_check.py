@@ -207,3 +207,16 @@ def test_a_real_run_finds_the_failing_test(tmp_path):
                                                      "def test_fails():\n    assert False\n")
     failed = asyncio.run(merge_check.failures(tmp_path, Path(sys.prefix)))
     assert failed == {"tests/test_tiny.py::test_fails"}
+
+
+def test_the_goal_check_reads_the_suites_record_of_the_final_code(alfred, monkeypatch):
+    from alfred.tasks import goal
+
+    _, task = run_worktree_task(monkeypatch, add_new_file, project="alfred")
+    worktree = Path(task["worktree"])
+    assert "Test suite" not in asyncio.run(goal.evidence(task, "added new.py"))  # never run on this code
+    merge_check.record(worktree, merge_check.code_tree(worktree), {NEW, OLD}, {ENV_ONLY})
+    assert ("on exactly this final code: 2 tests passed or were skipped, 1 failed only for want of local files a task "
+            "doesn't have, as expected, and none failed.") in asyncio.run(goal.evidence(task, "added new.py"))
+    merge_check.record(worktree, merge_check.code_tree(worktree), {NEW, ENV_ONLY}, {OLD})  # the whole suite again
+    assert f"2 tests passed or were skipped, and 1 failed: {OLD}." in asyncio.run(goal.evidence(task, "added new.py"))

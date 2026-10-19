@@ -29,6 +29,7 @@ from alfred import projects
 from alfred.config import (
     DATA_DIR,
     SCHEDULE_EFFORT,
+    TASK_ANSWER_EFFORT,
     TASK_CACHE_DIR,
     TASK_EFFORT,
     TASK_MAX_TURNS,
@@ -168,11 +169,18 @@ def _on_demand(server: dict) -> dict:
     return server | {"alwaysLoad": False} if mcp_servers.ON_DEMAND else server
 
 
-def _model(task: dict) -> tuple[str, str]:
-    """(model, effort): scheduled non-code runs get the schedule role; usage.available falls back if a limit is out."""
+def role(task: dict) -> Role:
+    """The role a task's session runs on: scheduled non-code runs the schedule's, research its own, else the task's."""
     if task.get("job") is not None and task["kind"] != "code_change":
-        return usage.available(Role.SCHEDULE), SCHEDULE_EFFORT
-    return usage.available(Role.TASK), TASK_EFFORT
+        return Role.SCHEDULE
+    return Role.RESEARCH if task["kind"] == "research" else Role.TASK
+
+
+def _model(task: dict) -> tuple[str, str]:
+    """(model, effort): tasks that change no code get the lighter effort; usage.available falls back if a limit is out."""
+    if (on := role(task)) == Role.SCHEDULE:
+        return usage.available(on), SCHEDULE_EFFORT
+    return usage.available(on), TASK_EFFORT if task["kind"] == "code_change" else TASK_ANSWER_EFFORT
 
 
 def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> ClaudeAgentOptions:

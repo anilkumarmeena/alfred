@@ -42,6 +42,7 @@ task_seconds = 30.0            # ALFRED_INJECTION_TASK_SECONDS: check time limit
 
 [tasks]
 effort = "high"                # ALFRED_TASK_EFFORT
+answer_effort = "medium"       # ALFRED_TASK_ANSWER_EFFORT: research and code questions, which change no code
 max_turns = 150                # ALFRED_TASK_MAX_TURNS
 continues = 3                  # ALFRED_TASK_CONTINUES: times a run out of turns carries on by itself (0-20)
 approval_hours = 12.0          # ALFRED_TASK_APPROVAL_HOURS: how long a task's risky command waits for the user
@@ -123,6 +124,7 @@ turn_silence = 0.8             # ALFRED_TURN_SILENCE: seconds of silence that en
 whisper_unsure_logprob = -1.0  # ALFRED_WHISPER_UNSURE_LOGPROB
 vad_min_speech = 0.2           # ALFRED_VAD_MIN_SPEECH
 vad_min_silence = 0.55         # ALFRED_VAD_MIN_SILENCE (0.3-2)
+whisper_early = 0.25           # ALFRED_WHISPER_EARLY: silence that starts Whisper before the VAD ends the clip; 0 = off
 vad_threshold = 0.5            # ALFRED_VAD_THRESHOLD
 denoise = "on"                 # ALFRED_DENOISE: on, vad or off
 denoise_atten_db = 18.0        # ALFRED_DENOISE_ATTEN_DB (0 = no limit)

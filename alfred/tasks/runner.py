@@ -65,7 +65,6 @@ from alfred.config import (
 from alfred.contracts import remote
 from alfred.contracts.remote import HERE, HERE_WORD, TASKS, Offline, Place
 from alfred.llm import claude_logins, retry, roles, usage
-from alfred.llm.roles import Role
 from alfred.llm.sdk import CanUseToolShadowedWarning
 from alfred.safety import host
 from alfred.state import activity as bell, preferences, todo as todos
@@ -82,6 +81,7 @@ from alfred.tasks import (
     notices,
     scheduler,
     stall,
+    worker,
 )
 
 # Re-exported: tests import these from here
@@ -690,6 +690,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
             self._waited(task_id)
         if self.closing:  # left for _after_restart
             return
+        announce.warm()  # starts while the commit and goal check run
 
         task = self.store.get(task_id)
         fields: dict = {}
@@ -860,7 +861,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
             after, said = None, (f"Task {task_id}, {task['title']}, hit Claude's usage limit, so it carries on on the "
                                  f"{other or 'default'} Claude login.")
         elif (reported and task_id not in self.limit_resumed and not task["node"] and not usage.used_up_until()
-                and usage.available(model := roles.model(Role.TASK)) != model):
+                and usage.available(model := roles.model(worker.role(task))) != model):
             self.limit_resumed[task_id] = now
             after, said = None, (f"Task {task_id}, {task['title']}, hit Claude's usage limit for its model, so it "
                                  "carries on with a lighter one.")  # at once: no reset to wait for

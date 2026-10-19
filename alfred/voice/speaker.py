@@ -395,12 +395,26 @@ class SpeakerCheck:
                 self._warned = True
             return None
 
-    def _judge(self, audio: np.ndarray) -> Judgement:
-        t, engaged = self.thresholds, self.engaged()
-        speech = speech_only(audio, self._speech_probs())
+    def likely(self, audio: np.ndarray, speech_probs: Callable[[np.ndarray], np.ndarray] | None = None) -> bool:
+        """Whether judge() would keep this clip, remembering nothing; True if off or on error. For hearing an
+        utterance early (WhisperSTT.speculate), on `speech_probs` of its own. Runs in a thread."""
+        if not self.on:
+            return True
+        try:
+            speech_seconds, needed, engaged, _, _, score = self._score(audio, speech_probs)
+        except (OSError, RuntimeError, ValueError):  # judge() lets such a clip through too
+            return True
+        if engaged and speech_seconds < self.thresholds.min_seconds:
+            return True
+        return score is not None and score >= needed
+
+    def _score(self, audio: np.ndarray, speech_probs: Callable[[np.ndarray], np.ndarray] | None = None):
+        """(speech seconds, needed score, engaged, embedding, best reference, its score); nothing remembered."""
+        engaged = self.engaged()
+        speech = speech_only(audio, speech_probs or self._speech_probs())
         speech_seconds = round(len(speech) / RATE, 3)
-        needed = t.needed(speech_seconds, engaged)
-        score, reference, why = None, "", ""
+        needed = self.thresholds.needed(speech_seconds, engaged)
+        score, reference = None, ""
         try:
             embedding = self._embed(speech)
         except ValueError:  # too little speech to tell
@@ -409,6 +423,12 @@ class SpeakerCheck:
             reference, score = max(((name, cosine(embedding, ref)) for name, ref in self._references(speech_seconds)),
                                    key=lambda found: found[1])
             score = round(score, 3)
+        return speech_seconds, needed, engaged, embedding, reference, score
+
+    def _judge(self, audio: np.ndarray) -> Judgement:
+        t = self.thresholds
+        speech_seconds, needed, engaged, embedding, reference, score = self._score(audio)
+        why = ""
         if engaged and speech_seconds < t.min_seconds:
             ok, why = True, "too short to tell, in a conversation"
         elif score is None:

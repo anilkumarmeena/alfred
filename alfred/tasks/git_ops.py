@@ -266,7 +266,8 @@ async def discard_op(body: dict) -> dict:
     task_id, repo, branch, wt = body["task"], Path(body["repo"]), body["branch"], body.get("worktree")
     if wt and Path(wt).resolve() == repo.resolve():
         raise ValueError(f"Task {task_id}'s worktree is {body['name']}'s own folder, so nothing was removed.")
-    if not branch.startswith(f"alfred/{task_id}-"):  # only the branch the runner made
+    # Only the branch the runner made: jarvis/ before the rename to Alfred
+    if not branch.startswith((f"alfred/{task_id}-", f"jarvis/{task_id}-")):
         raise ValueError(f"Task {task_id}'s branch {branch} wasn't made by Alfred, so nothing was removed.")
     exists = (await _git_try(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"))[0] == 0
     if exists and await _git(repo, "rev-list", "--count", f"{body['base']}..{branch}") != "0" \

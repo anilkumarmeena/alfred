@@ -2,7 +2,8 @@
 
 Input is an `Ending`: outcome and report, what the goal check found missing, what Alfred already did, and pending
 suggested edits. `lead` (words already fit to say) is kept verbatim and the rest appended. Falls back to `plain`
-fixed wording when ALFRED_ANNOUNCE=off, on error, past ANNOUNCE_SECONDS, or at the usage limit.
+fixed wording when ALFRED_ANNOUNCE=off, on error, past SECONDS (or ANNOUNCE_SECONDS if lower), or at the usage limit.
+The call runs on a single-use session the runner `warm`s as a run ends, so CLI startup overlaps the goal check.
 
 Only the spoken text is produced here; structured facts stay on the task. `context` gives the voice brain the task
 number and pending edits, unspoken. `first` and `brief` pick and shorten the update a greeting leads with.
@@ -17,6 +18,7 @@ from alfred import prompts
 from alfred.config import ANNOUNCE_ENABLED, ANNOUNCE_SECONDS
 from alfred.llm import usage
 from alfred.llm.roles import Role
+from alfred.llm.standby import Standby
 from alfred.storage import profile
 from alfred.tasks import data_edits
 from alfred.tasks.scheduler import headline, sentence
@@ -25,6 +27,8 @@ log = logging.getLogger("alfred.tasks.announce")
 
 def system() -> str:
     return prompts.load("task_announcement", user_name=profile.name())
+SECONDS = 8.0  # wait for the wording at most this long: a warmed session answers in seconds
+IDLE_SECONDS = 300  # close an unused warmed session after this (the goal check runs in between)
 REPORT_MOST = 4000  # chars of the report the model reads
 SAID_MOST = 600  # max chars spoken
 BRIEF_MOST = 200  # chars of an update a greeting leads with, in whole sentences
@@ -99,12 +103,29 @@ def plain(e: Ending) -> str:
     return " ".join(p for p in parts if p)
 
 
-async def ask_model(text: str) -> str:
-    """One tool-less announce-role call; returns its reply."""
-    from alfred.llm.claude import ask
+# Keyed by system prompt (it names the profile's user); _connect is looked up per call so tests can fake it
+_sessions = Standby("task announcement", "", IDLE_SECONDS, connect=lambda prompt: _connect(prompt))
 
-    reply, _ = await ask(text, system(), Role.ANNOUNCE, effort="low")
-    return reply
+
+async def _connect(prompt: str):
+    from alfred.llm.claude import short_options
+    from alfred.llm.sdk import ClaudeSDKClient
+
+    client = ClaudeSDKClient(short_options(prompt, Role.ANNOUNCE, effort="low"))
+    await client.connect()  # on failure the SDK cleans up
+    return client
+
+
+def warm() -> None:
+    """Start a session for the next ending's wording, unless wording is off or one is ready. Closed after IDLE_SECONDS
+    if unused; no-op outside a running event loop."""
+    if ANNOUNCE_ENABLED and not usage.out():
+        _sessions.warm(system())
+
+
+async def ask_model(text: str) -> str:
+    """One tool-less announce-role call, on the warmed session if ready; returns its reply."""
+    return await _sessions.ask(text, system())
 
 
 async def spoken(e: Ending) -> str:
@@ -114,7 +135,7 @@ async def spoken(e: Ending) -> str:
     if not ANNOUNCE_ENABLED or usage.out():
         return plain(e)
     try:
-        worded = " ".join((await asyncio.wait_for(ask_model(facts(e)), ANNOUNCE_SECONDS)).split())
+        worded = " ".join((await asyncio.wait_for(ask_model(facts(e)), min(SECONDS, ANNOUNCE_SECONDS))).split())
     except Exception as ex:  # log the type only: no task content
         log.warning("announcement wording failed: %s", type(ex).__name__)
         return plain(e)
