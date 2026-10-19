@@ -1,7 +1,7 @@
 """Prompt-injection screening of tool results, via PostToolUse hooks on every tool-using Claude session.
 
 Covered: every tool's result but UNSCREENED tools' (model-authored output, subagent answers, a task's own reporting
-tools) and Alfred's own tools', which each mark what of theirs is screened (Tool.screened): all of it for outside
+tools), reads of the user's own code (own_read) and Alfred's own tools', which each mark what of theirs is screened (Tool.screened): all of it for outside
 content (mail, pages, documents), none for Alfred's own data (tasks, schedules, memory, skills), or just the
 task-written fields of a task's record. Pictures, text under MIN_CHARS and Alfred's own wording given as a result
 (own(): a slow call's "still running" note) are skipped.
@@ -28,6 +28,7 @@ import weakref
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlparse
 
 from alfred import prompts
@@ -55,6 +56,10 @@ UNSCREENED = {"Edit", "Write", "MultiEdit", "NotebookEdit", "TodoWrite", "ToolSe
 # A background task's reporting tools (alfred.tasks.reporting): acknowledgements, and the user's answer
 UNSCREENED_SERVERS = ("mcp__task__",)
 ALFRED_TOOLS = "mcp__alfred__"  # prefix of Alfred's own tools, marked in its tool registry
+# Reads of the user's own code go unscreened (own_read): on the MacBook Air the check of every file a task read cost
+# ~7 min a task. Folders of other people's code inside a project (installed packages) are still screened.
+OWN_READS = {"Read": "file_path", "Grep": "path", "Glob": "path"}  # tool -> its path argument (default: the cwd)
+NOT_OWN = {"node_modules", ".venv", "venv", "site-packages", "dist-packages", "vendor", "Pods", "bower_components"}
 _PICTURES = ("image", "document", "audio")  # non-text content block types
 _STRUCTURE = {"type", "mimeType", "filePath", "file_path", "url"}  # metadata keys, not content
 PROMPT = prompts.load("injection_check")
@@ -87,12 +92,14 @@ def hooks(seconds: float, model: str | None = None) -> dict[str, list[HookMatche
     model = model or preferences.injection_model()
 
     async def before(data: dict, _tool_use_id, _ctx) -> dict:
-        if covers(data.get("tool_name", "")):
+        tool, args = data.get("tool_name", ""), data.get("tool_input") or {}
+        if covers(tool) and not await asyncio.to_thread(own_read, tool, args, data.get("cwd")):
             warm(model)
         return {}
 
     async def after(data: dict, _tool_use_id, _ctx) -> dict:
-        return await screen(data["tool_name"], data.get("tool_input") or {}, data.get("tool_response"), model, seconds)
+        return await screen(data["tool_name"], data.get("tool_input") or {}, data.get("tool_response"), model, seconds,
+                            data.get("cwd"))
 
     return {"PreToolUse": [HookMatcher(hooks=[before])],
             "PostToolUse": [HookMatcher(hooks=[after], timeout=seconds + 30)]}
@@ -106,9 +113,9 @@ def with_screening(hooks_: dict | None, seconds: float) -> dict:
     return merged
 
 
-async def screen(tool: str, args: dict, response, model: str, seconds: float) -> dict:
+async def screen(tool: str, args: dict, response, model: str, seconds: float, cwd: str | None = None) -> dict:
     """PostToolUse output: {} to pass unchanged, else context for the model and, on block, the redacted result."""
-    if not (covered := covers(tool)):
+    if not (covered := covers(tool)) or await asyncio.to_thread(own_read, tool, args, cwd):
         return {}
     fields = None if covered is True else covered
     if len("\n".join(texts := _texts(response, fields)).strip()) < MIN_CHARS:
@@ -170,6 +177,30 @@ def covers(tool: str) -> bool | tuple[str, ...]:
 
     found = tools.get(tool.removeprefix(ALFRED_TOOLS))
     return True if found is None else found.screened
+
+
+def own_read(tool: str, args: dict, cwd: str | None) -> bool:
+    """Whether this is a built-in read (OWN_READS) of the user's own code: inside a project on this computer or a
+    task's worktree, outside the packages installed in it. Symlinks count where they lead."""
+    if (key := OWN_READS.get(tool)) is None:
+        return False
+    given, base = args.get(key), Path(cwd) if cwd else None
+    path = Path(given).expanduser() if isinstance(given, str) and given else base
+    if path is None or (not path.is_absolute() and base is None):
+        return False
+    try:
+        path = (path if path.is_absolute() else base / path).resolve()
+    except (OSError, RuntimeError):  # a symlink loop
+        return False
+    return not NOT_OWN.intersection(path.parts) and any(path.is_relative_to(folder) for folder in own_folders())
+
+
+def own_folders() -> list[Path]:
+    """The user's code: the projects on this computer, and the task worktrees made from them."""
+    from alfred import projects  # imported late: it isn't needed until a read
+    from alfred.config import WORKTREES_DIR
+
+    return [*(p.path.resolve() for p in projects.load() if p.node is None), WORKTREES_DIR.resolve()]
 
 
 _own: dict[str, None] = {}  # own() texts, oldest first

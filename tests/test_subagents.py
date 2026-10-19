@@ -106,6 +106,20 @@ def test_gate_starts_only_the_task_s_own_subagents(tmp_path, tool):
         assert isinstance(denied, PermissionResultDeny) and "code-searcher, test-runner" in denied.message
 
 
+def test_helpers_run_on_their_own_model_whatever_the_task_asks(tmp_path):
+    """Tasks asked for Opus code-searchers 110 times in a day; the searcher's role is Haiku."""
+    g = gate(tmp_path)
+    call = {"subagent_type": "code-searcher", "prompt": "p", "description": "d", "model": "opus"}
+    allowed = asyncio.run(g("Agent", call, MAIN))
+    assert isinstance(allowed, PermissionResultAllow)
+    assert allowed.updated_input == {"subagent_type": "code-searcher", "prompt": "p", "description": "d"}
+    # The hook too, since a project skill's allow rule skips can_use_tool
+    hooked = asyncio.run(g.pre_tool_use({"tool_name": "Agent", "tool_input": call}, "t1", None))
+    assert hooked["hookSpecificOutput"]["updatedInput"] == allowed.updated_input
+    plain = {k: v for k, v in call.items() if k != "model"}
+    assert asyncio.run(g.pre_tool_use({"tool_name": "Agent", "tool_input": plain}, "t2", None)) == {}
+
+
 def test_builtin_agents_are_denied_under_both_names_of_the_tool():
     for name in ("general-purpose", "claude", "Explore", "Plan"):
         assert {f"Agent({name})", f"Task({name})"} <= set(BUILTIN_AGENTS_DENIED)

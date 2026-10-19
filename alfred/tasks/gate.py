@@ -140,6 +140,12 @@ def _read_only_git(command: str) -> bool:
 Decision = PermissionResultAllow | PermissionResultDeny
 
 
+def own_model(args: dict) -> dict:
+    """An Agent call's input without a model of the task's choosing: each helper runs on its role's model
+    (alfred.tasks.subagents). Tasks asked for Opus code-searchers 110 times on 14 October 2026 ($40) where Haiku does."""
+    return {k: v for k, v in args.items() if k != "model"}
+
+
 class TaskGate:
     """The session's can_use_tool; denies anything it doesn't handle.
 
@@ -179,7 +185,7 @@ class TaskGate:
             return self.connections(name, args, ctx)
         if name in _AGENT_TOOLS:
             if args.get("subagent_type") in self.agents:
-                return PermissionResultAllow()
+                return PermissionResultAllow(updated_input=own_model(args))
             return PermissionResultDeny(message=f"The subagents in this task are {', '.join(sorted(self.agents)) or 'none'}.")
         agent = getattr(ctx, "agent_id", None)
         if name in _WRITES | {ARTIFACT} and agent and self.kinds.get(agent) not in self.editors:
@@ -279,6 +285,8 @@ class TaskGate:
             return deny(decision.message)
         if name in self.once and tool_use_id:
             self.decided[tool_use_id] = decision  # reused by can_use_tool if it gets called
+        if name in _AGENT_TOOLS and (helper := own_model(args)) != args:  # also when an allow rule skips can_use_tool
+            return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": helper}}
         return {}  # no opinion: deny rules and can_use_tool still apply
 
     @property

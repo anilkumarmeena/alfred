@@ -150,8 +150,8 @@ def test_with_no_cost_limit_any_cost_is_sent_back(checks):
     assert more is not None and said.startswith("checked, round 1 of 2")
 
 
-@pytest.mark.parametrize("setting, model", [("", "claude-task-model"), ("claude-sonnet-5", "claude-sonnet-5")])
-def test_the_checks_model_is_a_setting_else_the_tasks_own(tmp_path, setting, model):
+@pytest.mark.parametrize("setting, model", [("", "claude-sonnet-5"), ("claude-opus-5-5", "claude-opus-5-5")])
+def test_the_checks_model_is_a_setting_else_sonnet_whatever_the_task_runs_on(tmp_path, setting, model):
     # Fresh process: config is read at import. Set but empty means the default, whatever .env says
     env = os.environ | {"ALFRED_GOAL_MODEL": setting, "ALFRED_TASK_MODEL": "claude-task-model",
                         "ALFRED_GOAL_MAX_COST": "", "ALFRED_DB_FILE": str(tmp_path / "t.db")}

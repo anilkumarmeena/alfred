@@ -497,3 +497,45 @@ def test_the_check_and_its_model_are_preferences():
         settings.set_preference("injection_model", "")
         settings.set_preference("injection_check", "")
     assert preferences.injection_model() == roles.model("fast")
+
+
+# ── Reads of the user's own code ────────────────────────────────
+
+
+@pytest.fixture
+def own(tmp_path, monkeypatch):
+    """A project folder and a worktrees folder of the user's; elsewhere is someone else's."""
+    project, worktrees, elsewhere = tmp_path / "atlas", tmp_path / "worktrees", tmp_path / "downloads"
+    for folder in (project / "src", project / "node_modules" / "left-pad", worktrees / "atlas-7", elsewhere):
+        folder.mkdir(parents=True)
+    monkeypatch.setattr(injection, "own_folders", lambda: [project.resolve(), worktrees.resolve()])
+    return project, worktrees, elsewhere
+
+
+def test_reads_of_the_users_own_code_go_unchecked(model, own):
+    project, worktrees, _ = own
+    for tool, args, cwd in [("Read", {"file_path": str(project / "src/app.py")}, None),
+                            ("Read", {"file_path": "src/app.py"}, str(project)),  # relative to the session's folder
+                            ("Grep", {"pattern": "TODO"}, str(worktrees / "atlas-7")),  # no path: the session's folder
+                            ("Glob", {"pattern": "**/*.py", "path": str(project)}, None)]:
+        assert asyncio.run(injection.screen(tool, args, mcp(EMAIL), MODEL, 5, cwd)) == {}, (tool, args)
+    assert model.prompts == []
+
+
+def test_other_peoples_code_is_still_checked(model, own):
+    project, _, elsewhere = own
+    model.answer = says(WARN, "aimed at the assistant")
+    (project / "src" / "away").symlink_to(elsewhere)
+    for args in [{"file_path": str(project / "node_modules/left-pad/README.md")},  # an installed package
+                 {"file_path": str(elsewhere / "notes.txt")},
+                 {"file_path": str(project / "src/away/notes.txt")},  # a link out of the project
+                 {"file_path": "notes.txt"}]:  # relative, with no folder to resolve it against
+        assert note(asyncio.run(injection.screen("Read", args, mcp(EMAIL), MODEL, 5))), args
+    assert len(model.prompts) == 1  # all four checked; the same text is judged once, then cached
+
+
+def test_only_built_in_reads_count_as_reading_own_code(own):
+    project, _, _ = own
+    assert injection.own_read("Read", {"file_path": str(project / "a.py")}, None)
+    assert not injection.own_read("WebFetch", {"url": f"file://{project}/a.py"}, None)
+    assert not injection.own_read("mcp__gitlab__get_file", {"path": str(project / "a.py")}, str(project))

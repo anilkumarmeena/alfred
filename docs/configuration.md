@@ -142,7 +142,7 @@ uv run python -m alfred.state.settings prefs voice bm_lewis  # change one
 | `ALFRED_TASK_APPROVAL_HOURS` | `12` | How long a background task's request to run a risky command waits |
 | `ALFRED_CONSENT` | `on` | Unclear replies go to a short model call (below) |
 | `ALFRED_CONSENT_MODEL`<br>`ALFRED_CONSENT_SECONDS` | Haiku<br>`8` | Its model and time limit |
-| `ALFRED_INJECTION_CHECK` | `on` | Screen every tool result for hidden instructions before the model acts on it |
+| `ALFRED_INJECTION_CHECK` | `on` | Screen every tool result for hidden instructions before the model acts on it (not reads of your own projects' code) |
 | `ALFRED_INJECTION_MODEL` | Haiku | The model that screens (the app offers Haiku or Sonnet) |
 | `ALFRED_INJECTION_VOICE_SECONDS`<br>`ALFRED_INJECTION_TASK_SECONDS` | `6`<br>`30` | A slower check passes the result on, marked unchecked |
 
@@ -307,7 +307,7 @@ Answers only your enrolled voice. What each case means is in **[🗣️ Voice](v
 | `ALFRED_TASK_ARTIFACTS` | `on` | Let tasks publish mockups and previews as claude.ai artifacts |
 | `ALFRED_TASK_STALL_MINUTES` | `15` | Flag a running task with no progress for this long (`0` off) |
 | `ALFRED_GOAL_LOOP` | `on` | Check a finished task against what it was asked, and send it back to finish |
-| `ALFRED_GOAL_MODEL`<br>`ALFRED_GOAL_ROUNDS` | Task model<br>`2` | The check's model, and send-backs per request (0–5) |
+| `ALFRED_GOAL_MODEL`<br>`ALFRED_GOAL_ROUNDS` | Balanced tier (Sonnet)<br>`2` | The check's model, and send-backs per request (0–5) |
 | `ALFRED_GOAL_MAX_COST` | `0` (no limit) | Stop sending back past this many CLI-reported dollars |
 | `ALFRED_GOAL_DAILY_CHECKS` | `100` | Most goal checks per 24 hours |
 | `ALFRED_ANNOUNCE`<br>`ALFRED_ANNOUNCE_MODEL`<br>`ALFRED_ANNOUNCE_SECONDS` | `on`<br>Haiku<br>`30` | Word a task's end, and a background lookup's answer that isn't already short plain speech, with a short model call; else fixed wording, or the answer trimmed to plain sentences. A task's end waits at most 8 s, on a session started as its run ends |
