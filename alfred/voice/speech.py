@@ -1,12 +1,14 @@
 """On-device speech for LiveKit: Whisper in, Kokoro out. Nothing leaves the computer.
 
 Models load once in LiveKit's shared inference process (runners registered here); job processes send it audio/text
-over IPC, so concurrent calls share one Whisper and one Kokoro. Requests are serialized, and each runner locks too.
+over IPC, so concurrent calls share one Whisper and one Kokoro. That process runs requests on a thread pool, so each
+runner locks, and the two share one lock when both run on MLX (one GPU job at a time).
 If that process is down or a model failed to load, STT/TTS raise APIConnectionError instead of hanging.
 
 Whisper runs on MLX (Apple GPU) on Apple silicon and on faster-whisper elsewhere (alfred.media.whisper). It is
-prompted with the user's vocabulary, and known mishearings are fixed after the speech gate. Memory is kept lean: MLX's
-buffer cache is capped (ALFRED_MLX_CACHE_MB) and Kokoro's ORT arena is off by default.
+prompted with the user's vocabulary, and known mishearings are fixed after the speech gate. Kokoro runs on MLX too on
+Apple silicon (alfred.voice.kokoro_mlx, ALFRED_TTS_ENGINE), else on ONNX Runtime. Memory is kept lean: MLX's buffer
+cache is capped (ALFRED_MLX_CACHE_MB) and Kokoro's ORT arena is off by default.
 """
 
 import asyncio
@@ -28,18 +30,21 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from alfred.config import (
     MLX_CACHE_MB,
     STT_MODEL,
+    TTS_ENGINE,
     TTS_MEMORY_ARENA,
     TTS_MODEL,
     TTS_MODEL_FALLBACKS,
     TTS_THREADS,
     TTS_VOICES_FILE,
 )
+from alfred.core import platform
 from alfred.media import whisper
 from alfred.state import preferences
 from alfred.state.vocabulary import Vocabulary
+from alfred.voice import speech_gate
 from alfred.voice.clauses import ClauseTokenizer
 from alfred.voice.speaker import SpeakerCheck
-from alfred.voice.speech_gate import SpeechGate
+from alfred.voice.speech_gate import SileroProbs, SpeechGate
 
 log = logging.getLogger("alfred.voice.speech")
 
@@ -48,6 +53,7 @@ KOKORO_RATE = 24000
 WHISPER_METHOD = "alfred_whisper"
 KOKORO_METHOD = "alfred_kokoro"
 INFERENCE_TIMEOUT = 30  # seconds; only a stuck process hits it
+MLX_LOCK = threading.Lock()  # Whisper and Kokoro on the Apple GPU: one at a time, as MLX runs one job per stream
 
 
 # ── Shared process: one runner per model ───────────────────────
@@ -118,6 +124,7 @@ class WhisperRunner(_InferenceRunner):
         mlx = whisper.backend() == whisper.MLX
         if mlx:
             limit_mlx_cache()
+            self._lock = MLX_LOCK
         transcribe(np.zeros(WHISPER_RATE, dtype=np.float32))  # load (and on MLX compile kernels, ~3 s)
         self._ready = True
         if mlx:
@@ -203,14 +210,31 @@ class KokoroRunner(_InferenceRunner):
         self._kokoro = None
 
     def initialize(self) -> None:
+        on_gpu = self._on_mlx() if TTS_ENGINE == "mlx" and platform.APPLE_SILICON else None
+        self._kokoro, how = on_gpu or self._on_onnx()
+        self._render("Ready.", preferences.tts_voice(), preferences.tts_speed(), timed=False)  # first synthesis is slow
+        log.info("shared speech process: Kokoro loaded (%s)", how)
+
+    def _on_mlx(self):
+        """(Kokoro on the Apple GPU, how) or None if it can't load; it then shares Whisper's GPU lock."""
+        try:
+            from alfred.voice import kokoro_mlx
+
+            limit_mlx_cache()
+            kokoro = kokoro_mlx.MlxKokoro.load(TTS_VOICES_FILE)
+        except (ImportError, OSError, RuntimeError, ValueError) as e:  # not installed or downloaded (make models)
+            log.warning("Kokoro couldn't load on MLX (%r); running it on ONNX Runtime", e)
+            return None
+        self._lock = MLX_LOCK
+        return kokoro, f"on MLX, {kokoro_mlx.REPO}"
+
+    def _on_onnx(self):
         from kokoro_onnx import Kokoro
 
         model, threads = kokoro_model(), kokoro_threads()
-        self._kokoro = Kokoro.from_session(kokoro_session(model, threads), str(TTS_VOICES_FILE))
-        self._render("Ready.", preferences.tts_voice(), preferences.tts_speed(), timed=False)  # first synthesis is slow
-        log.info("shared speech process: Kokoro loaded (%s, %s, memory arena %s)", model.name,
-                 f"{threads} threads" if threads else "ONNX Runtime's default threads",
-                 "on" if TTS_MEMORY_ARENA else "off")
+        kokoro = Kokoro.from_session(kokoro_session(model, threads), str(TTS_VOICES_FILE))
+        cores = f"{threads} threads" if threads else "ONNX Runtime's default threads"
+        return kokoro, f"{model.name}, {cores}, memory arena {'on' if TTS_MEMORY_ARENA else 'off'}"
 
     def _render(self, text: str, voice: str, speed: float, timed: bool = True) -> bytes:
         lang = "en-gb" if voice.startswith("b") else "en-us"
@@ -280,8 +304,9 @@ class WhisperSTT(stt.STT):
                  executor: InferenceExecutor | None = None, speaker: SpeakerCheck | None = None) -> None:
         super().__init__(capabilities=stt.STTCapabilities(streaming=False, interim_results=False))
         self._model = model
-        self._gate = gate or SpeechGate()
-        self._speaker = speaker or SpeakerCheck()
+        measured = SileroProbs()  # the gate measures each clip first; the speaker check reuses that, same clip
+        self._gate = gate or SpeechGate(speech_probs=measured)
+        self._speaker = speaker or SpeakerCheck(speech_probs=speech_gate.reusing(measured))
         self._executor = executor
         self._vocabulary, self._prompt = Vocabulary(), ""
         self._lock = asyncio.Lock()  # one clip at a time, in order

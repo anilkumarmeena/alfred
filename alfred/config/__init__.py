@@ -346,10 +346,13 @@ VAD_THRESHOLD = number("voice.vad_threshold", "ALFRED_VAD_THRESHOLD")
 VOICE_TURNS_LOG = LOGS_DIR / "voice-turns.jsonl"  # per-stage turn timing
 
 # Kokoro model (name in MODELS_DIR or full path); first existing fallback if missing. 32-bit by default: int8 saves
-# ~230 MB but renders 30-60% slower on an M2, leaving pauses between sentences under load.
+# ~230 MB but renders about 2x slower on an M2 Air, leaving pauses between sentences under load.
 TTS_MODEL = model_file(text("speech.kokoro", "ALFRED_TTS_MODEL"))
 TTS_MODEL_FALLBACKS = tuple(model_file(name) for name in setting("speech.kokoro_fallbacks"))
 TTS_VOICES_FILE = model_file(text("speech.kokoro_voices"))
+# Where Kokoro runs: "mlx" on the Apple GPU (alfred.voice.kokoro_mlx, ~3x faster than the CPU; ONNX Runtime off
+# Apple silicon or if it can't load), "onnx" always on ONNX Runtime
+TTS_ENGINE = text("speech.tts_engine", "ALFRED_TTS_ENGINE").lower()
 # Kokoro threads. Empty = performance cores - 1, clamped to 2..4 (as fast as 8 under load, frees a core for the
 # call); 0 = ONNX Runtime default.
 TTS_THREADS = text("speech.tts_threads", "ALFRED_TTS_THREADS")

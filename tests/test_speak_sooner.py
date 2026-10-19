@@ -4,11 +4,12 @@ import asyncio
 
 from claude_agent_sdk import ResultMessage, StreamEvent
 
-from alfred.brain import SPEAK_NOW, cli, timing
+from alfred.brain import SPEAK_NOW, SpeakNow, cli, filler, timing
 from alfred.brain.route import Router
 from alfred.brain.timing import CURRENT, Timings
 from alfred.llm import quick
 from alfred.state import memory
+from alfred.voice import clauses
 from alfred.voice.clauses import ClauseTokenizer
 
 
@@ -30,6 +31,20 @@ def test_a_long_first_sentence_goes_at_its_first_pause():
     assert asyncio.run(streamed(text)) == ["I found two flights tomorrow morning,", "both leaving Heathrow before nine.",
                                            "Shall I book one?"]
     assert ClauseTokenizer().tokenize(text)[0] == "I found two flights tomorrow morning, both leaving Heathrow before nine."
+
+
+def test_a_long_first_sentence_with_no_pause_goes_at_its_first_joining_word():
+    text = "I found two flights tomorrow morning that both leave Heathrow before nine. Shall I book one?"
+    assert asyncio.run(streamed(text))[0] == "I found two flights tomorrow morning"
+    # a later sentence keeps whole: only the reply's first piece is hurried
+    later = "Here's what I found. The two flights both leave Heathrow before nine and land in Lisbon at noon."
+    assert asyncio.run(streamed(later))[1] == "The two flights both leave Heathrow before nine and land in Lisbon at noon."
+
+
+def test_no_cut_too_early_or_too_late_for_a_joining_word():
+    assert clauses.clause_spans("So I think we should go and then eat later.", 6, 4, soon=True) == [(0, 23), (23, 43)]
+    one_word = "Yes and I can do this for you right now today."  # "and" after one word: too early, and no other
+    assert clauses.clause_spans(one_word, 6, 4, soon=True) == [(0, len(one_word))]
 
 
 def test_the_first_piece_is_timed_with_the_turn(tmp_path):
@@ -191,9 +206,31 @@ def test_words_before_a_tool_call_are_released_as_the_tool_starts(monkeypatch):
     assert "".join(chunks) == "Let me check. You're free."
 
 
-def test_a_tool_call_before_any_words_releases_nothing(monkeypatch):
-    chunks = _reply(monkeypatch, [_tool_starts(), _text("You're free.")])
-    assert chunks == ["You're free."]  # no empty marker either
+def test_a_tool_call_before_any_words_gets_a_short_lead_in_at_once(monkeypatch):
+    """49 of 61 tool turns had nothing said before the tool, and sat silent ~13 s."""
+    message_start = StreamEvent(uuid="1", session_id="s", event={"type": "message_start"})
+    chunks = _reply(monkeypatch, [_tool_starts(), _tool_starts("calendar_free_time"), message_start,
+                                  _text("You're free.")])
+    lead_in, again, space, answer = chunks
+    assert isinstance(lead_in, SpeakNow) and lead_in in filler.PHRASES["look"]
+    assert again is SPEAK_NOW and space == " " and answer == "You're free."  # one lead-in a reply
+
+
+def test_words_of_the_models_own_before_a_tool_get_no_lead_in(monkeypatch):
+    chunks = _reply(monkeypatch, [_text("Checking your calendar."), _tool_starts()])
+    assert chunks == ["Checking your calendar.", ""] and chunks[1] is SPEAK_NOW
+
+
+def test_lead_ins_fit_the_tool_and_never_repeat():
+    import random
+
+    assert filler.kind("mcp__alfred__task_list") == "tasks" and filler.kind("mcp__alfred__task_start") == "start"
+    assert filler.kind("mcp__gitlab__list_todos") == "look" and filler.kind("mcp__alfred__remember") == "other"
+    rng, last = random.Random(4), None
+    for _ in range(20):
+        said = filler.pick("mcp__alfred__file_lookup", last, rng)
+        assert said in filler.PHRASES["look"] and said != last
+        last = said
 
 
 def test_the_agent_ends_its_speech_where_the_brain_says_to_speak_now():
@@ -214,3 +251,23 @@ def test_the_agent_ends_its_speech_where_the_brain_says_to_speak_now():
 
     first, flush, rest = asyncio.run(main())
     assert first == "Let me check." and isinstance(flush, FlushSentinel) and rest == " You're free."
+
+
+def test_the_agent_speaks_a_lead_in_then_ends_its_speech():
+    from livekit.agents import FlushSentinel, llm
+
+    from alfred.apps.agent import AlfredAgent
+
+    class Voice:
+        async def respond(self, text):
+            for chunk in (SpeakNow("One moment."), " You're free."):
+                yield chunk
+
+    chat = llm.ChatContext()
+    chat.add_message(role="user", content="am I free at four?")
+
+    async def main():
+        return [c async for c in AlfredAgent(Voice()).llm_node(chat, [], None)]
+
+    said, flush, rest = asyncio.run(main())
+    assert said == "One moment." and type(said) is str and isinstance(flush, FlushSentinel)

@@ -6,7 +6,8 @@ MIN_WORDS). Never cut inside a number ("1,000", "3:30"), a date ("May 4, 2026") 
 A trailing piece under MIN_WORDS stays with the previous one, so streamed pieces match what the full sentence gives.
 
 The first piece of a reply goes sooner: any sentence of FIRST_MIN_CHARS+ goes alone, and one over FIRST_MAX_WORDS is
-cut at its first pause.
+cut at its first pause or, with none within FIRST_MAX_WORDS, before its first joining word ("and", "because",
+"which"...) after MIN_WORDS: Kokoro takes ~0.12 s a word before a piece plays, and first pieces ran to 17 words.
 """
 
 import re
@@ -24,6 +25,9 @@ FIRST_MAX_WORDS, FIRST_MIN_CHARS = 6, 8  # reply's first piece
 
 # , ; : before a space; a spaced hyphen; an en/em dash not inside a number
 _PAUSE = re.compile(r"[,;:](?=\s)|(?<=\s)-(?=\s)|(?<!\d)[–—]|[–—](?!\d)")
+# A space before a word that starts a clause: where a sentence with no pause can still be cut without a seam
+_JOINING = re.compile(r"\s(?=(?:and|but|so|because|which|who|that|when|while|if|or|then|before|after|until|since|"
+                      r"though|although|unless|where)\b)", re.IGNORECASE)
 _BEFORE = re.compile(r"(\S+)$")
 _AFTER = re.compile(r"^\s*(\S+)")
 _NO_CUT_AFTER = {"e.g.", "i.e.", "viz.", "cf.", "vs.", "eg.", "ie."}  # "e.g., apples": comma binds forward
@@ -44,11 +48,26 @@ def _can_cut(text: str, at: re.Match) -> bool:
     return before.lower() not in _NO_CUT_AFTER and after.lower() not in _NO_CUT_BEFORE
 
 
-def clause_spans(text: str, max_words: int = MAX_WORDS, min_words: int = MIN_WORDS) -> list[tuple[int, int]]:
-    """(start, end) spans covering all of one sentence; a single span if it's short enough."""
+def _joining_cut(text: str, max_words: int, min_words: int) -> int | None:
+    """Where to cut before the first joining word with min_words to max_words words ahead of it, if any."""
+    for m in _JOINING.finditer(text):
+        if (n := _words(text[:m.start()])) > max_words:
+            return None
+        if n >= min_words:
+            return m.start()
+    return None
+
+
+def clause_spans(text: str, max_words: int = MAX_WORDS, min_words: int = MIN_WORDS,
+                 soon: bool = False) -> list[tuple[int, int]]:
+    """(start, end) spans covering all of one sentence; a single span if it's short enough. `soon`: with no pause in
+    its first max_words, it may be cut before a joining word instead."""
     if _words(text) <= max_words:
         return [(0, len(text))]
     cuts = [m.end() for m in _PAUSE.finditer(text) if _can_cut(text, m)]
+    if soon and not any(_words(text[:cut]) <= max_words for cut in cuts):
+        if (joining := _joining_cut(text, max_words, min_words)) is not None:
+            cuts.append(joining)
     bounds = sorted({0, len(text), *cuts})
     chunks: list[list[int]] = []  # [start, end, words]
     for start, end in zip(bounds, bounds[1:]):
@@ -64,11 +83,12 @@ def clause_spans(text: str, max_words: int = MAX_WORDS, min_words: int = MIN_WOR
 
 
 def split(text: str, max_words: int = MAX_WORDS, min_words: int = MIN_WORDS,
-          min_chars: int = MIN_SENTENCE_CHARS) -> list[tuple[str, int, int]]:
-    """LiveKit sentences with long ones cut: contiguous (text, start, end), whitespace kept."""
+          min_chars: int = MIN_SENTENCE_CHARS, soon: bool = False) -> list[tuple[str, int, int]]:
+    """LiveKit sentences with long ones cut: contiguous (text, start, end), whitespace kept. `soon` (a reply's first
+    piece) lets the first sentence be cut before a joining word."""
     out = []
-    for sentence, start, _ in _split_sentences(text, min_chars, retain_format=True):
-        for s, e in clause_spans(sentence, max_words, min_words):
+    for n, (sentence, start, _) in enumerate(_split_sentences(text, min_chars, retain_format=True)):
+        for s, e in clause_spans(sentence, max_words, min_words, soon=soon and n == 0):
             out.append((sentence[s:e], start + s, start + e))
     return out
 
@@ -103,7 +123,7 @@ class _FirstSoonerStream(token_stream.BufferedSentenceStream):
         if not self._first:
             self._min_token_len = MIN_SENTENCE_CHARS  # first piece released at its own threshold
             return self._rest(text)
-        pieces = split(text, FIRST_MAX_WORDS, MIN_WORDS, FIRST_MIN_CHARS)
+        pieces = split(text, FIRST_MAX_WORDS, MIN_WORDS, FIRST_MIN_CHARS, soon=True)
         if len(pieces) > 1 and len(pieces[0][0].strip()) >= FIRST_MIN_CHARS:
             self._first = False  # release now; the rest are cut normally
             timing.piece(pieces[0][0])

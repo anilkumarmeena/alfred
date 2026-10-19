@@ -188,7 +188,7 @@ Everything an install keeps lives in **ALFRED_HOME** ([Configuration](configurat
 
 ## 🎤 The voice pipeline
 
-**Models load once.** `WhisperRunner` and `KokoroRunner` (`alfred/voice/speech.py`) run in LiveKit's shared inference process. Each call's job process (~300 MB: Silero, the noise filter, the brain) sends them audio or text over IPC, and requests queue one at a time.
+**Models load once.** `WhisperRunner` and `KokoroRunner` (`alfred/voice/speech.py`) run in LiveKit's shared inference process. Each call's job process (~300 MB: Silero, the noise filter, the brain) sends them audio or text over IPC. Each runner takes one request at a time, and on Apple silicon the two share one GPU lock.
 
 ```mermaid
 %%{init: {"sequence": {"mirrorActors": false, "width": 110, "actorMargin": 30}}}%%
@@ -229,7 +229,7 @@ sequenceDiagram
 | 🚪 | **Speech gate** | `speech_gate.py` | Drops Whisper's phantoms ("Thank you.") on near-silence. `enforce` or `shadow` |
 | 👤 | **Speaker check** | `speaker.py`, `state/voiceprints.py` | Drops utterances that aren't the user's, once a voiceprint is enrolled |
 | 🧠 | **Think** | `agent.py` `AlfredAgent.llm_node` | Replaces LiveKit's LLM step and streams `CliBrain.respond` |
-| 🔊 | **Speak** | `speech.py` `KokoroTTS`, `clauses.py` | Kokoro v1.0 32-bit; long sentences cut early so speech starts sooner |
+| 🔊 | **Speak** | `speech.py` `KokoroTTS`, `kokoro_mlx.py`, `clauses.py` | Kokoro v1.0 32-bit, on the Apple GPU on Apple silicon; long sentences cut early so speech starts sooner |
 | 🔕 | **Speaker off** | `quiet.py` | The `SPEAKER` participant attribute turns TTS off; replies go to captions only |
 
 - **Noise filter:** `ALFRED_DENOISE=vad` filters only what the VAD hears.
@@ -842,7 +842,7 @@ A task's `host_run` and `start_job` commands run inside `host.walled()`. On Linu
 | **LiveKit / Agents** | Open-source WebRTC media server, and its Python framework for voice agents |
 | **Tailscale Serve** | Exposes a local port over HTTPS to the user's own tailnet devices only |
 | **VAD** | Voice activity detection (Silero here) |
-| **STT / TTS** | Speech-to-text (Whisper on MLX or faster-whisper) and text-to-speech (Kokoro on ONNX Runtime) |
+| **STT / TTS** | Speech-to-text (Whisper on MLX or faster-whisper) and text-to-speech (Kokoro on MLX or ONNX Runtime) |
 | **faster-whisper** | Whisper on CTranslate2, used off Apple silicon (CUDA or CPU) |
 | **MCP** | Model Context Protocol, the standard way to give Claude tools |
 | **Barge-in** | Talking over Alfred to interrupt it |

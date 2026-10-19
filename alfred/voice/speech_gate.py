@@ -162,10 +162,12 @@ def reasons(m: Measure, t: Thresholds, text: str | None = None, echo: bool = Fal
 
 
 class SileroProbs:
-    """Silero over a whole clip from fresh state, on its own lazily-loaded onnxruntime session."""
+    """Silero over a whole clip from fresh state, on its own lazily-loaded onnxruntime session. Its latest clip and
+    probabilities stay in `latest`, so another check of that very clip (the speaker check's) needn't run it again."""
 
     def __init__(self) -> None:
         self._model = None
+        self.latest: tuple[np.ndarray, np.ndarray] | None = None
 
     def __call__(self, audio: np.ndarray) -> np.ndarray:
         from livekit.plugins.silero import onnx_model
@@ -174,7 +176,23 @@ class SileroProbs:
             self._model = onnx_model.OnnxModel(onnx_session=onnx_model.new_inference_session(True), sample_rate=RATE)
         self._model.reset()
         n = len(audio) - len(audio) % WINDOW
-        return np.array([self._model(audio[i:i + WINDOW]) for i in range(0, n, WINDOW)], np.float32)
+        probs = np.array([self._model(audio[i:i + WINDOW]) for i in range(0, n, WINDOW)], np.float32)
+        self.latest = (audio, probs)
+        return probs
+
+
+def reusing(first: SileroProbs, own: Callable[[np.ndarray], np.ndarray] | None = None
+            ) -> Callable[[np.ndarray], np.ndarray]:
+    """Speech probabilities for a clip: `first`'s if it last measured this very clip, else `own`'s (by default a
+    session of its own, as a check on other audio may run at the same time)."""
+    fallback = own or SileroProbs()
+
+    def probs(audio: np.ndarray) -> np.ndarray:
+        if (latest := first.latest) is not None and latest[0] is audio:
+            return latest[1]
+        return fallback(audio)
+
+    return probs
 
 
 def save_clip(audio: np.ndarray, folder: Path, at: float, keep: int) -> Path:

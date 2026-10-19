@@ -104,6 +104,7 @@ whisper_cpu_files = "small"    # recordings: any language
 device = ""                    # ALFRED_STT_DEVICE: cuda or cpu; empty = cuda when an NVIDIA GPU is usable
 transcribe = ""                # ALFRED_TRANSCRIBE_MODEL: recordings; empty = the live model on Apple silicon
 prompt = true                  # ALFRED_STT_PROMPT: prompt Whisper with the speech vocabulary
+tts_engine = "mlx"             # ALFRED_TTS_ENGINE: mlx = Kokoro on the Apple GPU (~3x faster), onnx = ONNX Runtime on the CPU
 kokoro = "kokoro-v1.0.onnx"    # ALFRED_TTS_MODEL
 kokoro_fallbacks = ["kokoro-v1.0.onnx", "kokoro-v1.0.int8.onnx"]
 kokoro_voices = "voices-v1.0.bin"
@@ -114,7 +115,7 @@ speaker_id = "wespeaker-voxceleb-resnet34-LM"
 
 [voice]
 idle_processes = 1             # ALFRED_VOICE_IDLE_PROCESSES: warm spare job processes (~300 MB each)
-mlx_cache_mb = 256             # ALFRED_MLX_CACHE_MB: MLX buffer-cache cap; 0 = free every clip, -1 = no cap
+mlx_cache_mb = 32              # ALFRED_MLX_CACHE_MB: MLX buffer-cache cap (32 is as fast as 256); 0 = free every clip, -1 = no cap
 tts_memory_arena = false       # ALFRED_TTS_MEMORY_ARENA
 malloc_large_cache = false     # ALFRED_VOICE_MALLOC_LARGE_CACHE
 memory_log_minutes = 10.0      # ALFRED_VOICE_MEMORY_LOG_MINUTES (0 = never)

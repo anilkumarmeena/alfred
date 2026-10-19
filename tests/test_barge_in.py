@@ -286,3 +286,21 @@ def test_the_sessions_vad_holds_back_another_voice_and_lets_the_user_through():
     g, heard = asyncio.run(main())
     assert SECOND < interrupts(heard) < 2 * SECOND
     assert g._owner is None  # stream released on close
+
+
+@pytest.mark.parametrize("scores, at", [
+    ([0.1, 0.1, 0.1, 0.1, 0.27, 0.1, 0.1], None),  # the TV, checked on and on, crosses the line once: not you
+    ([0.1, 0.1, 0.1, 0.1, 0.27, 0.3], 6),  # twice in a row: you, talking over it
+    ([0.1, 0.27], 2),  # within the first checks a single match still interrupts
+])
+def test_after_a_few_checks_one_stretch_of_speech_needs_two_matches_in_a_row(scores, at):
+    """On the MacBook Air the TV's speech interrupted after 9 and 31 checks; the user's own match at once."""
+    g = gate()
+    g.replying("speaking")
+    left = list(scores)
+    g._match = lambda frames: (left.pop(0), 0.25, 1.0, USER)
+    events = asyncio.run(speak(g, [TV] * (16 + 8 * (len(scores) - 1) + 1)))  # a check every 0.25 s from 0.5 s
+    assert not left  # every scripted check ran
+    interrupted = [r for r in g.recorded if r.verdict == "interrupted"]
+    assert (interrupted[0].checks if interrupted else None) == at
+    assert (interrupts(events) is not None) == (at is not None)

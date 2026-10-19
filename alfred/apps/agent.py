@@ -28,7 +28,7 @@ from livekit.plugins import silero
 
 from alfred import bootstrap, config, projects
 from alfred.auth import credentials
-from alfred.brain import SPEAK_NOW, make_brain, timing
+from alfred.brain import SpeakNow, make_brain, timing
 from alfred.brain.route import Router
 from alfred.core import platform
 from alfred.llm import roles
@@ -69,7 +69,12 @@ class AlfredAgent(Agent):
         )
         async for chunk in self.voice.respond(text):
             # A tool call starting ends the speech there, so what came before it plays while the tool runs
-            yield FlushSentinel() if chunk is SPEAK_NOW else chunk
+            if isinstance(chunk, SpeakNow):
+                if chunk:
+                    yield str(chunk)
+                yield FlushSentinel()
+            else:
+                yield chunk
 
     # Everything said (replies and session.say alike) passes these two, so private notes are neither heard nor shown
     def tts_node(self, text, model_settings):

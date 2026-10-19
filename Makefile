@@ -162,6 +162,8 @@ models: ## Download speech, VAD, noise and speaker models (into ALFRED_HOME/mode
 	@$(call fetch,$(SPK),$(SPK_URL),$(SPK_SHA))
 # Whisper for this machine: MLX on Apple silicon, faster-whisper elsewhere (alfred.media.whisper)
 	$(UV) python -m alfred.media.whisper
+# Kokoro's weights for the Apple GPU (alfred.voice.kokoro_mlx), pinned; a no-op elsewhere
+	$(UV) python -m alfred.voice.kokoro_mlx
 # os._exit skips teardown, which native plugin libraries can crash on macOS
 	$(UV) python -c "import os, sys; from livekit.agents.__main__ import main; code = main(['download-files']); \
 		sys.stdout.flush(); sys.stderr.flush(); os._exit(code)"

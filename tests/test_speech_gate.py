@@ -496,3 +496,21 @@ def test_saving_is_on_by_default_only_in_shadow_mode(monkeypatch):
     finally:
         monkeypatch.undo()
         importlib.reload(config)
+
+
+def test_the_speaker_check_reuses_the_gates_silero_pass_on_the_same_clip():
+    runs = []
+
+    class Counting(speech_gate.SileroProbs):
+        def __call__(self, audio):
+            runs.append(len(audio))
+            self.latest = (audio, np.ones(len(audio) // WINDOW, np.float32))
+            return self.latest[1]
+
+    first, own = Counting(), Counting()
+    probs = speech_gate.reusing(first, own)
+    clip_ = np.zeros(WINDOW * 4, np.float32)
+    first(clip_)
+    assert list(probs(clip_)) == [1.0] * 4 and runs == [WINDOW * 4]  # same clip: not run again
+    probs(np.zeros(WINDOW * 2, np.float32))  # other audio (a barge-in check): its own session
+    assert runs == [WINDOW * 4, WINDOW * 2] and own.latest is not first.latest

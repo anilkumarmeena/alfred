@@ -112,7 +112,7 @@ Your mic goes through **[DeepFilterNet 3](https://github.com/Rikorose/DeepFilter
 
 ## 📝 Whisper in, Kokoro out
 
-**Whisper** turns each utterance into text; **Kokoro** speaks the reply, on the CPU everywhere. All knobs are in [Speech in and out](configuration.md#-speech-in-and-out).
+**Whisper** turns each utterance into text; **Kokoro** speaks the reply: on the Apple GPU on Apple silicon (~3× faster), on the CPU elsewhere. All knobs are in [Speech in and out](configuration.md#-speech-in-and-out).
 
 Whisper runs on whichever backend suits the machine, picked at start:
 
@@ -125,6 +125,7 @@ Whisper runs on whichever backend suits the machine, picked at start:
 - **CPU speed:** `small.en` takes **0.61 s per 5 s clip** on an M-series CPU; expect **~1–1.5 s** on a 4–8 core x86. Large models would take several seconds a clip on a CPU, hence the smaller default.
 - **Weak CPU?** `ALFRED_STT=base.en` trades a little accuracy for speed.
 - **GPU** needs CUDA 12's cuBLAS and cuDNN 9, from the system or pip (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`). If it fails to load, Alfred falls back to the CPU and logs why; `ALFRED_STT_DEVICE=cpu` skips trying.
+- **Kokoro on MLX:** kokoro-onnx still makes the phonemes and joins the pieces, so the voice sounds the same; only the model runs on the GPU (`alfred/voice/kokoro_mlx.py`). A 6-word piece takes **0.21 s instead of 0.64 s** on an M2 Air. It shares one lock with Whisper, so the two never use the GPU at once. If its weights are missing it falls back to the CPU and logs why.
 - **Before Kokoro**, everything said (and shown as text) passes `alfred/voice/unspoken.py`, which drops the brain's private notes and says internal details plainly; see [The Brain](brain.md#-one-turn-end-to-end).
 - **Recordings** use their own model, multilingual (`small` on a CPU): see [`ALFRED_TRANSCRIBE_MODEL`](configuration.md#-speech-in-and-out).
 - **`make models`** downloads the models this machine will use.
@@ -137,8 +138,9 @@ Whisper runs on whichever backend suits the machine, picked at start:
 | `ALFRED_STT_PROMPT` | `on` | Gives Whisper the speech vocabulary and project names |
 | `ALFRED_TTS_VOICE` | `bm_george` | Kokoro voice: `bm_*`/`bf_*` British, `am_*`/`af_*` American |
 | `ALFRED_TTS_SPEED` | `1.05` | Speaking speed, 0.5 to 2.0 |
+| `ALFRED_TTS_ENGINE` | `mlx` | Kokoro on the Apple GPU (`mlx`) or ONNX Runtime on the CPU (`onnx`) |
 
-**Inspect:** `make voice-timing` reports `transcript` (Whisper's text ready) and `tts_first` (Kokoro's first audio) per turn. `logs/agent.log` names the Whisper model, device and threads when it loads.
+**Inspect:** `make voice-timing` reports `transcript` (Whisper's text ready) and `tts_first` (Kokoro's first audio) per turn. `logs/agent.log` names the Whisper model, device and threads, and where Kokoro runs, when they load.
 
 ## 🚫 Speech gate
 

@@ -5,7 +5,9 @@ speaker check matches the user's voiceprint; LiveKit then interrupts on the next
 
   when    from SPEAKER_BARGE_IN_MIN_SECONDS (0.5 s, LiveKit's own wait) so a check (~15 ms CPU) adds little; again
           every STEP, on the latest MAX_SECONDS, until a match or speech ends
-  needs   the normal short-clip threshold (0.25 at <= 1 s); no reply-to-Alfred leniency
+  needs   the normal short-clip threshold (0.25 at <= 1 s); no reply-to-Alfred leniency. From the ALONE+1th check of
+          one stretch of speech, two matches in a row: checked again and again, the TV's speech crossed the line by
+          chance (after 9 and 31 checks) while the user's own barge-ins match on the first
   else    the reply continues; the full utterance is still checked at its end and can interrupt then
 
 Pass-through when the check is off, no voiceprint is enrolled or ALFRED_SPEAKER_BARGE_IN is off. Shadow mode passes
@@ -35,6 +37,7 @@ from alfred.voice.speech import _to_whisper_audio
 log = logging.getLogger("alfred.voice.barge_in")
 
 REPLYING = ("thinking", "speaking")  # agent states where speech interrupts
+ALONE = 3  # checks of one stretch of speech on which a single match interrupts; after them, two in a row
 
 
 @dataclasses.dataclass
@@ -49,6 +52,7 @@ class _Episode:
     checked: float | None = None  # `heard` at the last check
     since: float | None = None  # when it could first have interrupted
     checks: int = 0
+    run: int = 0  # matches in a row, up to the latest check
     best: tuple | None = None  # (score, needed, seconds, reference) of the closest check
     why: str = ""
     ended: bool = False
@@ -144,11 +148,13 @@ class BargeIn:
         finally:
             e.busy = False
         e.checks += 1
+        matched = score is not None and score >= needed
+        e.run = e.run + 1 if matched else 0
         if e.best is None or _margin(score, needed) > _margin(*e.best[:2]):
             e.best = (score, needed, seconds, reference)
         if e.ended:
-            self._settle(e, "speech ended before the check did" if score is not None and score >= needed else "")
-        elif e.why or (score is not None and score >= needed):
+            self._settle(e, "speech ended before the check did" if matched else "")
+        elif e.why or (matched and (e.checks <= ALONE or e.run >= 2)):
             e.allowed = True
             self._log(e, True)
 

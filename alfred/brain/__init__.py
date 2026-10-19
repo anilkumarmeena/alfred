@@ -7,13 +7,13 @@ if TYPE_CHECKING:
     from alfred.brain.kept import Kept
 
 
-class _SpeakNow(str):
-    """The type of SPEAK_NOW."""
+class SpeakNow(str):
+    """A chunk of a reply where a tool call starts: what was said before it, and these words if any (a lead-in the
+    model didn't say), are spoken now rather than held until more words follow (the voice ends its speech there).
+    Joined with the rest of the reply it is just its words."""
 
 
-# A chunk of a reply marking where a tool call starts: what was said before it is spoken now, not held until more
-# words follow (the voice ends its speech there). It is an empty string, so joining a reply's chunks drops it.
-SPEAK_NOW = _SpeakNow()
+SPEAK_NOW = SpeakNow()  # no words of its own
 
 
 class VoiceBrain(Protocol):

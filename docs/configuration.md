@@ -158,7 +158,8 @@ uv run python -m alfred.state.settings prefs voice bm_lewis  # change one
 | `ALFRED_STT_PROMPT` | `on` | Give Whisper the speech vocabulary and project names as its prompt |
 | `ALFRED_TTS_VOICE` | `bm_george` | Kokoro voice: `bm_*`/`bf_*` British, `am_*`/`af_*` American |
 | `ALFRED_TTS_SPEED` | `1.05` | Speaking speed, 0.5 to 2.0 |
-| `ALFRED_TTS_MODEL` | `kokoro-v1.0.onnx` | Kokoro model in `models/` |
+| `ALFRED_TTS_ENGINE` | `mlx` | Where Kokoro runs: `mlx` on the Apple GPU (~3× faster; ONNX Runtime off Apple silicon or if it can't load), `onnx` on the CPU |
+| `ALFRED_TTS_MODEL` | `kokoro-v1.0.onnx` | Kokoro model in `models/` (ONNX Runtime) |
 | `ALFRED_TTS_THREADS` | One fewer than performance cores (every core counts on Linux), 2–4 | Kokoro's ONNX Runtime threads; `0` uses every core |
 | `ALFRED_TURN_SILENCE` | `0.8` | Seconds after you stop speaking before your turn ends (up to 5; never sooner than `ALFRED_VAD_MIN_SILENCE`); it also waits for Whisper's words |
 | `ALFRED_VAD_MIN_SILENCE` | `0.55` | Silence that ends an utterance; the floor under every reply's wait |
@@ -177,7 +178,8 @@ uv run python -m alfred.state.settings prefs voice bm_lewis  # change one
 
 - **Whisper names:** MLX takes a Hugging Face repo; faster-whisper a size (`base.en`, `small.en`, `large-v3-turbo`...) or a CTranslate2 folder. An `mlx-community/` model elsewhere falls back to the default.
 - **Whisper sizes:** on MLX the 4-bit default is ~0.5 GB, the 16-bit original ~1.6 GB. On a slow CPU, `ALFRED_STT=base.en` answers quicker.
-- **Kokoro 8-bit:** `kokoro-v1.0.int8.onnx` saves ~230 MB but renders 30–60% slower. `make models-int8` downloads it.
+- **Kokoro 8-bit:** `kokoro-v1.0.int8.onnx` saves ~230 MB but renders about 2× slower on an M2 Air. `make models-int8` downloads it.
+- **Kokoro on MLX** holds 327 MB of weights. Its working memory grows with the piece (about 0.6 GB for 6 words, 1.3 GB for 18; ONNX Runtime's ~0.3 GB) and is freed after each one; voice pieces are 12 words at most.
 - **Turn delays:** the min applies when you sound finished, the max at most mid-thought. Each speaker's delays then follow their pace.
 
 <details>
@@ -188,7 +190,7 @@ uv run python -m alfred.state.settings prefs voice bm_lewis  # change one
 | Setting | Default | What it does |
 |---|---|---|
 | `ALFRED_VOICE_IDLE_PROCESSES` | `1` | Warm spare voice processes (~300 MB each) so a call connects at once |
-| `ALFRED_MLX_CACHE_MB` | `256` | **Apple silicon only.** GPU memory MLX keeps for reuse after Whisper; `0` frees after every clip, `-1` no cap |
+| `ALFRED_MLX_CACHE_MB` | `32` | **Apple silicon only.** GPU memory MLX keeps for reuse after Whisper and Kokoro (32 MB transcribes as fast as 256); `0` frees after every clip (~3% slower), `-1` no cap |
 | `ALFRED_TTS_MEMORY_ARENA` | `off` | Kokoro's ONNX memory arena (grows to ~1 GB after a long sentence) |
 | `ALFRED_VOICE_MALLOC_LARGE_CACHE` | `off` | Let the allocator keep large freed blocks in voice processes (macOS's large cache, glibc's growing mmap threshold) |
 | `ALFRED_VOICE_MEMORY_LOG_MINUTES` | `10` | How often `logs/agent.log` gets a `voice memory` line (`0` never) |

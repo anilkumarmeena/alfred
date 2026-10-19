@@ -27,7 +27,7 @@ from collections.abc import AsyncIterator
 from contextlib import aclosing
 
 from alfred import prompts, tools
-from alfred.brain import SPEAK_NOW, timing
+from alfred.brain import SPEAK_NOW, SpeakNow, filler, timing
 from alfred.brain.budget import Budget
 from alfred.brain.kept import Kept
 from alfred.brain.persona import Notes, system_prompt
@@ -182,6 +182,8 @@ class CliBrain(Notes):
         self._accounts = accounts.load()  # Google accounts the CLI started with
         self._setup = _setup()  # connections and skills the CLI started with
         self._session: str | None = None  # the CLI's session id, to carry the conversation on after a restart
+        self._led_in = False  # something was said this reply before its first tool call (the hold line counts)
+        self._filler: str | None = None  # the last lead-in said for the model
 
     async def start(self) -> None:
         """Start the CLI, or restart it on the same conversation when the Google accounts, connections or skills
@@ -301,8 +303,9 @@ class CliBrain(Notes):
         self._drain = asyncio.create_task(self._finish() if self._holding else self._interrupt())
 
     def _chunk(self, msg, spoken: list[str], timed: bool = True) -> str:
-        """Spoken text in `msg`, also added to `spoken`, SPEAK_NOW at a tool call after words, or ''. Tracks tool calls
-        and usage limits on the way."""
+        """Spoken text in `msg`, also added to `spoken`, or ''. A tool call starting gives SPEAK_NOW after words, or a
+        lead-in (alfred.brain.filler) as a SpeakNow before the first one when nothing was said. Tracks tool calls and
+        usage limits on the way."""
         self._track(msg)
         if isinstance(msg, StreamEvent) and msg.parent_tool_use_id is None:
             event = msg.event
@@ -313,10 +316,15 @@ class CliBrain(Notes):
                 spoken.append(" ")  # new model turn after a tool call
                 return " "
             if timed and event.get("type") == "content_block_start" and event["content_block"].get("type") == "tool_use":
-                said = "".join(spoken)
-                timing.tool(said, event["content_block"].get("name", ""))
-                if said.strip():
+                said, name = "".join(spoken), event["content_block"].get("name", "")
+                timing.tool(said, name)
+                if said.strip() or self._led_in:
                     return SPEAK_NOW  # "let me check" plays while the tool runs, not after it
+                self._led_in = True
+                self._filler = filler.pick(name, self._filler)
+                timing.note("lead_in", self._filler)
+                spoken.append(self._filler)
+                return SpeakNow(self._filler)  # the model said nothing first: seconds of silence otherwise
         elif isinstance(msg, RateLimitEvent):
             self.limits.saw(msg)
         return ""
@@ -369,7 +377,9 @@ class CliBrain(Notes):
                 yield chunk
 
     async def _respond(self, text: str) -> AsyncIterator[str]:
+        self._led_in = False
         if self._drain is not None and self._holding and not self._drain.done():
+            self._led_in = True
             yield shell.HOLD + " "
         await self._drained()
         if lookups := conversation.current().lookups:
@@ -391,7 +401,7 @@ class CliBrain(Notes):
             await self.client.query(self._message(self._prompt(text, agreed, len(photos)), photos))
             timing.mark("sent")
             async for msg in self.client.receive_response():
-                if (chunk := self._chunk(msg, spoken)) or chunk is SPEAK_NOW:
+                if (chunk := self._chunk(msg, spoken)) or isinstance(chunk, SpeakNow):
                     yield chunk
                 elif isinstance(msg, ResultMessage):
                     finished = True
