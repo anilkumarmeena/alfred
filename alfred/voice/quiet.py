@@ -10,10 +10,13 @@ import logging
 log = logging.getLogger("alfred.voice.quiet")
 
 SPEAKER = "alfred.speaker"
+# What the phone apps' native sessions set (alfred-app, from before the rename and since, so one build works with
+# either server). The token sets SPEAKER at the start; the app's switch sets this one after, so it wins.
+APP_SPEAKER = "jarvis.speaker"
 
 
 def speaker_on(attributes: dict[str, str]) -> bool:
-    return attributes.get(SPEAKER) != "off"
+    return attributes.get(APP_SPEAKER, attributes.get(SPEAKER)) != "off"
 
 
 def apply(session, attributes: dict[str, str]) -> None:
@@ -29,5 +32,5 @@ def follow(session, room) -> None:
 
     @room.on("participant_attributes_changed")
     def changed(attributes: dict[str, str], participant) -> None:
-        if SPEAKER in attributes:  # only the user sets it; the agent's are lk.agent.*
+        if SPEAKER in attributes or APP_SPEAKER in attributes:  # only the user sets them; the agent's are lk.agent.*
             apply(session, participant.attributes)

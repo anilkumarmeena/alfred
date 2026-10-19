@@ -53,6 +53,12 @@ def test_speaker_is_on_unless_switched_off():
     assert not quiet.speaker_on({quiet.SPEAKER: "off"})
 
 
+def test_the_phone_app_s_switch_counts_and_wins_over_the_token_s():
+    assert not quiet.speaker_on({"jarvis.speaker": "off"})  # what the native apps set
+    assert not quiet.speaker_on({quiet.SPEAKER: "on", "jarvis.speaker": "off"})  # switched off after joining
+    assert quiet.speaker_on({quiet.SPEAKER: "off", "jarvis.speaker": "on"})
+
+
 def test_apply_turns_the_voice_off_and_on_once():
     session = Session()
     quiet.apply(session, {quiet.SPEAKER: "off"})
