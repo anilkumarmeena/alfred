@@ -1,7 +1,9 @@
 """Runner mixin for git and project-list changes.
 
-  worktree tasks  own worktree + branch alfred/<id>-<slug>; committed at run end, then merged or discarded; a
-                  merge under way stops cleanly (halt), leaving the folder as it was
+  worktree tasks  own worktree + branch alfred/<id>-<slug>, the main checkout's node_modules and .venv cloned in (warm);
+                  committed at run end, then merged or discarded; a merge under way stops cleanly (halt), leaving the
+                  folder as it was. A branch behind its target is rebased onto it first, without a model; one that
+                  conflicts is left as it was and squashed as before
   in-place tasks  user's uncommitted work saved under refs/alfred/ before each run; changes reported after
                   (non-git folders: a file mtime/size snapshot instead)
   projects        register / git init, serialised by projects_lock
@@ -24,7 +26,7 @@ from alfred.config import ASSISTANT_NAME, WORKTREES_DIR
 from alfred.core import proc
 from alfred.safety import remembered
 from alfred.state import activity as bell
-from alfred.tasks import merge_check
+from alfred.tasks import merge_check, warm
 from alfred.tasks.approvals import session_key
 from alfred.tasks.host_tools import few
 from alfred.tasks.runner_base import RunnerBase
@@ -78,7 +80,8 @@ def _file_changes(before: dict, after: dict, repos: list[str]) -> str:
 
 
 async def worktree_op(body: dict) -> dict:
-    """{"repo", "task", "title", "name"}: a worktree and branch for the task, from the repo's HEAD."""
+    """{"repo", "task", "title", "name"}: a worktree and branch for the task, from the repo's HEAD, with the main
+    checkout's dependency folders cloned in ("warmed")."""
     repo = Path(body["repo"])
     if problem := await asyncio.to_thread(projects.worktree_problem, projects.Project(body["name"], repo, [], "")):
         raise ValueError(problem)
@@ -88,7 +91,12 @@ async def worktree_op(body: dict) -> dict:
     base, base_ref = (await _git(repo, "rev-parse", "HEAD", "--abbrev-ref", "HEAD")).split("\n")
     WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
     await _git(repo, "worktree", "add", "-q", "-b", branch, str(worktree), base, timeout=300)
-    return {"worktree": str(worktree), "branch": branch, "base": base, "base_ref": base_ref}
+    try:
+        warmed = await asyncio.to_thread(warm.warm, repo, worktree)
+    except OSError:  # the task installs what it needs, as it would anyway
+        log.exception("couldn't pre-warm %s", worktree)
+        warmed = []
+    return {"worktree": str(worktree), "branch": branch, "base": base, "base_ref": base_ref, "warmed": warmed}
 
 
 async def enter_op(body: dict) -> dict:
@@ -165,6 +173,18 @@ async def commit_op(body: dict) -> dict:
     return {"said": await _git(wt, "diff", "--shortstat", body["base"], "HEAD") or "no changes"}
 
 
+async def touched_op(body: dict) -> dict:
+    """{"repo", "worktree", "base", "branch"}: the files a worktree task has changed since its base, committed or not,
+    as {"files": [...]}; from its branch once the worktree is gone."""
+    wt, base = body.get("worktree"), body["base"]
+    if wt and Path(wt).exists():
+        found = [await _git_try(wt, "diff", "--name-only", base),
+                 await _git_try(wt, "ls-files", "--others", "--exclude-standard")]
+    else:
+        found = [await _git_try(body["repo"], "diff", "--name-only", base, body["branch"])]
+    return {"files": sorted({name for code, out in found if code == 0 for name in out.splitlines() if name})}
+
+
 def squash_message(title: str, summary: str, task: int) -> str:
     """The one commit a task's branch becomes: its title, the opening of its summary (whole paragraphs up to
     SQUASH_BODY characters), and trailers ending with the assistant as co-author."""
@@ -183,8 +203,12 @@ async def merge_op(body: dict) -> dict:
     """{"repo", "branch", "worktree", "task", "name", "title", "summary"}: squash the branch into one commit on what's
     checked out, then remove it. Returns {"did", "cleaned"}; ValueError (nothing changed) if it can't.
 
+    A branch behind what's checked out is rebased onto it first (_catch_up), so its tests run on the code that would be
+    merged; one that conflicts is left as it was and squashed as before, git's three-way merge deciding. Not merged
+    after all, a rebased branch is put back as it was.
+
     Cancelling it stops the merge: its tests stop, a squash under way is undone, and CancelledError comes out with the
-    folder as it was and the branch kept. Once merged, it's too late: the cleanup finishes and it returns as usual."""
+    folder and branch as they were. Once merged, it's too late: the cleanup finishes and it returns as usual."""
     task_id, name = body["task"], body["name"]
     repo, branch, wt = Path(body["repo"]), body["branch"], body.get("worktree")
     if wt and Path(wt).exists() and await _git(wt, "status", "--porcelain", *projects.PATHSPEC):
@@ -200,22 +224,18 @@ async def merge_op(body: dict) -> dict:
     else:
         if await _git(repo, "status", "--porcelain", "--untracked-files=no"):
             raise ValueError(f"{name}'s folder has uncommitted changes; commit or put them aside before merging.")
-        # Alfred's own branches merge only once their tests pass
-        tested = projects.is_alfred(repo)
-        if tested and (why := await merge_check.refusal(repo, branch, wt, into)):
-            raise ValueError(f"Task {task_id}'s branch {branch} wasn't merged, since {why}.")
-        message = squash_message(body.get("title") or "", body.get("summary") or "", task_id)
         before = await _git(repo, "rev-parse", "HEAD")
-        squashing = asyncio.ensure_future(_squash(repo, branch, into, message))
+        tip, conflicts = await _catch_up(repo, wt, branch, task_id, before)
         try:
-            squashed = await asyncio.shield(squashing)
-        except asyncio.CancelledError:  # killing git mid-squash could leave the folder half-merged: let it end, undo it
-            with contextlib.suppress(ValueError):  # it failed, and put the folder back itself
-                if await squashing:
-                    await _git_try(repo, "reset", "-q", "--merge", before)
+            squashed, tested = await _test_and_squash(body, repo, branch, wt, into, before, conflicts)
+        except BaseException:  # not merged: a rebased branch goes back as it was, so its task's base still holds
+            if tip and wt:
+                await _git_try(wt, "reset", "-q", "--keep", tip)
             raise
         if squashed:
-            did = f"merged into {into} as one commit" + (", its tests passing" if tested else "")
+            did = (f"merged into {into} as one commit"
+                   + (f", rebased onto {into}'s newer commits first" if tip else "")
+                   + (", its tests passing" if tested else ""))
         else:
             did = f"{branch} had no changes that weren't already in {into}"
     cleaning = asyncio.ensure_future(_clean_up(repo, wt, branch if exists else None))
@@ -226,6 +246,60 @@ async def merge_op(body: dict) -> dict:
         if task := asyncio.current_task():
             task.uncancel()
     return {"did": did, "cleaned": cleaned}
+
+
+async def _test_and_squash(body: dict, repo: Path, branch: str, wt: str | None, into: str, before: str,
+                           conflicts: list[str]) -> tuple[bool, bool]:
+    """merge_op's tests (Alfred's own branches) and squash onto `into`, at `before`: (squashed, tested). A squash
+    stopped part way is undone; one that fails names the files its rebase found in conflict."""
+    task_id = body["task"]
+    # Alfred's own branches merge only once their tests pass; not one whose rebase left nothing to add
+    tested = projects.is_alfred(repo) and (await _git_try(repo, "merge-base", "--is-ancestor", branch, before))[0] != 0
+    if tested and (why := await merge_check.refusal(repo, branch, wt, into)):
+        raise ValueError(f"Task {task_id}'s branch {branch} wasn't merged, since {why}.")
+    message = squash_message(body.get("title") or "", body.get("summary") or "", task_id)
+    squashing = asyncio.ensure_future(_squash(repo, branch, into, message))
+    try:
+        return await asyncio.shield(squashing), tested
+    except asyncio.CancelledError:  # killing git mid-squash could leave the folder half-merged: let it end, undo it
+        with contextlib.suppress(ValueError):  # it failed, and put the folder back itself
+            if await squashing:
+                await _git_try(repo, "reset", "-q", "--merge", before)
+        raise
+    except ValueError as e:
+        if not conflicts:
+            raise
+        raise ValueError(f"{e} It conflicts with {into} in {few(conflicts)}."[:600]) from None
+
+
+def _own_branch(task_id: int | str, branch: str) -> bool:
+    """Whether `branch` is the one the runner made for the task: jarvis/ before the rename to Alfred."""
+    return branch.startswith((f"alfred/{task_id}-", f"jarvis/{task_id}-"))
+
+
+async def _catch_up(repo: Path, worktree: str | None, branch: str, task_id: int | str,
+                    onto: str) -> tuple[str, list[str]]:
+    """Rebase the task's own `branch`, checked out in its `worktree`, onto commit `onto` when it's behind, without a
+    model: (the commit it was at before, if rebased, else ""; the files that conflicted). One that conflicts is put
+    back as it was. Never a branch or folder that isn't the task's own, and nothing without its worktree."""
+    if not worktree or not Path(worktree).exists() or Path(worktree).resolve() == repo.resolve() \
+            or not _own_branch(task_id, branch) or await _git(worktree, "rev-parse", "--abbrev-ref", "HEAD") != branch \
+            or (await _git_try(repo, "merge-base", "--is-ancestor", onto, branch))[0] == 0:
+        return "", []
+    tip = await _git(worktree, "rev-parse", "HEAD")
+    try:
+        # --no-update-refs: a rebase.updateRefs setting would move other branches along with it
+        code, out = await _git_try(worktree, "rebase", "-q", "--no-verify", "--no-autostash", "--no-update-refs", onto,
+                                   timeout=300)
+        if not code:
+            return tip, []
+        conflicts = (await _git_try(worktree, "diff", "--name-only", "--diff-filter=U"))[1].split()
+    except BaseException:  # a timeout or cancellation mid-rebase: the branch goes back as it was
+        await _git_try(worktree, "rebase", "--abort")
+        raise
+    await _git_try(worktree, "rebase", "--abort")
+    log.info("task %s: %s not rebased onto %s: %s", task_id, branch, onto[:7], few(conflicts) or out[-300:])
+    return "", conflicts
 
 
 async def _clean_up(repo: Path, worktree: str | None, branch: str | None) -> str:
@@ -266,8 +340,7 @@ async def discard_op(body: dict) -> dict:
     task_id, repo, branch, wt = body["task"], Path(body["repo"]), body["branch"], body.get("worktree")
     if wt and Path(wt).resolve() == repo.resolve():
         raise ValueError(f"Task {task_id}'s worktree is {body['name']}'s own folder, so nothing was removed.")
-    # Only the branch the runner made: jarvis/ before the rename to Alfred
-    if not branch.startswith((f"alfred/{task_id}-", f"jarvis/{task_id}-")):
+    if not _own_branch(task_id, branch):  # only the branch the runner made
         raise ValueError(f"Task {task_id}'s branch {branch} wasn't made by Alfred, so nothing was removed.")
     exists = (await _git_try(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"))[0] == 0
     if exists and await _git(repo, "rev-list", "--count", f"{body['base']}..{branch}") != "0" \
@@ -292,8 +365,8 @@ async def _remove_branch(repo: Path, worktree: str | None, branch: str | None) -
 
 
 OPS: dict[str, Callable[[dict], Awaitable[dict]]] = {
-    "worktree": worktree_op, "enter": enter_op, "changes": changes_op, "commit": commit_op, "merge": merge_op,
-    "discard": discard_op}
+    "worktree": worktree_op, "enter": enter_op, "changes": changes_op, "commit": commit_op, "touched": touched_op,
+    "merge": merge_op, "discard": discard_op}
 
 
 class GitOps(RunnerBase):
@@ -335,6 +408,8 @@ class GitOps(RunnerBase):
             raise ValueError(self._get(task_id)["spoken"]) from None
         finally:
             self.merges.pop(task_id, None)
+            if merging.cancelled() or (merging.done() and merging.exception()):
+                self._settle(task_id)  # a merge put off while this one ran goes ahead (Chains._same_files)
         await self._forget_copy(task, project)
         merged = self.store.update(task_id, merge_waits_on=None)  # a merge waiting to happen is done
         self._settle(task_id)
@@ -463,6 +538,8 @@ class GitOps(RunnerBase):
         self.store.set(task["id"], worktree=made["worktree"], branch=made["branch"], base=made["base"])
         self.store.log(task["id"], "branch", f"{made['branch']} from {made['base_ref']} at {made['base'][:7]}, in "
                                              f"{made['worktree']}")
+        if warmed := made.get("warmed"):  # a machine not yet updated doesn't say
+            self.store.log(task["id"], "warmed", f"{', '.join(warmed)} cloned in from {project.path}")
 
     async def _enter_folder(self, task: dict) -> None:
         """Before each in-place run: save uncommitted work to refs/alfred/; on the first run record branch and base.
@@ -499,6 +576,16 @@ class GitOps(RunnerBase):
         except Exception as e:
             log.exception("couldn't read changes for task %s", task["id"])
             return f"couldn't read changes: {e}"[:200]
+
+    async def _touched(self, task: dict) -> set[str]:
+        """The files a worktree task has changed so far, committed or not; none if git can't say."""
+        try:
+            return set((await self._op(self._lives_on(task), "touched", {
+                "repo": str(self._project(task).path), "worktree": task["worktree"], "base": task["base"],
+                "branch": task["branch"]}))["files"])
+        except Exception:
+            log.exception("couldn't read the files task %s changed", task["id"])
+            return set()
 
     async def _commit(self, task: dict, summary: str, finished: bool) -> str:
         """Commit the run's changes; returns the branch's shortstat against its base."""

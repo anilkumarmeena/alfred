@@ -15,7 +15,8 @@ reloads its connections when they changed (alfred.brain.cli), and a running task
 (alfred.tasks.connection_watch). Voice gets every enabled server; tasks with the accounts access get the for_research
 ones, their changes each held for the user's yes (alfred.tasks.connection_calls); other tasks none. Sign-in checks
 and watches start a server read-only (its read_only args and env). Servers missing their program or secrets are
-skipped. With tool search on, their tools are deferred until looked up via ToolSearch.
+skipped. With tool search on, their tools are deferred until looked up via ToolSearch. A local server starts at its
+first call: until then the relay answers from the tool list kept from its last start (mcp_listings, mcp_relay.Lazy).
 
     uv run python -m alfred.integrations.mcp_servers                         list (same as make servers)
     uv run python -m alfred.integrations.mcp_servers add NAME --label L --command C [--arg A ...] [--env K=V ...]
@@ -110,6 +111,13 @@ create table mcp_tools (
     says text not null default '',       -- write: phrase read out, with {argument} placeholders
     primary key (server, tool)
 )""")
+_LISTINGS = """
+create table mcp_listings (
+    server text primary key,
+    key text not null,                   -- run_key it was listed under
+    listing text not null,               -- JSON: the CLI's protocol version and the server's answers (mcp_relay.Lazy)
+    at real not null
+)"""
 # GitLab's inline comment on a diff line, one of its own default tools: read out by file and line (mcp_gate.action)
 GITLAB_THREAD = "create_merge_request_thread"
 GITLAB_THREAD_SAYS = "comment on {project_id} merge request {merge_request_iid}[ {position}], saying {body}"
@@ -382,6 +390,7 @@ def remove(name: str) -> list[str]:
     with _db() as db:
         db.execute("delete from mcp_tools where server = ?", (name,))
         db.execute("delete from mcp_servers where name = ?", (name,))
+    keep_listing(name, "", {})
     return [s for s in dict.fromkeys([*server.secrets, server.oauth_secret]) if s not in others and vault.remove(s)]
 
 
@@ -422,6 +431,38 @@ def stamps(servers: list[Server]) -> dict[str, str]:
          [set_at.get(secret) for secret in server.secret_env.values()],
          server.sign_in and server.oauth_secret in set_at], sort_keys=True).encode()).hexdigest()
         for server in servers}
+
+
+def run_key(server: Server, read_only: bool) -> str:
+    """Digest of how a local server is run (program, arguments, settings), which its tool list follows; not its keys
+    or tool sorting."""
+    how = [server.command, server.args, server.env, server.version]
+    how += [server.read_only_args, server.read_only_env] if read_only else []
+    return hashlib.sha256(json.dumps(how, sort_keys=True).encode()).hexdigest()
+
+
+def listing(name: str, key: str) -> dict:
+    """What the server answered when last started under `key` (run_key), {} if nothing or under another key."""
+    try:
+        with database.table("mcp_listings", _LISTINGS) as db:
+            row = db.execute("select listing from mcp_listings where server = ? and key = ?", (name, key)).fetchone()
+        return json.loads(row[0]) if row else {}
+    except (sqlite3.Error, ValueError) as e:
+        log.warning("can't read %s's tool list: %s", name, e)
+        return {}
+
+
+def keep_listing(name: str, key: str, kept: dict) -> None:
+    """Keep what the server answered under `key` for its next start; {} forgets it."""
+    try:
+        with database.table("mcp_listings", _LISTINGS) as db:
+            if kept:
+                db.execute("insert or replace into mcp_listings values (?, ?, ?, ?)",
+                           (name, key, json.dumps(kept), time.time()))
+            else:
+                db.execute("delete from mcp_listings where server = ?", (name,))
+    except sqlite3.Error as e:
+        log.warning("can't keep %s's tool list: %s", name, e)
 
 
 def for_voice() -> list[Server]:

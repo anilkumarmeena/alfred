@@ -229,6 +229,8 @@ A changing call is read out from the tool's own title and arguments ("On Notion,
 | 💻 Other tasks | None |
 
 - **The relay.** Each server runs behind a small relay (`alfred/integrations/mcp_relay.py`) that runs reading calls **side by side** and follows MCP's long-running tasks.
+- **Started on first use.** A local server starts only when a conversation or task **first calls one of its tools**; until then its tool list comes from its last start, so an unused connection costs no memory. If its tools changed since, the session is told when it starts.
+- **`npx` without npx.** A pinned `npx` package that npx has already installed runs straight on `node`, with no npx process and no registry lookup at each start. Until it's installed (or for another `npx` form), npx runs it as before.
 - **Slow calls** still running after `ALFRED_CONNECTION_WAIT` (20 s) move into the **background**, so the conversation carries on.
 - **Tool search.** Tools load on demand (`ALFRED_TOOL_SEARCH`), so more connections don't slow every reply.
 - **No restart, no new conversation.** A new key or server address, a connection switched on, off, added, updated or removed, or its tools sorted again: the conversation takes it at your next turn, picking up where it was, and a task already running restarts a changed connection in place (one added mid-task comes with its next run).

@@ -12,9 +12,12 @@ Other fields: speech (LiveKit's start-to-stop span), voiced (speech seconds in t
 how many Whisper heard before the VAD ended them, alfred.voice.early), words, tts_first,
 ack (said before first tool), lead_in (said for the model when it said nothing first), tools, tool_names, spoke, ended (spoken|interrupted|unspoken|closed), resumed (unspoken
 only), speaker, logprob, piece (words in first spoken piece), model (when not the voice brain's own), barge
-(remark|point|unsure: the turn cut the last reply off).
+(remark|point|unsure: the turn cut the last reply off), whisper (seconds waited on Whisper for clips not heard early).
+The call's noise filter (alfred.voice.denoise) adds denoise (its mode) and filter_cpu, filter_wall (its CPU seconds over
+the wall seconds since the call's last record).
 
-mark()/tool()/note() are no-ops outside a timed turn. `python -m alfred.brain.timing [HOURS]` summarises recent turns.
+mark()/tool()/note() are no-ops outside a timed turn. `python -m alfred.brain.timing [HOURS]` summarises recent turns,
+split by noise filter mode with the speech gate's clips when they carry one (ALFRED_DENOISE=ab).
 """
 
 import json
@@ -27,7 +30,7 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from pathlib import Path
 
-from alfred.config import VOICE_TURNS_LOG
+from alfred.config import SPEECH_GATE_LOG, VOICE_TURNS_LOG
 
 log = logging.getLogger("alfred.brain.timing")
 
@@ -96,10 +99,11 @@ class Timings:
     """A session's turn timings, one at a time, each written when it ends."""
 
     def __init__(self, path: Path | None = VOICE_TURNS_LOG, clock: Callable[[], float] = time.time,
-                 written: Callable[[dict], None] | None = None) -> None:
+                 written: Callable[[dict], None] | None = None, fields: Callable[[], dict] | None = None) -> None:
         self.path = path
         self.clock = clock
         self.written = written  # gets each finished record (turn.Pacing.learn)
+        self.fields = fields  # more for each record as it's written (denoise.Meter.take)
         self.turn: Turn | None = None
         self.n = 0
 
@@ -145,7 +149,7 @@ class Timings:
             self._write("closed")
 
     def _write(self, ended: str) -> dict:
-        record = self.turn.record | {"ended": ended}
+        record = self.turn.record | (self.fields() if self.fields is not None else {}) | {"ended": ended}
         self.turn = None
         log.info("%s", describe(record))
         if self.written is not None:
@@ -184,19 +188,61 @@ def _spread(values: list[float]) -> str:
     return f"median {statistics.median(values):5.2f} s   p90 {p90:5.2f} s   max {values[-1]:5.2f} s   ({len(values)})"
 
 
-def summary(path: Path = VOICE_TURNS_LOG, since: float = 0.0, slowest: int = 5) -> str:
-    """Report on turns since `since`: outcomes, per-stage and per-gap spread, slowest turns."""
+def _read(path: Path, since: float) -> list[dict] | None:
+    """JSONL records since `since`; None if the file doesn't exist."""
     try:
         lines = path.read_text().splitlines()
     except FileNotFoundError:
-        return f"No turns yet: {path} doesn't exist."
+        return None
     records = []
     for line in lines:
         try:
             records.append(json.loads(line))
         except ValueError:  # truncated by a crash
             continue
-    records = [r for r in records if r.get("time", 0) >= since]
+    return [r for r in records if r.get("time", 0) >= since]
+
+
+def by_filter(records: list[dict], clips: list[dict]) -> list[str]:
+    """Turns and the speech gate's clips by the call's noise filter mode: calls, the filter's share of a core,
+    Whisper's wait, words, and clips dropped as noise or phantoms. Empty if none carry a mode."""
+    modes = sorted({r["denoise"] for r in [*records, *clips] if "denoise" in r})
+    if not modes:
+        return []
+    out = ["", "By noise filter mode:"]
+    for mode in modes:
+        turns = [r for r in records if r.get("denoise") == mode]
+        heard = [c for c in clips if c.get("denoise") == mode]
+        line = f"  {mode}: {sum(r['turn'] == 1 for r in turns)} calls, {len(turns)} turns"
+        if wall := sum(r.get("filter_wall", 0) for r in turns):
+            line += f", the filter {sum(r.get('filter_cpu', 0) for r in turns) / wall:.1%} of a core"
+        if words := [r["words"] for r in turns if not r.get("typed")]:
+            line += f", {statistics.median(words):g} words a spoken turn (median)"
+        out.append(line)
+        for name, key in (("transcript", "transcript"), ("Whisper, a turn", "whisper")):
+            if values := [r[key] for r in turns if key in r]:
+                out.append(f"    {name:26} {_spread(values)}")
+        if not heard:
+            continue
+        if values := [c["whisper"] for c in heard if c.get("whisper") is not None]:
+            out.append(f"    {'Whisper, a clip':26} {_spread(values)}")
+        flagged = [c for c in heard if c["verdict"] != "kept"]
+        kept = [len(c["text"].split()) for c in heard if c["verdict"] == "kept"]
+        line = f"    {len(heard)} clips, {len(flagged)} ({len(flagged) / len(heard):.0%}) the gate dropped or would drop"
+        if reasons := Counter(why for c in flagged for why in c["reasons"]):
+            line += " (" + ", ".join(f"{why} {n}" for why, n in reasons.most_common()) + ")"
+        if kept:
+            line += f"; {statistics.median(kept):g} words a kept clip (median)"
+        out.append(line)
+    return out
+
+
+def summary(path: Path = VOICE_TURNS_LOG, since: float = 0.0, slowest: int = 5, clips: Path = SPEECH_GATE_LOG) -> str:
+    """Report on turns since `since`: outcomes, per-stage and per-gap spread, by noise filter mode (with the speech
+    gate's `clips`), slowest turns."""
+    records = _read(path, since)
+    if records is None:
+        return f"No turns yet: {path} doesn't exist."
     if not records:
         return "No turns in that time."
     ended = Counter(r["ended"] for r in records)
@@ -224,6 +270,7 @@ def summary(path: Path = VOICE_TURNS_LOG, since: float = 0.0, slowest: int = 5) 
             out.append(f"  {'first tool call to done':28} {_spread(work)}")
         handed = sum("background_lookup" in r.get("tool_names", ()) for r in acks)
         out.append(f"{handed} handed slow reading to a background lookup.")
+    out += by_filter(records, _read(clips, since) or [])
     if timed := sorted((r for r in records if "first_audio" in r), key=lambda r: r["first_audio"], reverse=True):
         out += ["", "Slowest to first audio:"]
         out += [f"  {time.strftime('%m-%d %H:%M:%S', time.localtime(r['time']))}  {describe(r)}"

@@ -6,6 +6,7 @@ utilization. Never queries Claude; a window past its reset is treated as fresh.
 
   windows()    known state by window
   out()        a window used up for every model, or None
+  left()       share of the tightest limit for every model still left, 0 to 1
   available()  the model to use (lighter while its family's weekly window is used up)
   used_up_until() when a window used up for every model resets
   hold_until() when scheduled model runs should wait until (used-up window, or five-hour past USAGE_HOLD)
@@ -35,6 +36,7 @@ OWN = {f.window: f.name for f in MODELS.families if f.window}
 LIGHTER = {f.name: f.lighter for f in MODELS.families if f.lighter}
 UNKNOWN_RESET = 30 * 60  # seconds a used-up window with no reset time stays used up
 FORGET = 6 * 3600  # seconds before a window with no reset time is forgotten
+CLOSE = 0.2  # share of a limit taken to be left when Claude warns it's getting close without saying how close
 # Fallback when no rate-limit event arrived: CLI limit wording in an error
 LIMIT_TEXT = re.compile(r"usage limit|rate.?limit|hit your limit|limit reached", re.IGNORECASE)
 
@@ -98,6 +100,18 @@ def out(now: float | None = None, kept: dict | None = None) -> tuple[str, dict] 
     """(name, details) of a window used up for every model (latest reset if several), or None."""
     found = [(k, w) for k, w in windows(now, kept).items() if k not in OWN and _used_up(w)]
     return max(found, key=lambda kw: _ends(kw[1]), default=None)
+
+
+def left(now: float | None = None, kept: dict | None = None) -> float:
+    """Share of the tightest limit for every model still left, 0 to 1: this computer's login in use, or `kept` (another
+    login's or machine's). Claude reports only as limits get close, so nothing reported counts as all of it."""
+    if out(now, kept):
+        return 0.0
+    known = [w for k, w in windows(now, kept).items() if k not in OWN]
+    used = [float(w["utilization"]) for w in known if w.get("utilization") is not None]
+    if used:
+        return round(max(0.0, 1 - max(used)), 2)
+    return CLOSE if any(w.get("status") == "allowed_warning" for w in known) else 1.0
 
 
 def family(model: str) -> str:

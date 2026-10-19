@@ -169,7 +169,7 @@ def _system_prompt(task: dict, cwd: Path, setup: project_claude.Setup | None = N
     elif kind == "code_change":
         extra = f"""
 - You are in a fresh git worktree of {task['project']}, on branch {task['branch']}, made from commit {task['base'][:7]}. Read the project's CLAUDE.md or README first if it has one.
-- Gitignored files (.env, node_modules, build output) aren't here; install dependencies if you need them.
+- Gitignored files (.env, build output) aren't here. Dependencies may be: node_modules and .venv folders the main checkout has are cloned in, as they were there when this worktree was made. Check before installing, and install only what's missing or out of date; changes to them stay in this worktree.
 - Bash commands run in a sandbox: they can write only inside this worktree, and reach any host on the network.{_host_brief(task["id"])}
 - Don't commit, push or switch branches. Alfred commits your work to {task['branch']} when you finish."""
     elif kind == "code_question":

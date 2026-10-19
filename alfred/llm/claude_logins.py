@@ -9,11 +9,14 @@ Install-wide, like the Claude login always was (see alfred.storage.profile). Sig
 
 Alfred runs on the first login in the priority order (secrets/claude-logins/order) that's usable: not one whose
 limit is used up (brain.usage, per login) or whose sign-in stopped working (its last check, or a call that failed to
-authenticate). Chosen at every CLI start, so a change in order or a used-up limit applies from the next call.
+authenticate). Chosen at every CLI start, so a change in order or a used-up limit applies from the next call. A new
+task starts there too unless that login is close to its limit and another has more room left (starting); a command
+task starts on the one with the most room (roomiest), as it can't move once it runs.
 
   order() / set_order(names)   the logins Alfred may use, by priority
   removable(name) / remove(name)   any login but the Mac's
   active() / skipped(name)     the login in use / why one is passed over ("" if it isn't)
+  starting() / roomiest()      the login a new task starts on / the usable one with the most room left
   env(name) / of_env(env)      the CLI's environment for a login / the login an environment is for
   folder(name) / folders()     a login's config folder / every login's
   resume_on(session_id)        the login to resume a session on: its own, or, while that one is passed over, the one
@@ -142,6 +145,29 @@ def active(now: float | None = None) -> str:
     first (its limit's reset is what scheduled runs wait for)."""
     every = order()
     return next((name for name in every if not skipped(name, now)), every[0])
+
+
+def _room(name: str, now: float | None = None) -> float:
+    """Share of a login's tightest limit still left (usage.left)."""
+    from alfred.llm import usage
+
+    return usage.left(now, usage.of(name))
+
+
+def roomiest(now: float | None = None) -> str:
+    """The usable login with the most room left under its limits, to a tenth, so near-equal ones keep the priority
+    order; with every one passed over, active()'s."""
+    usable = [name for name in order() if not skipped(name, now)]
+    return max(usable, key=lambda name: round(_room(name, now), 1)) if usable else active(now)
+
+
+def starting(now: float | None = None) -> str:
+    """The login a new task starts on: the one in use, unless it's close to its limit (usage.CLOSE or less left) and
+    another has more room: then the one with the most."""
+    from alfred.llm import usage
+
+    on = active(now)
+    return on if _room(on, now) > usage.CLOSE else roomiest(now)
 
 
 def resume_on(session_id: str | None) -> str | None:

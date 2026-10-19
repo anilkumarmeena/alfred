@@ -42,6 +42,7 @@ class Notes:
         self.notes: list[str] = []
         self.unsaid: list[str] = []
         self.framing: list[str] = []
+        self.fresh = False  # a new conversation: its first message starts with memory and the latest exchanges
 
     def note(self, text: str, unsaid: str = "") -> None:
         """Record `text` as said (if any); `unsaid` (e.g. which task) goes to the brain only and isn't logged."""
@@ -66,8 +67,10 @@ class Notes:
 
     def head(self) -> str:
         """Timestamp, announcements since the last turn and private notes on them, which start every message to the
-        brain."""
+        brain; a new conversation's first one starts with its context()."""
         head = f"[{datetime.now(profile.tz()):%A %d %B %Y, %I:%M %p}]"
+        if self.fresh:
+            head, self.fresh = context() + "\n\n" + head, False
         if self.notes:
             head += "\n[You announced since the last turn: " + " ".join(self.notes) + "]"
         if self.unsaid:
@@ -77,9 +80,14 @@ class Notes:
 
 
 def system_prompt(extra: str = "") -> str:
-    """Persona + `extra` + long-term memory + recent exchanges."""
-    parts = [persona() + extra]
-    parts.append(memory.prompt_block())
+    """Persona + `extra`, the same from one conversation to the next so its prompt cache carries over. Memory and the
+    latest exchanges change every turn, so they start the conversation's first message instead (Notes.head)."""
+    return persona() + extra
+
+
+def context() -> str:
+    """Long-term memory and the latest exchanges, possibly from an earlier conversation."""
+    parts = [memory.prompt_block()]
     if recent := memory.read_recent().strip():
         parts.append(f"<recent_conversation>\nThe latest exchanges, possibly from an earlier session "
                      f"(conversation_search finds older ones):\n{recent}\n</recent_conversation>")

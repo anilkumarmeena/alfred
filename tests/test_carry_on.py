@@ -7,14 +7,15 @@ import time
 from types import SimpleNamespace
 
 import pytest
-from test_in_place import env  # noqa: F401  (fixture)
+from test_in_place import NullReporter, env, worker_task  # noqa: F401  (env is a fixture)
 from test_nudges import fake_run, finishes, settle, until
 
 from alfred import config
 from alfred.llm import claude_logins, retry, usage
-from alfred.tasks import runner
+from alfred.tasks import runner, worker
 from alfred.tasks.store import Store
 from alfred.tasks.worker import STEPS_OUT, Outcome
+from conftest import use_task_cache
 
 
 @pytest.fixture(autouse=True)
@@ -290,7 +291,7 @@ def test_a_reply_after_a_stop_lets_the_same_limit_be_waited_for_again(env, monke
 
 def test_a_limit_on_its_model_alone_carries_on_with_a_lighter_one(env, monkeypatch):
     monkeypatch.setattr(runner, "LIMIT_SLACK", 0.0)
-    monkeypatch.setattr(usage, "available", lambda model, now=None: "claude-sonnet-5")
+    monkeypatch.setattr(usage, "available", lambda model, now=None: "claude-haiku-5-5")  # lighter than any task role
     prompts = fake_run(monkeypatch, limited(after=7 * 86400), finishes())
     _, task, said = asyncio.run(run_one())
     assert prompts[1] == runner.LIMIT_RESUMED and task["status"] == "done"
@@ -335,6 +336,18 @@ def test_a_task_cut_short_by_the_usage_limit_carries_on_at_once_on_the_backup_lo
     _, task, said = asyncio.run(run_one())
     assert prompts[1] == runner.LIMIT_RESUMED and ran_on == ["backup"] and task["status"] == "done"
     assert "carries on on the backup Claude login" in said[0]
+
+
+def test_a_new_task_starts_on_the_backup_login_while_the_first_is_close_to_its_limit(env, backup, monkeypatch,
+                                                                                      tmp_path):
+    use_task_cache(monkeypatch, tmp_path / "cache")
+    usage.record(SimpleNamespace(rate_limit_type="five_hour", status="allowed_warning", resets_at=time.time() + 3600,
+                                 utilization=0.9, overage_status=None), login="")
+    task = worker_task(in_place=1, worktree=str(env["video"]), branch="main")
+    fresh = worker._options(task, NullReporter())
+    resumed = worker._options(task | {"session_id": "s1"}, NullReporter())
+    assert fresh.env["CLAUDE_CONFIG_DIR"] == str(tmp_path / "claude-logins" / "backup")
+    assert "CLAUDE_CONFIG_DIR" not in resumed.env  # its session stays on its own login, which still works
 
 
 def test_a_task_waits_for_the_reset_when_the_backup_login_is_used_up_too(env, backup, monkeypatch):

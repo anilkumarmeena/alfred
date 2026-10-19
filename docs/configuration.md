@@ -121,7 +121,7 @@ uv run python -m alfred.state.settings prefs voice bm_lewis  # change one
 | `ALFRED_LOOKUP_MODEL`<br>`ALFRED_LOOKUP_WAIT` | Haiku<br>`8` | The voice brain's read-only file and computer lookups: model, and seconds a spoken turn waits on them before they carry on in the background |
 | `ALFRED_SIDE_MODEL`<br>`ALFRED_SIDE_MINUTES` | Sonnet<br>`3` | Background lookups that let the conversation carry on: model and time limit (past it, one carries on as a task) |
 | `ALFRED_PROACTIVE_JUDGE` | `on` | A fast model picks the moment to bring up task updates and alerts |
-| `ALFRED_TOOL_SEARCH` | `true` | Connections' tools load on demand via tool search, and in background tasks Alfred's own account tools too |
+| `ALFRED_TOOL_SEARCH` | `true` | Connections' tools load on demand via tool search, as do the conversation's Docs, Sheets and Slides editing tools and, in background tasks, Alfred's own account tools |
 | `ALFRED_CONNECTION_WAIT` | `20` | Seconds a connection's call may hold up a spoken reply |
 | `ALFRED_TOOL_WAIT` | `8` | Seconds one of Alfred's own tools (a merge, a long read) may hold up a spoken reply |
 
@@ -166,7 +166,7 @@ uv run python -m alfred.state.settings prefs voice bm_lewis  # change one
 | `ALFRED_WHISPER_EARLY` | `0.25` | Silence after which Whisper starts on the utterance so far, so its words are ready that much sooner when you've finished (`0` off; at least `ALFRED_VAD_MIN_SILENCE` is off too) |
 | `ALFRED_VAD_MIN_SPEECH`<br>`ALFRED_VAD_THRESHOLD` | `0.2`<br>`0.5` | Unbroken speech before an utterance starts; probability that counts as speech |
 | `ALFRED_WHISPER_UNSURE_LOGPROB` | `-1.0` | Below this average log-probability a turn is marked unsure, so Alfred checks back |
-| `ALFRED_DENOISE` | `on` | Noise filter: `on` everywhere, `vad` only for the VAD, `off` |
+| `ALFRED_DENOISE` | `on` | Noise filter: `on` everywhere, `vad` only for the VAD (Whisper hears the raw mic), `off`, or `ab`: each call `on` or `vad` at random, to compare them in `make voice-timing` ([A/B](voice.md#-noise-filter)) |
 | `ALFRED_DENOISE_ATTEN_DB` | `18` | Most the filter takes off any sound, in dB (`0` no limit) |
 
 **Whisper defaults** depend on the machine ([how each runs](voice.md#-whisper-in-kokoro-out)):
@@ -294,7 +294,7 @@ Answers only your enrolled voice. What each case means is in **[🗣️ Voice](v
 
 | Setting | Default | What it does |
 |---|---|---|
-| `ALFRED_MAX_TASKS` | `6` | Tasks running at once (1–12); the rest queue |
+| `ALFRED_MAX_TASKS` | `3` | Tasks running at once (1–12); the rest queue. While the computer is short of memory (macOS memory pressure at warning or worse; under 10% available on Linux), a queued task also waits for it to ease, unless no other task is running |
 | `ALFRED_RESUME_TASKS` | `3` | Tasks cut off by a runner restart that resume by themselves (0–12) |
 | `ALFRED_TASK_MODEL`<br>`ALFRED_TASK_EFFORT` | Opus<br>`high` | Model and effort for background tasks |
 | `ALFRED_RESEARCH_MODEL`<br>`ALFRED_TASK_ANSWER_EFFORT` | Sonnet<br>`medium` | Model for research tasks; effort for research and code questions, which change no code (code questions keep the task model) |

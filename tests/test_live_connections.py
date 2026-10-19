@@ -105,6 +105,7 @@ def test_a_change_mid_conversation_restarts_the_cli_on_the_same_conversation_and
     asyncio.run(v.say("try again"))
     assert len(v.clis) == 2 and v.clis[0].closed and v.resumed == [None, "s"]  # the session the first one reported
     assert cli.RELOADED in v.cli.prompts[-1] and "try again" in v.cli.prompts[-1]
+    assert "<long_term_memory>" in v.clis[0].prompts[0] and "<long_term_memory>" not in v.cli.prompts[-1]  # had it
     asyncio.run(v.say("thanks"))
     assert len(v.clis) == 2 and cli.RELOADED not in v.cli.prompts[-1]  # said once
 
@@ -137,6 +138,7 @@ def test_carrying_on_that_fails_starts_a_new_conversation_rather_than_none(fresh
     vault.put("gitlab.token", NEW_TOKEN)
     assert asyncio.run(v.say("try again")) == "Okay."
     assert v.resumed == [None, "s", None] and v.cli.connected
+    assert "<long_term_memory>" in v.cli.prompts[0]  # a new conversation, so memory comes with its first message
 
 
 def test_the_cli_carries_on_a_session_on_the_login_holding_it_or_starts_afresh(fresh, monkeypatch):  # noqa: F811

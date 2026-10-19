@@ -309,7 +309,21 @@ def test_the_prompt_shows_each_section_with_its_usage(mem):
     assert memory.prompt_block() == ("<long_term_memory>\nAbout Alex (34 of 2,000 characters):\n"
                                      f"{dated('Likes short answers')}\n"
                                      "Alex's environment (0 of 3,000 characters):\n(nothing yet)\n</long_term_memory>")
-    assert memory.prompt_block() in persona.system_prompt()
+    assert memory.prompt_block() in persona.context()
+
+
+def test_memory_and_the_latest_exchanges_start_a_conversation_and_stay_out_of_its_cached_prompt(mem, voice):
+    before = persona.system_prompt()
+    memory.remember("Likes short answers", "user")
+    memory.log_exchange("what's on today?", "Two meetings.")
+    assert persona.system_prompt() == before  # unchanged, so its cache carries over to the next conversation
+    v = voice()
+    asyncio.run(v.say("hello"))
+    asyncio.run(v.say("and tomorrow?"))
+    first, second = v.cli.prompts
+    assert first.startswith(memory.prompt_block()) and first.endswith("\nhello")
+    assert "<recent_conversation>" in first and "Alex: what's on today?\nAssistant: Two meetings." in first
+    assert "<long_term_memory>" not in second and "<recent_conversation>" not in second
 
 
 def test_the_memory_tools_say_which_section_and_when_to_consolidate():

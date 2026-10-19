@@ -14,7 +14,7 @@ from alfred.integrations import accounts
 from alfred.integrations.accounts import google_settings as settings  # noqa: F401  (tests read it here)
 from alfred.integrations.armory import all_tools, configure, current, load_many
 
-from . import register_toolsets, unregister
+from . import Tool, register_toolsets, unregister
 
 # A conversation's tool list is fixed when it starts (prompt cache); fresh() takes changes for the next one, and the
 # voice brain restarts its CLI on a change (alfred.brain.cli.CliBrain.start).
@@ -30,6 +30,21 @@ def on_change(fn: Callable[[], None]) -> Callable[[], None]:
     _followers.append(fn)
     fn()
     return fn
+
+
+def editing(t: Tool) -> bool:
+    """A Docs, Sheets or Slides tool that changes, drafts or deletes rather than searches or reads: the voice brain
+    loads these through ToolSearch when a request needs one, as most turns don't."""
+    return (t.armory is not None and t.name.startswith(("docs_", "sheets_", "slides_"))
+            and not t.name.endswith(("_search", "_read")))
+
+
+def prompt() -> str:
+    """Voice brain prompt section for deferred editing tools."""
+    return ("\n\nGoogle Docs, Sheets and Slides:\n- The tools that search and read them are loaded; those that edit "
+            "them (docs_insert, sheets_write and the like) aren't, to keep replies quick: when a request needs one, "
+            "load it with ToolSearch first (select:mcp__alfred__<tool>, or a search for what you want to do), then call "
+            "it. Load what you need in one search.")
 
 
 def _register() -> None:

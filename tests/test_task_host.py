@@ -149,6 +149,7 @@ def test_host_commands_stay_in_the_tasks_folder(folder):
     "rm -rf build", "cd {temp} && rm -f s1366.png s1920.png", "rm -rf {temp}/prof5",
     'D=$(mktemp -d); chrome --user-data-dir="$D" --screenshot=a.png; rm -rf "$D"',
     "chrome --headless=new --screenshot=a.png x.html >/dev/null 2>&1 & pid=$!; sleep 5; kill $pid 2>/dev/null",
+    "chmod +x {temp}/bin/tool", "chmod -R u+w {temp}/unpacked && rm -rf {temp}/unpacked",
 ])
 def test_deleting_its_own_files_or_stopping_its_own_processes_isnt_asked_about(folder, command):
     reporter = Asking()
@@ -160,6 +161,7 @@ def test_deleting_its_own_files_or_stopping_its_own_processes_isnt_asked_about(f
 @pytest.mark.parametrize("command", [
     "rm -rf ~/Desktop/renders", "cd /tmp/claude/mockshots && rm -f s1366.png", "rm -rf ..", "rm -rf .git",
     "pkill -f 'Google Chrome'", "kill 1", "rm -rf {cache}", "rm -rf {temp}/../task-10",
+    "chmod +x build.sh", "chmod 755 {temp}", "chmod +x {temp}/*", "chmod +x {cache}/tmp/task-10/x",
 ])
 def test_deleting_or_stopping_anything_else_still_is(folder, command):
     reporter = Asking()
@@ -176,6 +178,8 @@ def test_a_temp_folder_swapped_for_a_link_isnt_its_own(folder, tmp_path):
     reporter = Asking()
     denied = call(options(folder, reporter), worker.HOST_RUN, command=f"rm -rf {temp}/Documents")
     assert isinstance(denied, PermissionResultDeny) and len(reporter.asked) == 1
+    denied = call(options(folder, reporter), worker.HOST_RUN, command=f"chmod -R 777 {temp}/Documents")
+    assert isinstance(denied, PermissionResultDeny) and len(reporter.asked) == 2
 
 
 def test_a_mixed_command_is_asked_about_for_what_isnt_its_own(folder):

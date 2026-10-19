@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
-from test_in_place import add_new_file, branches, env  # noqa: F401  (env is a fixture)
+from test_in_place import add_new_file, branches, env, git  # noqa: F401  (env is a fixture)
 from test_nudges import until
 
 from alfred.tasks import git_ops, runner
@@ -417,6 +417,111 @@ def test_a_merge_set_for_later_happens_by_itself_and_then_what_waits_for_it_star
     assert r.store.merged(change["id"]) and r.store.get(change["id"])["merge_waits_on"] is None
     assert any("merged into main" in s for s in said)
     assert [status(r, t) for t in rest] == ["done", "done"]
+
+
+def lines(first: str = "a", last: str = "j") -> str:
+    """A file of ten lines, the first and last as given."""
+    return "\n".join([first, *"bcdefghi", last]) + "\n"
+
+
+def test_merges_changing_the_same_files_go_in_the_order_their_tasks_began(env, monkeypatch):
+    other = env["other"]
+    (other / "lines.py").write_text(lines())
+    git(other, "add", "-A")
+    git(other, "commit", "-qm", "lines")
+    gates, began = gated(monkeypatch)
+
+    async def main():
+        r = runner.Runner()
+        first = r.start("code_change", "first", "Change the first line.", "other")
+        second = r.start("code_change", "second", "Change the last line.", "other")
+        await until(lambda: sorted(began) == ["first", "second"])  # in either order
+        for task, text in ((first, lines(first="A")), (second, lines(last="J"))):
+            (Path(r.store.get(task["id"])["worktree"]) / "lines.py").write_text(text)
+        r.merge_later(second["id"], after=[second["id"]])
+        finish(gates, "second")
+        await until(lambda: any("put off" in e["text"] for e in r.store.history(second["id"])))
+        assert not r.store.merged(second["id"]) and second["id"] not in r.merging  # first still runs
+        r.merge_later(first["id"], after=[first["id"]])
+        finish(gates, "first")
+        await until(lambda: r.store.merged(first["id"]) and r.store.merged(second["id"]))
+        await until(lambda: not r._bg or all(t.done() for t in r._bg))
+        return r, first, second
+
+    r, first, second = asyncio.run(main())
+    put_off = [e["text"] for e in r.store.history(second["id"]) if "put off" in e["text"]]
+    assert put_off[-1].startswith(f"put off while task {first['id']}, begun before it, changes lines.py too")
+    assert git(other, "log", "--format=%s", "-2").splitlines() == ["second", "first"]
+    assert (other / "lines.py").read_text() == lines(first="A", last="J")
+    assert "rebased onto main's newer commits first" in r.store.get(second["id"])["spoken"]
+    assert branches(other) == ["main"]
+
+
+def test_a_merge_put_off_for_one_under_way_goes_ahead_when_that_fails(env, monkeypatch):
+    other = env["other"]
+    (other / "lines.py").write_text(lines())
+    git(other, "add", "-A")
+    git(other, "commit", "-qm", "lines")
+    gates, began = gated(monkeypatch)
+    squashing, go_on = asyncio.Event(), asyncio.Event()
+    real = git_ops._git_try
+
+    async def git_slowly(cwd, *args, timeout=60):
+        if args[0] == "merge":
+            squashing.set()
+            await go_on.wait()
+        return await real(cwd, *args, timeout=timeout)
+
+    monkeypatch.setattr(git_ops, "_git_try", git_slowly)
+
+    async def main():
+        r = runner.Runner()
+        first = r.start("code_change", "first", "Change the first line.", "other")
+        second = r.start("code_change", "second", "Change the last line.", "other")
+        await until(lambda: sorted(began) == ["first", "second"])  # in either order
+        for task, text in ((first, lines(first="A")), (second, lines(last="J"))):
+            (Path(r.store.get(task["id"])["worktree"]) / "lines.py").write_text(text)
+        finish(gates, "first")
+        await until(lambda: status(r, first) == "done")
+        (other / "lines.py").write_text(lines(first="M"))  # the first task's change now conflicts
+        git(other, "commit", "-qam", "meanwhile")
+        merging = asyncio.create_task(r.merge(first["id"]))
+        await squashing.wait()
+        r.merge_later(second["id"], after=[second["id"]])
+        finish(gates, "second")
+        await until(lambda: any("put off" in e["text"] for e in r.store.history(second["id"])))
+        go_on.set()
+        with pytest.raises(ValueError, match="It conflicts with main in lines.py"):
+            await merging
+        await until(lambda: r.store.merged(second["id"]))
+        await until(lambda: not r._bg or all(t.done() for t in r._bg))
+        return r, first
+
+    r, first = asyncio.run(main())
+    assert not r.store.merged(first["id"]) and (other / "lines.py").read_text() == lines(first="M", last="J")
+
+
+def test_a_merge_changing_other_files_than_a_running_task_goes_ahead(env, monkeypatch):
+    gates, began = gated(monkeypatch)
+
+    async def main():
+        r = runner.Runner()
+        first = r.start("code_change", "first", "Change app.py.", "other")
+        second = r.start("code_change", "second", "Add new.py.", "other")
+        await until(lambda: sorted(began) == ["first", "second"])  # in either order
+        (Path(r.store.get(first["id"])["worktree"]) / "app.py").write_text("print('first')\n")
+        add_new_file(Path(r.store.get(second["id"])["worktree"]), second)
+        r.merge_later(second["id"], after=[second["id"]])
+        finish(gates, "second")
+        await until(lambda: r.store.merged(second["id"]))
+        assert status(r, first) == "running"
+        finish(gates, "first")
+        await ended(r, first)
+        return r, second
+
+    r, second = asyncio.run(main())
+    assert not any(e["kind"] == "merge waits" and "put off" in e["text"] for e in r.store.history(second["id"]))
+    assert (env["other"] / "new.py").exists()
 
 
 def test_a_merge_waiting_for_a_task_that_fails_is_called_off_and_holds_what_waits_for_it(env, monkeypatch):

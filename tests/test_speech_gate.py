@@ -244,6 +244,18 @@ def test_the_new_measurements_are_logged(tmp_path, caplog):
     assert "By reason: phantom phrase 1." in speech_gate.summary(tmp_path / "gate.jsonl")
 
 
+def test_each_clip_is_logged_with_the_calls_noise_filter_and_whisper_time(tmp_path, monkeypatch):
+    g = gate("enforce", (0.4, 0.8), tmp_path)
+    assert g.passes(g.measure(clip(1.2, (0.4, 0.8))), "Okay.", 0.0, whisper=0.81234)
+    assert records(tmp_path)[0]["whisper"] == 0.812 and "denoise" not in records(tmp_path)[0]
+    g.use("enforce", False, "vad")
+    stt = speech.WhisperSTT(gate=g)
+    monkeypatch.setattr(stt, "_transcribe", transcribes("Okay.", 0.0))
+    assert asyncio.run(stt._hear(buffer(clip(1.2, (0.4, 0.8))))) == "Okay."
+    record = records(tmp_path)[1]
+    assert record["denoise"] == "vad" and record["whisper"] >= 0
+
+
 def test_enforce_mode_drops_a_faint_clip(tmp_path):
     audio = clip(1.172, (0.5, 0.66), level=0.02)  # 0.16 s of speech, its loudest 100 ms about -37 dBFS
     g = gate("enforce", (0.5, 0.66), tmp_path)

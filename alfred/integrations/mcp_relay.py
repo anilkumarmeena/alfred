@@ -6,6 +6,8 @@ Gives the CLI a uniform server whatever MCP features it has:
                    tasks capability is hidden from the CLI. Every call carries a relay progress token.
   background       with `wait` (voice sessions, config.CONNECTION_WAIT), a call still running is handed to the task
                    runner as a connection task; the relay outlives the session (`detach`) until it ends.
+  first use        a local server starts only when the session needs it, its tool list answered till then from its
+                   last start (`Lazy`), so a session that calls none of its tools never runs it
 Everything else passes through both ways. Relay request ids ("alfred-N") never clash with the CLI's numeric ids.
 """
 
@@ -23,7 +25,7 @@ from dataclasses import dataclass
 import httpx
 
 from alfred.contracts.runner import ConnectionRunner, RunnerUnavailable
-from alfred.integrations import mcp_bridge
+from alfred.integrations import mcp_bridge, mcp_servers
 from alfred.integrations.mcp_servers import Server
 from alfred.storage import profile
 
@@ -37,6 +39,8 @@ FOLLOW_SECONDS = 5.0  # background call: progress report / stop check interval
 BACKGROUND_HOURS = 24  # max background call duration
 RESULT_CHARS = 20_000  # result chars stored on the task
 REPORT_TRIES = 12  # ~1 min of retries to report the end while the runner restarts
+START_SECONDS = 90  # a server started late: to answer the relay's initialize (npx may download first)
+LISTS = ("tools/list", "prompts/list", "resources/list", "resources/templates/list")  # answers kept for the next start
 
 
 @dataclass
@@ -357,11 +361,138 @@ class Process:
         self.ended.cancel()
 
 
+def _asked(message: dict) -> str:
+    """What a kept answer is found under: 'initialize', or a list with its params ('tools/list {}'); '' for none."""
+    method = message.get("method")
+    if method in LISTS:
+        params = {k: v for k, v in (message.get("params") or {}).items() if k != "_meta"}
+        return f"{method} {json.dumps(params, sort_keys=True)}"
+    return "initialize" if method == "initialize" else ""
+
+
+TOOLS = _asked({"method": "tools/list"})
+
+
+def _copy(result: dict) -> dict:
+    return json.loads(json.dumps(result))  # the relay rewrites what it passes on
+
+
+class Lazy:
+    """Local server started on first use. Until then the CLI's initialize and lists are answered from what it said
+    when last started the same way (mcp_servers.listing, under `key`), and its notifications dropped; anything else
+    starts it, introduced with the CLI's own initialize, and its tool list is checked against the kept one (the CLI is
+    told if it changed). With nothing kept it starts at once. Its answers are kept for next time. Used as a Process."""
+
+    def __init__(self, server: Server, command: tuple[list[str], dict[str, str]],
+                 deliver: Callable[[dict], Awaitable[None]], key: str) -> None:
+        self.server, self.command, self.deliver, self.key = server, command, deliver, key
+        # {"version": the CLI's protocol version, "answers": {what was asked: its result}}
+        self.kept = mcp_servers.listing(server.name, key)
+        self.process: Process | None = None
+        self.starting: asyncio.Future | None = None
+        self.checking: asyncio.Task | None = None  # its tool list, checked once started late
+        self.ended = asyncio.get_running_loop().create_future()  # set when the started server stops
+        self.hello: dict = {}  # the CLI's initialize
+        self.asked: dict = {}  # CLI requests whose answers are kept: id -> what they asked
+        self.mine: dict[str, asyncio.Future] = {}  # the relay's own requests while introducing it
+
+    async def send(self, message) -> None:
+        one = message if isinstance(message, dict) else {}  # batches start it
+        method, mid = one.get("method"), one.get("id")
+        if method == "initialize":
+            self.hello = one
+            if self.kept.get("version") != (one.get("params") or {}).get("protocolVersion"):
+                self.kept = {}  # said to another protocol version
+        if self.starting is None:
+            answers = self.kept.get("answers") or {}
+            if mid is not None and (asked := _asked(one)) in answers:
+                return await self.deliver({"jsonrpc": "2.0", "id": mid, "result": _copy(answers[asked])})
+            if method == "ping" and mid is not None:
+                return await self.deliver({"jsonrpc": "2.0", "id": mid, "result": {}})
+            if one and mid is None:
+                return  # notifications: nothing is running to hear them
+            self.starting = asyncio.ensure_future(self._start(introduce=method != "initialize"))
+        try:
+            await asyncio.shield(self.starting)
+        except OSError as e:  # it can't start; every request is told so
+            if method and mid is not None:
+                await self.deliver({"jsonrpc": "2.0", "id": mid, "error": {
+                    "code": ERROR, "message": f"{self.server.label} couldn't start ({e or type(e).__name__})."}})
+            return
+        if mid is not None and (asked := _asked(one)):
+            self.asked[mid] = asked
+        await self.process.send(message)  # pyright: ignore[reportOptionalMemberAccess]  (started)
+
+    async def _start(self, introduce: bool) -> None:
+        process = None
+        try:
+            self.process = process = await Process.start(*self.command, self._from_server)
+            process.ended.add_done_callback(lambda _: self.ended.done() or self.ended.set_result(None))
+            if not introduce:  # the CLI's initialize comes next; what was kept didn't do
+                self.kept = {"version": (self.hello.get("params") or {}).get("protocolVersion"), "answers": {}}
+                return
+            log.info("%s started for its first call", self.server.name)
+            self._keep("initialize", await self._ask(process, "initialize", self.hello.get("params") or {}))
+            await process.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        except OSError as e:
+            log.warning("%s didn't start: %s", self.server.name, e)
+            if process:
+                await process.close()  # gone, as if it had stopped
+            raise
+        self.checking = asyncio.create_task(self._check(process))  # alongside the call, which may need it answering
+
+    async def _check(self, process: Process) -> None:
+        """Keep its tool list as it is now, telling the CLI if it changed since it was kept."""
+        was = (self.kept.get("answers") or {}).get(TOOLS)
+        try:
+            listed = await self._ask(process, "tools/list", {})
+        except OSError:
+            return
+        if listed != was:
+            self._keep(TOOLS, listed)
+            if was is not None:
+                await self.deliver({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+
+    async def _ask(self, process: Process, method: str, params: dict) -> dict:
+        """Its result for the relay's own request. Raises ConnectionError if it refused or didn't answer."""
+        rid = f"alfred-{method}"
+        self.mine[rid] = answer = asyncio.get_running_loop().create_future()
+        try:
+            await process.send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
+            await asyncio.wait({answer, process.ended}, timeout=START_SECONDS, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            self.mine.pop(rid, None)
+        if not answer.done() or not isinstance(result := answer.result().get("result"), dict):
+            raise ConnectionError(f"it didn't answer {method}")
+        return result
+
+    async def _from_server(self, message) -> None:
+        if isinstance(message, dict) and message.get("method") is None:
+            mid = message.get("id")
+            if (answer := self.mine.get(mid)) and not answer.done():  # pyright: ignore[reportArgumentType]
+                return answer.set_result(message)
+            if (asked := self.asked.pop(mid, None)) and isinstance(message.get("result"), dict):
+                self._keep(asked, message["result"])
+        await self.deliver(message)
+
+    def _keep(self, asked: str, result: dict) -> None:
+        self.kept.setdefault("answers", {})[asked] = _copy(result)
+        mcp_servers.keep_listing(self.server.name, self.key, self.kept)
+
+    async def close(self) -> None:
+        if self.checking:
+            self.checking.cancel()
+        if self.process:
+            await self.process.close()
+
+
 async def serve(server: Server, wait: float = 0.0, command: tuple[list[str], dict[str, str]] | None = None,
                 reader: asyncio.StreamReader | None = None, out=None,
-                transport: httpx.AsyncBaseTransport | None = None, runner: ConnectionRunner | None = None) -> int:
+                transport: httpx.AsyncBaseTransport | None = None, runner: ConnectionRunner | None = None,
+                read_only: bool = False) -> int:
     """Relay stdin/stdout to the server until either ends, then wait for background calls. Local servers start from
-    `command` (mcp_launch.command); HTTP ones go through the bridge. Raises vault.VaultError if a secret isn't set."""
+    `command` (mcp_launch.command, with `read_only` its read-only args) when first needed; HTTP ones go through the
+    bridge. Raises vault.VaultError if a secret isn't set."""
     reader = reader or await mcp_bridge._stdin()
     out = out or sys.stdout
     lock = asyncio.Lock()
@@ -379,7 +510,8 @@ async def serve(server: Server, wait: float = 0.0, command: tuple[list[str], dic
         bridge = mcp_bridge.Bridge(server, relay.from_server, transport)
         relay.send, ended, close = bridge.send, asyncio.get_running_loop().create_future(), bridge.close
     else:
-        process = await Process.start(*command, relay.from_server)  # pyright: ignore[reportCallIssue]  (stdio: given)
+        key = mcp_servers.run_key(server, read_only)
+        process = Lazy(server, command, relay.from_server, key)  # pyright: ignore[reportArgumentType]  (stdio: given)
         relay.send, ended, close = process.send, process.ended, process.close
 
     async def pump() -> None:

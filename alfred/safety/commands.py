@@ -2018,14 +2018,18 @@ def agreed_to(asked: str, said: str, command: str, own: "Own | None" = None, yes
 # ── A task's own files and processes ────────────────────────────
 # No yes needed only where the command itself proves ownership: each path is literal (or a fresh mktemp dir) and
 # resolves, symlinks included, strictly inside a task folder and outside .git; each process is $! or Own.process.
+# chmod is stricter: literal paths in a scratch folder only (no globs or mktemp), plain modes, no file in it with a
+# hard link elsewhere.
 
 @dataclass(frozen=True)
 class Own:
-    """A task's own: start folder, folders it may delete in (worktree/project, temp), and its-process predicate."""
+    """A task's own: start folder, folders it may delete in (worktree/project, temp), its-process predicate, and the
+    scratch folders (temp) it may also chmod in."""
 
     folder: Path
     roots: tuple[Path, ...]
     process: Callable[[int], bool] = lambda pid: False
+    scratch: tuple[Path, ...] = ()
 
 
 # Any of these can change what a word or path means (aliases, glob options, CDPATH, links, moves): nothing is owned
@@ -2036,6 +2040,9 @@ _NOT_LITERAL = set("$`{}[]\\*?")
 _MKTEMP = r"\"?\$\(\s*mktemp((\s+-[dq]+)*(\s+-[dq]*t\s+[\w.-]+)?(\s+-[dq]+)*)\s*\)\"?"  # fresh dir in $TMPDIR
 _JOB = re.compile(r"%(\d+|%|\+|-)")
 _DELETE_FLAGS = {"rm": set("dfiIPRrvWx"), "rmdir": {"v"}, "unlink": set()}  # allowed options
+_CHMOD_FLAGS = re.compile(r"-[Rfv]+")  # not -H/-L: -R then follows links out of the folder
+_MODE = re.compile(r"0?[0-7]{1,3}|[ugoa]*[-+=][rwxX]*(,[ugoa]*[-+=][rwxX]*)*")  # no setuid, setgid or sticky bits
+_SHARED_MOST = 10_000  # files looked at for hard links under a chmod -R folder; more, and it's asked about
 
 
 class _Mine:
@@ -2044,7 +2051,8 @@ class _Mine:
     def __init__(self, command: str, pieces: list[list[str]], own: Own) -> None:
         self.own = own
         self.roots = [r.resolve() for r in own.roots]
-        self.guarded = [*self.roots, ROOT.resolve()]  # never deleted whole, nor anything containing them
+        self.scratch = [r.resolve() for r in own.scratch]
+        self.guarded = [*self.roots, *self.scratch, ROOT.resolve()]  # never deleted whole, nor anything containing them
         words = {Path(w).name for argv in pieces for w in argv}  # incl. programs run by others (find -exec mv)
         self.sure = not _UNSURE.search(command) and not words & _UNSURE_PROGRAMS
         self.pids = self._reads(self._set_only(command, r"\$!"))  # vars only ever set to $!
@@ -2097,10 +2105,10 @@ class _Mine:
             found.add(target.resolve())
         return found
 
-    def _inside(self, path: Path, strictly: bool = True) -> bool:
-        """Whether a resolved path is inside a task folder (strictly: not the root), outside .git, and contains no
-        guarded folder."""
-        for root in self.roots:
+    def _inside(self, path: Path, strictly: bool = True, roots: list[Path] | None = None) -> bool:
+        """Whether a resolved path is inside a task folder (or one of `roots`; strictly: not the root), outside .git,
+        and contains no guarded folder."""
+        for root in self.roots if roots is None else roots:
             if path.is_relative_to(root) and ".git" not in path.relative_to(root).parts:
                 return not any(g.is_relative_to(path) and (strictly or g != path) for g in self.guarded)
         return False
@@ -2127,6 +2135,46 @@ class _Mine:
         where = None if path is None else self._where(path)
         return bool(where) and all(self._inside(p, strictly) for p in where)
 
+    def _scratch_paths(self, word: str) -> list[Path] | None:
+        """Where a literal path word without '..' leads, if strictly inside a scratch folder from every cwd; else None."""
+        path = self._literal(word)
+        if path is None or ".." in path.parts or not (where := self._where(path)):
+            return None
+        return where if all(self._inside(p, roots=self.scratch) for p in where) else None
+
+    @staticmethod
+    def _unshared(path: Path, deep: bool) -> bool:
+        """Whether no file at `path` (or under it, if `deep`) is a hard link also named elsewhere, whose permissions a
+        chmod here would change too. Links within aren't followed, as chmod -R doesn't."""
+        try:
+            if os.lstat(path).st_nlink > 1 and not path.is_dir():
+                return False
+        except OSError:
+            return True  # nothing there to change
+        seen = 0
+        for top, _, names in os.walk(path) if deep else ():
+            for name in names:
+                seen += 1
+                try:
+                    if seen > _SHARED_MOST or os.lstat(os.path.join(top, name)).st_nlink > 1:
+                        return False
+                except OSError:
+                    continue
+        return True
+
+    def _owned_chmod(self, args: list[str]) -> bool:
+        """Whether chmod `args` only changes plain permission bits of files in a scratch folder."""
+        i, deep = 0, False
+        while i < len(args) and _CHMOD_FLAGS.fullmatch(args[i]):
+            deep |= "R" in args[i]
+            i += 1
+        if args[i : i + 1] == ["--"]:
+            i += 1
+        if i >= len(args) or not _MODE.fullmatch(args[i]) or not (operands := args[i + 1 :]):
+            return False
+        found = [self._scratch_paths(word) for word in operands]
+        return all(found) and all(self._unshared(p, deep) for where in found for p in where)
+
     def _owned_process(self, word: str) -> bool:
         if word in ("$!", "${!}") or _JOB.fullmatch(word):
             return True
@@ -2135,10 +2183,13 @@ class _Mine:
         return word.isdigit() and self.own.process(int(word))
 
     def covers(self, argv: list[str]) -> bool:
-        """Whether a risky simple command only deletes the task's own files or stops its own processes."""
+        """Whether a risky simple command only deletes the task's own files, chmods its scratch files or stops its own
+        processes."""
         if not self.sure or not (argv := _strip_prefixes(argv)):
             return False
         program, args = argv[0], argv[1:]
+        if program in ("chmod", "/bin/chmod", "/usr/bin/chmod"):
+            return self._owned_chmod(args)
         if (name := program.removeprefix("/bin/")) in _DELETE_FLAGS:
             allowed, i = _DELETE_FLAGS[name], 0
             while i < len(args) and args[i].startswith("-") and args[i] != "-":

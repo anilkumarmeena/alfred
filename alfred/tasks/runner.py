@@ -17,7 +17,8 @@
   uv run python -m alfred.tasks.runner approve 12 always    and remember it: session or always, exact (default) or kind
 
 Concepts:
-  slots       the max_tasks preference run at once; command and connection tasks take no slot
+  slots       the max_tasks preference run at once; command and connection tasks take no slot. While memory is short
+              (alfred.core.memory) one with a slot waits for it to ease, unless no other runs here (_room_in_memory)
   in place    default for code_change: edits the project folder, one task per project at a time; uncommitted work is
               first saved under refs/alfred/. in_place=false (always for Alfred's own repo): worktree + branch per task,
               committed at run end, never pushed; merged or discarded via the API
@@ -64,6 +65,7 @@ from alfred.config import (
 )
 from alfred.contracts import remote
 from alfred.contracts.remote import HERE, HERE_WORD, TASKS, Offline, Place
+from alfred.core import memory
 from alfred.llm import claude_logins, retry, roles, usage
 from alfred.llm.sdk import CanUseToolShadowedWarning
 from alfred.safety import host
@@ -140,6 +142,8 @@ LIMIT_RESUMED = ("Claude's usage limit stopped you partway through this task, an
                  "then end with your summary of the whole task as before.")
 LIMIT_SLACK = 60.0  # seconds past a usage limit's reset before resuming, for clock differences
 WAIT_STEP = 300.0  # most seconds a wait for the reset sleeps before checking the wall clock again
+MEMORY_STEP = 20.0  # seconds between memory checks of a task held back while memory is short
+MEMORY_SHORT = "waiting for memory to free up: this computer is short of it, with other tasks running"
 
 
 def _waits_for_reset(task: dict) -> float | None:
@@ -151,6 +155,8 @@ def _waits_for_reset(task: dict) -> float | None:
 class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
     """The task runner: mixins plus task start/reply/stop, the run loop, restart and shutdown."""
 
+    short_of_memory = staticmethod(memory.short)  # read before a task starts here; tests fake it
+
     def __init__(self, capacity: int | None = None,
                  machines: Callable[["Runner"], tuple[remote.Links, remote.Offload, remote.Machines]] | None = None) -> None:
         self.store = Store()
@@ -158,6 +164,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
         self.slots = asyncio.Semaphore(capacity)
         self.jobs: dict[int, asyncio.Task] = {}
         self.in_line: set[int] = set()  # tasks holding or next in line for a slot
+        self.here: set[int] = set()  # tasks running on this computer, past the memory check
         self.begun: set[int] = set()  # runs in progress: new grants apply from the next turn
         self.folders: dict[str, asyncio.Lock] = {}  # per project folder
         self.merges: dict[int, asyncio.Task] = {}  # merges under way, by task id; halt() stops one
@@ -585,6 +592,8 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
             status, activity = "running", STARTING
         else:
             status, activity = ("running", STARTING) if self._slot_free(task_id) else ("queued", self._slot_wait())
+            if status == "running" and self._memory_short():
+                status, activity = "queued", MEMORY_SHORT
             self.in_line.add(task_id)
         task = self.store.update(task_id, status=status, question=None, wait_kind=None, wants=None, error=None,
                                  spoken=None, activity=activity, interrupted=cut, waits_on=None)
@@ -612,6 +621,20 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
 
     def _slot_wait(self) -> str:
         return f"waiting for a free slot: {self.capacity} {'task runs' if self.capacity == 1 else 'tasks run'} at once"
+
+    def _memory_short(self) -> bool:
+        """Whether a task about to start here waits for memory: it's short, and another task runs here."""
+        return bool(self.here) and self.short_of_memory()
+
+    async def _room_in_memory(self, task_id: int) -> None:
+        """Hold a task that has its slot while memory is short, checking every MEMORY_STEP, then count it as running
+        here. The first always starts: with none running, waiting frees nothing."""
+        if self._memory_short():
+            self.store.set(task_id, status="queued", activity=MEMORY_SHORT)
+            self.store.log(task_id, "memory", "held back: this computer is short of memory, with other tasks running")
+            while self._memory_short():
+                await asyncio.sleep(MEMORY_STEP)
+        self.here.add(task_id)  # no await since the check, so two can't both start as the first
 
     def _ahead_in_folder(self, task: dict) -> list[int]:
         """Other active in-place tasks on the same project."""
@@ -656,6 +679,8 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
                     self.in_line.add(task_id)
                 reattach = remote and prompt == RESUMED  # its run there goes on: taken up, not begun again
                 async with nullcontext() if remote else self.slots:  # one on another machine takes no slot here
+                    if not remote:
+                        await self._room_in_memory(task_id)
                     if task["in_place"] and not reattach:
                         await self._enter_folder(task)
                     task = self.store.update(task_id, status="running", activity=STARTING)
@@ -685,6 +710,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
             self.jobs.pop(task_id, None)
             self.prompts.pop(task_id, None)
             self.in_line.discard(task_id)
+            self.here.discard(task_id)
             self.begun.discard(task_id)
             self.pulse.forget(task_id)
             self._waited(task_id)

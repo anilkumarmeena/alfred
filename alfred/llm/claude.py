@@ -28,6 +28,7 @@ from alfred.llm.roles import Role, model as model_for
 
 log = logging.getLogger("alfred.llm.claude")
 TOOL_SEARCH_TOOL = "ToolSearch"  # CLI tool that loads deferred tools
+UP_FRONT = "anthropic/alwaysLoad"  # in a tool's _meta: the CLI loads it up front though its server is deferred
 
 # Built-in subagents inherit every session tool, so deny them; only Alfred's narrower subagents run.
 # The CLI may report the tool as "Task", so rules name it both ways.
@@ -82,6 +83,21 @@ def on_demand(options: dict) -> dict:
     return options | {"mcp_servers": servers, "tools": [*options["tools"], TOOL_SEARCH_TOOL],
                       "allowed_tools": [*options.get("allowed_tools", []), TOOL_SEARCH_TOOL],
                       "env": options["env"] | {"ENABLE_TOOL_SEARCH": TOOL_SEARCH}}
+
+
+def deferring(server: dict, up_front: list[str]) -> dict:
+    """In-process `server` (create_sdk_mcp_server's) deferred, all but its tools `up_front`, which are marked to load up
+    front as the server lists them."""
+    instance, keep = server["instance"], set(up_front)
+    listing = instance.get_request_handler("tools/list")
+
+    async def listed(ctx, params):
+        found = await listing.handler(ctx, params)
+        return found.model_copy(update={"tools": [t.model_copy(update={"meta": (t.meta or {}) | {UP_FRONT: True}})
+                                                  if t.name in keep else t for t in found.tools]})
+
+    instance.add_request_handler("tools/list", listing.params_type, listed)
+    return server | {"alwaysLoad": False}
 
 
 def sdk_options(env: dict[str, str] | None = None, login: str | None = None, **options) -> ClaudeAgentOptions:

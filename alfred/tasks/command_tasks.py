@@ -393,10 +393,10 @@ class CommandTasks(RunnerBase):
                                                                       command_jobs.LOGIN_CHARS))
 
     def _fall_over(self, task: dict, how: dict, job: dict | None, trouble: str) -> bool:
-        """Run a command its Claude login stopped (`trouble`) again on the next login by priority, as tasks move on;
-        False when every login has been tried, or its scheduled job has ended."""
+        """Run a command its Claude login stopped (`trouble`) again on the login with the most room now (which passes
+        that one over), as tasks move on; False when every login has been tried, or its scheduled job has ended."""
         tried = [*how.get("tried", []), how["login"]]
-        if (now_on := claude_logins.active()) in tried or (job and job["status"] not in schedules.LIVE):
+        if (now_on := claude_logins.roomiest()) in tried or (job and job["status"] not in schedules.LIVE):
             return False
         try:
             rerun = self._again(task, how, attempt=how.get("attempt", 1), after=how.get("after"), tried=tried)

@@ -30,13 +30,14 @@ def _sdk_tool(t: tools.Tool, kept: "Kept | None" = None):
     return sdk_tool(t.name, t.description, tools.input_schema(t), READS if t.reads else None)(handler)
 
 
-def alfred_server(names: list[str] | Callable[[tools.Tool], bool] | None = None,
-                  kept: "Kept | None" = None) -> tuple[dict, list[str]]:
+def alfred_server(names: list[str] | Callable[[tools.Tool], bool] | None = None, kept: "Kept | None" = None,
+                  later: Callable[[tools.Tool], bool] | None = None) -> tuple[dict, list[str]]:
     """Alfred's enabled tools (or just `names`, or those `names` picks) as an MCP server, plus their allowed_tools
     entries. Google accounts changed since the last session are taken first, so the choice sees their tools.
 
     Gated and shell-carrying tools are not in allowed_tools, so each call goes through can_use_tool. With `kept`
-    (the voice brain), slow calls carry on outside the turn.
+    (the voice brain), slow calls carry on outside the turn. The tools `later` picks are listed by name only until
+    the session loads one with ToolSearch; the rest load up front.
     """
     from alfred.tools import google
 
@@ -44,6 +45,8 @@ def alfred_server(names: list[str] | Callable[[tools.Tool], bool] | None = None,
     picks = names if callable(names) else (lambda t: names is None or t.name in names)
     chosen = [t for t in tools.all_tools() if picks(t) and t.on()]
     server = create_sdk_mcp_server("alfred", tools=[_sdk_tool(t, kept) for t in chosen])
+    if later and any(later(t) for t in chosen):
+        server = claude.deferring(server, [t.name for t in chosen if not later(t)])
     return server, [f"mcp__alfred__{t.name}" for t in chosen if not (t.gated or t.shell)]
 
 

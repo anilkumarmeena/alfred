@@ -168,12 +168,3 @@ def test_when_the_model_cant_be_asked_the_computer_with_the_most_room_takes_it(m
     assert choose(Hub({studio.id: FREE}), running=1, slots=1).node == studio.id  # no slot free here
     monkeypatch.setattr(placement, "_here", lambda running, slots: placement.Standing(12, 0.0, 2, 1.0))
     assert choose(Hub({studio.id: FREE | {"cores": 12, "load": 0.0}})) == placement.HERE  # a tie stays here
-
-
-def test_usage_left_reads_the_tightest_limit():
-    soon = time.time() + 3600
-    assert placement.usage_left({}) == 1.0
-    assert placement.usage_left({"five_hour": {"status": "allowed", "utilization": 0.3, "resets_at": soon},
-                                 "seven_day": {"status": "allowed", "utilization": 0.75, "resets_at": soon}}) == 0.25
-    assert placement.usage_left({"seven_day": {"status": "allowed_warning", "resets_at": soon}}) == placement.CLOSE
-    assert placement.usage_left(USED_UP) == 0.0

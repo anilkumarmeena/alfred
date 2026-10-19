@@ -1,8 +1,8 @@
 """Command tasks (store.COMMAND): a shell command run in the background with no model until it ends.
 
 Sources: start_job, audio rendering, scheduled "command" jobs. Runs as a host.Jobs job in COMMANDS_DIR (N.log), outside
-the sandbox via a login shell, without Alfred's keys, on the Claude login Alfred runs on; survives runner restarts,
-polled via `how`, stopped at its limit.
+the sandbox via a login shell, without Alfred's keys, on the Claude login with the most room left
+(claude_logins.roomiest); survives runner restarts, polled via `how`, stopped at its limit.
 On end:
   success  `summarize` (Role.COMMAND_SUMMARY)
   failure  `pass_over`: the CLI said its Claude login is signed out or used up, so it reruns on the next login
@@ -73,8 +73,9 @@ def project_of(folder: Path, named=None) -> str | None:
 class Runs(host.Jobs):
     """Long jobs for command tasks, numbered by task id; no desktop notification (the runner announces).
 
-    Each runs on the Claude login Alfred runs on (alfred.llm.claude_logins), so a `claude` the command calls uses it too:
-    CLAUDE_CONFIG_DIR names its folder (only the folder; the login stays in its keychain entry), `login` in the record."""
+    Each runs on the usable Claude login with the most room left under its limits (claude_logins.roomiest), so a
+    `claude` the command calls uses it too: CLAUDE_CONFIG_DIR names its folder (only the folder; the login stays in its
+    keychain entry), `login` in the record. It can't move once it runs, so it starts where it's least likely to stop."""
 
     def __init__(self, folder: Path | None = None, shell: tuple[str, ...] = host.SHELL) -> None:
         super().__init__(folder or COMMANDS_DIR, shell, notify=False)
@@ -82,7 +83,7 @@ class Runs(host.Jobs):
     def launch(self, command: str, title: str, cwd: Path, task: int | None = None, env: dict[str, str] | None = None,
                report: bool = False, extra: dict | None = None, job_id: int | None = None,
                walls: bool = True) -> dict:
-        login = claude_logins.active()
+        login = claude_logins.roomiest()
         return super().launch(command, title, cwd, task, claude_logins.env(login) | (env or {}), report,
                               {"login": login} | (extra or {}), job_id, walls)
 

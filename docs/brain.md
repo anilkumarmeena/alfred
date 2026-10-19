@@ -41,7 +41,7 @@
 | [`__init__.py`](../alfred/brain/__init__.py) | 33 | **`VoiceBrain` protocol** and `make_brain()` (always returns `CliBrain`) |
 | [`cli.py`](../alfred/brain/cli.py) | 340 | **`CliBrain`**: the session, the turn loop, interruptions, the lookup subagent |
 | [`sdk.py`](../alfred/brain/sdk.py) | 201 | SDK options **shared with tasks**: lockdown, tool server, `ask` / `ask_json` / `ask_flag` |
-| [`persona.py`](../alfred/brain/persona.py) | 63 | Builds the system prompt; frames each user turn (`Notes`) |
+| [`persona.py`](../alfred/brain/persona.py) | 94 | Builds the system prompt; frames each user turn, a session's first with memory and recent talk (`Notes`) |
 | [`quick.py`](../alfred/llm/quick.py) | 159 | **`Quick`**: one warm fast-model session for sub-second judgements |
 | [`route.py`](../alfred/brain/route.py) | 57 | **`Router`**: optional small-talk → lighter model |
 | [`side.py`](../alfred/brain/side.py) | 104 | **Side jobs**: background reading and checks (`background_lookup`, `file_lookup`, `computer_lookup`) |
@@ -151,6 +151,8 @@ sequenceDiagram
 **The framed prompt** (built by `Notes.turn` + `CliBrain._prompt`) is the user's words wrapped with context:
 
 ```text
+<long_term_memory>…</long_term_memory>          (a new conversation's first message only)
+<recent_conversation>…</recent_conversation>
 [Monday 12 October 2026, 03:41 PM]
 [You announced since the last turn: The Chat fix is done …]
 <private>The update on "Chat fix" was task 230. Its suggested edits, pending: …</private>
@@ -168,7 +170,7 @@ sequenceDiagram
 
 ## 👁️ What the brain sees
 
-The system prompt is built **once per session** and then **frozen** so the prompt cache stays warm.
+The system prompt is built **once per session** and then **frozen** so the prompt cache stays warm. It holds **nothing that changes between sessions**, so the cached prefix (tools + system prompt) carries over from one conversation to the next.
 
 | Layer | Source | Notes |
 |:-:|---|---|
@@ -176,10 +178,20 @@ The system prompt is built **once per session** and then **frozen** so the promp
 | 2 | Shell rules | `shell.prompt()` |
 | 3 | Lookups | `prompts/voice_lookups.md` (use the lookup subagent for file questions) |
 | 4 | Screen, browser | `screen.prompt()`, `browser.prompt()` when the browser is on |
-| 5 | Connections | Enabled MCP servers + `connections.prompt()` |
-| 6 | Skills | Enabled skills, loaded as a **per-session plugin** |
-| 7 | **Long-term memory** | `<long_term_memory>` from `data/memory.md`, with fill levels |
-| 8 | **Recent conversation** | `<recent_conversation>` from `data/recent.md` (last ~6,000 chars) |
+| 5 | Google edits | `google.prompt()`: Docs, Sheets and Slides editing tools load through ToolSearch |
+| 6 | Connections | Enabled MCP servers + `connections.prompt()` |
+| 7 | Skills | Enabled skills, loaded as a **per-session plugin** |
+
+**Memory and recent talk start the first message**, not the system prompt (`persona.context()`, added by `Notes.head` once per new session):
+
+| Block | Source |
+|---|---|
+| **Long-term memory** | `<long_term_memory>` from `data/memory.md`, with fill levels |
+| **Recent conversation** | `<recent_conversation>` from `data/recent.md` (last ~6,000 chars) |
+
+A session carried on with `resume` already has them in its history, so they aren't sent again; a fresh one (including after a failed resume) gets them.
+
+**Tools loaded on demand:** the Docs, Sheets and Slides tools that change, draft or delete (`google.editing`) stay listed by name only until the brain loads one with `ToolSearch`; searching and reading them, and every other Alfred tool, load up front. Alfred's tool server is marked deferred and each up-front tool carries `anthropic/alwaysLoad` in its `_meta` (`claude.deferring`). Off with `ALFRED_TOOL_SEARCH=false`.
 
 **When the setup changes mid-call:** each turn starts by comparing the Google accounts, the connections (`mcp_servers.stamps`: settings, tool sorting, when each key was last set) and the skills (`skills.stamp()`) with those the CLI started with. If any changed (say, a new GitLab key saved in the control panel), the CLI restarts **resuming the same session** (`resume`, on the login holding its transcript), so the prompt, tools and skills are rebuilt and the conversation carries on. That turn's prompt says they were reloaded, so a tool that failed before is tried again. If resuming fails, a fresh session starts.
 
@@ -423,7 +435,7 @@ Things I noticed reading the code. **None of them is a confirmed bug.** They're 
 | | Area | Observation |
 |:-:|---|---|
 | 1 | 🔁 **Context after a CLI restart** | A failed interrupt or `ClaudeSDKError` calls `close()`; the next turn opens a **fresh session** whose only memory of this call is `recent.md` (6,000 chars). Long calls can lose earlier context. |
-| 2 | 🧊 **Frozen prompt** | Memory written mid-session (`remember`) isn't in the system prompt until the next session. The model knows because it made the call, but a restart (item 1) brings back only what's on disk. |
+| 2 | 🧊 **Frozen context** | Memory written mid-session (`remember`) isn't in the first message's memory block until the next session. The model knows because it made the call, but a restart (item 1) brings back only what's on disk. |
 | 3 | 🤖 **Fast model was a generation behind** | Settled: the fast tier is now `claude-haiku-5-5`. On the yes/no and hidden-instruction checks it gave the same verdicts as Haiku 4.5, about three times faster (median 1.4 s against 4.9 s), at a tenth of the price. |
 | 4 | ⚡ **Routing is off by default** | The doc says the gain depends on warm prompt caches. There's a `model` field in the timing log to measure it, but no default decision yet. |
 | 5 | 🧩 **One implementation** | `VoiceBrain` is a protocol with one implementation, and `make_brain()` hardcodes `CliBrain`. Fine today; it matters if a second channel (chat, Telegram) or a non-CLI brain is planned. |

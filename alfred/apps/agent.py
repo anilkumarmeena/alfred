@@ -142,7 +142,10 @@ async def entrypoint(ctx: JobContext) -> None:
     stt = ctx.proc.userdata["stt"]
     barge = BargeIn(stt.speaker)  # while replying, only the user's voice interrupts
     pacing = turn.Pacing()  # each speaker's pace, for the brain's hints
-    vad = BargeInVAD(denoise.session_vad(ctx.proc.userdata["vad"], ctx.proc.userdata["denoise"]), barge)
+    filtering = ctx.proc.userdata["denoise"]
+    noise = denoise.pick(filtering)  # on, vad or off; ALFRED_DENOISE=ab picks on or vad per call
+    meter = denoise.Meter(noise)  # the filter's CPU, in each turn's record
+    vad = BargeInVAD(denoise.session_vad(ctx.proc.userdata["vad"], filtering, noise, meter), barge)
     session = AgentSession(
         stt=early.adapter(stt, vad),  # Whisper starts at a short pause, before the VAD ends the clip
         llm=BrainPlaceholder(),
@@ -153,7 +156,7 @@ async def entrypoint(ctx: JobContext) -> None:
     # Read per call so Settings changes (or a new voiceprint) need no restart
     ctx.proc.userdata["tts"].use(preferences.tts_voice(), preferences.tts_speed())
     mode = preferences.speech_gate()
-    stt.gate.use(mode, config.speech_gate_save_audio(mode))
+    stt.gate.use(mode, config.speech_gate_save_audio(mode), noise)
     stt.use_vocabulary(await asyncio.to_thread(vocabulary.load, projects.load), config.STT_PROMPT)
     stt.take_clips()  # drop the last conversation's clips
     prints = await asyncio.to_thread(voiceprints.load)
@@ -162,7 +165,7 @@ async def entrypoint(ctx: JobContext) -> None:
     voice = VoiceSession(make_brain(), talk, stt=stt, pacing=pacing,
                          router=Router(quick) if (quick := roles.model(Role.VOICE_QUICK)) else None,
                          moment=Moment() if config.PROACTIVE_JUDGE else None,  # when to raise things
-                         timings=timing.Timings(written=pacing.learn),  # logs/voice-turns.jsonl
+                         timings=timing.Timings(written=pacing.learn, fields=meter.take),  # logs/voice-turns.jsonl
                          push=_to_phone)  # unspoken announcements go to the phone
     voice.open()
 
@@ -186,7 +189,7 @@ async def entrypoint(ctx: JobContext) -> None:
     await session.start(
         room=ctx.room,
         agent=AlfredAgent(voice),
-        room_options=denoise.room_options(ctx.proc.userdata["denoise"]),  # mic through DeepFilterNet
+        room_options=denoise.room_options(filtering, noise, meter),  # mic through DeepFilterNet
     )
     quiet.follow(session, ctx.room)  # speaker off: text-only replies
     quiet.apply(session, (await ctx.wait_for_participant()).attributes)  # initial switch, before the greeting

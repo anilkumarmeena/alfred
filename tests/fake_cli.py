@@ -139,7 +139,7 @@ class Voice:
 
         def options(gate, jobs, kept=None, budget=None, resume=None):
             self.resumed.append(resume)
-            return type("Options", (), {"model": "claude-opus-5-5"})
+            return type("Options", (), {"model": "claude-opus-5-5", "resume": resume})
 
         monkeypatch.setattr(brain_cli, "_options", options)
         monkeypatch.setattr(brain_cli, "ClaudeSDKClient", started)

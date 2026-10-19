@@ -65,6 +65,7 @@ Ask for anything that takes a while and Alfred starts a task. Keep talking, star
 | "set up git for weather app" | Puts it under git once the first version has settled |
 
 - **Merge** goes into the project's own checkout, as one commit: the task's title and the start of its summary. Its in-between commits ("… (unfinished)", catch-up merges) stay off your branch.
+- **Branch behind?** When your branch has moved on since the task began, its branch is **rebased onto it first**, in the task's worktree, with plain git and no model, so the tests run on the code that actually gets merged; if it isn't merged after all (a test fails, you stop it), the branch goes back as it was. A rebase that conflicts is undone, leaving the branch as it was, and the merge goes ahead as before; if git can't merge it either, nothing changes and the reply names the files that conflict. Only the task's own `alfred/<id>-…` branch is ever rebased: never your folder, your branches or an in-place task's work.
 - **Stopping** a merge (`task_stop`, or the CLI's `stop`) kills its test run and removes the checkout made for it; a stop while git squashes and commits lets git end, then undoes it. Once merged it's too late: the cleanup finishes and the reply says so.
 - **Throw away** on an in-place task leaves its changes for you to undo.
 
@@ -84,6 +85,7 @@ Work can wait for other work: say "once that's merged, start the rebuild" or "wh
 - **When it starts by itself**, Alfred says so in a sentence.
 - **When what it waited for goes wrong** (a task fails, is stopped or thrown away, or a merge fails), the waiting task **doesn't start**: it's held and you're asked whether to start it anyway ("go ahead" starts it, "stop it" drops it). A merge waiting on it is called off, and you're told. If the work it waited for comes right after all (you carry the failed task on and it finishes), a held task still starts by itself.
 - **Waiting tasks show** in the task list with what they still wait for, and stop like queued ones; stopping one holds whatever waited for it in turn. "Stop" on a finished task whose merge is waiting calls that merge off.
+- **Same files, in order:** a merge waiting to happen by itself is put off while a task on the same project, begun before it, still runs or is being merged and has changed some of the same files. It goes ahead once that task has finished and any merge of it under way is done (one set to follow it goes first), rebased onto what it left. Files only count once changed, so tasks still start side by side; a merge you ask for yourself goes ahead at once.
 
 ### Where code changes go
 
@@ -93,6 +95,9 @@ Work can wait for other work: say "once that's merged, start the rebuild" or "wh
 | **Worktree** (`projects set NAME --worktrees`) | Own worktree and `alfred/<id>-...` branch per task, **committed but never pushed** |
 | **Alfred's own repo** | Always uses worktrees |
 | **A folder of several repos** (say a `frontend` and a `backend` repo side by side) | Always in place: the task is told its repos and uses git in each; worktrees and setting up git over them are refused |
+
+- **Worktrees start warm:** the project's `node_modules` (at the top and one folder down, like `web/node_modules`) and `.venv` are **cloned copy-on-write** into a new worktree, so a task doesn't reinstall them. A clone takes seconds (about one for a 2 GB `.venv` on a Mac) and no disk space until changed; where the disk can't clone (another volume, a filesystem without clones) nothing is copied and the task installs as before. Only folders git ignores are cloned, so they're never committed.
+- **Your own `.venv` is never shared:** the task gets its own clone, its scripts pointed at it, so its `uv sync` or `pip install` changes the clone only.
 
 ### What tasks can and can't see
 
@@ -105,6 +110,8 @@ Work can wait for other work: say "once that's merged, start the rebuild" or "wh
 - The project's setup is **scanned for hidden instructions** first; skipping its settings and hooks keeps Alfred's permissions and sandbox in force.
 - **Suggested edits:** small ones are applied when the task finishes and you're told; bigger ones (deleting memory, changing a project's settings) wait for your yes.
 - **Goal loop:** when a task says it's finished, a short model call checks the result against what was asked and sends it back to finish what it can (`ALFRED_GOAL_LOOP`, up to 2 rounds) before you hear about it.
+- **How many at once:** up to **3** (`ALFRED_MAX_TASKS`); the rest queue. While the computer is **short of memory** (macOS memory pressure at warning or worse, or under 10% available on Linux), a queued task waits for it to ease or for the others to finish, rechecking every 20 seconds, so an 8 GB Mac doesn't swap. The first task always starts.
+- **Which Claude login:** a new task starts on the login Alfred runs on, unless that login is **close to its limit** (Claude warns it's getting close, or under 20% is left) and another login has more room: then it starts on the one with the most. A task carrying on stays on its session's login until that one is used up.
 - **Stalled tasks:** a running task with no sign of progress for **15 minutes** is flagged and offered a nudge or a stop.
 - **Out of steps:** a task that uses up its turns before finishing carries on by itself in the same session, keeping what it did, up to **3 times** per request (`ALFRED_TASK_CONTINUES`). Past that it stops and says so; a reply or message carries it on with a fresh three. A watch's check isn't carried on: it's checked again when next due.
 - **Kept light:** a task's account, connection and GitLab download tools are listed by name and load through tool search when first used (`ALFRED_TOOL_SEARCH`); only its few others load up front. Its prompt is cached for five minutes, not an hour, since an hour's cache costs twice as much to write.
@@ -203,7 +210,7 @@ flowchart LR
 - The fix task **only fixes the code**: its walls hide the keys the command needs, so it never runs the command itself. When it finishes, **Alfred reruns the command once**, as it always runs it (same folder, outside the walls, with its keys), and says how that went, unless the fix says the cause remains (an expired login, say).
 - A rerun that fails again is **only reported**, so it can't loop.
 - Jobs outside a project, or started with "don't fix it if it fails", are only explained.
-- A `claude` the command calls runs on **the Claude login Alfred runs on** (Settings › Claude logins, in priority order). If the run fails because Claude says that login is signed out or its limit is used up, Alfred passes the login over and **reruns the command on the next one**; with none left, it just says so.
+- A `claude` the command calls runs on **the usable Claude login with the most room left** under its limits (Settings › Claude logins; the priority order breaks ties), since a command can't move once it runs. If the run fails because Claude says that login is signed out or its limit is used up, Alfred passes the login over and **reruns the command on the one with the most room now**; with none left, it just says so.
 
 ## ✋ Approvals
 
@@ -234,7 +241,7 @@ flowchart LR
 | 📱 | The **app's buttons** |
 | 💻 | `runner approve N` in a terminal |
 
-- A task **deleting files in its own folders**, or stopping processes it started, doesn't ask.
+- A task **deleting files in its own folders**, **`chmod` on files in its temp folder**, or stopping processes it started, doesn't ask. Each path must be spelled out (or be a folder the same command made with `mktemp`) and lead inside, links resolved. `chmod` is stricter: no variables, wildcards or `..`, a plain mode (`+x`, `755`; no setuid bits), and no file hard-linked from elsewhere.
 - The request is **withdrawn** once the task no longer needs it (finished, failed, stopped).
 
 ### Changes through a connection

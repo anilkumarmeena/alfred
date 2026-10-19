@@ -370,8 +370,9 @@ web-build: $(WEB_STAMP) ## Build web app into web/dist
 
 ## ── Housekeeping ───────────────────────────────────────────────
 
+# In parallel (pytest-xdist): a process a core, at most 4, as merge checks run it (alfred.tasks.merge_check.PARALLEL)
 test: ## Run unit tests
-	$(UV) --with pytest pytest -q
+	$(UV) --with pytest --with pytest-xdist pytest -q -n auto --maxprocesses=4
 
 host-check: ## Check task sandbox walls
 	$(UV) python -m alfred.apps.host_check check

@@ -89,9 +89,26 @@ Your mic goes through **[DeepFilterNet 3](https://github.com/Rikorose/DeepFilter
 |---|---|
 | `ALFRED_DENOISE_ATTEN_DB` (`18`) | The most the filter takes off any sound, so speech it mistakes for noise stays audible to Whisper |
 | `ALFRED_DENOISE=vad` | VAD hears filtered audio (turn-taking unchanged), Whisper the original: for comparing |
+| `ALFRED_DENOISE=ab` | **A/B test:** each call is `on` or `vad` at random (the agent log names the pick) |
 | `ALFRED_DENOISE=off` | No filter |
 
 **Inspect:** `logs/agent.log` names the mode at start, logs the filter's time per frame when a call ends, and warns if a frame ever takes longer than real time.
+
+### A/B: does Whisper do as well on the raw mic?
+
+Run `ALFRED_DENOISE=ab` for a week, then `make voice-timing HOURS=168`. Its **By noise filter mode** section splits both logs by the call's mode:
+
+| Line | From | Compares |
+|---|---|---|
+| `calls, turns, the filter N% of a core` | `filter_cpu` / `filter_wall` in `logs/voice-turns.jsonl` | The filter's CPU: its thread time over the call's time |
+| `words a spoken turn` | `words` | Transcript length |
+| `transcript`, `Whisper, a turn` | `transcript`, `whisper` | Whisper's latency (`whisper`: seconds waited on it for clips not heard early) |
+| `Whisper, a clip` | `whisper` in `logs/speech-gate.jsonl` | The same, per clip, kept or not |
+| `clips, N the gate dropped` | `verdict`, `reasons` | Clips dropped as noise or phantoms, by reason; words a kept clip |
+
+- Every turn and clip carries `denoise` (the call's mode) whatever the setting, so a week of `on` also compares with a week of `vad`.
+- **In `vad` mode each VAD stream filters on its own**, and a call has two (turn-taking's and the one that cuts Whisper's clips), so expect about **twice** `on`'s CPU there; the A/B measures it.
+- Nothing new of what you said is logged: clip words are counted from the transcript the speech gate already keeps.
 
 ## ⌛ When you've finished
 
@@ -185,7 +202,7 @@ uv run python -m alfred.voice.speech_gate 72      # the last three days
 
 | Where | Shows |
 |---|---|
-| `logs/speech-gate.jsonl` | Every clip, kept or not: length, loudness, VAD speech, Whisper's probabilities, transcript, WAV path (`audio`) |
+| `logs/speech-gate.jsonl` | Every clip, kept or not: length, loudness, VAD speech, Whisper's probabilities and time (`whisper`), transcript, WAV path (`audio`), the call's noise filter mode (`denoise`) |
 | `logs/speech-gate-audio/` | 16 kHz WAVs of what Whisper heard; play one with `afplay` (macOS) or `aplay` (Linux). The newest 300 are kept |
 
 - **A real reply among the drops?** Loosen the threshold named in brackets.
@@ -326,6 +343,8 @@ make voice-timing HOURS=2    # the last two
 | `ended` | **spoken**, **interrupted**, **unspoken** (you went on before it was heard; `resumed` is your pause) or **closed** |
 | `speaker`, `logprob` | Who spoke and how well Whisper heard it |
 | `early` | How many of the turn's clips Whisper had heard before the VAD ended them ([Whisper starts early](#-whisper-in-kokoro-out)) |
+| `whisper` | Seconds waited on Whisper for the turn's other clips |
+| `denoise`, `filter_cpu`, `filter_wall` | The call's [noise filter](#-noise-filter) mode, and its CPU seconds over the seconds since the call's last record |
 | `barge` | Your words cut Alfred's last reply off: **remark**, **point** (a question) or **unsure** (left to the brain) |
 
 </details>

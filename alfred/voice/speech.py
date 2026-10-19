@@ -434,11 +434,13 @@ class WhisperSTT(stt.STT):
             return ""  # another voice: stay silent
         heard = await self._words(early)
         heard_early = heard is not None
+        started = time.monotonic()
         heard = heard or await self._heard(audio)
+        whisper = None if heard_early else time.monotonic() - started  # its wait for Whisper (the GPU queue included)
         text = heard["text"]
         echo = bool(self._prompt) and self._vocabulary.echo(text)
         passes = await asyncio.to_thread(self._gate.passes, measured, text, heard["no_speech"], audio,
-                                         avg_logprob=heard["avg_logprob"], echo=echo)
+                                         avg_logprob=heard["avg_logprob"], echo=echo, whisper=whisper)
         if judged is not None:
             await asyncio.to_thread(self._speaker.record, judged, text)
         if not passes:
@@ -448,7 +450,8 @@ class WhisperSTT(stt.STT):
         # Silero's speech seconds: the gate's, else the speaker check's, else unknown (both off)
         speech = measured.speech_seconds if measured is not None else judged.speech_seconds if judged else None
         self.clips.append({"words": len(fixed.split()), "logprob": heard["avg_logprob"], "speaker": self._who(judged),
-                           "speech": speech, "early": heard_early})
+                           "speech": speech, "early": heard_early,
+                           "whisper": None if whisper is None else round(whisper, 3)})
         return fixed
 
     def _who(self, judged) -> str | None:
@@ -458,7 +461,8 @@ class WhisperSTT(stt.STT):
         return self._speaker.prints[0].name if judged.reference == "this call" else judged.reference
 
     def take_clips(self) -> list[dict]:
-        """Return and clear clips since the last call: [{words, logprob, speaker, speech (Silero seconds), early}]."""
+        """Return and clear clips since the last call: [{words, logprob, speaker, speech (Silero seconds), early,
+        whisper (seconds waited on Whisper; None if heard early)}]."""
         clips, self.clips = self.clips, []
         return clips
 

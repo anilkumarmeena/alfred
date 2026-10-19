@@ -75,6 +75,56 @@ def test_the_modes_put_the_filter_where_they_say():
     assert denoise.session_vad(silero, None, "vad") is silero
 
 
+def test_ab_mode_picks_on_or_vad_for_each_call(caplog):
+    with caplog.at_level(logging.INFO, logger="alfred.voice.denoise"):
+        assert denoise.pick(Silent(), "ab", choose=lambda arms: arms[-1]) == "vad"
+    assert "vad mode for this call" in caplog.text
+    assert {denoise.pick(Silent(), "ab") for _ in range(64)} == {"on", "vad"}
+    assert denoise.pick(Silent(), "vad") == "vad" and denoise.pick(Silent(), "on") == "on"
+    assert denoise.pick(None, "ab") == "off"  # no model: nothing filters
+    assert denoise.room_options(Silent(), "ab").audio_input.noise_cancellation is None  # the call's pick decides
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 100.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_the_meter_hands_each_turn_the_filters_cpu_since_the_last():
+    clock = Clock()
+    meter = denoise.Meter("vad", clock)
+    meter.add(0.25)
+    meter.add(0.5)
+    clock.now = 130.0
+    assert meter.take() == {"denoise": "vad", "filter_cpu": 0.75, "filter_wall": 30.0}
+    clock.now = 140.0
+    assert meter.take() == {"denoise": "vad", "filter_cpu": 0.0, "filter_wall": 10.0}
+    assert denoise.Meter("off").take() == {"denoise": "off"}
+
+
+def test_both_modes_meter_the_filters_cpu():
+    x = noise(0.5, 24000)
+    on = denoise.Meter("on")
+    processor = denoise.room_options(Silent(), "on", on).audio_input.noise_cancellation(None)
+    for f in frames(x, 1200):
+        processor._process(rtc.AudioFrame(f.tobytes(), 24000, 1, 1200))
+    assert on.take()["filter_cpu"] > 0
+
+    async def main(meter):
+        stream = denoise.session_vad(Recorder(), Silent(), "vad", meter).stream()
+        for f in frames(x, 1200):
+            stream.push_frame(rtc.AudioFrame(f.tobytes(), 24000, 1, 1200))
+        stream.end_input()
+        return [ev async for ev in stream]
+
+    vad_only = denoise.Meter("vad")
+    asyncio.run(main(vad_only))
+    assert vad_only.take()["filter_cpu"] > 0  # timed in the worker thread that filters
+
+
 def test_a_failing_filter_passes_the_original_through(caplog):
     class Broken:
         def run(self, *_):

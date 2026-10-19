@@ -8,7 +8,8 @@ from ai_armory.toolsets.google import GoogleSettings, current
 from alfred import config, tools
 from alfred.brain import cli
 from alfred.gates import draft_gate
-from alfred.integrations import accounts
+from alfred.integrations import accounts, mcp_servers
+from alfred.llm import claude
 from alfred.safety.commands import ALFRED_SECRETS
 from alfred.storage import profile
 from alfred.tasks import worker
@@ -77,6 +78,34 @@ def test_the_cli_brain_gets_every_google_tool_but_sends_and_deletes_only_through
     others = {"mcp__alfred__skill_confirm", "mcp__alfred__connection_confirm"}  # skills' and connections'
     assert draft_gate.gated() - others == {f"mcp__alfred__{n}" for n in GATED}
     assert isinstance(brain.shell, draft_gate.DraftGate) and opts.can_use_tool is brain.shell
+
+
+def listed(server: dict) -> dict[str, dict]:
+    """The tools in-process `server` lists to the CLI, each with its _meta."""
+    found = asyncio.run(server["instance"].get_request_handler("tools/list").handler(None, None))
+    return {t.name: t.meta or {} for t in found.tools}
+
+
+def test_the_voice_brain_loads_docs_sheets_and_slides_edits_through_tool_search_and_the_rest_up_front():
+    brain = cli.CliBrain()
+    opts = cli._options(brain.shell, brain.jobs)
+    own = opts.mcp_servers["alfred"]
+    later = {name for name, meta in listed(own).items() if not meta.get(claude.UP_FRONT)}
+    edits = {n for n in TOOLS["docs"] | TOOLS["sheets"] | TOOLS["slides"] if not n.endswith(("_search", "_read"))}
+    assert later == edits and {"docs_insert", "sheets_write", "docs_draft_delete", "docs_delete"} <= later
+    assert own["alwaysLoad"] is False and claude.TOOL_SEARCH_TOOL in opts.tools
+    assert claude.TOOL_SEARCH_TOOL in opts.allowed_tools and opts.env["ENABLE_TOOL_SEARCH"] == claude.TOOL_SEARCH
+    # Deferred, not taken away: allowed once loaded, deletes still only through the gate
+    assert "mcp__alfred__docs_insert" in opts.allowed_tools and "mcp__alfred__docs_delete" not in opts.allowed_tools
+    assert google.prompt() in opts.system_prompt and "select:mcp__alfred__<tool>" in google.prompt()
+
+
+def test_with_tool_search_off_every_google_tool_loads_up_front(monkeypatch):
+    monkeypatch.setattr(mcp_servers, "ON_DEMAND", False)  # ALFRED_TOOL_SEARCH=false: a deferred tool never loads
+    brain = cli.CliBrain()
+    opts = cli._options(brain.shell, brain.jobs)
+    assert opts.mcp_servers["alfred"]["alwaysLoad"] is True and google.prompt() not in opts.system_prompt
+    assert not any(meta for meta in listed(opts.mcp_servers["alfred"]).values())
 
 
 def test_an_account_signed_in_mid_conversation_restarts_the_voice_cli_to_take_it(voice, own_profile):

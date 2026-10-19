@@ -23,6 +23,7 @@ from alfred.gates import shell
 from alfred.gates.shell import ShellGate
 from alfred.llm import claude, claude_logins, usage
 from alfred.llm.roles import Role
+from alfred.llm.sdk import RateLimitInfo
 from alfred.safety import host
 from alfred.tasks import client, command_jobs, events as task_events, runner, schedules, stall
 from alfred.tasks.command_jobs import Triage, parse_triage
@@ -739,6 +740,20 @@ def test_a_command_runs_on_the_claude_login_alfred_runs_on(env, logins):
     assert own["summary"].endswith("on=.") and command_jobs.spec(own)["login"] == ""  # this computer's own sign-in
     assert work["summary"].endswith(f"on={logins}.") and command_jobs.spec(work)["login"] == "work"
     assert r.view(work)["command"]["login"] == "work"
+
+
+def test_a_command_starts_on_the_claude_login_with_the_most_room(env, logins):
+    usage.record(RateLimitInfo("allowed", resets_at=int(time.time() + 3600), rate_limit_type="five_hour",
+                               utilization=0.7), login="")
+
+    async def main():
+        r = make()
+        task = r.start_command('echo "on=$CLAUDE_CONFIG_DIR."', "room", str(env["project"]), summarize=False)
+        return await ended(r, task["id"])
+
+    task = asyncio.run(main())
+    assert claude_logins.active() == ""  # tasks and calls stay on the first: it isn't used up
+    assert task["summary"].endswith(f"on={logins}.") and command_jobs.spec(task)["login"] == "work"
 
 
 def test_a_run_whose_claude_login_is_signed_out_runs_again_on_the_next_one(env, logins):

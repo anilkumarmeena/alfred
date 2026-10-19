@@ -4,6 +4,8 @@ ALFRED_DENOISE modes:
   on    filter the room mic input (VAD, barge-in and Whisper all hear it)
   vad   only the VAD hears filtered audio; Whisper gets the original, to compare recognition
   off   original audio everywhere
+  ab    each call on or vad at random, for comparing: its turns (make voice-timing) and the speech gate's clips carry
+        the call's mode, with the filter's CPU and Whisper's time
 Model: single-file streaming export (make models), 10 ms of 48 kHz per call, state passed in and out.
 Load failure logs a warning and falls back to original audio.
 """
@@ -11,7 +13,10 @@ Load failure logs a warning and falls back to original audio.
 import asyncio
 import dataclasses
 import logging
+import random
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +35,7 @@ MODEL_DELAY = 1440  # output lag in samples: STFT 480 + two lookahead frames
 # Export's own attenuation limit disabled: its dry mix is a frame out of step (Denoiser does it instead)
 _FULL = np.array(0, np.float32)
 HISTORY_SECONDS = 75  # vad mode history: Silero's 60 s buffer + padding + slack
+ARMS = ("on", "vad")  # ab mode's choices
 
 
 def load(path: Path = DENOISE_MODEL, mode: str = DENOISE):
@@ -60,6 +66,40 @@ def load(path: Path = DENOISE_MODEL, mode: str = DENOISE):
     return session
 
 
+def pick(session, mode: str = DENOISE, choose: Callable[[tuple[str, ...]], str] = random.choice) -> str:
+    """This call's mode: "off" without a filter; on or vad at random in "ab" mode."""
+    if session is None:
+        return "off"
+    if mode != "ab":
+        return mode
+    chosen = choose(ARMS)
+    log.info("noise filter: %s mode for this call (ab)", chosen)
+    return chosen
+
+
+class Meter:
+    """The filter's CPU in one call, for its turns' records. Filters add from the event loop (on) or threads (vad)."""
+
+    def __init__(self, mode: str, clock: Callable[[], float] = time.monotonic) -> None:
+        self.mode, self._clock = mode, clock
+        self._lock = threading.Lock()
+        self._cpu, self._since = 0.0, clock()
+
+    def add(self, seconds: float) -> None:
+        with self._lock:
+            self._cpu += seconds
+
+    def take(self) -> dict:
+        """{denoise: mode, filter_cpu, filter_wall}: CPU and wall seconds since the last take (the mode alone if off)."""
+        if self.mode == "off":
+            return {"denoise": "off"}
+        now = self._clock()
+        with self._lock:
+            cpu, self._cpu = self._cpu, 0.0
+        wall, self._since = now - self._since, now
+        return {"denoise": self.mode, "filter_cpu": round(cpu, 3), "filter_wall": round(wall, 1)}
+
+
 def _run(session, hop: np.ndarray, state: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     out, state, _lsnr = session.run(None, {"input_frame": hop, "states": state, "atten_lim_db": _FULL})
     return out, state
@@ -67,10 +107,11 @@ def _run(session, hop: np.ndarray, state: np.ndarray) -> tuple[np.ndarray, np.nd
 
 class Denoiser:
     """DeepFilterNet over one mono int16 stream at any rate. Each call returns len(input) samples, `delay` behind
-    (silence while filling)."""
+    (silence while filling). `meter` gets each call's CPU time."""
 
-    def __init__(self, session, atten_db: float = DENOISE_ATTEN_DB) -> None:
+    def __init__(self, session, atten_db: float = DENOISE_ATTEN_DB, meter: Meter | None = None) -> None:
         self._session = session
+        self._meter = meter
         # Dry mix so nothing drops more than atten_db (0 = no limit)
         self._keep = np.float32(10 ** (-atten_db / 20) if atten_db > 0 else 0)
         self._state = np.zeros(STATE_SIZE, np.float32)
@@ -90,6 +131,14 @@ class Denoiser:
         self.delay = round(MODEL_DELAY * rate / RATE)
 
     def process(self, pcm: np.ndarray, rate: int) -> np.ndarray:
+        start = time.thread_time()
+        try:
+            return self._process(pcm, rate)
+        finally:
+            if self._meter is not None:
+                self._meter.add(time.thread_time() - start)
+
+    def _process(self, pcm: np.ndarray, rate: int) -> np.ndarray:
         if rate != self._rate:
             self._start(rate)
         n = len(pcm)
@@ -132,8 +181,8 @@ class DeepFilterNet(rtc.FrameProcessor[rtc.AudioFrame]):
 
     Runs on the event loop, so must stay real-time: ~8 ms CPU per 50 ms frame on an M-series Mac."""
 
-    def __init__(self, session, atten_db: float = DENOISE_ATTEN_DB) -> None:
-        self._denoiser = Denoiser(session, atten_db)
+    def __init__(self, session, atten_db: float = DENOISE_ATTEN_DB, meter: Meter | None = None) -> None:
+        self._denoiser = Denoiser(session, atten_db, meter)
         self._enabled = True
         self._frames, self._busy, self._worst, self._audio = 0, 0.0, 0.0, 0.0
         self._slow_warned = 0.0
@@ -173,25 +222,26 @@ class DeepFilterNet(rtc.FrameProcessor[rtc.AudioFrame]):
                      self._frames, self._busy / self._frames * 1000, self._worst * 1000, self._busy / self._audio * 100)
 
 
-def room_options(session, mode: str = DENOISE) -> room_io.RoomOptions:
+def room_options(session, mode: str = DENOISE, meter: Meter | None = None) -> room_io.RoomOptions:
     """Room options: mic through DeepFilterNet in "on" mode. AGC stays on in all modes so only the filter differs."""
     audio = room_io.AudioInputOptions(auto_gain_control=True)
     if session is not None and mode == "on":
-        audio.noise_cancellation = lambda _params: DeepFilterNet(session)  # one per mic track, own state
+        audio.noise_cancellation = lambda _params: DeepFilterNet(session, meter=meter)  # one per mic track, own state
     return room_io.RoomOptions(audio_input=audio)
 
 
-def session_vad(silero: vad.VAD, session, mode: str = DENOISE) -> vad.VAD:
+def session_vad(silero: vad.VAD, session, mode: str = DENOISE, meter: Meter | None = None) -> vad.VAD:
     """Session VAD; in "vad" mode, decides on filtered audio but emits the original."""
-    return FilteredVAD(silero, session) if session is not None and mode == "vad" else silero
+    return FilteredVAD(silero, session, meter=meter) if session is not None and mode == "vad" else silero
 
 
 class FilteredVAD(vad.VAD):
-    """Silero decides on denoised audio; events carry the original audio (which the STT adapter cuts for Whisper)."""
+    """Silero decides on denoised audio; events carry the original audio (which the STT adapter cuts for Whisper).
+    Each stream filters on its own, and a call has two: turn-taking's and the STT adapter's."""
 
-    def __init__(self, inner: vad.VAD, session, atten_db: float = DENOISE_ATTEN_DB) -> None:
+    def __init__(self, inner: vad.VAD, session, atten_db: float = DENOISE_ATTEN_DB, meter: Meter | None = None) -> None:
         super().__init__(capabilities=inner.capabilities)
-        self._inner, self._session, self._atten_db = inner, session, atten_db
+        self._inner, self._session, self._atten_db, self._meter = inner, session, atten_db, meter
 
     @property
     def model(self) -> str:
@@ -202,7 +252,7 @@ class FilteredVAD(vad.VAD):
         return self._inner.provider
 
     def stream(self) -> "FilteredVADStream":
-        return FilteredVADStream(self, self._inner, Denoiser(self._session, self._atten_db))
+        return FilteredVADStream(self, self._inner, Denoiser(self._session, self._atten_db, self._meter))
 
 
 class _History:

@@ -16,7 +16,9 @@ so the brain hands the rest to a lookup or a task. Slow Alfred tool calls carry 
 
 The CLI's prompt and tools are fixed when it starts, so a turn that finds the connections (their keys, addresses,
 tool sorting, which are on), the skills or the Google accounts changed restarts it on the same conversation
-(`resume`), and tells the brain they were reloaded.
+(`resume`), and tells the brain they were reloaded. The prompt holds nothing that changes from one conversation to
+the next, so its cache carries over: memory and the latest exchanges start a new conversation's first message.
+Docs, Sheets and Slides editing tools load through ToolSearch when needed (alfred.tools.google.editing).
 """
 
 import asyncio
@@ -109,7 +111,8 @@ def _options(gate: mcp_gate.Gate, jobs: shell.Jobs, kept: Kept | None = None, bu
     """The voice CLI's options; with `resume`, carrying on that session's conversation on the login holding it (a
     fresh one if no login does)."""
     login = claude_logins.resume_on(resume)
-    server, allowed = alfred_server(kept=kept)
+    # Docs, Sheets and Slides editing waits for ToolSearch, while tool search is on (else it could never load)
+    server, allowed = alfred_server(kept=kept, later=google.editing if mcp_servers.ON_DEMAND else None)
     # Read per session; a slow server goes to the background after CONNECTION_WAIT seconds
     mcp = mcp_servers.session(mcp_servers.for_voice(), wait=CONNECTION_WAIT)
     gate.use(mcp.servers)
@@ -122,6 +125,7 @@ def _options(gate: mcp_gate.Gate, jobs: shell.Jobs, kept: Kept | None = None, bu
         cwd=str(shell.scratch_dir()),
         system_prompt=system_prompt(shell.prompt() + LOOKUP_PROMPT + screen.prompt()
                                     + (browser.prompt() if browser_on() else "")
+                                    + (google.prompt() if server.get("alwaysLoad") is False else "")
                                     + mcp_servers.prompt(mcp.servers) + connections.prompt()
                                     + skill_tools.prompt(found)),
         model=usage.available(Role.VOICE),  # lighter model while Opus's weekly limit is used up
@@ -213,6 +217,7 @@ class CliBrain(Notes):
         await client.connect()
         self.client = client
         self._main = self._model = options.model
+        self.fresh = options.resume is None  # a carried-on conversation has its context already
 
     async def _use_model(self) -> None:
         """Switch to next_model for this turn if set, else the session model; same session keeps history."""

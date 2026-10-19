@@ -36,7 +36,7 @@ from alfred.media import transcribe
 from alfred.safety import host  # noqa: E402
 from alfred.state import conversation, settings  # noqa: E402
 from alfred.storage import profile
-from alfred.tasks import merge_check  # noqa: E402
+from alfred.tasks import merge_check, runner  # noqa: E402
 
 PROFILE = profile.Profile("test", "Sam", config.mac_timezone() or "UTC", config.DATA_DIR, config.DB_FILE,
                           SCRATCH / "secrets")
@@ -44,6 +44,7 @@ profile.activate(PROFILE)
 transcribe.LOG_FILE = SCRATCH / "transcribe.log"  # keep errors out of the checkout's logs/
 config.CLAUDE_LOGINS_DIR = SCRATCH / "claude-logins"  # never this computer's Claude logins
 host.JOB_POLL = 0.05  # jobs' ends are seen at once, not up to 2 s later
+runner.Runner.short_of_memory = staticmethod(lambda: False)  # never this computer's: test_task_admission fakes it
 bootstrap.wire()  # as every process does at start: task sessions and watches get Alfred's tools
 
 
@@ -106,12 +107,14 @@ with accounts.change() as found:
 settings.set_about(ABOUT)
 
 
-# What this run did, noted against the code it ran on: merging exactly that code needn't run the suite again
+# What this run did, noted against the code it ran on: merging exactly that code needn't run the suite again.
+# Under pytest-xdist (-n) only the controller notes it: every worker's reports reach it, and workers note nothing.
 _RUN: dict = {"tree": None, "ran": set(), "failed": set()}
 
 
-def pytest_collection_finish(session):
-    _RUN["tree"] = merge_check.code_tree(session.config.rootpath)
+def pytest_sessionstart(session):
+    if not hasattr(session.config, "workerinput"):  # not an xdist worker
+        _RUN["tree"] = merge_check.code_tree(session.config.rootpath)
 
 
 def pytest_runtest_logreport(report):

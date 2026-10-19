@@ -310,6 +310,8 @@ def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> Claud
     model, effort = _model(task)
     # After each call: the user's nudges, and connections restarted since
     after = _nudge_hook(task["id"], reporter) + (live.told if live.running else [])
+    # Its own login, or the next one if that's passed over; a new session where there's room (claude_logins.starting)
+    login = claude_logins.resume_on(task["session_id"])
 
     return _wired().options(
         env=env,
@@ -332,7 +334,7 @@ def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> Claud
         settings=json.dumps(flags) if flags else None,
         max_turns=TASK_MAX_TURNS,
         resume=task["session_id"],
-        login=claude_logins.resume_on(task["session_id"]),  # its own login, or the next one if that's passed over
+        login=claude_logins.starting() if login is None else login,
         stderr=lambda line: log.debug("task %s claude: %s", task["id"], line),
     )
 

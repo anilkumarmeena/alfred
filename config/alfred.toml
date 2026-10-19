@@ -10,7 +10,7 @@ assistant = "Alfred"           # ALFRED_ASSISTANT_NAME: the name the assistant g
 voice = "bm_george"            # ALFRED_TTS_VOICE: Kokoro voice, b*/a* = British/American, then m/f
 voice_speed = 1.05             # ALFRED_TTS_SPEED: 0.5-2.0
 speech_gate = "enforce"        # ALFRED_SPEECH_GATE: enforce, shadow or off
-max_tasks = 6                  # ALFRED_MAX_TASKS: tasks running at once (1-12), the rest queue
+max_tasks = 3                  # ALFRED_MAX_TASKS: tasks running at once (1-12), the rest queue
 browser = "on"                 # ALFRED_BROWSER: browser tools on or off
 browser_window = "headed"      # ALFRED_BROWSER_WINDOW: headed or headless
 speaker_check = "on"           # ALFRED_SPEAKER_CHECK: on, shadow or off
@@ -126,7 +126,7 @@ vad_min_speech = 0.2           # ALFRED_VAD_MIN_SPEECH
 vad_min_silence = 0.55         # ALFRED_VAD_MIN_SILENCE (0.3-2)
 whisper_early = 0.25           # ALFRED_WHISPER_EARLY: silence that starts Whisper before the VAD ends the clip; 0 = off
 vad_threshold = 0.5            # ALFRED_VAD_THRESHOLD
-denoise = "on"                 # ALFRED_DENOISE: on, vad or off
+denoise = "on"                 # ALFRED_DENOISE: on, vad, off, or ab (each call on or vad at random, for comparing)
 denoise_atten_db = 18.0        # ALFRED_DENOISE_ATTEN_DB (0 = no limit)
 
 [audio_files]

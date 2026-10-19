@@ -211,7 +211,9 @@ def test_whisper_keeps_each_clip_passed_on_for_the_turn():
     stt = speech.WhisperSTT(gate=SpeechGate("off", record=None, audio_dir=None), executor=Executor())
     asyncio.run(stt._hear([rtc.AudioFrame(np.zeros(480, np.int16).tobytes(), 48000, 1, 480)]))
     # gate and speaker check both off: nothing measured the clip's speech
-    assert stt.take_clips() == [{"words": 4, "logprob": -0.6, "speaker": None, "speech": None}]
+    [clip] = stt.take_clips()
+    assert clip.pop("whisper") >= 0  # seconds it waited on Whisper
+    assert clip == {"words": 4, "logprob": -0.6, "speaker": None, "speech": None, "early": False}
     assert stt.take_clips() == []
 
 
@@ -325,7 +327,9 @@ def test_the_agent_logs_who_spoke_each_turn_and_tells_the_brain_one_went_on_from
     pacing = turn.Pacing(turn.Paces(lambda key, default="": default, lambda key, value: None))
     brain, router = Brain(), Router()
     voice = VoiceSession(brain, timings=timings, pacing=pacing, router=router,
-                         stt=Clips([{"words": 3, "logprob": -0.4, "speaker": None}],
+                         stt=Clips([{"words": 2, "logprob": -0.4, "speaker": None, "whisper": 0.5},
+                                    {"words": 1, "logprob": -0.4, "speaker": None, "early": True, "whisper": None},
+                                    {"words": 1, "logprob": -0.4, "speaker": None, "whisper": 0.25}],
                                    [{"words": 5, "logprob": -1.5, "speaker": None}]))
     alfred = agent.AlfredAgent(voice)
 
@@ -350,6 +354,7 @@ def test_the_agent_logs_who_spoke_each_turn_and_tells_the_brain_one_went_on_from
     [first] = learned
     assert first["ended"] == "unspoken" and first["resumed"] == 1.0 and first["speaker"] == "owner"
     assert first["logprob"] == -0.4 and not {"eot", "judge", "wait"} & first.keys()
+    assert first["whisper"] == 0.75 and first["early"] == 1  # waited on Whisper for the clips not heard early
     assert "resumed after 1.00 s" in timing.describe(first)
     assert router.guessed == ["Okay, great. So", "let's discuss what to do next."]  # each turn's own words
     assert brain.framed[0][0].startswith('[This goes on from their last message ("Okay, great. So")')

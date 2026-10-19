@@ -343,6 +343,110 @@ def test_the_launcher_relays_a_local_server_and_goes_when_the_cli_does(tmp_path)
     mcp_servers.remove("echo")
 
 
+# ── Started at its first call ───────────────────────────────────
+
+COUNTED_SERVER = textwrap.dedent("""
+    import json, os, sys
+    open(sys.argv[1], "a").write("started\\n")
+    for line in sys.stdin:
+        m = json.loads(line)
+        if "id" not in m:
+            continue
+        if m["method"] == "initialize":
+            result = {"protocolVersion": m["params"]["protocolVersion"], "capabilities": {"tools": {}}}
+        elif m["method"] == "tools/list":
+            result = {"tools": [{"name": n, "inputSchema": {"type": "object"}} for n in os.environ["TOOLS"].split(",")]}
+        else:
+            result = {"content": [{"type": "text", "text": "echo " + m["params"]["arguments"]["q"]}]}
+        print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": result}), flush=True)
+""")
+HELLO = {"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}
+READY = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+LIST = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+
+
+class Lines:
+    """The CLI's side of the relay's stdout."""
+
+    def __init__(self) -> None:
+        self.got: list[dict] = []
+
+    def write(self, line: str) -> None:
+        self.got.append(json.loads(line))
+
+    def flush(self) -> None:
+        pass
+
+
+@pytest.fixture
+def counted(tmp_path):
+    """Runs a session against a server that notes each start, until each request and `told` notifications are
+    answered: session(*sent, tools=..., argv=..., told=0) -> (said, starts)."""
+    script, starts = tmp_path / "server.py", tmp_path / "starts"
+    script.write_text(COUNTED_SERVER)
+    mcp_servers.keep_listing(SERVER.name, "", {})
+
+    def session(*sent: dict, tools: str = "find", argv: list[str] | None = None, told: int = 0):
+        how = (argv or [sys.executable, str(script), str(starts)], os.environ | {"TOOLS": tools})
+        asked = sum(1 for m in sent if "id" in m)
+
+        async def main():
+            reader, out = asyncio.StreamReader(), Lines()
+            reader.feed_data(b"".join(json.dumps(m).encode() + b"\n" for m in sent))
+            serving = asyncio.create_task(mcp_relay.serve(SERVER, command=how, reader=reader, out=out))
+            for _ in range(500):
+                answered = sum(1 for m in out.got if "id" in m)
+                if answered >= asked and len(out.got) - answered >= told:
+                    break
+                await asyncio.sleep(0.01)
+            reader.feed_eof()
+            await asyncio.wait_for(serving, 10)
+            return out.got
+
+        said = asyncio.run(main())
+        return said, len(starts.read_text().splitlines()) if starts.exists() else 0
+
+    yield session
+    mcp_servers.keep_listing(SERVER.name, "", {})
+
+
+def test_a_server_starts_only_at_its_first_call_its_tools_listed_from_its_last_start(counted):
+    first, starts = counted(HELLO, READY, LIST)
+    assert starts == 1  # nothing kept yet
+    listed, starts = counted(HELLO, READY, LIST)
+    assert starts == 1 and listed == first  # answered from what it said, still marked as Alfred sorted it
+    assert listed[1]["result"]["tools"][0] == {"name": "find", "inputSchema": {"type": "object"},
+                                               "annotations": {"readOnlyHint": True}}
+    said, starts = counted(HELLO, READY, LIST, {"jsonrpc": "2.0", "id": 2, "method": "ping"}, call(3))
+    assert starts == 2  # for the call, not the ping
+    assert said[2:] == [{"jsonrpc": "2.0", "id": 2, "result": {}},
+                        {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "echo invoices"}]}}]
+
+
+def test_a_server_whose_tools_changed_says_so_when_started(counted):
+    counted(HELLO, READY, LIST)
+    said, _ = counted(HELLO, READY, LIST, call(2), tools="find,report", told=1)
+    assert {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"} in said
+    listed, starts = counted(HELLO, READY, LIST)
+    assert starts == 2 and [t["name"] for t in listed[1]["result"]["tools"]] == ["find", "report"]
+
+
+def test_a_new_protocol_version_or_way_of_running_it_starts_it_at_once(counted, monkeypatch):
+    counted(HELLO, READY, LIST)
+    _, starts = counted(HELLO | {"params": {"protocolVersion": "2099-01-01"}}, READY, LIST)
+    assert starts == 2
+    monkeypatch.setattr(SERVER, "args", ["--other"])  # its run_key changes
+    _, starts = counted(HELLO, READY, LIST)
+    assert starts == 3
+
+
+def test_a_server_that_cant_start_late_fails_its_call_not_the_session(counted, tmp_path):
+    counted(HELLO, READY, LIST)
+    said, _ = counted(HELLO, READY, LIST, call(2), argv=[str(tmp_path / "gone")])
+    assert said[1]["result"]["tools"][0]["name"] == "find"
+    assert said[2]["id"] == 2 and "Acme couldn't start" in said[2]["error"]["message"]
+
+
 # ── The runner's connection tasks ───────────────────────────────
 
 @pytest.fixture

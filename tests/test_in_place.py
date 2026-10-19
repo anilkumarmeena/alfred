@@ -2,13 +2,14 @@
 
 import asyncio
 import functools
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from alfred import projects
-from alfred.tasks import events, git_ops, merge_check, runner, worker
+from alfred.tasks import events, git_ops, merge_check, runner, warm, worker
 from alfred.tasks.worker import Outcome
 from alfred.tools import tasks as task_tools
 from conftest import use_profile, use_task_cache
@@ -445,13 +446,94 @@ def test_merge_conflict_leaves_everything_as_it_was(env, monkeypatch):
     r, task = run_worktree_task(monkeypatch, edit)
     (other / "app.py").write_text("print('from main')\n")
     git(other, "commit", "-qam", "meanwhile")
-    head = git(other, "rev-parse", "HEAD")
+    head, tip = git(other, "rev-parse", "HEAD"), git(other, "rev-parse", task["branch"])
 
-    with pytest.raises(ValueError, match="failed, so nothing changed"):
+    with pytest.raises(ValueError, match="(?s)failed, so nothing changed.*It conflicts with main in app.py"):
         asyncio.run(r.merge(task["id"]))
     assert git(other, "rev-parse", "HEAD") == head and git(other, "status", "--porcelain") == ""
     assert task["branch"] in branches(other) and Path(task["worktree"]).exists()
     assert not (other / ".git" / "SQUASH_MSG").exists()  # nor a stale message for the user's next commit
+    wt = Path(task["worktree"])  # its rebase was tried and undone: the branch and worktree are as they were
+    assert git(other, "rev-parse", task["branch"]) == tip and git(wt, "status", "--porcelain") == ""
+    assert git(wt, "rev-parse", "--abbrev-ref", "HEAD") == task["branch"]
+    assert not Path(git(wt, "rev-parse", "--git-path", "rebase-merge")).exists()
+
+
+def test_a_branch_behind_is_rebased_onto_main_so_its_tests_run_on_what_is_merged(alfred, monkeypatch):
+    tested = []
+
+    async def passing(folder, venv, tests=()):
+        tested.append((folder / "main.py").exists())
+        return set()
+
+    monkeypatch.setattr(merge_check, "failures", passing)
+    r, task = run_worktree_task(monkeypatch, add_new_file, project="alfred")
+    (alfred / "main.py").write_text("m = 1\n")
+    git(alfred, "add", "-A")
+    git(alfred, "commit", "-qm", "meanwhile")
+    head = git(alfred, "rev-parse", "HEAD")
+
+    merged = asyncio.run(r.merge(task["id"]))
+    assert tested[0] is True  # the worktree had main's newer commit when its tests ran
+    said = "merged into main as one commit, rebased onto main's newer commits first, its tests passing"
+    assert said in merged["spoken"]
+    assert git(alfred, "log", "-1", "--format=%P") == head and branches(alfred) == ["main"]
+    assert git(alfred, "show", "--name-only", "--format=", "HEAD") == "new.py"
+
+
+def test_a_rebase_moves_no_other_branch_whatever_the_users_settings(env, monkeypatch):
+    other = env["other"]
+    r, task = run_worktree_task(monkeypatch, add_new_file)
+    git(other, "branch", "mine", task["branch"])  # the user's own branch, on the task's commit
+    git(other, "config", "rebase.updateRefs", "true")  # alone, it would move "mine" along with the rebase
+    mine = git(other, "rev-parse", "mine")
+    (other / "main.py").write_text("m = 1\n")
+    git(other, "add", "-A")
+    git(other, "commit", "-qm", "meanwhile")
+
+    merged = asyncio.run(r.merge(task["id"]))
+    assert "rebased onto main's newer commits first" in merged["spoken"]
+    assert git(other, "rev-parse", "mine") == mine and branches(other) == ["main", "mine"]
+
+
+def test_only_a_tasks_own_branch_in_its_own_worktree_is_ever_rebased(env, monkeypatch):
+    other = env["other"]
+    _, task = run_worktree_task(monkeypatch, add_new_file)
+    wt, tip = Path(task["worktree"]), git(other, "rev-parse", task["branch"])
+    (other / "main.py").write_text("m = 1\n")
+    git(other, "add", "-A")
+    git(other, "commit", "-qm", "meanwhile")
+    head = git(other, "rev-parse", "HEAD")
+
+    def catch_up(folder: Path | None, task_id: int) -> tuple[str, list[str]]:
+        return asyncio.run(git_ops._catch_up(other, folder and str(folder), task["branch"], task_id, head))
+
+    assert catch_up(wt, task["id"] + 1) == ("", [])  # not the task's own branch
+    assert catch_up(other, task["id"]) == ("", [])  # the user's own folder
+    assert catch_up(None, task["id"]) == ("", [])
+    assert git(other, "rev-parse", task["branch"]) == tip
+    assert catch_up(wt, task["id"]) == (tip, [])
+    assert git(other, "rev-parse", f"{task['branch']}~1") == head
+    assert catch_up(wt, task["id"]) == ("", [])  # not behind any more
+
+
+def test_a_rebased_branch_that_isnt_merged_after_all_goes_back_as_it_was(alfred, monkeypatch):
+    async def failing(folder, venv, tests=()):
+        return {"tests/test_x.py::test_y"} if folder != alfred else set()
+
+    monkeypatch.setattr(merge_check, "failures", failing)
+    r, task = run_worktree_task(monkeypatch, add_new_file, project="alfred")
+    tip = git(alfred, "rev-parse", task["branch"])
+    (alfred / "main.py").write_text("m = 1\n")
+    git(alfred, "add", "-A")
+    git(alfred, "commit", "-qm", "meanwhile")
+    head = git(alfred, "rev-parse", "HEAD")
+
+    with pytest.raises(ValueError, match="1 test fails on it that pass on main"):
+        asyncio.run(r.merge(task["id"]))
+    wt = Path(task["worktree"])
+    assert git(alfred, "rev-parse", "HEAD") == head and git(alfred, "rev-parse", task["branch"]) == tip
+    assert git(wt, "status", "--porcelain") == "" and not (wt / "main.py").exists()
 
 
 def test_merge_squashes_checkpoints_and_catch_up_merges_into_one_commit(env, monkeypatch):
@@ -567,3 +649,116 @@ def test_merge_works_for_alfred_itself(alfred, monkeypatch):
     merged = asyncio.run(r.merge(task["id"]))
     assert (alfred / "new.py").exists() and branches(alfred) == ["main"]
     assert "merged into main as one commit, its tests passing" in merged["spoken"]
+
+
+# ── Worktrees pre-warmed with the main checkout's dependencies ──
+
+
+def with_dependencies(repo: Path) -> None:
+    """Ignored node_modules (top, web/, and in a folder git doesn't have) and a .venv whose scripts name the repo."""
+    (repo / ".gitignore").write_text("node_modules/\n.venv/\n")
+    (repo / "web").mkdir()
+    (repo / "web" / "app.js").write_text("")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "deps ignored")
+    for folder in ("node_modules/pkg", "web/node_modules/pkg", "scratch/node_modules/pkg"):
+        (repo / folder).mkdir(parents=True)
+        (repo / folder / "index.js").write_text("module.exports = 1\n")
+    (repo / "node_modules" / ".bin").mkdir()
+    (repo / "node_modules" / ".bin" / "pkg").symlink_to("../pkg/index.js")
+    bin_, site = repo / ".venv" / "bin", repo / ".venv" / "lib" / "python3.12" / "site-packages"
+    bin_.mkdir(parents=True)
+    site.mkdir(parents=True)
+    (bin_ / "python").symlink_to("/usr/bin/python3")
+    (bin_ / "pytest").write_text(f"#!{repo}/.venv/bin/python\nimport pytest\n")
+    (bin_ / "activate").write_text(f"VIRTUAL_ENV='{repo}/.venv'\n")
+    (site / "_project.pth").write_text(f"{repo}/src\n{repo}-old/src\nimport os\n")
+
+
+def plain_copy(monkeypatch) -> None:
+    """Clones as a plain copy: the tests' filesystem may not clone (Linux tmpfs, ext4)."""
+
+    def clone(source: Path, dest: Path) -> bool:
+        shutil.copytree(source, dest, symlinks=True)
+        return True
+
+    monkeypatch.setattr(warm, "clone", clone)
+
+
+def test_a_worktree_starts_with_the_main_checkouts_dependencies(env, monkeypatch):
+    other = env["other"]
+    with_dependencies(other)
+    plain_copy(monkeypatch)
+    r, task = run_worktree_task(monkeypatch, add_new_file)
+    worktree = Path(task["worktree"])
+    assert (worktree / "node_modules/pkg/index.js").is_file() and (worktree / "web/node_modules/pkg/index.js").is_file()
+    assert (worktree / "node_modules/.bin/pkg").is_symlink()
+    assert not (worktree / "scratch").exists()  # a folder the worktree hasn't got isn't made for it
+    # The .venv is the task's own: its scripts run its own python, its .pth files lead into the worktree
+    assert (worktree / ".venv/bin/pytest").read_text().startswith(f"#!{worktree}/.venv/bin/python\n")
+    assert (worktree / ".venv/bin/activate").read_text() == f"VIRTUAL_ENV='{worktree}/.venv'\n"
+    assert (worktree / ".venv/lib/python3.12/site-packages/_project.pth").read_text() == (
+        f"{worktree}/src\n{other}-old/src\nimport os\n")  # another folder whose name only starts the same is left
+    assert (worktree / ".venv/bin/python").is_symlink()
+    assert (other / ".venv/bin/pytest").read_text().startswith(f"#!{other}/.venv/bin/python\n")  # the main one's untouched
+    assert "1 file changed" in task["changes"]  # none of it committed
+    [warmed] = [e["text"] for e in r.store.history(task["id"]) if e["kind"] == "warmed"]
+    assert warmed == f".venv, node_modules, web/node_modules cloned in from {other}"
+    asyncio.run(r.merge(task["id"]))
+    assert not worktree.exists() and (other / ".venv/bin/pytest").is_file()
+
+
+def test_folders_git_doesnt_ignore_arent_cloned(env, monkeypatch):
+    other = env["other"]
+    (other / "node_modules/pkg").mkdir(parents=True)  # not in .gitignore: it would be committed
+    plain_copy(monkeypatch)
+    r, task = run_worktree_task(monkeypatch, add_new_file)
+    assert not (Path(task["worktree"]) / "node_modules").exists()
+    assert not [e for e in r.store.history(task["id"]) if e["kind"] == "warmed"]
+
+
+def test_a_venv_that_cant_be_pointed_at_itself_isnt_kept(env, monkeypatch):
+    other = env["other"]
+    with_dependencies(other)
+    plain_copy(monkeypatch)
+
+    def fails(venv, repo, worktree):
+        raise PermissionError("no")
+
+    monkeypatch.setattr(warm, "moved", fails)
+    _, task = run_worktree_task(monkeypatch, add_new_file)
+    assert not (Path(task["worktree"]) / ".venv").exists() and (Path(task["worktree"]) / "node_modules").is_dir()
+
+
+def test_a_clone_is_copy_on_write_or_nothing(tmp_path, monkeypatch):
+    source = tmp_path / "node_modules"
+    (source / "pkg").mkdir(parents=True)
+    (source / "pkg" / "index.js").write_text("x")
+    cloned = warm.clone(source, tmp_path / "copy")
+    assert cloned == (tmp_path / "copy").exists()
+    if warm.platform.MAC:  # APFS
+        assert cloned and (tmp_path / "copy/pkg/index.js").read_text() == "x"
+    assert not warm.clone(source, tmp_path / "copy")  # never over something there
+
+    def half_done(source: Path, dest: Path) -> bool:
+        (dest / "pkg").mkdir(parents=True)
+        raise OSError(18, "Cross-device link")
+
+    monkeypatch.setattr(warm, "_clonefile", half_done)
+    monkeypatch.setattr(warm, "_reflink", half_done)
+    assert not warm.clone(source, tmp_path / "other") and not (tmp_path / "other").exists()
+
+
+def test_linux_never_falls_back_to_a_full_copy(tmp_path, monkeypatch):
+    source = tmp_path / "node_modules"
+    (source / "pkg").mkdir(parents=True)
+    (source / "pkg" / "index.js").write_text("x")
+    ran = []
+
+    def run(argv, **kw):
+        ran.append(argv)
+        return subprocess.CompletedProcess(argv, 1)  # the filesystem can't reflink
+
+    monkeypatch.setattr(warm.subprocess, "run", run)
+    assert not warm._reflink(source, tmp_path / "copy")
+    assert ran == [["cp", "--reflink=always", "--", str(source / "pkg" / "index.js"), str(tmp_path / ".copy.reflink")]]

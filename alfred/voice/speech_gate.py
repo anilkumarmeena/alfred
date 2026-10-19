@@ -109,6 +109,7 @@ class Measure:
     no_speech: float | None = None  # Whisper's, if given
     avg_logprob: float | None = None  # Whisper's, if given
     compression_ratio: float | None = None  # of the transcript
+    whisper: float | None = None  # Whisper's seconds on it, if it ran once the clip ended (not heard early)
 
 
 def _dbfs(x: np.ndarray) -> float:
@@ -232,10 +233,11 @@ class SpeechGate:
         self._audio_dir, self._keep_audio = audio_dir, keep_audio  # None: never save
         # save_all: every clip; else kept clips under short[0] s long or short[1] s of speech
         self._save_all, self._short = save_all, short
+        self.denoise: str | None = None  # the call's noise filter mode, in each record
 
-    def use(self, mode: str, save_all: bool) -> None:
-        """Apply per-conversation mode and save_all."""
-        self.mode, self._save_all = mode, save_all
+    def use(self, mode: str, save_all: bool, denoise: str | None = None) -> None:
+        """Apply per-conversation mode, save_all and noise filter mode."""
+        self.mode, self._save_all, self.denoise = mode, save_all, denoise
         if save_all and self._audio_dir is None:
             self._audio_dir = SPEECH_GATE_AUDIO_DIR
 
@@ -271,13 +273,14 @@ class SpeechGate:
             return None
 
     def passes(self, m: Measure | None, text: str, no_speech: float | None, audio: np.ndarray | None = None, *,
-               avg_logprob: float | None = None, echo: bool = False) -> bool:
+               avg_logprob: float | None = None, echo: bool = False, whisper: float | None = None) -> bool:
         """True if the transcript may reach the brain. Logs every clip and saves `audio` when configured."""
         if m is None or not text:
             return True
         m.no_speech = None if no_speech is None else round(no_speech, 3)
         m.avg_logprob = None if avg_logprob is None else round(avg_logprob, 3)
         m.compression_ratio = compression_ratio(text)
+        m.whisper = None if whisper is None else round(whisper, 3)
         why = reasons(m, self.thresholds, text, echo)
         verdict = "kept" if not why else "dropped" if self.mode == "enforce" else "would drop"
         now = time.time()
@@ -289,7 +292,8 @@ class SpeechGate:
                      "n/a" if m.no_speech is None else f"{m.no_speech:.2f}",
                      "n/a" if m.avg_logprob is None else f"{m.avg_logprob:.2f}", text, f" ({saved})" if saved else "")
         self._write({"time": round(now, 1), "verdict": verdict, "reasons": why, "text": text,
-                     **dataclasses.asdict(m), "audio": saved and str(saved)})
+                     **dataclasses.asdict(m), "audio": saved and str(saved)}
+                    | ({"denoise": self.denoise} if self.denoise else {}))
         return verdict != "dropped"
 
     def _saves(self, m: Measure, verdict: str) -> bool:

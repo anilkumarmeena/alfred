@@ -78,6 +78,16 @@ def test_a_models_own_limit_moves_to_a_lighter_model():
     assert usage.available("claude-opus-5-5", NOW) == roles.model("fast")  # and on down, when Sonnet's is out too
 
 
+def test_left_reads_the_tightest_limit_for_every_model():
+    soon = NOW + 3600
+    assert usage.left(NOW, {}) == 1.0
+    assert usage.left(NOW, {"five_hour": {"status": "allowed", "utilization": 0.3, "resets_at": soon},
+                            "seven_day": {"status": "allowed", "utilization": 0.75, "resets_at": soon}}) == 0.25
+    assert usage.left(NOW, {"seven_day": {"status": "allowed_warning", "resets_at": soon}}) == usage.CLOSE
+    assert usage.left(NOW, {"seven_day_opus": {"status": "rejected", "resets_at": soon}}) == 1.0  # a lighter model goes on
+    assert usage.left(NOW, {"five_hour": {"status": "rejected", "resets_at": soon}}) == 0.0
+
+
 def test_warnings_are_keyed_per_window_so_each_is_said_once():
     said("allowed_warning", utilization=0.91)
     [(key, text)] = usage.alerts(NOW)

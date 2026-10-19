@@ -181,3 +181,23 @@ def test_a_session_moves_elsewhere_only_while_its_login_is_passed_over_and_anoth
     assert claude_logins.elsewhere("abc-123") == "backup" and claude_logins.elsewhere("other") is None
     usage.record(Info(), login="backup")
     assert claude_logins.elsewhere("abc-123") is None  # every login used up: it waits
+
+
+class Close(Info):
+    """A rate-limit event's info: most of the five-hour limit used, not all of it."""
+    rate_limit_type, status, utilization = "five_hour", "allowed_warning", 0.9
+
+
+def test_a_new_task_moves_off_a_login_close_to_its_limit_to_one_with_room(logins_dir, monkeypatch, tmp_path):
+    monkeypatch.setattr(usage, "USAGE_FILE", tmp_path / "usage.json")
+    claude_logins.make("work")
+    assert claude_logins.starting() == claude_logins.roomiest() == ""  # nothing known: the first by priority
+    usage.record(Close(), login="")
+    assert claude_logins.active() == ""  # still usable: calls and resumed sessions stay on it
+    assert claude_logins.starting() == claude_logins.roomiest() == "work"
+    usage.record(Close(), login="work")
+    assert claude_logins.starting() == claude_logins.roomiest() == ""  # no more room elsewhere: it stays
+    usage.record(Info(), login="")
+    assert claude_logins.starting() == claude_logins.roomiest() == "work"  # used up: passed over
+    usage.record(Info(), login="work")
+    assert claude_logins.starting() == claude_logins.roomiest() == ""  # every one used up: the first, as active()

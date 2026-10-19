@@ -30,19 +30,6 @@ from alfred.storage import profile
 log = logging.getLogger("alfred.node.placement")
 
 CHOICE_SECONDS = 20.0
-CLOSE = 0.2  # share of a limit taken to be left when Claude warns it's getting close without saying how close
-
-
-def usage_left(kept: dict | None = None) -> float:
-    """Share of the tightest Claude limit still left, 0 to 1: this computer's account, or `kept` (a machine's). Claude
-    reports only as limits get close, so nothing reported counts as all of it."""
-    if usage.out(kept=kept):
-        return 0.0
-    known = [w for k, w in usage.windows(kept=kept).items() if k not in usage.OWN]
-    used = [float(w["utilization"]) for w in known if w.get("utilization") is not None]
-    if used:
-        return round(max(0.0, 1 - max(used)), 2)
-    return CLOSE if any(w.get("status") == "allowed_warning" for w in known) else 1.0
 
 
 def problem(check: dict | None, kind: str, needs: list[str] = ()) -> str:
@@ -67,7 +54,7 @@ class Standing:
     cores: int
     load: float | None
     free: int
-    left: float  # usage_left of its Claude account
+    left: float  # usage.left of its Claude account
 
     def room(self, kind: str) -> tuple:
         """Larger is better: for a Claude task, a free slot and Claude usage first; then idle cores."""
@@ -77,7 +64,7 @@ class Standing:
 
 def _standing(m: machines.Machine, check: dict) -> Standing:
     return Standing(int(check.get("cores") or m.cores or 0), check.get("load"), int(check.get("free") or 0),
-                    usage_left(check.get("usage") or {}))
+                    usage.left(kept=check.get("usage") or {}))
 
 
 def _here(running: int, slots: int) -> Standing:
@@ -85,7 +72,7 @@ def _here(running: int, slots: int) -> Standing:
         load = round(os.getloadavg()[0], 2)
     except OSError:
         load = None
-    return Standing(os.cpu_count() or 0, load, max(0, slots - running), usage_left())
+    return Standing(os.cpu_count() or 0, load, max(0, slots - running), usage.left())
 
 
 def _there(found: machines.Machine, said: str = "") -> Place:

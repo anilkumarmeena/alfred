@@ -266,15 +266,16 @@ def _host_tools(task: dict, cwd: Path, jobs: TaskJobs) -> list:
 
 
 def _own(task: dict, cwd: Path, folder: Path, jobs: TaskJobs) -> commands.Own:
-    """Task-owned scope for a command in `folder`: its folder, its temp folder, processes it started.
+    """Task-owned scope for a command in `folder`: its folder, its temp folder (also chmod's scratch), processes it
+    started.
 
     A folder replaced by a symlink no longer counts as owned.
     """
     task_id = task["id"]
     temp = task_temp(task_id)
     roots = [cwd] if not cwd.is_symlink() else []
-    if not temp.is_symlink() and temp.resolve() == TASK_CACHE_DIR.resolve() / "tmp" / temp.name:
-        roots.append(temp)
+    scratch = [temp] if not temp.is_symlink() and temp.resolve() == TASK_CACHE_DIR.resolve() / "tmp" / temp.name else []
+    roots += scratch
 
     @functools.cache
     def sessions() -> list[tuple[int, float]]:  # lazy, once per command
@@ -283,7 +284,7 @@ def _own(task: dict, cwd: Path, folder: Path, jobs: TaskJobs) -> commands.Own:
     def process(pid: int) -> bool:
         return host.in_sessions(pid, sessions())
 
-    return commands.Own(folder, tuple(roots), process)
+    return commands.Own(folder, tuple(roots), process, tuple(scratch))
 
 
 def approval_item(tool: str, args: dict, cwd: Path, why: str, own: commands.Own | None = None) -> dict:
@@ -298,7 +299,8 @@ def approval_item(tool: str, args: dict, cwd: Path, why: str, own: commands.Own 
 def _host_gate(task: dict, cwd: Path, reporter: "Reporter"):
     """Permission gate for host_run/start_job: deny, allow, allow as agreed, or request approval.
 
-    Deleting the task's own files or killing its own processes needs no approval (commands.Own).
+    Deleting the task's own files, chmod in its temp folder or killing its own processes needs no approval
+    (commands.Own).
     """
     task_id, in_place = task["id"], bool(task["in_place"])
     roots = [cwd, TASK_CACHE_DIR]
@@ -324,7 +326,7 @@ def _host_gate(task: dict, cwd: Path, reporter: "Reporter"):
             return allow()
         own = _own(task, cwd, folder, reporter.host_jobs)
         if not (why := commands.describe(command, own)):
-            log.warning("task %s runs on %s, deleting or stopping only its own: %s", task_id, MACHINE, command)
+            log.warning("task %s runs on %s, deleting, chmodding or stopping only its own: %s", task_id, MACHINE, command)
             return allow()
         item = approval_item(tool, args, cwd, why, own)
         if await answer(reporter.cleared(task_id, item)):  # a prior yes to exactly this, or a remembered rule

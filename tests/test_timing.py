@@ -114,6 +114,18 @@ def test_a_typed_turn_is_timed_from_when_it_arrived(timed):
     assert turn is not timings.replying()  # and the next one is a turn of its own
 
 
+def test_each_record_gets_the_calls_fields_as_it_is_written(tmp_path):
+    taken = iter([{"denoise": "vad", "filter_cpu": 1.5, "filter_wall": 20.0},
+                  {"denoise": "vad", "filter_cpu": 0.4, "filter_wall": 6.0}])
+    timings = Timings(tmp_path / "turns.jsonl", Clock(), fields=lambda: next(taken))
+    for stopped in (1000.0, 1010.0):
+        timings.heard("hello there", heard_at(stopped))
+        timings.close()
+    first, second = records(tmp_path / "turns.jsonl")
+    assert first["filter_cpu"] == 1.5 and second["filter_cpu"] == 0.4 and second["denoise"] == "vad"
+    assert second["ended"] == "closed"
+
+
 def test_the_session_ending_writes_the_turn_under_way(timed):
     timings, clock, path = timed
     timings.close()
@@ -205,7 +217,7 @@ def test_the_summary_gives_each_stage_and_wait_and_the_slowest_turns(tmp_path):
                  "ended": "unspoken"})
     rows.append({"time": 10.0, "turn": 1, "words": 1, "first_audio": 99.0, "ended": "spoken"})  # too old
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n{cut short")
-    out = timing.summary(path, since=1000.0, slowest=2)
+    out = timing.summary(path, since=1000.0, slowest=2, clips=tmp_path / "no-clips.jsonl")
     assert out.startswith("4 turns: 3 spoken, 1 unspoken.")
     assert "first_audio" in out and "median  3.50 s" in out
     assert "model to first words" in out and "median  2.00 s" in out
@@ -213,3 +225,31 @@ def test_the_summary_gives_each_stage_and_wait_and_the_slowest_turns(tmp_path):
     slowest = out.split("Slowest to first audio:\n")[1].splitlines()
     assert len(slowest) == 2 and "voice turn 3" in slowest[0] and "99" not in out
     assert timing.summary(tmp_path / "none.jsonl").startswith("No turns yet")
+    assert "By noise filter mode" not in out  # no record carries one
+
+
+def test_the_summary_splits_turns_and_clips_by_noise_filter_mode(tmp_path):
+    turns, clips = tmp_path / "turns.jsonl", tmp_path / "gate.jsonl"
+    rows = [{"time": 2000.0, "turn": 1, "words": 4, "transcript": 0.5, "whisper": 0.4, "denoise": "on",
+             "filter_cpu": 6.0, "filter_wall": 40.0, "ended": "spoken"},
+            {"time": 2001.0, "turn": 2, "words": 8, "transcript": 0.7, "denoise": "on", "filter_cpu": 3.0,
+             "filter_wall": 20.0, "ended": "spoken"},
+            {"time": 2002.0, "turn": 1, "words": 6, "transcript": 0.9, "whisper": 0.8, "denoise": "vad",
+             "filter_cpu": 12.0, "filter_wall": 60.0, "ended": "spoken"},
+            {"time": 2003.0, "turn": 3, "words": 2, "ended": "spoken"}]  # before the mode was logged
+    turns.write_text("\n".join(json.dumps(r) for r in rows))
+    heard = [{"time": 2000.0, "verdict": "kept", "reasons": [], "text": "What's the time?", "whisper": 0.4,
+              "denoise": "on"},
+             {"time": 2002.0, "verdict": "kept", "reasons": [], "text": "Open the door", "whisper": 0.8,
+              "denoise": "vad"},
+             {"time": 2002.5, "verdict": "dropped", "reasons": ["phantom phrase"], "text": "Thank you.",
+              "whisper": 0.6, "denoise": "vad"},
+             {"time": 10.0, "verdict": "dropped", "reasons": ["faint"], "text": "Bye.", "denoise": "vad"}]  # too old
+    clips.write_text("\n".join(json.dumps(c) for c in heard))
+    out = timing.summary(turns, since=1000.0, clips=clips).split("By noise filter mode:\n")[1]
+    on, vad = out.split("\n  vad: ")
+    assert on.startswith("  on: 1 calls, 2 turns, the filter 15.0% of a core, 6 words a spoken turn (median)")
+    assert "transcript" in on and "median  0.60 s" in on and "1 clips, 0 (0%) the gate dropped" in on
+    assert vad.startswith("1 calls, 1 turns, the filter 20.0% of a core, 6 words a spoken turn")
+    assert "2 clips, 1 (50%) the gate dropped or would drop (phantom phrase 1); 3 words a kept clip" in vad
+    assert "Whisper, a clip" in vad and "median  0.70 s" in vad and "faint" not in vad

@@ -30,6 +30,8 @@ TIMEOUT = 600  # seconds for one run of the suite
 RECORDS = "alfred-tested"  # folder in the repo's git dir: <tree>.json per run of the suite
 RECORD_DAYS = 14  # records older than this are dropped
 SHOWN = 5  # failing tests listed in a refusal
+# A run's test processes (pytest-xdist): one a core, at most 4, which an 8 GB Mac has the memory for
+PARALLEL = ("-n", "auto", "--maxprocesses=4")
 # Tests that always fail in a worktree or task sandbox (missing local assets), regardless of the branch
 ENV_ONLY = {
     "tests/test_panel.py::test_preferences_kept_from_the_panel_and_read_by_config",  # needs Kokoro voices in models/
@@ -42,8 +44,8 @@ FAILED = re.compile(r"^(?:FAILED|ERROR) (.+?)(?: - .*)?$", re.M)  # pytest -rfE 
 async def _pytest(folder: Path, venv: Path, *args: str) -> tuple[int, str]:
     """Run pytest in `folder` with .venv `venv`: (exit code, output)."""
     env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"} | {"UV_PROJECT_ENVIRONMENT": str(venv)}
-    return await proc.run_try("uv", "run", "--no-sync", "--with", "pytest", "pytest", "-q", "-p", "no:cacheprovider",
-                              *args, timeout=TIMEOUT, cwd=folder, env=env, group=True)
+    return await proc.run_try("uv", "run", "--no-sync", "--with", "pytest", "--with", "pytest-xdist", "pytest", "-q",
+                              "-p", "no:cacheprovider", *args, timeout=TIMEOUT, cwd=folder, env=env, group=True)
 
 
 async def failures(folder: Path, venv: Path, tests: Sequence[str] = ()) -> set[str]:
@@ -51,7 +53,7 @@ async def failures(folder: Path, venv: Path, tests: Sequence[str] = ()) -> set[s
 
     Raises RuntimeError if pytest couldn't run, TimeoutError past TIMEOUT.
     """
-    code, out = await _pytest(folder, venv, "-rfE", *tests)
+    code, out = await _pytest(folder, venv, "-rfE", *PARALLEL, *tests)
     failed = set(FAILED.findall(out))
     if code not in (0, 1, 5) and not failed:  # 5: nothing collected (e.g. all skipped)
         raise RuntimeError(" ".join(out.splitlines()[-3:])[:300] or f"pytest exited with {code}")

@@ -6,7 +6,9 @@ and a merge that goes ahead by itself once tasks finish.
                   was stopped or discarded, a merge failed) it's held: waiting (WAIT_AFTER), asking whether to start it
                   anyway. Held, it still starts by itself if what it waits for comes right after all.
   merge_waits_on  the same for a task's merge, which then runs in the background and says how it went. When one
-                  can't be met the merge is called off, holding whatever waits for it in turn.
+                  can't be met the merge is called off, holding whatever waits for it in turn. Merges that change the
+                  same files go in the order their tasks began: one is put off while a task begun before it, changing
+                  some of those files too, still runs or is being merged; it's then rebased onto that (merge_op).
 
 Event-driven, so waiting costs nothing: `_settle` runs where the runner learns a task ended (Events._finish,
 GitOps.discard) or was merged (GitOps.merge), `_merge_failed` where a merge fails, and `settle_all` once at start,
@@ -22,6 +24,7 @@ from alfred.notify.push import task_target
 from alfred.storage import profile
 from alfred.tasks import hold
 from alfred.tasks.announce import joined
+from alfred.tasks.host_tools import few
 from alfred.tasks.runner_base import RunnerBase
 from alfred.tasks.store import WAIT_AFTER
 
@@ -211,14 +214,23 @@ class Chains(RunnerBase):
             self._call_off(task, bad)
 
     async def _merge_now(self, task_id: int) -> None:
-        """Run a waiting merge whose waits are met, and say how it went. While a task works in the project's folder
-        it's put off, not called off: settle_all tries it again when a task ends."""
+        """Run a waiting merge whose waits are met, and say how it went. While a task works in the project's folder,
+        or one begun before it changes the same files (_same_files), it's put off, not called off: settle_all tries it
+        again when a task ends or a merge does."""
         if busy := self._jobs_on(self.store.get(task_id)["project"], in_place=True):
             self.merging.discard(task_id)
             self.store.log(task_id, "merge waits", f"put off while task {joined([str(i) for i in busy])} works in "
                                                    "the project's folder")
             return
         try:
+            if ahead := await self._same_files(self.store.get(task_id)):
+                self.merging.discard(task_id)
+                said = (f"put off while task {joined([str(i) for i in ahead])}, begun before it, changes "
+                        f"{few(sorted(set().union(*ahead.values())))} too: it merges once that has finished and any "
+                        "merge of it is done, rebased onto what that left")
+                if [e["text"] for e in self.store.history(task_id, 1)] != [said]:  # once, however often it's tried
+                    self.store.log(task_id, "merge waits", said)
+                return
             task = await self.merge(task_id)  # settles what waits for the merge, or holds it when the merge fails
             said, title = task["spoken"], f"Task {task_id} is merged"
         except asyncio.CancelledError:  # shutting down: left waiting, so settle_all merges it at the next start
@@ -233,6 +245,16 @@ class Chains(RunnerBase):
         self.merging.discard(task_id)
         self.store.set(task_id, merge_waits_on=None)
         self._tell(task_id, said, title)
+
+    async def _same_files(self, task: dict) -> dict[int, list[str]]:
+        """Worktree tasks on the task's project, begun before it, that are still running (not just waiting for a usage
+        limit's reset) or being merged, and have changed files its branch changes too: {id: those files}."""
+        ahead = [t for i in sorted({*self.jobs, *self.merges} - set(self.limit_waits))
+                 if i < task["id"] and (t := self.store.get(i)) and t["project"] == task["project"]
+                 and t["kind"] == "code_change" and not t["in_place"] and t["branch"]]
+        if not ahead or not (mine := await self._touched(task)):
+            return {}
+        return {t["id"]: sorted(shared) for t in ahead if (shared := mine & await self._touched(t))}
 
     def _call_off(self, task: dict, why: str) -> None:
         """Drop a waiting merge that can't happen as planned, and hold what waits for it in turn."""

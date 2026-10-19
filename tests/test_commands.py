@@ -164,7 +164,7 @@ def own(tmp_path):
     for d in (folder / "build", folder / ".git", temp / "shots", outside):
         d.mkdir(parents=True)
     (folder / "out").symlink_to(outside)
-    return commands.Own(folder, (folder, temp), process=lambda pid: pid == 4242)
+    return commands.Own(folder, (folder, temp), process=lambda pid: pid == 4242, scratch=(temp,))
 
 
 @pytest.mark.parametrize("command", [
@@ -201,6 +201,43 @@ def test_a_task_deleting_its_own_files_or_stopping_its_own_processes_needs_no_ye
 def test_anything_it_cant_prove_is_its_own_is_still_asked_about(own, command):
     command = command.format(temp=own.roots[1], folder=own.folder)
     assert risky(command, own), command
+
+
+@pytest.mark.parametrize("command", [
+    "chmod +x {temp}/shots/run.sh", "chmod 755 {temp}/shots", "chmod -R u+w,go-w {temp}/shots", "chmod -- -x {temp}/a",
+    "chmod 0644 {temp}/shots/a.png {temp}/shots/b.png", "/bin/chmod -v a+rX {temp}/shots", "chmod = {temp}/shots/a",
+])
+def test_a_task_chmodding_files_in_its_temp_folder_needs_no_yes(own, command):
+    command = command.format(temp=own.roots[1])
+    assert risky(command), command
+    assert risky(command, own) == "", command
+
+
+@pytest.mark.parametrize("command", [
+    "chmod +x build/run.sh", "chmod 755 {folder}/build", "chmod 755 {temp}", "chmod -R 777 {temp}/..",
+    "chmod 755 {temp}/../task-10", "chmod 755 {temp}/shots/../shots", "chmod +x {temp}/shots/*", "chmod +x {temp}/s?",
+    "chmod +x $TMPDIR/x", 'D=$(mktemp -d); chmod 755 "$D"', "chmod +x ~/bin/x", "chmod 755 /usr/local/bin/x",
+    "chmod u+s {temp}/a", "chmod 4755 {temp}/a", "chmod +t {temp}/shots", "chmod -L -R 755 {temp}/shots",
+    "chmod -H -R 755 {temp}/shots", "chmod --reference=/etc/hosts {temp}/a", "chmod {temp}/a", "chmod +x",
+    "chmod 755 {temp}/link", "chmod 755 {temp}/link/x", "chmod 644 {temp}/hard", "chmod -R 644 {temp}/linked",
+    "ln -s ~ {temp}/home; chmod 755 {temp}/home", "chown me {temp}/a", "chgrp staff {temp}/a",
+    "chmod 755 {temp}/a && chmod 755 ~/x", "chmod 755 {temp}/.git/x", "cd {temp} && chmod +x shots/run.sh",
+])
+def test_any_other_chmod_is_still_asked_about(own, command, tmp_path):
+    temp = own.roots[1]
+    (temp / "link").symlink_to(tmp_path / "elsewhere")
+    (tmp_path / "elsewhere" / "secret.txt").write_text("x")
+    (temp / "hard").hardlink_to(tmp_path / "elsewhere" / "secret.txt")  # changing its mode changes the original's
+    (temp / "linked").mkdir()
+    (temp / "linked" / "x").hardlink_to(tmp_path / "elsewhere" / "secret.txt")
+    command = command.format(temp=temp, folder=own.folder)
+    assert risky(command, own), command
+
+
+def test_chmod_in_the_temp_folder_needs_it_to_be_a_scratch_folder(own):
+    plain = commands.Own(own.folder, own.roots, own.process)  # deletes there, but no chmod
+    assert risky(f"chmod +x {own.roots[1]}/shots/run.sh", plain)
+    assert risky(f"rm -f {own.roots[1]}/shots/run.sh", plain) == ""
 
 
 def test_its_own_rm_is_judged_apart_from_the_rest_of_the_line(own):

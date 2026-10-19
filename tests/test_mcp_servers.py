@@ -47,6 +47,7 @@ def fresh(monkeypatch, tmp_path):
     _emptied()
     monkeypatch.setattr(mcp_servers, "which", lambda name: f"/opt/bin/{name}")
     monkeypatch.setattr(mcp_launch, "which", lambda name: f"/opt/bin/{name}")
+    monkeypatch.setenv("npm_config_cache", str(tmp_path / "npm"))  # nothing installed by npx yet
     yield tmp_path
     _emptied()
 
@@ -447,7 +448,8 @@ def test_the_voice_brain_loads_connections_tools_on_demand_and_its_own_up_front(
     brain = cli.CliBrain()
     opts = cli._options(brain.shell, brain.jobs)
     assert opts.mcp_servers["github"]["alwaysLoad"] is False and opts.mcp_servers["gitlab"]["alwaysLoad"] is False
-    assert opts.mcp_servers["alfred"]["alwaysLoad"] is True and opts.mcp_servers["shell"]["alwaysLoad"] is True
+    # Deferred but for its own tools marked one by one, all bar the Docs and Sheets edits (test_google_tools)
+    assert opts.mcp_servers["alfred"]["alwaysLoad"] is False and opts.mcp_servers["shell"]["alwaysLoad"] is True
     assert claude.TOOL_SEARCH_TOOL in opts.tools and claude.TOOL_SEARCH_TOOL in opts.allowed_tools
     assert opts.env["ENABLE_TOOL_SEARCH"] == "true"
     assert "ToolSearch" in opts.system_prompt and "GitHub (mcp__github__…)" in opts.system_prompt
@@ -499,7 +501,7 @@ def test_gitlab_guidance_is_given_only_with_a_gitlab_connection_on(fresh):
     assert "GitLab file whole" in prompt and "create_merge_request_thread" in prompt
 
 
-def test_a_session_without_connections_gets_no_tool_search(fresh):
+def test_a_session_without_connections_or_google_accounts_gets_no_tool_search(fresh, own_profile):
     opts = cli._options(cli.CliBrain().shell, shell.Jobs())
     assert "ToolSearch" not in opts.tools and "ToolSearch" not in opts.allowed_tools
     assert "ENABLE_TOOL_SEARCH" not in opts.env and opts.mcp_servers["alfred"]["alwaysLoad"] is True
@@ -512,6 +514,7 @@ def test_tool_search_off_loads_every_tool_up_front_as_before(fresh, monkeypatch)
     brain = cli.CliBrain()
     opts = cli._options(brain.shell, brain.jobs)
     assert "alwaysLoad" not in opts.mcp_servers["github"]  # the CLI would leave a deferred tool unloaded
+    assert opts.mcp_servers["alfred"]["alwaysLoad"] is True  # Docs and Sheets edits too
     assert "ToolSearch" not in opts.tools and "ENABLE_TOOL_SEARCH" not in opts.env
     assert "ToolSearch" not in opts.system_prompt and "GitHub and GitLab:" in opts.system_prompt
 
@@ -562,7 +565,7 @@ def test_the_launcher_relays_the_server_and_refuses_one_thats_off(fresh, monkeyp
     seeded(gitlab_on=False)
     relayed, detached = [], []
 
-    async def serve(server, wait, how, runner=None):
+    async def serve(server, wait, how, runner=None, read_only=False):
         relayed.append((server.name, wait, how[0]))
         return 0
 

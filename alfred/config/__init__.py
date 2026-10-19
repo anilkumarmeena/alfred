@@ -179,8 +179,9 @@ SIDE_MINUTES = number("voice_brain.side_minutes", "ALFRED_SIDE_MINUTES", 0.5, 30
 # A fast model picks when to speak updates and reminders (alfred.voice.floor); off = as soon as nobody is talking
 PROACTIVE_JUDGE = flag("voice_brain.proactive_judge", "ALFRED_PROACTIVE_JUDGE")
 # CLI ENABLE_TOOL_SEARCH for connections' tools: true = always deferred, auto:N = deferred once they'd fill N% of
-# context, false = all loaded up front. Alfred's own tools load up front, except a task's account tools, deferred too
-# while this is on. Deferring keeps many connections from slowing every reply, and a task's first call small.
+# context, false = all loaded up front. Alfred's own tools load up front, except a task's account tools and the voice
+# brain's Docs, Sheets and Slides edits, deferred too while this is on. Deferring keeps many connections from slowing
+# every reply, and a task's first call small.
 TOOL_SEARCH = text("voice_brain.tool_search", "ALFRED_TOOL_SEARCH").lower()
 # Seconds an MCP call may block a spoken reply before continuing in the background (alfred.integrations.mcp_relay).
 # 0 = always wait. Tasks always wait.
@@ -370,8 +371,8 @@ if AUDIO_FORMAT not in AUDIO_FORMATS:
 AUDIO_MODEL = model_file(text("audio_files.model", "ALFRED_AUDIO_MODEL"))
 AUDIO_THREADS = whole("audio_files.threads", "ALFRED_AUDIO_THREADS", 0)  # 0 = auto
 # Mic noise suppression (alfred.voice.denoise, DeepFilterNet 3 on CPU). on = filtered everywhere; vad = VAD only,
-# Whisper hears the original; off = never
-DENOISE_MODES = ("on", "vad", "off")
+# Whisper hears the original; off = never; ab = each call on or vad at random, logged with its turns, for comparing
+DENOISE_MODES = ("on", "vad", "off", "ab")
 _denoise = text("voice.denoise", "ALFRED_DENOISE").lower()
 DENOISE = {"1": "on", "true": "on", "yes": "on", "0": "off", "false": "off", "no": "off"}.get(_denoise, _denoise)
 if DENOISE not in DENOISE_MODES:

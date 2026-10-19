@@ -148,14 +148,16 @@ def test_a_clip_uses_the_words_heard_early_on_its_utterance():
     early_audio = clip_audio[:RATE + RATE // 10]
     stt, executor, text = early_then_clip(clip_audio, early_audio)
     assert executor.calls == 1 and text == f"{len(early_audio) // 3} samples."  # 48 -> 16 kHz
-    assert stt.take_clips()[0]["early"] is True
+    [clip] = stt.take_clips()
+    assert clip["early"] is True and clip["whisper"] is None  # nothing waited on Whisper once the clip ended
 
 
 def test_speech_that_went_on_is_heard_fresh():
     clip_audio = np.concatenate([sound(RATE, 5), sound(RATE // 2, 6)])
     stt, executor, text = early_then_clip(clip_audio, clip_audio[:RATE], dropped=True)
     assert executor.calls == 2 and text == f"{len(clip_audio) // 3} samples."
-    assert stt.take_clips()[0]["early"] is False
+    [clip] = stt.take_clips()
+    assert clip["early"] is False and clip["whisper"] >= 0
 
 
 def test_another_utterances_early_words_are_never_used():

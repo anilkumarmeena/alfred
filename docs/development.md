@@ -138,14 +138,15 @@ The architecture test's baseline (`tests/architecture_baseline.txt`) is **empty*
 | 🧱 | `make host-check` | The real sandbox walls around tasks' commands (Seatbelt or bubblewrap) |
 | 🖼️ | `make artifact-check` | Publishes a tiny claude.ai artifact on Alfred's login, the way tasks do |
 
-- **`make test`** fetches pytest with `uv run --with pytest`. The vitest tests are skipped if `web/node_modules` is missing (`make web-install`).
+- **`make test`** fetches pytest and **pytest-xdist** with `uv run --with pytest --with pytest-xdist`, and runs the suite **in parallel**: `-n auto --maxprocesses=4`, a process a core and at most 4, which an 8 GB Mac has the memory for. Merge checks run it the same way (`PARALLEL` in `alfred/tasks/merge_check.py`). For one process (a debugger, `-x`), drop `-n` or pass `-n 0`. The vitest tests are skipped if `web/node_modules` is missing (`make web-install`).
+- **A run of the suite notes what it ran** against the code it ran on (`tests/conftest.py`, kept in the repo's git dir), so merging exactly that code needn't run it again. In parallel, only xdist's controller notes it, with every worker's results.
 - **Pyright** is a pinned version, errors only. Its softer rules are listed under `[tool.pyright]` in `pyproject.toml`; `uv run --with pyright pyright` shows their warnings.
 - **`make check`** passes with **only one speech engine installed**: MLX Whisper on Apple silicon, faster-whisper elsewhere (`pyproject.toml` picks by platform marker), and the other's imports are marked for pyright.
 - **`make host-check`** checks that secrets and Alfred's files are blocked, while PyPI, the task cache and the SSH agent stay reachable, and signing in over SSH works for each SSH git host in your projects' remotes (skipped when none use SSH). Each OS has its own list: macOS adds code signing; Linux adds the session bus, other processes, `sudo` and new files at the top of home.
 - **`make artifact-check`** takes `FILE=page.html` to publish a real page.
 
 > [!NOTE]
-> Tests use a **scratch data folder** (`tests/conftest.py` sets `ALFRED_DATA_DIR` and `ALFRED_DB_FILE`), so they never touch your data. The voice brain's tests run against a **fake `claude` CLI** (`tests/fake_cli.py`).
+> Tests use a **scratch data folder** (`tests/conftest.py` sets `ALFRED_DATA_DIR` and `ALFRED_DB_FILE`), one per test process, so they never touch your data or each other's. The voice brain's tests run against a **fake `claude` CLI** (`tests/fake_cli.py`).
 
 #### One suite, two systems
 
