@@ -3,7 +3,7 @@
 A turn ends on silence alone (TURN_SILENCE after the last speech, alfred.voice.agent) once Whisper has every clip's
 words (Transcribed); nothing judges the words. Pace is learned per speaker (voiceprint, else owner) and stored in
 settings: running shares of low-confidence turns and of turns the user went on from before hearing the reply, plus
-speaking rate, flag "effortful" speakers; the brain then gets hints asking for plainer replies.
+speaking rate over the speech in the clips heard, flag "effortful" speakers; the brain then gets hints asking for plainer replies.
 """
 
 import asyncio
@@ -73,7 +73,8 @@ class Pace:
         self.went_on += AVERAGE * ((ended == "unspoken") - self.went_on)
         if (logprob := record.get("logprob")) is not None:
             self.unsure += AVERAGE * ((logprob < WHISPER_UNSURE_LOGPROB) - self.unsure)
-        if (speech := record.get("speech") or 0) >= 1.0 and record.get("words"):
+        # Speech in the clips heard, not LiveKit's start-to-stop span: that one takes in TV between the user's words
+        if (speech := record.get("voiced") or 0) >= 1.0 and record.get("words"):
             rate = record["words"] / speech
             self.rate = rate if not self.rate else self.rate + AVERAGE * (rate - self.rate)
 
@@ -143,10 +144,12 @@ class Pacing:
         return out
 
 
-def clips_heard(clips: list[dict]) -> tuple[str, float | None]:
-    """(majority speaker or OWNER, word-weighted mean logprob or None) from WhisperSTT.take_clips()."""
+def clips_heard(clips: list[dict]) -> tuple[str, float | None, float | None]:
+    """(majority speaker or OWNER, word-weighted mean logprob or None, speech seconds or None) from
+    WhisperSTT.take_clips(): the clips that passed, so not the TV's dropped ones."""
     speakers = [c["speaker"] for c in clips if c.get("speaker")]
     speaker = max(set(speakers), key=speakers.count) if speakers else OWNER
     scored = [(c["logprob"], max(c.get("words", 1), 1)) for c in clips if c.get("logprob") is not None]
     logprob = sum(lp * n for lp, n in scored) / sum(n for _, n in scored) if scored else None
-    return speaker, logprob
+    timed = [c["speech"] for c in clips if c.get("speech") is not None]
+    return speaker, logprob, round(sum(timed), 3) if timed else None

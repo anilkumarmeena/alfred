@@ -13,12 +13,22 @@ import logging
 import os
 from urllib.parse import urlparse
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobProcess, TurnHandlingOptions, cli, llm
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    FlushSentinel,
+    JobContext,
+    JobProcess,
+    TurnHandlingOptions,
+    cli,
+    llm,
+)
 from livekit.plugins import silero
 
 from alfred import bootstrap, config, projects
 from alfred.auth import credentials
-from alfred.brain import make_brain, timing
+from alfred.brain import SPEAK_NOW, make_brain, timing
 from alfred.brain.route import Router
 from alfred.core import platform
 from alfred.llm import roles
@@ -58,7 +68,8 @@ class AlfredAgent(Agent):
             None,
         )
         async for chunk in self.voice.respond(text):
-            yield chunk
+            # A tool call starting ends the speech there, so what came before it plays while the tool runs
+            yield FlushSentinel() if chunk is SPEAK_NOW else chunk
 
     # Everything said (replies and session.say alike) passes these two, so private notes are neither heard nor shown
     def tts_node(self, text, model_settings):
@@ -94,8 +105,17 @@ os.environ["LIVEKIT_URL"] = config.LIVEKIT_URL  # the worker reads it from env
 # LiveKit sends the worker's connection through HTTPS_PROXY/HTTP_PROXY, ignoring NO_PROXY; a company proxy can't
 # reach this machine's server and answers 500, so a local server goes direct
 LOCAL_LIVEKIT = urlparse(config.LIVEKIT_URL).hostname in ("127.0.0.1", "localhost", "::1")
+CALLS = 2  # calls at once, all sharing one Whisper and one Kokoro
+
+
+def load(worker: AgentServer) -> float:
+    """The worker's load as LiveKit weighs it (unavailable from 0.7): its own calls. LiveKit's default is the whole
+    computer's CPU, so a busy task or build turned calls away (87 minutes in two days on the MacBook Air)."""
+    return min(1.0, len(worker.active_jobs) / CALLS)
+
+
 server = AgentServer(setup_fnc=prewarm, num_idle_processes=config.VOICE_IDLE_PROCESSES, initialize_process_timeout=120,
-                     api_key=credentials.get(credentials.LIVEKIT_KEY),
+                     load_fnc=load, api_key=credentials.get(credentials.LIVEKIT_KEY),
                      api_secret=credentials.get(credentials.LIVEKIT_SECRET),
                      **({"http_proxy": None} if LOCAL_LIVEKIT else {}))
 

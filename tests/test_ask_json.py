@@ -107,3 +107,30 @@ def test_ask_flag_gives_up_after_its_timeout(replies):
     replies.queue.append(asyncio.Event())  # never set: the call hangs
     assert asyncio.run(claude.ask_flag("Fixed it.", "rerun", "s", "claude-x", timeout=0.05)) is None
     assert replies.timeouts == [0.05]  # the call itself is bounded
+
+
+def test_a_short_call_is_on_the_five_minute_cache_and_keeps_its_own_env():
+    options = claude.short_options("Judge it.", "claude-haiku-5-5", env={"X": "1"})
+    assert options.env["FORCE_PROMPT_CACHING_5M"] == "1" and options.env["X"] == "1"
+    assert options.tools == [] and options.max_turns == 1
+
+
+def test_warmed_check_sessions_start_at_low_effort(monkeypatch):
+    """Hidden-instruction and yes-or-no checks only sort words into a verdict."""
+    from alfred.gates import injection
+    from alfred.llm import sdk
+    from alfred.safety import consent
+
+    made = []
+
+    class Client:
+        def __init__(self, options):
+            made.append(options)
+
+        async def connect(self):
+            pass
+
+    monkeypatch.setattr(sdk, "ClaudeSDKClient", Client)
+    asyncio.run(injection._connect("claude-haiku-5-5"))
+    asyncio.run(consent._connect())
+    assert [o.effort for o in made] == [claude.CHECK_EFFORT] * 2 == ["low"] * 2

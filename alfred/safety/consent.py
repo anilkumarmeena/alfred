@@ -205,10 +205,10 @@ async def close() -> None:
 
 
 async def _connect():
-    from alfred.llm.claude import short_options
+    from alfred.llm.claude import CHECK_EFFORT, short_options
     from alfred.llm.sdk import ClaudeSDKClient
 
-    client = ClaudeSDKClient(short_options(PROMPT, Role.CONSENT))
+    client = ClaudeSDKClient(short_options(PROMPT, Role.CONSENT, effort=CHECK_EFFORT))
     await client.connect()  # on failure the SDK cleans up
     return client
 

@@ -171,6 +171,8 @@ def test_live_voice_scores_faster_whisper_as_it_does_mlx(faster):
     assert heard["avg_logprob"] == pytest.approx(-0.4)
     call = whisper.loaded(speech.STT_MODEL).calls[-1]
     assert call["initial_prompt"] == "Alfred, AI Armory." and call["condition_on_previous_text"] is False
+    # one greedy pass, its tokens capped by the clip's length (160 samples: just the margin)
+    assert call["temperature"] == 0.0 and call["max_new_tokens"] == speech.TOKENS_BASE
     FakeModel.segments = []
     assert speech.transcribe(np.zeros(160, np.float32)) == {"text": "", "no_speech": None, "avg_logprob": None}
 
@@ -236,3 +238,32 @@ def test_make_models_on_apple_silicon_fetches_the_mlx_repo_once(monkeypatch):
     monkeypatch.setattr(whisper, "TRANSCRIBE_MODEL", "mlx-community/whisper-large-v3-turbo-q4")
     whisper.download()
     assert fetched == ["mlx-community/whisper-large-v3-turbo-q4"]
+
+
+def test_a_long_clip_decodes_up_to_whispers_own_cap(faster):
+    FakeModel.segments = [segment(" Hi.")]
+    speech.transcribe(np.zeros(speech.WHISPER_RATE * 2, np.float32))
+    assert whisper.loaded(speech.STT_MODEL).calls[-1]["max_new_tokens"] == speech.TOKENS_BASE + 2 * speech.TOKENS_PER_SECOND
+    speech.transcribe(np.zeros(speech.WHISPER_RATE * 60, np.float32))
+    assert whisper.loaded(speech.STT_MODEL).calls[-1]["max_new_tokens"] == speech.TOKENS_MOST
+
+
+def test_mlx_weights_load_from_their_download_without_asking_the_hub(monkeypatch):
+    import huggingface_hub
+
+    asked = []
+
+    def snapshot_download(repo, local_files_only=False):
+        asked.append(local_files_only)
+        if repo != "mlx-community/kept":
+            raise huggingface_hub.errors.LocalEntryNotFoundError("not downloaded")
+        return "/cache/kept"
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    whisper.downloaded.cache_clear()
+    try:
+        assert whisper.downloaded("mlx-community/kept") == "/cache/kept"
+        assert whisper.downloaded("mlx-community/new") == "mlx-community/new"  # fetched by mlx_whisper on first use
+        assert asked == [True, True]
+    finally:
+        whisper.downloaded.cache_clear()

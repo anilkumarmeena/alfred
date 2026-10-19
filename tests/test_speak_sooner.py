@@ -4,7 +4,7 @@ import asyncio
 
 from claude_agent_sdk import ResultMessage, StreamEvent
 
-from alfred.brain import cli, timing
+from alfred.brain import SPEAK_NOW, cli, timing
 from alfred.brain.route import Router
 from alfred.brain.timing import CURRENT, Timings
 from alfred.llm import quick
@@ -143,3 +143,74 @@ def test_the_brain_answers_one_turn_on_the_lighter_model_then_goes_back(tmp_path
     assert quick_turn["model"] == "claude-sonnet-5" and "model" not in main_turn
     assert brain.next_model is None
     assert timing.describe(quick_turn | {"ended": "spoken"})
+
+
+# ── Speaking before a tool runs ──────────────────────────────────
+
+
+def _text(text: str) -> StreamEvent:
+    return StreamEvent(uuid="1", session_id="s",
+                       event={"type": "content_block_delta", "delta": {"type": "text_delta", "text": text}})
+
+
+def _tool_starts(name: str = "calendar_events") -> StreamEvent:
+    return StreamEvent(uuid="1", session_id="s",
+                       event={"type": "content_block_start", "content_block": {"type": "tool_use", "name": name}})
+
+
+class ToolClient(SessionClient):
+    """Says a line, calls a tool, then answers."""
+
+    def __init__(self, events: list) -> None:
+        super().__init__()
+        self.events = events
+
+    async def receive_response(self):
+        for event in self.events:
+            yield event
+        yield ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
+                            session_id="s")
+
+
+def _reply(monkeypatch, events: list) -> list[str]:
+    monkeypatch.setattr(memory, "log_exchange", lambda *a, **k: None)
+    brain = cli.CliBrain()
+    brain.client = ToolClient(events)
+    brain._main = brain._model = "claude-opus-5-5"
+
+    async def main():
+        return [c async for c in brain.respond("am I free at four?")]
+
+    return asyncio.run(main())
+
+
+def test_words_before_a_tool_call_are_released_as_the_tool_starts(monkeypatch):
+    message_start = StreamEvent(uuid="1", session_id="s", event={"type": "message_start"})
+    chunks = _reply(monkeypatch, [_text("Let me check."), _tool_starts(), message_start, _text("You're free.")])
+    assert chunks == ["Let me check.", "", " ", "You're free."] and chunks[1] is SPEAK_NOW
+    assert "".join(chunks) == "Let me check. You're free."
+
+
+def test_a_tool_call_before_any_words_releases_nothing(monkeypatch):
+    chunks = _reply(monkeypatch, [_tool_starts(), _text("You're free.")])
+    assert chunks == ["You're free."]  # no empty marker either
+
+
+def test_the_agent_ends_its_speech_where_the_brain_says_to_speak_now():
+    from livekit.agents import FlushSentinel, llm
+
+    from alfred.apps.agent import AlfredAgent
+
+    class Voice:
+        async def respond(self, text):
+            for chunk in ("Let me check.", SPEAK_NOW, " You're free."):
+                yield chunk
+
+    chat = llm.ChatContext()
+    chat.add_message(role="user", content="am I free at four?")
+
+    async def main():
+        return [c async for c in AlfredAgent(Voice()).llm_node(chat, [], None)]
+
+    first, flush, rest = asyncio.run(main())
+    assert first == "Let me check." and isinstance(flush, FlushSentinel) and rest == " You're free."

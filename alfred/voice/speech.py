@@ -53,11 +53,20 @@ INFERENCE_TIMEOUT = 30  # seconds; only a stuck process hits it
 # ── Shared process: one runner per model ───────────────────────
 
 
+# Tokens a clip may decode: a margin plus a generous rate of speech (timestamps included), up to Whisper's own cap.
+# A hallucinated loop ("I was a man, I was a man…") stops there, not at the window's end.
+TOKENS_BASE, TOKENS_PER_SECOND, TOKENS_MOST = 20, 8, 224
+
+
 def transcribe(audio: np.ndarray, model: str = STT_MODEL, prompt: str = "") -> dict:
     """{text, no_speech (min over segments), avg_logprob (token-weighted)}; numbers None without segments.
 
-    condition_on_previous_text is off so one phantom can't seed the next; `prompt` is the only context."""
-    result = whisper.run(audio, model, language="en", condition_on_previous_text=False, initial_prompt=prompt or None)
+    condition_on_previous_text is off so one phantom can't seed the next; `prompt` is the only context. One greedy
+    pass: Whisper's default retries a doubtful window at rising temperatures, running the 30 s encoder up to six
+    times for one clip and sampling foreign-language gibberish; the speech gate judges doubtful text itself."""
+    tokens = min(TOKENS_MOST, TOKENS_BASE + round(TOKENS_PER_SECOND * len(audio) / WHISPER_RATE))
+    result = whisper.run(audio, model, language="en", condition_on_previous_text=False, initial_prompt=prompt or None,
+                         temperature=0.0, sample_len=tokens)
     segments = result.get("segments", [])
     no_speech = [s["no_speech_prob"] for s in segments if "no_speech_prob" in s]
     scored = [(s["avg_logprob"], max(len(s.get("tokens", [])), 1)) for s in segments if "avg_logprob" in s]
@@ -245,13 +254,19 @@ async def _infer(executor: InferenceExecutor | None, method: str, data: bytes) -
 
 
 def _to_whisper_audio(buffer: utils.AudioBuffer) -> np.ndarray:
+    """16 kHz mono float32. LiveKit's resampler filters out what 16 kHz can't hold (the room's 8-12 kHz); plain
+    interpolation folded it back into the band Whisper, the gate and the voiceprints listen to."""
     frame = rtc.combine_audio_frames(buffer)
+    if frame.sample_rate != WHISPER_RATE:
+        resampler = rtc.AudioResampler(frame.sample_rate, WHISPER_RATE, num_channels=frame.num_channels,
+                                       quality=rtc.AudioResamplerQuality.HIGH)
+        frames = [*resampler.push(frame), *resampler.flush()]
+        if not frames:
+            return np.zeros(0, dtype=np.float32)
+        frame = rtc.combine_audio_frames(frames)
     audio = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32) / 32768.0
     if frame.num_channels > 1:
         audio = audio.reshape(-1, frame.num_channels).mean(axis=1)
-    if frame.sample_rate != WHISPER_RATE:
-        n = int(len(audio) * WHISPER_RATE / frame.sample_rate)
-        audio = np.interp(np.linspace(0, len(audio) - 1, n), np.arange(len(audio)), audio)
     return audio.astype(np.float32)
 
 
@@ -337,7 +352,10 @@ class WhisperSTT(stt.STT):
             return ""  # session ignores empty text
         if (fixed := self._vocabulary.correct(text)) != text:
             log.info("speech vocabulary put a mishearing right: %r as %r", text, fixed)
-        self.clips.append({"words": len(fixed.split()), "logprob": heard["avg_logprob"], "speaker": self._who(judged)})
+        # Silero's speech seconds: the gate's, else the speaker check's, else unknown (both off)
+        speech = measured.speech_seconds if measured is not None else judged.speech_seconds if judged else None
+        self.clips.append({"words": len(fixed.split()), "logprob": heard["avg_logprob"], "speaker": self._who(judged),
+                           "speech": speech})
         return fixed
 
     def _who(self, judged) -> str | None:
@@ -347,7 +365,7 @@ class WhisperSTT(stt.STT):
         return self._speaker.prints[0].name if judged.reference == "this call" else judged.reference
 
     def take_clips(self) -> list[dict]:
-        """Return and clear clips since the last call: [{words, logprob, speaker}]."""
+        """Return and clear clips since the last call: [{words, logprob, speaker, speech (Silero seconds)}]."""
         clips, self.clips = self.clips, []
         return clips
 

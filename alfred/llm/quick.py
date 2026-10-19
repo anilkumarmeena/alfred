@@ -37,9 +37,9 @@ class Quick:
     async def _start(self):
         from claude_agent_sdk import ClaudeSDKClient
 
-        from alfred.llm.claude import short_options
+        from alfred.llm.claude import CHECK_EFFORT, short_options
 
-        client = ClaudeSDKClient(short_options(self.prompt, self.model))
+        client = ClaudeSDKClient(short_options(self.prompt, self.model, effort=CHECK_EFFORT))
         await client.connect()  # SDK cleans up on failure
         return client
 

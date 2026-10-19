@@ -27,7 +27,7 @@ from collections.abc import AsyncIterator
 from contextlib import aclosing
 
 from alfred import prompts, tools
-from alfred.brain import timing
+from alfred.brain import SPEAK_NOW, timing
 from alfred.brain.budget import Budget
 from alfred.brain.kept import Kept
 from alfred.brain.persona import Notes, system_prompt
@@ -301,7 +301,8 @@ class CliBrain(Notes):
         self._drain = asyncio.create_task(self._finish() if self._holding else self._interrupt())
 
     def _chunk(self, msg, spoken: list[str], timed: bool = True) -> str:
-        """Spoken text in `msg`, also added to `spoken`, or ''. Tracks tool calls and usage limits on the way."""
+        """Spoken text in `msg`, also added to `spoken`, SPEAK_NOW at a tool call after words, or ''. Tracks tool calls
+        and usage limits on the way."""
         self._track(msg)
         if isinstance(msg, StreamEvent) and msg.parent_tool_use_id is None:
             event = msg.event
@@ -312,7 +313,10 @@ class CliBrain(Notes):
                 spoken.append(" ")  # new model turn after a tool call
                 return " "
             if timed and event.get("type") == "content_block_start" and event["content_block"].get("type") == "tool_use":
-                timing.tool("".join(spoken), event["content_block"].get("name", ""))
+                said = "".join(spoken)
+                timing.tool(said, event["content_block"].get("name", ""))
+                if said.strip():
+                    return SPEAK_NOW  # "let me check" plays while the tool runs, not after it
         elif isinstance(msg, RateLimitEvent):
             self.limits.saw(msg)
         return ""
@@ -387,7 +391,7 @@ class CliBrain(Notes):
             await self.client.query(self._message(self._prompt(text, agreed, len(photos)), photos))
             timing.mark("sent")
             async for msg in self.client.receive_response():
-                if chunk := self._chunk(msg, spoken):
+                if (chunk := self._chunk(msg, spoken)) or chunk is SPEAK_NOW:
                     yield chunk
                 elif isinstance(msg, ResultMessage):
                     finished = True

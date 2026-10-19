@@ -34,6 +34,13 @@ TOOL_SEARCH_TOOL = "ToolSearch"  # CLI tool that loads deferred tools
 BUILTIN_AGENTS_DENIED = [f"{tool}({a})" for tool in ("Agent", "Task")
                          for a in ("general-purpose", "claude", "Explore", "Plan", "statusline-setup", "claude-code-guide")]
 
+# The CLI may cache prompts for an hour, whose writes cost twice the input price; calls that follow each other
+# within minutes (a task's, a burst of checks) do better on the five-minute cache, whose writes cost 1.25x.
+FIVE_MINUTE_CACHE = {"FORCE_PROMPT_CACHING_5M": "1"}
+# Warmed sessions that only sort words into a verdict (hidden instructions, a yes or no, when to speak): low effort
+# gave the same verdicts as the default, and less thinking means a sooner answer
+CHECK_EFFORT = "low"
+
 # Max single CLI message; the SDK's 1 MB default fails large tool results with CLIJSONDecodeError
 MAX_BUFFER_SIZE = 20 * 1024 * 1024
 ASK_SECONDS = 120  # default `ask` timeout
@@ -97,10 +104,13 @@ def sdk_options(env: dict[str, str] | None = None, login: str | None = None, **o
     )
 
 
-def short_options(system_prompt: str, model: Role | str, **options) -> ClaudeAgentOptions:
-    """Options for one short tool-less call; falls back to a lighter model while the limit is used up."""
-    return sdk_options(model=usage.available(model_for(model)), system_prompt=system_prompt, tools=[], allowed_tools=[],
-                       max_turns=1, cwd=str(DATA_DIR), **options)
+def short_options(system_prompt: str, model: Role | str, env: dict[str, str] | None = None,
+                  **options) -> ClaudeAgentOptions:
+    """Options for one short tool-less call, on the five-minute cache; falls back to a lighter model while the limit
+    is used up."""
+    return sdk_options(FIVE_MINUTE_CACHE | (env or {}), model=usage.available(model_for(model)),
+                       system_prompt=system_prompt, tools=[], allowed_tools=[], max_turns=1, cwd=str(DATA_DIR),
+                       **options)
 
 
 async def ask(prompt: str, system_prompt: str, model: Role | str, timeout: float = ASK_SECONDS,

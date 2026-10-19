@@ -37,7 +37,7 @@ from alfred.config import (
 from alfred.core import platform
 from alfred.integrations import mcp_servers
 from alfred.llm import claude_logins, retry, usage
-from alfred.llm.claude import BUILTIN_AGENTS_DENIED, LimitWatch, Spend
+from alfred.llm.claude import BUILTIN_AGENTS_DENIED, FIVE_MINUTE_CACHE, LimitWatch, Spend
 from alfred.llm.roles import Role
 from alfred.llm.sdk import (
     AssistantMessage,
@@ -136,9 +136,6 @@ class Outcome:
 
 
 ARTIFACT_ENV = {"CLAUDE_CODE_ARTIFACT": "1"}  # undocumented; the CLI omits Artifact under the SDK without it
-# The CLI may cache prompts for an hour, whose writes cost twice the input price; a task's calls follow each other
-# within minutes, so the five-minute cache (writes at 1.25x) is cheaper. Covers its subagents too.
-FIVE_MINUTE_CACHE = {"FORCE_PROMPT_CACHING_5M": "1"}
 
 
 # "*" allows every domain through the sandbox proxy. configd (macOS network settings) is needed by uv and other
@@ -182,7 +179,7 @@ def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> Claud
     """The task session's options; `live` keeps its connections current while it runs."""
     live = live or Watch()
     kind = task["kind"]
-    env: dict[str, str] = _blank_env() | FIVE_MINUTE_CACHE
+    env: dict[str, str] = _blank_env() | FIVE_MINUTE_CACHE  # a task's calls follow within minutes; subagents' too
     # Reporting and host tools load up front; only the many account tools wait for ToolSearch (deferring a few small
     # ones would cost more in ToolSearch's own description than it saves)
     mcp = {"task": _task_server(task["id"], reporter)}

@@ -7,6 +7,15 @@ if TYPE_CHECKING:
     from alfred.brain.kept import Kept
 
 
+class _SpeakNow(str):
+    """The type of SPEAK_NOW."""
+
+
+# A chunk of a reply marking where a tool call starts: what was said before it is spoken now, not held until more
+# words follow (the voice ends its speech there). It is an empty string, so joining a reply's chunks drops it.
+SPEAK_NOW = _SpeakNow()
+
+
 class VoiceBrain(Protocol):
     """What a voice call (alfred.voice.session) needs of its brain."""
 
@@ -19,7 +28,7 @@ class VoiceBrain(Protocol):
         """The conversation is over."""
 
     def respond(self, text: str) -> AsyncIterator[str]:
-        """Stream the spoken reply to one user utterance."""
+        """Stream the spoken reply to one user utterance, with SPEAK_NOW where a tool call starts."""
 
     def on_background(self, finished: Callable[[str, str, str], object]) -> None:
         """Take results of slow tool calls that left their turn: `finished(summary, prompt, words)`, where `prompt`

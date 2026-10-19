@@ -134,16 +134,16 @@ def test_the_json_in_a_reply_is_found():
 def test_effort_shows_in_how_their_turns_go_not_in_their_words():
     fluent, halting = turn.Pace(), turn.Pace()
     for _ in range(turn.SETTLED):
-        fluent.learn({"ended": "spoken", "logprob": -0.3, "speech": 2.0, "words": 6})
-        halting.learn({"ended": "spoken", "logprob": -1.4, "speech": 2.0, "words": 6})
+        fluent.learn({"ended": "spoken", "logprob": -0.3, "voiced": 2.0, "words": 6})
+        halting.learn({"ended": "spoken", "logprob": -1.4, "voiced": 2.0, "words": 6})
     assert not fluent.effortful and halting.effortful
     slow = turn.Pace()
     for _ in range(turn.SETTLED):
-        slow.learn({"ended": "spoken", "logprob": -0.3, "speech": 6.0, "words": 6})
+        slow.learn({"ended": "spoken", "logprob": -0.3, "voiced": 6.0, "words": 6})
     assert slow.effortful and not turn.Pace(turns=3, unsure=1.0).effortful  # too few turns to tell
     going_on = turn.Pace()
     for _ in range(turn.SETTLED):
-        going_on.learn({"ended": "unspoken", "logprob": -0.3, "speech": 2.0, "words": 6})
+        going_on.learn({"ended": "unspoken", "logprob": -0.3, "voiced": 2.0, "words": 6})
     assert going_on.effortful
     going_on.learn({"ended": "closed"})
     assert going_on.turns == turn.SETTLED  # a turn the session closed on teaches nothing
@@ -186,10 +186,19 @@ def test_what_the_brain_is_told_about_how_a_turn_was_heard():
 
 
 def test_clips_say_who_spoke_and_how_sure_whisper_was():
-    assert turn.clips_heard([]) == ("owner", None)
-    speaker, logprob = turn.clips_heard([{"words": 3, "logprob": -0.2, "speaker": "guest"},
-                                         {"words": 1, "logprob": -1.0, "speaker": None}])
-    assert speaker == "guest" and round(logprob, 3) == -0.4
+    assert turn.clips_heard([]) == ("owner", None, None)
+    speaker, logprob, voiced = turn.clips_heard([{"words": 3, "logprob": -0.2, "speaker": "guest", "speech": 1.25},
+                                                 {"words": 1, "logprob": -1.0, "speaker": None, "speech": 0.5}])
+    assert speaker == "guest" and round(logprob, 3) == -0.4 and voiced == 1.75
+
+
+def test_pace_counts_only_the_speech_heard_not_the_tv_between_words():
+    """LiveKit's span ran to 713 s with the TV on; the owner's rate fell to 0.02 words a second on such turns."""
+    pace = turn.Pace()
+    pace.learn({"ended": "spoken", "speech": 300.0, "voiced": 2.0, "words": 6})
+    assert pace.rate == 3.0
+    pace.learn({"ended": "spoken", "speech": 300.0, "words": 6})  # no clips timed: rate left as it was
+    assert pace.rate == 3.0
 
 
 def test_whisper_keeps_each_clip_passed_on_for_the_turn():
@@ -201,7 +210,9 @@ def test_whisper_keeps_each_clip_passed_on_for_the_turn():
 
     stt = speech.WhisperSTT(gate=SpeechGate("off", record=None, audio_dir=None), executor=Executor())
     asyncio.run(stt._hear([rtc.AudioFrame(np.zeros(480, np.int16).tobytes(), 48000, 1, 480)]))
-    assert stt.take_clips() == [{"words": 4, "logprob": -0.6, "speaker": None}] and stt.take_clips() == []
+    # gate and speaker check both off: nothing measured the clip's speech
+    assert stt.take_clips() == [{"words": 4, "logprob": -0.6, "speaker": None, "speech": None}]
+    assert stt.take_clips() == []
 
 
 # ── In the voice agent and the brain ─────────────────────────────
@@ -343,3 +354,28 @@ def test_the_agent_logs_who_spoke_each_turn_and_tells_the_brain_one_went_on_from
     assert router.guessed == ["Okay, great. So", "let's discuss what to do next."]  # each turn's own words
     assert brain.framed[0][0].startswith('[This goes on from their last message ("Okay, great. So")')
     assert "unsure" in brain.framed[0][1] and len(brain.framed) == 1
+
+
+def test_the_voice_worker_is_busy_only_with_its_own_calls():
+    """Not the computer's CPU: a running task must not turn a call away."""
+    from types import SimpleNamespace
+
+    worker = SimpleNamespace(active_jobs=[])
+    assert agent.load(worker) == 0.0
+    worker.active_jobs = ["call"]
+    assert agent.load(worker) < 0.7  # LiveKit's line: a second call is still taken
+    worker.active_jobs = ["call", "call"]
+    assert agent.load(worker) == 1.0
+
+
+def test_room_audio_reaches_whisper_at_16_khz_without_folding_back():
+    """A 10 kHz tone in 24 kHz room audio is above what 16 kHz holds: filtered out, not aliased to 6 kHz."""
+    rate, seconds = 24000, 1.0
+    times = np.arange(int(rate * seconds)) / rate
+    tone = (np.sin(2 * np.pi * 10_000 * times) * 0.5 * 32767).astype(np.int16)
+    voice = (np.sin(2 * np.pi * 300 * times) * 0.5 * 32767).astype(np.int16)
+    for samples, kept in ((tone, False), (voice, True)):
+        audio = speech._to_whisper_audio([rtc.AudioFrame(samples.tobytes(), rate, 1, len(samples))])
+        assert abs(len(audio) - speech.WHISPER_RATE * seconds) < 400
+        level = float(np.sqrt(np.mean(np.square(audio[1000:-1000]))))
+        assert (level > 0.3) if kept else (level < 0.02), level

@@ -116,12 +116,24 @@ def model(chosen: str = STT_MODEL, multilingual: bool = False) -> str:
 
 def run(audio: np.ndarray, chosen: str = STT_MODEL, multilingual: bool = False, **options) -> dict:
     """Transcribe 16 kHz mono float32 audio. `options` are mlx_whisper.transcribe's (faster-whisper takes language,
-    initial_prompt, condition_on_previous_text, word_timestamps and verbose)."""
+    initial_prompt, condition_on_previous_text, word_timestamps, verbose, temperature and sample_len)."""
     if backend() == MLX:
         import mlx_whisper  # pyright: ignore[reportMissingImports]  # Apple silicon only
 
-        return mlx_whisper.transcribe(audio, path_or_hf_repo=chosen, **options)
+        return mlx_whisper.transcribe(audio, path_or_hf_repo=downloaded(chosen), **options)
     return _faster(audio, chosen, multilingual, **options)
+
+
+@functools.cache
+def downloaded(repo: str) -> str:
+    """The folder `repo`'s weights were downloaded to, else `repo` itself (fetched on first use). Loading by name asks
+    Hugging Face for newer files first, a network call at every start of the speech process."""
+    try:
+        from huggingface_hub import snapshot_download
+
+        return snapshot_download(repo, local_files_only=True)
+    except (ImportError, OSError, ValueError):  # not downloaded yet, or not a Hub name (a local path)
+        return repo
 
 
 # ── faster-whisper ──────────────────────────────────────────────
@@ -166,11 +178,13 @@ def _load(chosen: str, multilingual: bool):
 
 def _faster(audio: np.ndarray, chosen: str, multilingual: bool, language: str | None = None,
             initial_prompt: str | None = None, condition_on_previous_text: bool = True, word_timestamps: bool = False,
-            verbose: bool | None = None) -> dict:
-    """faster-whisper, decoded greedily as mlx_whisper does, as an mlx_whisper-shaped result."""
+            verbose: bool | None = None, temperature: float | None = None, sample_len: int | None = None) -> dict:
+    """faster-whisper, decoded greedily as mlx_whisper does, as an mlx_whisper-shaped result. `temperature` and
+    `sample_len` (mlx_whisper's names) are passed on only when given, else faster-whisper's defaults stand."""
+    given = {k: v for k, v in (("temperature", temperature), ("max_new_tokens", sample_len)) if v is not None}
     segments, info = loaded(chosen, multilingual).transcribe(
         audio, language=language, beam_size=1, initial_prompt=initial_prompt,
-        condition_on_previous_text=condition_on_previous_text, word_timestamps=word_timestamps)
+        condition_on_previous_text=condition_on_previous_text, word_timestamps=word_timestamps, **given)
     found = [segment(s) for s in segments]  # a generator: decoding happens here
     return {"text": "".join(s["text"] for s in found), "segments": found, "language": info.language}
 

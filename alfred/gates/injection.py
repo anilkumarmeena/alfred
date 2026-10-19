@@ -43,7 +43,7 @@ VERDICTS = CLEAN, UNCHECKED, WARN, BLOCK = "clean", "unchecked", "warn", "block"
 MIN_CHARS = 20  # shorter text isn't checked
 CHUNK = 30_000  # chars per model call
 MAX_CHUNKS = 8  # per result; the rest passes marked unchecked
-PARALLEL = 4  # concurrent checks per event loop
+PARALLEL = 2  # concurrent checks per event loop (each a CLI of ~100-170 MB)
 KEEP_DAYS = 30  # verdict cache lifetime
 PRUNE_EVERY = 100  # inserts between prunes of expired verdicts
 IDLE_SECONDS = 300  # close an unused warmed session after this
@@ -421,9 +421,9 @@ def warm(model: str) -> None:
 
 
 async def _connect(model: str):
-    from alfred.llm.claude import short_options
+    from alfred.llm.claude import CHECK_EFFORT, short_options
     from alfred.llm.sdk import ClaudeSDKClient
 
-    client = ClaudeSDKClient(short_options(PROMPT, model))
+    client = ClaudeSDKClient(short_options(PROMPT, model, effort=CHECK_EFFORT))
     await client.connect()  # on failure the SDK cleans up
     return client
