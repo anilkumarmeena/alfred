@@ -33,7 +33,7 @@ export interface NativeAudio {
 export function nativeAudio(win: any = globalThis): NativeAudio | null {
   const cap = win?.Capacitor;
   if (!cap?.isNativePlatform?.()) return null;
-  return cap.Plugins?.AlfredAudio ?? cap.Plugins?.JarvisAudio ?? null;  // app builds from before the rename: JarvisAudio
+  return cap.Plugins?.AlfredAudio ?? cap.Plugins?.JarvisAudio ?? null;  // alfred-app keeps JarvisAudio, for older servers
 }
 
 /** "ios" or "android" inside the Alfred app, else "". */
