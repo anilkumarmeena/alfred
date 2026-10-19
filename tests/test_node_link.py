@@ -1,13 +1,13 @@
-"""Tests for jarvis.node's pairing and link: keys, sign-in both ways, signed requests, the online check."""
+"""Tests for alfred.node's pairing and link: keys, sign-in both ways, signed requests, the online check."""
 
 import asyncio
 import time
 
 import pytest
 
-from jarvis.auth import vault
-from jarvis.node import agent, hub as hubs, keys, link, machines
-from jarvis.node.link import Link, LinkDown, Refused, memory_pair
+from alfred.auth import vault
+from alfred.node import agent, hub as hubs, keys, link, machines
+from alfred.node.link import Link, LinkDown, Refused, memory_pair
 
 
 @pytest.fixture
@@ -104,7 +104,7 @@ def test_machines_get_unique_names_found_by_name_or_alias(mine):
 # ── Where jobs run ──────────────────────────────────────────────
 
 
-def test_placement_is_this_computer_until_a_machine_is_paired_then_jarvis_chooses(mine):
+def test_placement_is_this_computer_until_a_machine_is_paired_then_alfred_chooses(mine):
     assert machines.placement() == {"commands": machines.HERE, "tasks": machines.HERE}
     machines.redeem(machines.new_code()["code"], keys.public(keys.new()), {"name": "Studio"})
     assert machines.placement()["tasks"] == machines.HERE  # pending: nowhere else to run yet

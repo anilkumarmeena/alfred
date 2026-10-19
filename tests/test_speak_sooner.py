@@ -4,12 +4,12 @@ import asyncio
 
 from claude_agent_sdk import ResultMessage, StreamEvent
 
-from jarvis.brain import cli, timing
-from jarvis.brain.route import Router
-from jarvis.brain.timing import CURRENT, Timings
-from jarvis.llm import quick
-from jarvis.state import memory
-from jarvis.voice.clauses import ClauseTokenizer
+from alfred.brain import cli, timing
+from alfred.brain.route import Router
+from alfred.brain.timing import CURRENT, Timings
+from alfred.llm import quick
+from alfred.state import memory
+from alfred.voice.clauses import ClauseTokenizer
 
 
 async def streamed(text: str) -> list[str]:
@@ -87,7 +87,7 @@ def test_a_turn_judged_simple_goes_to_the_lighter_model_and_anything_else_stays(
 
 
 def test_a_slow_verdict_leaves_the_main_model(monkeypatch):
-    monkeypatch.setattr("jarvis.brain.route.WAIT_SECONDS", 0.05)
+    monkeypatch.setattr("alfred.brain.route.WAIT_SECONDS", 0.05)
     r, _ = router('{"route": "quick"}', delay=0.3)
 
     async def main():

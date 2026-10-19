@@ -2,22 +2,23 @@
 // dock, draggable full/half/closed.
 import { useEffect, useRef } from "preact/hooks";
 import { jobOf } from "../../lib/schedule";
-import { readout } from "../../state/store";
+import { assistantName, readout } from "../../state/store";
 import {
   back, closeSheet, go, item, needYou, roomy, section, sheet, tasks, todos, unseen, wide, type Section, type SettingsItem,
 } from "../../state/panel";
 import { dayLabel } from "../../lib/history";
 import { days } from "../../state/history";
-import { BackIcon, CloseIcon, JarvisIcon, ProjectsIcon, TasksIcon, TodosIcon } from "../icons";
+import { BackIcon, CloseIcon, AlfredIcon, ProjectsIcon, TasksIcon, TodosIcon } from "../icons";
 import { HistorySection } from "./History";
 import { ProjectsSection } from "./Projects";
-import { JarvisSection, SETTINGS_TITLES, SettingsSection } from "./Settings";
+import { AlfredSection, SETTINGS_TITLES, SettingsSection } from "./Settings";
 import { TasksSection } from "./Tasks";
 import { TodosSection } from "./Todos";
 
 // Dock; History and Settings open from their buttons in the top bar (History from the sidebar on desktop).
-export const SECTIONS: [Section, string, () => preact.JSX.Element][] = [
-  ["tasks", "Tasks", TasksIcon], ["todos", "To-dos", TodosIcon], ["projects", "Projects", ProjectsIcon], ["jarvis", "JARVIS", JarvisIcon],
+// The assistant's own section goes by its name, so this is read during render.
+export const sections = (): [Section, string, () => preact.JSX.Element][] => [
+  ["tasks", "Tasks", TasksIcon], ["todos", "To-dos", TodosIcon], ["projects", "Projects", ProjectsIcon], ["alfred", assistantName.value, AlfredIcon],
 ];
 const ROOMY = 760;  // px: panel width that fits list and open item side by side
 
@@ -41,9 +42,9 @@ function Kpi() {
 function title(open: string | null): string {
   const sec = section.value;
   if (open && sec === "tasks") return jobOf(open) != null ? "Scheduled" : `Task ${open}`;
-  if (sec === "settings" || sec === "jarvis") return (open && SETTINGS_TITLES[open as SettingsItem]) || (sec === "jarvis" ? "JARVIS" : "Settings");
+  if (sec === "settings" || sec === "alfred") return (open && SETTINGS_TITLES[open as SettingsItem]) || (sec === "alfred" ? assistantName.value : "Settings");
   if (sec === "history") return open ? dayLabel(open, days.value?.today ?? "") : "History";
-  return SECTIONS.find(([s]) => s === sec)![1];
+  return sections().find(([s]) => s === sec)![1];
 }
 
 // Phone: drag handle or title between full, half, closed; tapping the handle toggles full/half.
@@ -88,7 +89,7 @@ export function Panel() {
     return () => watch.disconnect();
   }, []);
   const sec = section.value, drilled = !!item.value && !roomy.value;
-  const Body = { tasks: TasksSection, todos: TodosSection, projects: ProjectsSection, jarvis: JarvisSection, history: HistorySection, settings: SettingsSection }[sec];
+  const Body = { tasks: TasksSection, todos: TodosSection, projects: ProjectsSection, alfred: AlfredSection, history: HistorySection, settings: SettingsSection }[sec];
   return (
     <aside id="panel" class={`panel${drilled ? " drill" : ""}`} ref={ref} aria-label="Panel" data-sheet={sheet.value}>
       <div class="grabzone" onPointerDown={drag} title="Drag, or tap for half or full height"><div class="grab" /></div>
@@ -99,7 +100,7 @@ export function Panel() {
         <span class="vstrip"><span class="dot run" />{readout.value.label}</span>
         <button class="ico close" aria-label="Close" onClick={closeSheet}><CloseIcon /></button>
       </div>
-      <div class={`pbody${roomy.value && (sec === "tasks" || sec === "history" || sec === "settings" || sec === "jarvis") ? " splitting" : ""}`} key={`${sec}:${drilled ? item.value : ""}`}>
+      <div class={`pbody${roomy.value && (sec === "tasks" || sec === "history" || sec === "settings" || sec === "alfred") ? " splitting" : ""}`} key={`${sec}:${drilled ? item.value : ""}`}>
         <Body />
       </div>
     </aside>
@@ -109,7 +110,7 @@ export function Panel() {
 export function Dock() {
   return (
     <nav class="dock" aria-label="Sections">
-      {SECTIONS.map(([sec, label, Icon]) => {
+      {sections().map(([sec, label, Icon]) => {
         const on = sheet.value !== "closed" && section.value === sec;
         return (
           <button key={sec} class={on ? "on" : ""} aria-pressed={on}

@@ -1,4 +1,4 @@
-"""Tests for jarvis.integrations.accounts: the accounts table, its command, and Google tools' accounts and sign-ins."""
+"""Tests for alfred.integrations.accounts: the accounts table, its command, and Google tools' accounts and sign-ins."""
 
 import asyncio
 import json
@@ -13,13 +13,13 @@ from types import SimpleNamespace
 import pytest
 from ai_armory.toolsets.google import chat, common
 
+from alfred import config, tools
+from alfred.integrations import accounts
+from alfred.integrations.accounts import Account, Accounts
+from alfred.state import settings
+from alfred.storage import profile
+from alfred.tools import google
 from conftest import use_profile
-from jarvis import config, tools
-from jarvis.integrations import accounts
-from jarvis.integrations.accounts import Account, Accounts
-from jarvis.state import settings
-from jarvis.storage import profile
-from jarvis.tools import google
 
 ROOT = config.ROOT
 PANEL = "the Sign in button beside the {} account on the control panel's Google accounts page"
@@ -123,10 +123,10 @@ def test_a_fresh_install_starts_without_google_tools_or_a_crash(home):
     """Subprocess: tool account lists are fixed at import. Its empty DB keeps out this machine's data/."""
     assert accounts.load() == Accounts()
     settings.about()  # also creates the settings table
-    env = os.environ | {"JARVIS_DB_FILE": str(home.db)}
+    env = os.environ | {"ALFRED_DB_FILE": str(home.db)}
     code = ("from ai_armory.toolsets.google import current\n"
-            "from jarvis import tools\n"
-            "from jarvis.brain import persona\n"
+            "from alfred import tools\n"
+            "from alfred.brain import persona\n"
             "names = {t.name for t in tools.all_tools()}\n"
             "print(sorted(n for n in names if n.split('_')[0] in ('gmail', 'calendar', 'chat', 'docs', 'sheets')))\n"
             "print(repr(current().default_label), 'task_start' in names)\n"
@@ -141,9 +141,9 @@ def test_one_account_alone_gets_every_tool_and_everything_by_default(home):
     only = Accounts([Account("work", "me@acme.example", "for work", chat=True)], "work")
     store(only)
     settings.about()
-    env = os.environ | {"JARVIS_DB_FILE": str(home.db)}
-    code = ("from jarvis import tools\n"
-            "from jarvis.tools import google\n"
+    env = os.environ | {"ALFRED_DB_FILE": str(home.db)}
+    code = ("from alfred import tools\n"
+            "from alfred.tools import google\n"
             "found = [t for t in tools.all_tools() if t.armory and 'account' in t.properties]\n"
             "print(len(found) >= 25, sorted({tuple(t.properties['account']['enum']) for t in found}))\n"
             "print(sorted({t.properties['account'].get('default') for t in found}), google.CHAT_LABELS)\n")
@@ -156,8 +156,8 @@ def test_one_account_alone_gets_every_tool_and_everything_by_default(home):
 
 def test_the_command_runs_as_a_module(home):
     store(two())
-    done = subprocess.run([sys.executable, "-m", "jarvis.integrations.accounts"], cwd=ROOT, capture_output=True, text=True,
-                          timeout=60, env=os.environ | {"JARVIS_DB_FILE": str(home.db)})
+    done = subprocess.run([sys.executable, "-m", "alfred.integrations.accounts"], cwd=ROOT, capture_output=True, text=True,
+                          timeout=60, env=os.environ | {"ALFRED_DB_FILE": str(home.db)})
     assert done.returncode == 0, done.stderr
     assert done.stdout.splitlines()[0].split() == ["work", "me@acme.example", "[default,", "Google", "Chat,", "not",
                                                     "signed", "in]", "for", "work"]
@@ -210,7 +210,7 @@ def test_the_command_adds_lists_changes_and_removes(home, capsys, monkeypatch):
     assert run("default", "home") == 0
     assert accounts.load() == Accounts([Account("home", "me@mail.example", "their own"),
                                         Account("job", "me@acme.example", "for work")], "home")
-    assert "JARVIS uses the change from its next conversation." in capsys.readouterr().out
+    assert "Alfred uses the change from its next conversation." in capsys.readouterr().out
 
     monkeypatch.setattr("builtins.input", lambda question: "n")
     assert run("remove", "job") == 1 and (home.secrets / "google-job.json").exists()
@@ -337,7 +337,7 @@ def test_all_covers_every_account_and_a_broken_one_is_noted(monkeypatch):
     assert is_error and content.endswith("Sign it in with: " + PANEL.format("personal"))
 
 
-def test_the_tools_use_jarvis_sign_ins_and_send_you_to_the_panel_to_sign_in_again():
+def test_the_tools_use_alfred_sign_ins_and_send_you_to_the_panel_to_sign_in_again():
     secrets = profile.current().secrets
     assert common.token_path("work") == secrets / "google-work.json"
     assert chat.state_path("work") == secrets / "google-work-chat.json"  # where the accounts command keeps it

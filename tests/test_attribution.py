@@ -1,13 +1,13 @@
-"""Tests for commit and PR attribution: every Claude session JARVIS starts credits the assistant, not the model."""
+"""Tests for commit and PR attribution: every Claude session Alfred starts credits the assistant, not the model."""
 
 import json
 from dataclasses import replace
 
 from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
 
-from jarvis.brain import sdk
-from jarvis.config import ASSISTANT_NAME
-from jarvis.llm import claude
+from alfred.brain import sdk
+from alfred.config import ASSISTANT_NAME
+from alfred.llm import claude
 
 
 def test_sessions_credit_the_assistant():

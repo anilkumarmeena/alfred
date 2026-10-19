@@ -3,6 +3,7 @@ import { useEffect, useRef } from "preact/hooks";
 import { byDay, dayLabel, marks, span, tally, type Day, type Entry } from "../../lib/history";
 import { clearSearch, day, days, found, loadDay, loadOlderDays, olderBusy, search, searching } from "../../state/history";
 import { go, item, openTask, roomy } from "../../state/panel";
+import { assistantName } from "../../state/store";
 import { BackIcon, ChevronIcon, SearchIcon } from "../icons";
 import { Empty, InlineForm } from "./bits";
 
@@ -26,20 +27,20 @@ function Said({ text, words = [] }: { text: string; words?: string[] }) {
 
 // One exchange (user words, approved commands, reply), or a between-turn announcement.
 export function Exchange({ e, words }: { e: Entry; words?: string[] }) {
-  const said = <p><Said text={e.said} words={words} /></p>;
+  const said = <p><Said text={e.said} words={words} /></p>, name = assistantName.value;
   return (
     <div class="hx">
       <div class="hx-time">{e.time}</div>
       {e.kind === "exchange" ? <>
         <div class="hx-msg you"><span class="who">{e.who}</span>{said}</div>
         {e.approved?.map((c, i) => <div key={i} class="hx-yes"><span class="who">Approved</span><code>{c}</code></div>)}
-        <div class="hx-msg jarvis">
-          <span class="who">JARVIS</span>
+        <div class="hx-msg alfred">
+          <span class="who">{name}</span>
           {e.reply ? <p><Said text={e.reply} words={words} />{e.interrupted && <span class="cut"> · cut off</span>}</p>
             : <p class="cut">{e.interrupted ? "Interrupted before replying" : "No reply"}</p>}
         </div>
       </> : e.kind === "announcement"
-        ? <div class="hx-msg jarvis ann"><span class="who">JARVIS · update</span>{said}</div>
+        ? <div class="hx-msg alfred ann"><span class="who">{name} · update</span>{said}</div>
         : <div class="hx-msg note">{said}</div>}
     </div>
   );

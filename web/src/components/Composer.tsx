@@ -3,13 +3,14 @@
 import type { ComponentChildren } from "preact";
 import { useSignal } from "@preact/signals";
 import { sendText } from "../state/session";
+import { assistantName } from "../state/store";
 import { ASK, attach, discard, photo, photoReady } from "../state/photo";
 import { CameraIcon, CloseIcon, SendIcon } from "./icons";
 
 export function Composer({ calls }: { calls?: ComponentChildren }) {
   const text = useSignal("");
   const busy = useSignal(false);  // waiting for the photo upload before sending
-  const p = photo.value;
+  const p = photo.value, name = assistantName.value;
   const empty = !text.value.trim() && !p;
 
   async function submit(e: Event) {
@@ -43,14 +44,14 @@ export function Composer({ calls }: { calls?: ComponentChildren }) {
           <span class="x"><CloseIcon /></span>
         </button>
       ) : (
-        <label class="attach" title="Show JARVIS a photo">
-          <input type="file" accept="image/*" aria-label="Show JARVIS a photo" onChange={picked} />
+        <label class="attach" title={`Show ${name} a photo`}>
+          <input type="file" accept="image/*" aria-label={`Show ${name} a photo`} onChange={picked} />
           <CameraIcon />
         </label>
       )}
       <input id="message" type="text" enterKeyHint="send" autoComplete="off"
-        placeholder={p ? "Ask about the photo, or just say it" : "Type to JARVIS"}
-        aria-label="Message JARVIS" value={text.value} onInput={(e) => { text.value = e.currentTarget.value; }} />
+        placeholder={p ? "Ask about the photo, or just say it" : `Type to ${name}`}
+        aria-label={`Message ${name}`} value={text.value} onInput={(e) => { text.value = e.currentTarget.value; }} />
       {empty ? calls
         : <button type="submit" class="send" aria-label="Send" title="Send (Return)" disabled={busy.value}><SendIcon /></button>}
     </form>

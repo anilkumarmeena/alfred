@@ -1,4 +1,4 @@
-"""Tests for jarvis.media.whisper: MLX on Apple silicon, faster-whisper elsewhere, one result shape from both."""
+"""Tests for alfred.media.whisper: MLX on Apple silicon, faster-whisper elsewhere, one result shape from both."""
 
 import sys
 import types
@@ -8,8 +8,8 @@ from typing import ClassVar
 import numpy as np
 import pytest
 
-from jarvis.media import transcribe, whisper
-from jarvis.voice import speech
+from alfred.media import transcribe, whisper
+from alfred.voice import speech
 
 
 def segment(text, start=0.0, end=1.0, logprob=-0.2, no_speech=0.01, tokens=(1, 2), words=None):
@@ -150,7 +150,7 @@ def test_a_gpu_that_was_asked_for_fails_loudly(faster, monkeypatch):
 def test_faster_whisper_segments_come_back_shaped_like_mlx_whispers(faster):
     words = [SimpleNamespace(word=" Hi", start=0.0, end=0.4, probability=0.9)]
     FakeModel.segments = [segment(" Hi there.", logprob=-0.3, words=words), segment(" Bye.", 1.0, 1.5)]
-    result = whisper.run(np.zeros(160, np.float32), "", language="en", initial_prompt="JARVIS.",
+    result = whisper.run(np.zeros(160, np.float32), "", language="en", initial_prompt="Alfred.",
                          condition_on_previous_text=False, word_timestamps=True, verbose=None)
     assert result["text"] == " Hi there. Bye." and result["language"] == "en"
     assert result["segments"][0] == {
@@ -158,7 +158,7 @@ def test_faster_whisper_segments_come_back_shaped_like_mlx_whispers(faster):
         "avg_logprob": -0.3, "compression_ratio": 1.1, "no_speech_prob": 0.01,
         "words": [{"word": " Hi", "start": 0.0, "end": 0.4, "probability": 0.9}]}
     assert "words" not in result["segments"][1]
-    assert whisper.loaded("").calls[-1] == {"language": "en", "beam_size": 1, "initial_prompt": "JARVIS.",
+    assert whisper.loaded("").calls[-1] == {"language": "en", "beam_size": 1, "initial_prompt": "Alfred.",
                                              "condition_on_previous_text": False, "word_timestamps": True}
 
 
@@ -166,11 +166,11 @@ def test_live_voice_scores_faster_whisper_as_it_does_mlx(faster):
     """The speech gate reads the same no_speech and token-weighted logprob from either backend."""
     FakeModel.segments = [segment(" One two three.", no_speech=0.01, logprob=-0.2, tokens=[1, 2, 3]),
                           segment(" Four.", no_speech=0.3, logprob=-1.0, tokens=[4])]
-    heard = speech.transcribe(np.zeros(160, np.float32), prompt="JARVIS, AI Armory.")
+    heard = speech.transcribe(np.zeros(160, np.float32), prompt="Alfred, AI Armory.")
     assert heard["text"] == "One two three. Four." and heard["no_speech"] == 0.01
     assert heard["avg_logprob"] == pytest.approx(-0.4)
     call = whisper.loaded(speech.STT_MODEL).calls[-1]
-    assert call["initial_prompt"] == "JARVIS, AI Armory." and call["condition_on_previous_text"] is False
+    assert call["initial_prompt"] == "Alfred, AI Armory." and call["condition_on_previous_text"] is False
     FakeModel.segments = []
     assert speech.transcribe(np.zeros(160, np.float32)) == {"text": "", "no_speech": None, "avg_logprob": None}
 

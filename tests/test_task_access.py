@@ -8,28 +8,28 @@ import pytest
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from test_in_place import NullReporter, worker_task
 
+from alfred.core import platform
+from alfred.gates import shell
+from alfred.llm import claude_logins
+from alfred.safety import commands
+from alfred.tasks import access, briefs, gate, worker
 from conftest import use_task_cache
-from jarvis.core import platform
-from jarvis.gates import shell
-from jarvis.llm import claude_logins
-from jarvis.safety import commands
-from jarvis.tasks import access, briefs, gate, worker
 
 
 @pytest.fixture
 def mac(tmp_path, monkeypatch):
-    """A projects folder with JARVIS (secrets, Claude config, session logs) and one other project."""
+    """A projects folder with Alfred (secrets, Claude config, session logs) and one other project."""
     projects = tmp_path / "projects"
-    jarvis = projects / "jarvis"
-    secrets = jarvis / "secrets"
+    alfred = projects / "alfred"
+    secrets = alfred / "secrets"
     claude = secrets / "claude"
-    logs = claude / "projects" / "-Users-me-projects-jarvis-data-shell"
-    other_sessions = claude / "projects" / "-Users-me-projects-jarvis-data-worktrees-jarvis-3"
-    for folder in (logs, other_sessions, jarvis / "logs", projects / "video" / "config" / "secrets", tmp_path / "cache"):
+    logs = claude / "projects" / "-Users-me-projects-alfred-data-shell"
+    other_sessions = claude / "projects" / "-Users-me-projects-alfred-data-worktrees-alfred-3"
+    for folder in (logs, other_sessions, alfred / "logs", projects / "video" / "config" / "secrets", tmp_path / "cache"):
         folder.mkdir(parents=True)
     files = {
-        "log": logs / "abc.jsonl", "agent_log": jarvis / "logs" / "agent.log", "code": projects / "video" / "render.py",
-        "env": jarvis / ".env", "env_local": projects / "video" / ".env.local", "token": secrets / "google-work.json",
+        "log": logs / "abc.jsonl", "agent_log": alfred / "logs" / "agent.log", "code": projects / "video" / "render.py",
+        "env": alfred / ".env", "env_local": projects / "video" / ".env.local", "token": secrets / "google-work.json",
         "login": claude / ".credentials.json", "settings": claude / "settings.json", "other_session": other_sessions / "x.jsonl",
         "nested": projects / "video" / "config" / "secrets" / "api.txt", "key": projects / "video" / "server.pem",
         "ssh": projects / "video" / "id_ed25519",
@@ -42,7 +42,7 @@ def mac(tmp_path, monkeypatch):
     monkeypatch.setattr(gate, "CLAUDE_CONFIG_DIR", str(claude))
     monkeypatch.setattr(claude_logins, "voice_logs", lambda who=None: logs)
     use_task_cache(monkeypatch, tmp_path / "cache")
-    worktree = jarvis / "data" / "worktrees" / "jarvis-9"
+    worktree = alfred / "data" / "worktrees" / "alfred-9"
     worktree.mkdir(parents=True)
     return {"projects": projects, "worktree": worktree, "logs": logs, **files}
 
@@ -110,9 +110,9 @@ def test_deny_rules_hide_secrets_from_the_sandbox_too(mac):
 
 
 def test_deny_rules_hide_the_installs_env_when_it_lives_outside_the_checkout(mac, tmp_path, monkeypatch):
-    home = tmp_path / "jarvis-home"  # JARVIS_HOME after make home-move: under no read folder
+    home = tmp_path / "alfred-home"  # ALFRED_HOME after make home-move: under no read folder
     monkeypatch.setattr(gate, "HOME_DIR", home)
-    monkeypatch.setattr(commands, "JARVIS_SECRETS", [*commands.JARVIS_SECRETS, home / ".env"])
+    monkeypatch.setattr(commands, "ALFRED_SECRETS", [*commands.ALFRED_SECRETS, home / ".env"])
     rules = denied_paths(worker._options(worker_task(worktree=str(mac["worktree"])), NullReporter()))
     there = home.resolve()
     assert f"{there}/.env" in rules and f"{there}/**/.env" in rules and f"{there}/**/*.pem" in rules
@@ -204,7 +204,7 @@ def test_artifacts_meet_the_gate_ahead_of_the_allow_rule(mac):
 
     assert decide({"tool_input": {"file_path": str(mac["token"])}})["hookSpecificOutput"]["permissionDecision"] == "deny"
     helper = decide({"agent_id": "a1", "agent_type": "test-runner", "tool_input": {"file_path": page}})
-    assert helper["hookSpecificOutput"]["permissionDecision"] == "deny"  # JARVIS's helpers don't publish
+    assert helper["hookSpecificOutput"]["permissionDecision"] == "deny"  # Alfred's helpers don't publish
     assert decide({"tool_input": {"file_path": page}}) == {}
 
 

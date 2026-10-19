@@ -1,4 +1,4 @@
-"""Tests for settling to-dos as tasks finish (jarvis.tasks.goal, runner): tick off, reword, or suggest ticking off."""
+"""Tests for settling to-dos as tasks finish (alfred.tasks.goal, runner): tick off, reword, or suggest ticking off."""
 
 import asyncio
 
@@ -8,13 +8,13 @@ from test_goal import checks, statuses, verdict  # noqa: F401  (checks is a fixt
 from test_in_place import env  # noqa: F401  (env is a fixture)
 from test_nudges import fake_run, finishes, settle
 
-from jarvis import tools
-from jarvis.state import todo
-from jarvis.storage import profile
-from jarvis.tasks import announce, briefs, data_edits, goal, runner
-from jarvis.tasks.goal import BLOCKED, COMPLETE, Check
-from jarvis.tasks.store import edits
-from jarvis.tools import tasks as task_tools
+from alfred import tools
+from alfred.state import todo
+from alfred.storage import profile
+from alfred.tasks import announce, briefs, data_edits, goal, runner
+from alfred.tasks.goal import BLOCKED, COMPLETE, Check
+from alfred.tasks.store import edits
+from alfred.tools import tasks as task_tools
 
 
 @pytest.fixture
@@ -187,9 +187,9 @@ def test_a_to_do_that_is_not_open_is_refused_and_no_task_starts(listed):
 # ── What the task and the voice brain see ───────────────────────
 
 
-def test_the_task_hears_jarvis_settles_its_to_do(listed):
+def test_the_task_hears_alfred_settles_its_to_do(listed):
     assert briefs._todo_brief({"todo": 2}) == (
-        f"\n- This task works on {profile.name()}'s to-do item \"Build the iPhone app\". JARVIS ticks it off, or "
+        f"\n- This task works on {profile.name()}'s to-do item \"Build the iPhone app\". Alfred ticks it off, or "
         "rewords it to what's left, when you finish, so don't suggest todo_done or todo_reword for it.")
     assert briefs._todo_brief({"todo": None}) == briefs._todo_brief({}) == ""
 

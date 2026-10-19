@@ -1,4 +1,4 @@
-"""Fake `claude` CLI (ClaudeSDKClient) for testing the voice brain, jarvis.brain.cli.
+"""Fake `claude` CLI (ClaudeSDKClient) for testing the voice brain, alfred.brain.cli.
 
 Each turn is a script of steps the CLI streams:
   message    built with the helpers below; a ResultMessage ends the turn
@@ -127,8 +127,8 @@ class Voice:
     """CliBrain on FakeClis built with `cli`; `logged` holds memory's (user, assistant, interrupted) per exchange."""
 
     def __init__(self, monkeypatch, turns: list[list], **cli) -> None:
-        from jarvis.brain import cli as brain_cli
-        from jarvis.state import memory
+        from alfred.brain import cli as brain_cli
+        from alfred.state import memory
 
         self.turns, self.clis, self.logged = turns, [], []
         self.resumed: list[str | None] = []  # the session each CLI was started to carry on, None for a new one

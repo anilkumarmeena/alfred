@@ -14,14 +14,14 @@ from ai_armory.toolsets.google import drafts
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from test_mcp_servers import LISTED, fresh  # noqa: F401  (fixture)
 
-from jarvis import panel, tools
-from jarvis.auth import vault
-from jarvis.brain import cli
-from jarvis.gates import draft_gate
-from jarvis.integrations import mcp_bridge, mcp_oauth, mcp_registry, mcp_servers
-from jarvis.integrations.mcp_servers import Server, Tool
-from jarvis.state import activity
-from jarvis.tools import connections
+from alfred import panel, tools
+from alfred.auth import vault
+from alfred.brain import cli
+from alfred.gates import draft_gate
+from alfred.integrations import mcp_bridge, mcp_oauth, mcp_registry, mcp_servers
+from alfred.integrations.mcp_servers import Server, Tool
+from alfred.state import activity
+from alfred.tools import connections
 
 # Registry entries (GitHub's is its real entry, trimmed)
 GITHUB = {
@@ -66,7 +66,7 @@ def serving(handler) -> httpx.AsyncClient:
 
 # ── The registry ────────────────────────────────────────────────
 
-def test_the_ways_to_run_one_are_hosted_first_and_those_jarvis_cant_say_why(runners):
+def test_the_ways_to_run_one_are_hosted_first_and_those_alfred_cant_say_why(runners):
     can, cant = mcp_registry.ways(GITHUB)
     assert [w.kind for w in can] == ["remote", "oci"] and not cant
     assert can[0].said() == "hosted at api.githubcopilot.com" and can[0].needs[0].secret
@@ -205,7 +205,7 @@ def test_the_bridge_answers_a_request_the_server_refused_so_the_cli_isnt_left_wa
     vault.ensure()
     vault.put("notes.notes_key", "k-123")
     got = bridged(notes_http(), [LIST], lambda r: httpx.Response(401))
-    assert got[0]["id"] == 1 and "refused JARVIS's key" in got[0]["error"]["message"]
+    assert got[0]["id"] == 1 and "refused Alfred's key" in got[0]["error"]["message"]
     got = bridged(notes_http(), [LIST], lambda r: httpx.Response(503))
     assert "answered 503" in got[0]["error"]["message"]
 
@@ -278,7 +278,7 @@ class Auth:
 WIKI = Server("wiki", "Wiki", transport="http", url="https://mcp.wiki.example/mcp", sign_in=True)
 
 
-def test_signing_in_registers_jarvis_and_keeps_the_tokens_in_the_vault(fresh):
+def test_signing_in_registers_alfred_and_keeps_the_tokens_in_the_vault(fresh):
     auth = Auth()
     assert asyncio.run(mcp_oauth.needs_sign_in(WIKI.url, serving(auth)))
     said = asyncio.run(mcp_oauth.sign_in(WIKI, auth.browser, serving(auth)))
@@ -291,7 +291,7 @@ def test_signing_in_registers_jarvis_and_keeps_the_tokens_in_the_vault(fresh):
 
 def test_a_sign_in_that_comes_back_wrong_or_cant_register_isnt_kept(fresh):
     auth = Auth()
-    with pytest.raises(mcp_oauth.SignInError, match="JARVIS's own check"):
+    with pytest.raises(mcp_oauth.SignInError, match="Alfred's own check"):
         asyncio.run(mcp_oauth.sign_in(WIKI, lambda url, back: auth.browser(url, back, "forged"), serving(auth)))
     with pytest.raises(mcp_oauth.SignInError, match="takes a key instead"):
         asyncio.run(mcp_oauth.sign_in(WIKI, Auth(registers=False).browser, serving(Auth(registers=False))))
@@ -332,11 +332,11 @@ def run(name: str, args: dict):
 def confirm(gate, draft_id: str) -> tuple[str, str]:
     """Hold connection_confirm for the question, then say yes; returns (what was asked, what was done)."""
     gate.new_turn("connect it")
-    assert isinstance(asyncio.run(gate("mcp__jarvis__connection_confirm", {"draft_id": draft_id}, None)),
+    assert isinstance(asyncio.run(gate("mcp__alfred__connection_confirm", {"draft_id": draft_id}, None)),
                       PermissionResultDeny)
     asked = gate.question("")
     assert gate.new_turn("Yes.") == [draft_gate.PREFIX + draft_id]
-    assert isinstance(asyncio.run(gate("mcp__jarvis__connection_confirm", {"draft_id": draft_id}, None)),
+    assert isinstance(asyncio.run(gate("mcp__alfred__connection_confirm", {"draft_id": draft_id}, None)),
                       PermissionResultAllow)
     done, error = run("connection_confirm", {"draft_id": draft_id})
     assert not error, done
@@ -349,7 +349,7 @@ def test_only_confirming_waits_for_a_yes_and_the_brain_is_told_how():
                           "connection_review", "connection_enable", "connection_disable", "connection_update",
                           "connection_remove", "connection_confirm"}
     assert [n for n, t in found.items() if t.gated] == ["connection_confirm"]
-    assert "mcp__jarvis__connection_confirm" in draft_gate.gated()
+    assert "mcp__alfred__connection_confirm" in draft_gate.gated()
     brain = cli.CliBrain()
     assert "Connections (tools from MCP servers)" in cli._options(brain.shell, brain.jobs).system_prompt
 

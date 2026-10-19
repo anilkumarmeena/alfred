@@ -10,11 +10,11 @@ import pytest
 from test_in_place import env, worker_task  # noqa: F401  (fixture)
 from test_nudges import fake_run, finishes, settle, until
 
+from alfred.safety import host
+from alfred.tasks import access, api, host_tools, runner, worker
+from alfred.tasks.store import Store
+from alfred.tasks.worker import Outcome
 from conftest import use_task_cache
-from jarvis.safety import host
-from jarvis.tasks import access, api, host_tools, runner, worker
-from jarvis.tasks.store import Store
-from jarvis.tasks.worker import Outcome
 
 
 def logged(r: runner.Runner, task_id: int) -> list[str]:
@@ -69,8 +69,8 @@ def test_a_shutdown_notes_tasks_as_interrupted_and_says_nothing(env, monkeypatch
     assert cut_off(plain)["on_mac"] == [] and cut_off(plain)["prompt"] == "Find flights to Goa."
     assert cut_off(on_mac)["on_mac"] == ["xcodebuild -scheme App"]
     assert cut_off(queued)["prompt"] == "Find a hotel."
-    assert logged(r, on_mac["id"]) == ["JARVIS is shutting down, while it ran xcodebuild -scheme App on the computer"]
-    assert logged(r, plain["id"]) == ["JARVIS is shutting down"]
+    assert logged(r, on_mac["id"]) == ["Alfred is shutting down, while it ran xcodebuild -scheme App on the computer"]
+    assert logged(r, plain["id"]) == ["Alfred is shutting down"]
     assert events.empty() and all(t["spoken"] is None for t in (plain, on_mac, queued))  # nothing announced
 
 
@@ -159,7 +159,7 @@ def test_a_restart_resumes_tasks_a_shutdown_cut_off_in_their_own_sessions(env, m
     r, task = asyncio.run(main())
     assert prompts[1] == runner.RESUMED
     assert task["status"] == "done" and task["interrupted"] is None and task["error"] is None
-    assert logged(r, task["id"]) == ["JARVIS is shutting down", "resumed after JARVIS restarted"]
+    assert logged(r, task["id"]) == ["Alfred is shutting down", "resumed after Alfred restarted"]
 
 
 def test_a_task_that_never_got_going_is_launched_again_as_it_was(env, monkeypatch):
@@ -199,7 +199,7 @@ def test_every_kind_of_task_resumes_whatever_access_it_has(env, monkeypatch):
     assert prompts[3:] == [runner.RESUMED] * 3
     assert [t["status"] for t in tasks] == ["done"] * 3
     assert "artifacts" in access.has(tasks[1])  # it keeps the access it was granted
-    assert all(logged(r, t["id"]) == ["JARVIS is shutting down", runner.RESUMED_LOG] for t in tasks)
+    assert all(logged(r, t["id"]) == ["Alfred is shutting down", runner.RESUMED_LOG] for t in tasks)
 
 
 def test_a_running_task_resumes_even_without_a_clean_shutdown(env, monkeypatch):
@@ -293,7 +293,7 @@ def test_only_so_many_resume_running_ones_first(env, monkeypatch):
     r = asyncio.run(main())
     assert prompts == [runner.RESUMED, runner.RESUMED]
     assert [r.store.get(t["id"])["status"] for t in (first, second, queued)] == ["done", "done", "stopped"]
-    assert logged(r, queued["id"]) == ["not resumed on its own: no more than 2 resume at once (JARVIS_RESUME_TASKS)"]
+    assert logged(r, queued["id"]) == ["not resumed on its own: no more than 2 resume at once (ALFRED_RESUME_TASKS)"]
 
 
 def test_resuming_can_be_turned_off(env, monkeypatch):

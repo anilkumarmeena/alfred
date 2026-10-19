@@ -1,4 +1,4 @@
-"""Tests for jarvis.storage.database: connections, ordered migrations, batched task-step writes."""
+"""Tests for alfred.storage.database: connections, ordered migrations, batched task-step writes."""
 
 import asyncio
 import sqlite3
@@ -7,9 +7,9 @@ import time
 
 import pytest
 
-from jarvis.storage import database
-from jarvis.tasks import runner
-from jarvis.tasks.store import Store
+from alfred.storage import database
+from alfred.tasks import runner
+from alfred.tasks.store import Store
 
 NOTES = "create table notes (id integer primary key, text text not null)"
 
@@ -98,7 +98,7 @@ def test_a_migration_that_fails_changes_nothing(db):
     assert raw(db).execute("select text from notes").fetchall() == [("kept",)] and versions(db) == {"notes": 1}
 
 
-def test_a_table_a_newer_jarvis_migrated_further_is_left_alone(db):
+def test_a_table_a_newer_alfred_migrated_further_is_left_alone(db):
     with database.table("notes", NOTES, migrations=["alter table notes add column tag text"]):
         pass
     with database.table("notes", NOTES) as conn:  # older code, which knows only version 1

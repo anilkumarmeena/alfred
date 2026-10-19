@@ -10,14 +10,14 @@ from test_in_place import NullReporter, worker_task
 from test_mcp_servers import GH_TOKEN, GL_TOKEN, fresh, seeded  # noqa: F401  (fixture)
 from test_skills import manual, skills_home  # noqa: F401  (fixture)
 
-from jarvis.auth import vault
-from jarvis.brain import cli
-from jarvis.integrations import mcp_servers
-from jarvis.integrations.mcp_servers import Server, Tool
-from jarvis.llm import claude_logins
-from jarvis.skills import home
-from jarvis.tasks import worker
-from jarvis.tasks.connection_watch import Watch
+from alfred.auth import vault
+from alfred.brain import cli
+from alfred.integrations import mcp_servers
+from alfred.integrations.mcp_servers import Server, Tool
+from alfred.llm import claude_logins
+from alfred.skills import home
+from alfred.tasks import worker
+from alfred.tasks.connection_watch import Watch
 
 NEW_TOKEN = "glpat-another-not-real-token"
 
@@ -219,7 +219,7 @@ def test_a_tool_sorted_away_from_reading_mid_task_is_refused(fresh):
     asyncio.run(live.check(Client()))
     assert live.refused("mcp__gitlab__list_todos", {}) == "list_todos isn't available."
     assert live.refused("mcp__gitlab__get_merge_request", {}) == ""
-    assert live.refused("mcp__jarvis__memory_read", {}) == "" and live.refused("WebSearch", {}) == ""
+    assert live.refused("mcp__alfred__memory_read", {}) == "" and live.refused("WebSearch", {}) == ""
 
 
 def test_a_changing_tool_still_reaches_its_yes_unless_blocked_and_a_reading_one_sorted_as_changing_is_refused(fresh):
@@ -285,7 +285,7 @@ def test_a_watched_tasks_comment_is_held_for_a_yes_not_refused_as_unavailable(fr
             "tool_input": {"project_id": "web/player"}}
     said = [asyncio.run(hook(call, "t2", None)) for m in opts.hooks["PreToolUse"] for hook in m.hooks]
     denials = [s["hookSpecificOutput"]["permissionDecisionReason"] for s in said if s.get("hookSpecificOutput")]
-    assert len(denials) == 1 and "JARVIS has asked them" in denials[0]
+    assert len(denials) == 1 and "Alfred has asked them" in denials[0]
     assert [i["tool"] for i in reporter.asked] == ["mcp__gitlab__create_merge_request_note"]
 
 

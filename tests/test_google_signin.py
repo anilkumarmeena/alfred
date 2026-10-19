@@ -1,4 +1,4 @@
-"""Tests for signing Google accounts in from the control panel (jarvis.integrations.google_signin), its callback page,
+"""Tests for signing Google accounts in from the control panel (alfred.integrations.google_signin), its callback page,
 the panel's account actions, and the tools following account changes without a restart. Where sign-ins come back,
 replays, expiry, pasted addresses and waiting are AI Armory's (its tests/test_google_web.py)."""
 
@@ -14,13 +14,13 @@ from ai_armory.toolsets.google.common import SCOPES
 from ai_armory.toolsets.google.web import OLD
 from google_auth_oauthlib.flow import Flow
 
+from alfred import config, panel, server, tools
+from alfred.auth import credentials
+from alfred.integrations import accounts, google_signin
+from alfred.integrations.accounts import Account
+from alfred.state import activity
+from alfred.tools import google
 from conftest import use_profile
-from jarvis import config, panel, server, tools
-from jarvis.auth import credentials
-from jarvis.integrations import accounts, google_signin
-from jarvis.integrations.accounts import Account
-from jarvis.state import activity
-from jarvis.tools import google
 
 TAILNET = "https://mac.tailnet.ts.net"
 LOCAL = f"http://127.0.0.1:{config.WEB_PORT}"
@@ -200,12 +200,12 @@ def test_the_tools_follow_accounts_added_and_removed_elsewhere(home):
 
 
 def test_a_session_starts_with_the_accounts_as_they_are(home):
-    from jarvis.brain import persona, sdk, side
+    from alfred.brain import persona, sdk, side
 
     with accounts.change() as found:
         found.add(Account("side", note="side project"))
-    _, allowed = sdk.jarvis_server(side.reads)  # picked after the accounts are reread
-    assert "mcp__jarvis__gmail_search" in allowed and '"side": side project' in persona.persona()
+    _, allowed = sdk.alfred_server(side.reads)  # picked after the accounts are reread
+    assert "mcp__alfred__gmail_search" in allowed and '"side": side project' in persona.persona()
 
 
 
@@ -223,7 +223,7 @@ def test_a_sign_in_with_an_api_turned_off_says_so_and_checking_again_clears_it(h
     assert result.said == ("Signed the personal Google account in. Calendar is turned off in its Google Cloud project, "
                            "so the tools can't use it yet.")
     page = google_signin.signins.page(result)
-    assert "Signed in, almost ready" in page and "Turn on</a>" in page and "check again in JARVIS" in page
+    assert "Signed in, almost ready" in page and "Turn on</a>" in page and "check again in Alfred" in page
     monkeypatch.setattr(checks, "check", lambda label, given, client: ([Check("Gmail", "ok"), Check("Calendar", "ok")],
                                                                           EMAILS[label]))
     again = act("google_check", label="personal")

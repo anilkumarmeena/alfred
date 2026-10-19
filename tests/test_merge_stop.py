@@ -7,15 +7,15 @@ import sys
 from pathlib import Path
 
 import pytest
-from test_in_place import add_new_file, branches, env, git, jarvis, run_worktree_task  # noqa: F401  (fixtures)
+from test_in_place import add_new_file, alfred, branches, env, git, run_worktree_task  # noqa: F401  (fixtures)
 from test_merge_check import suite  # noqa: F401  (fixture)
 from test_node_offload import World, finished, world  # noqa: F401  (world is a fixture)
 from test_node_projects import registered, there  # noqa: F401  (there is a fixture)
 
-from jarvis.core import proc
-from jarvis.state import activity as bell
-from jarvis.tasks import git_ops, merge_check
-from jarvis.tasks.worker import Outcome
+from alfred.core import proc
+from alfred.state import activity as bell
+from alfred.tasks import git_ops, merge_check
+from alfred.tasks.worker import Outcome
 
 
 def as_it_was(repo: Path, head: str, branch: str) -> None:
@@ -37,11 +37,11 @@ async def stop_when(r, task_id: int, reached: asyncio.Event) -> tuple[dict, str]
     return stopped, ended
 
 
-def test_stopping_a_merge_during_its_tests_stops_them_and_leaves_the_repo_as_it_was(jarvis, suite, monkeypatch,
+def test_stopping_a_merge_during_its_tests_stops_them_and_leaves_the_repo_as_it_was(alfred, suite, monkeypatch,
                                                                                     env):
-    r, task = run_worktree_task(monkeypatch, add_new_file, project="jarvis")
-    git(jarvis, "worktree", "remove", "--force", task["worktree"])  # so the tests run in a checkout made for them
-    head = git(jarvis, "rev-parse", "HEAD")
+    r, task = run_worktree_task(monkeypatch, add_new_file, project="alfred")
+    git(alfred, "worktree", "remove", "--force", task["worktree"])  # so the tests run in a checkout made for them
+    head = git(alfred, "rev-parse", "HEAD")
 
     async def main():
         testing = asyncio.Event()
@@ -56,8 +56,8 @@ def test_stopping_a_merge_during_its_tests_stops_them_and_leaves_the_repo_as_it_
     stopped, ended = asyncio.run(main())
     said = f"Task {task['id']}, add a thing, wasn't merged: its merge was stopped, so nothing changed and its branch is kept."
     assert stopped["spoken"] == ended == said
-    as_it_was(jarvis, head, task["branch"])
-    assert "merge-check" not in git(jarvis, "worktree", "list")
+    as_it_was(alfred, head, task["branch"])
+    assert "merge-check" not in git(alfred, "worktree", "list")
     assert list((env["tmp"] / "worktrees").glob("merge-check-*")) == []
     assert "merge stopped" in [e["kind"] for e in r.store.history(task["id"])]
     assert bell.recent()[0]["text"] == said

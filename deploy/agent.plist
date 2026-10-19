@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- JARVIS voice agent. caffeinate keeps the Mac awake. ProcessType Interactive schedules it (and its speech process) ahead of background tasks. PATH includes node for npx-based MCP servers. Label and folders are filled in by jarvis.setup_local. -->
+<!-- Alfred voice agent. caffeinate keeps the Mac awake. ProcessType Interactive schedules it (and its speech process) ahead of background tasks. PATH includes node for npx-based MCP servers. Label and folders are filled in by alfred.setup_local. -->
 <plist version="1.0">
 <dict>
     <key>Label</key><string>${LABEL}</string>
@@ -12,11 +12,11 @@
         <string>-s</string>
         <string>${ROOT}/.venv/bin/python</string>
         <string>-m</string>
-        <string>jarvis.voice.agent</string>
+        <string>alfred.voice.agent</string>
         <string>start</string>
     </array>
     <key>EnvironmentVariables</key>
-    <dict><key>JARVIS_HOME</key><string>${JARVIS_HOME}</string><key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:${NODE}/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+    <dict><key>ALFRED_HOME</key><string>${ALFRED_HOME}</string><key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:${NODE}/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ThrottleInterval</key><integer>10</integer>

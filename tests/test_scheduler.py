@@ -1,4 +1,4 @@
-"""Tests for jarvis.tasks.schedules and scheduler: due runs, catch-up, watches, announcing, job memory, voice tools."""
+"""Tests for alfred.tasks.schedules and scheduler: due runs, catch-up, watches, announcing, job memory, voice tools."""
 
 import asyncio
 import json
@@ -11,16 +11,16 @@ from test_approvals import drained, events, pushes  # noqa: F401  (fixture)
 from test_in_place import env  # noqa: F401  (fixture)
 from test_nudges import fake_run, finishes, settle
 
+from alfred import config, tools
+from alfred.integrations import accounts
+from alfred.llm import retry, roles
+from alfred.llm.roles import Role
+from alfred.state import settings
+from alfred.storage import database, profile
+from alfred.tasks import runner, scheduler, schedules, worker
+from alfred.tasks.scheduler import Found, Reading, Scheduler
+from alfred.tasks.store import Store
 from conftest import ACCOUNTS, use_profile, use_task_cache
-from jarvis import config, tools
-from jarvis.integrations import accounts
-from jarvis.llm import retry, roles
-from jarvis.llm.roles import Role
-from jarvis.state import settings
-from jarvis.storage import database, profile
-from jarvis.tasks import runner, scheduler, schedules, worker
-from jarvis.tasks.scheduler import Found, Reading, Scheduler
-from jarvis.tasks.store import Store
 
 # A Tuesday, 09:15
 NOW = datetime(2026, 10, 6, 9, 15, tzinfo=profile.tz())
@@ -45,7 +45,7 @@ def flags(monkeypatch):
         queued = fake.answers.get(field, [])
         return queued.pop(0) if queued else None
 
-    monkeypatch.setattr("jarvis.llm.claude.ask_flag", ask_flag)
+    monkeypatch.setattr("alfred.llm.claude.ask_flag", ask_flag)
     return fake
 
 
@@ -231,7 +231,7 @@ def test_a_reminder_is_said_every_way_once(db):
     assert tick(s) == []
     clock.now = at(hours=7, minutes=45, )  # 17:00
     assert tick(s) == [job["id"]]
-    assert said["notified"] == [("JARVIS · Reminder", "Call Priya about the budget.")]
+    assert said["notified"] == [("Alfred · Reminder", "Call Priya about the budget.")]
     assert said["events"] == [{"type": "alert", "text": "Reminder: Call Priya about the budget.", "tasks": [],
                                "urgency": "soon", "pushed": True}]
     assert said["pushed"] == [("Reminder", "Call Priya about the budget.", "/?alert=schedule", f"schedule-{job['id']}")]
@@ -241,9 +241,9 @@ def test_a_reminder_is_said_every_way_once(db):
 
 def test_a_late_reminder_says_when_it_was_due(db):
     schedules.add("reminder", "Call Priya", "Call Priya", when="17:00", now=NOW)
-    s, said, _ = make(now=at(hours=9))  # JARVIS was down at 17:00, back at 18:15
+    s, said, _ = make(now=at(hours=9))  # Alfred was down at 17:00, back at 18:15
     tick(s)
-    assert said["notified"] == [("JARVIS · Reminder", "Call Priya. It was due at 17:00.")]
+    assert said["notified"] == [("Alfred · Reminder", "Call Priya. It was due at 17:00.")]
 
 
 def test_a_scheduled_task_starts_a_background_task_with_its_brief(db):
@@ -311,7 +311,7 @@ def test_a_job_that_cant_start_waits_for_its_next_time_and_says_so_once(db):
         tick(s)
     after = schedules.get(job["id"])
     assert (after["fails"], after["next_run"]) == (2, at(minutes=60).timestamp())
-    assert said["notified"] == [("JARVIS · Digest", "JARVIS couldn't run \"Digest\": There's no project called video-agent.")]
+    assert said["notified"] == [("Alfred · Digest", "Alfred couldn't run \"Digest\": There's no project called video-agent.")]
 
 
 def test_paused_jobs_dont_run_and_ended_ones_stop(db):
@@ -354,7 +354,7 @@ def test_a_watch_is_silent_until_met_then_says_so_once_and_stops(db):
     clock.now = at(minutes=5)
     tick(s)
     assert len(calls) == 2
-    assert said["notified"] == [("JARVIS · Deploy live", "https://app.example is up.")]
+    assert said["notified"] == [("Alfred · Deploy live", "https://app.example is up.")]
     assert said["events"][0]["text"] == "Deploy live: https://app.example is up."
     assert schedules.get(job["id"])["status"] == schedules.DONE
     clock.now = at(minutes=10)
@@ -371,7 +371,7 @@ def test_failing_checks_are_said_once_and_the_watch_keeps_going(db):
         clock.now = at(minutes=10 * i)
         tick(s)
     assert [text for _, text in said["notified"]] == [
-        "JARVIS couldn't check \"Reply\" 3 times running: every account failed. It keeps trying."]
+        "Alfred couldn't check \"Reply\" 3 times running: every account failed. It keeps trying."]
     assert schedules.get(job["id"])["status"] == schedules.ACTIVE and schedules.get(job["id"])["fails"] == 4
 
 
@@ -383,7 +383,7 @@ def test_a_watch_that_never_sees_it_says_so_when_it_ends(db):
     clock.now = at(hours=1)
     tick(s)
     assert schedules.get(job["id"])["status"] == schedules.EXPIRED
-    assert said["notified"] == [("JARVIS · Deploy live", "Stopped watching for \"Deploy live\": it hadn't happened by 10:00.")]
+    assert said["notified"] == [("Alfred · Deploy live", "Stopped watching for \"Deploy live\": it hadn't happened by 10:00.")]
 
 
 def test_watches_wait_out_quiet_hours(db):
@@ -399,7 +399,7 @@ def test_watches_wait_out_quiet_hours(db):
 
 
 def test_watches_follow_the_users_quiet_hours_as_they_change(db, monkeypatch):
-    monkeypatch.delenv("JARVIS_QUIET_HOURS", raising=False)
+    monkeypatch.delenv("ALFRED_QUIET_HOURS", raising=False)
     evening = datetime(2026, 10, 6, 22, 0, tzinfo=profile.tz())
     job = schedules.add("watch", "Deploy", "live", probe="url", target="https://a.example", now=evening)
     probe, calls = probe_that(Found(False, "Not yet."))
@@ -520,7 +520,7 @@ def judged(monkeypatch):
             raise RuntimeError("the model call failed")
         return fake.answers.pop(0), 0.0
 
-    monkeypatch.setattr("jarvis.llm.claude.ask_json", ask_json)
+    monkeypatch.setattr("alfred.llm.claude.ask_json", ask_json)
     return fake
 
 
@@ -553,7 +553,7 @@ def test_a_gmail_watch_says_new_mail_once_a_model_has_read_only_that(db, results
     tick(s)
     [prompt] = judged.asked
     assert "Priya replies about the budget" in prompt and "Re: budget" in prompt and "Old news" not in prompt
-    assert said["notified"] == [("JARVIS · Priya's reply", "New email from Priya: Re: budget.")]
+    assert said["notified"] == [("Alfred · Priya's reply", "New email from Priya: Re: budget.")]
     assert said["events"][0]["text"] == "Priya's reply: Priya wrote back about the budget, saying it looks fine."
     assert schedules.get(job["id"])["status"] == schedules.DONE
 
@@ -611,7 +611,7 @@ def test_a_chat_watch_reads_only_new_messages_that_name_the_person(db, results, 
     tick(s)
     [prompt] = judged.asked
     assert "Budget looks fine" in prompt and "deploy done" not in prompt
-    assert said["notified"] == [("JARVIS · Priya on Chat", "Priya Shah wrote to you on Chat.")]  # her words never pushed
+    assert said["notified"] == [("Alfred · Priya on Chat", "Priya Shah wrote to you on Chat.")]  # her words never pushed
     assert said["events"][0]["text"] == "Priya on Chat: Priya Shah wrote to you on Chat: budget looks fine, go ahead."
     assert schedules.get(job["id"])["status"] == schedules.DONE
 
@@ -833,7 +833,7 @@ def test_a_scheduled_run_keeps_its_summary_without_the_notepad(env, pushes, monk
 
 
 def test_do_not_disturb_keeps_task_updates_off_the_mac_and_the_phone(env, pushes, monkeypatch):
-    from jarvis.tasks import hold
+    from alfred.tasks import hold
 
     fake_run(monkeypatch, finishes("Found three flights."))
     hold.start(minutes=30)
@@ -938,7 +938,7 @@ def test_schedule_tools(db):
     assert not error and added["kind"] == "reminder" and added["when"].startswith("once, at ")
     watch, _ = call("schedule_add", {"kind": "watch", "title": "Deploy", "text": "v2 live", "probe": "url",
                                      "target": "https://app.example", "expect": "v2"})
-    assert watch["check"] == "JARVIS checks the page: https://app.example, for \"v2\""
+    assert watch["check"] == "Alfred checks the page: https://app.example, for \"v2\""
     listed, _ = call("schedule_list", {})
     assert [j["title"] for j in listed] == ["Deploy", "Call Priya"]  # soonest first: the watch looks straight away
     changed, _ = call("schedule_change", {"id": added["id"], "paused": True})
@@ -950,7 +950,7 @@ def test_schedule_tools(db):
 
 
 def test_a_new_watch_is_told_the_users_quiet_hours(db, monkeypatch):
-    monkeypatch.delenv("JARVIS_QUIET_HOURS", raising=False)
+    monkeypatch.delenv("ALFRED_QUIET_HOURS", raising=False)
     watch = {"kind": "watch", "title": "Deploy", "text": "v2 live", "probe": "url", "target": "https://app.example"}
     settings.set_preference("quiet_hours", "22:00-06:30")
     added, _ = call("schedule_add", watch)
@@ -962,15 +962,15 @@ def test_a_new_watch_is_told_the_users_quiet_hours(db, monkeypatch):
 
 def test_a_tool_watch_is_set_up_and_changed_by_voice(db):
     watch, error = call("schedule_add", {"kind": "watch", "title": "Priya on Chat", "text": "Priya writes to me",
-                                         "probe": "tool", "target": "mcp__jarvis__chat_unread",
+                                         "probe": "tool", "target": "mcp__alfred__chat_unread",
                                          "arguments": {"mentions_only": True, "days": 1}, "expect": "Priya"})
     assert not error and watch["when"].startswith("every 10 minutes")
-    assert watch["check"] == 'JARVIS calls the tool: chat_unread with {"mentions_only": true, "days": 1}, for "Priya"'
+    assert watch["check"] == 'Alfred calls the tool: chat_unread with {"mentions_only": true, "days": 1}, for "Priya"'
     schedules.update(watch["id"], baseline=json.dumps(["a1"]))
     changed, error = call("schedule_change", {"id": watch["id"], "target": "gmail_search",
                                               "arguments": {"query": "from:priya"}})
     assert not error
-    assert changed["check"] == 'JARVIS calls the tool: gmail_search with {"query": "from:priya"}, for "Priya"'
+    assert changed["check"] == 'Alfred calls the tool: gmail_search with {"query": "from:priya"}, for "Priya"'
     assert schedules.get(watch["id"])["baseline"] is None  # compared afresh
     refused, error = call("schedule_change", {"id": watch["id"], "target": "gmail_modify"})
     assert error and "isn't a reading tool" in refused
@@ -1089,7 +1089,7 @@ def test_only_only_changes_lets_a_run_stay_silent_whatever_its_instruction_says(
     job = schedules.add("task", "Build watch", "Tell me only if a build failed.", every_minutes=60, only_changes=True,
                         now=NOW)
     task = {"id": 2, "job": job["id"]}
-    assert "JARVIS stays silent" in scheduler.task_prompt(job)
+    assert "Alfred stays silent" in scheduler.task_prompt(job)
     assert s.ended(task, "All builds green.", "", Reading(nothing_new=True)).quiet
     said = s.ended(task, "The iOS build failed on signing.", "", Reading(nothing_new=False))
     assert not said.quiet and said.spoken == "Build watch: The iOS build failed on signing."
@@ -1132,7 +1132,7 @@ def limit_used_up(resets_at: float, kind: str = "five_hour", utilization: float 
                   status: str = "rejected") -> None:
     from claude_agent_sdk import RateLimitInfo
 
-    from jarvis.llm import usage
+    from alfred.llm import usage
 
     usage.record(RateLimitInfo(status=status, resets_at=int(resets_at), rate_limit_type=kind,
                                utilization=utilization), now=NOW.timestamp())
@@ -1140,7 +1140,7 @@ def limit_used_up(resets_at: float, kind: str = "five_hour", utilization: float 
 
 @pytest.fixture
 def usage_file(tmp_path, monkeypatch):
-    from jarvis.llm import usage
+    from alfred.llm import usage
 
     monkeypatch.setattr(usage, "USAGE_FILE", tmp_path / "usage.json")
     return tmp_path / "usage.json"
@@ -1201,7 +1201,7 @@ def test_a_check_that_hit_the_usage_limit_isnt_a_failed_check(db):
 
 
 def test_do_not_disturb_holds_every_job_until_it_ends(db):
-    from jarvis.tasks import hold
+    from alfred.tasks import hold
 
     s, said, clock = make()
     hold.start(until="12:00", now=NOW)
@@ -1212,12 +1212,12 @@ def test_do_not_disturb_holds_every_job_until_it_ends(db):
     assert tick(s) == [] and said["notified"] == [] and s.runner.started == []
     clock.now = at(hours=2, minutes=46)  # 12:01: the brief is 2.5 hours late, but it was held, not missed
     assert set(tick(s)) == {nudge["id"], brief["id"], watch["id"]}
-    assert said["notified"][0] == ("JARVIS · Reminder", "Stretch. It was due at 09:30.")
+    assert said["notified"][0] == ("Alfred · Reminder", "Stretch. It was due at 09:30.")
     assert [t["title"] for t in s.runner.started] == ["Morning brief"]
 
 
 def test_resuming_lets_held_jobs_run_at_once(db):
-    from jarvis.tasks import hold
+    from alfred.tasks import hold
 
     s, said, clock = make()
     hold.start(now=NOW)  # until resumed

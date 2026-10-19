@@ -38,7 +38,7 @@ const JOB: Schedule = {
   last_result: "Two meetings and **one** urgent email.", task_kind: "research", project: null,
   when: "every weekday at 09:00", check: "", does: "", only_changes: 0, notepad: null, folder: null,
 };
-const WATCH: Schedule = { ...JOB, id: 4, kind: "watch", title: "Deploy live", status: "paused", task_kind: null, check: "JARVIS checks the page: https://app.example" };
+const WATCH: Schedule = { ...JOB, id: 4, kind: "watch", title: "Deploy live", status: "paused", task_kind: null, check: "Alfred checks the page: https://app.example" };
 
 let calls: { action: string; body: any }[] = [];
 let answers: Record<string, unknown> = {};
@@ -110,7 +110,7 @@ test("what waits on the user comes first, under a summary line", async () => {
 test("with nothing scheduled it says how to schedule something, and there's no form", async () => {
   state.schedules.value = [];
   await act(() => { render(h(ui.TaskList, {}), box); });
-  assert.ok([...box.querySelectorAll(".empty")].some((e) => /Nothing scheduled\. Ask JARVIS/.test(e.textContent!)));
+  assert.ok([...box.querySelectorAll(".empty")].some((e) => /Nothing scheduled\. Ask Alfred/.test(e.textContent!)));
   assert.equal(box.querySelector(".scheds"), null);
   assert.equal(box.querySelector("form, input, textarea"), null);  // jobs are created by voice only
 });
@@ -124,7 +124,7 @@ test("tasks a job started show the job's name on a row of its own", async () => 
   assert.equal(cards[1]!.querySelector(".jobmark"), null);
 });
 
-test("pause, resume and cancel on a job's page ask JARVIS and show the list it sends back", async () => {
+test("pause, resume and cancel on a job's page ask Alfred and show the list it sends back", async () => {
   const page = document.createElement("div");
   document.body.append(page);
   await act(() => { render(h(ui.TaskList, {}), box); });

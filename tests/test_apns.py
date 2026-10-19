@@ -1,4 +1,4 @@
-"""Tests for jarvis.notify.apns: devices, provider token, sending, and the endpoint."""
+"""Tests for alfred.notify.apns: devices, provider token, sending, and the endpoint."""
 
 import asyncio
 import base64
@@ -11,14 +11,14 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 
+from alfred import server
+from alfred.notify import apns, push
+from alfred.notify.apns import Devices
 from conftest import use_profile
-from jarvis import server
-from jarvis.notify import apns, push
-from jarvis.notify.apns import Devices
 
 TOKEN = "a1" * 32
 OTHER = "b2" * 32
-PHONE = {"token": TOKEN.upper(), "environment": "development", "topic": "com.example.jarvis"}
+PHONE = {"token": TOKEN.upper(), "environment": "development", "topic": "com.example.alfred"}
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ def key(tmp_path, monkeypatch):
     path.write_bytes(private.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                                            serialization.NoEncryption()))
     monkeypatch.setattr(apns, "APNS_KEY_FILE", path)
-    monkeypatch.setenv("JARVIS_APNS_KEY_ID", "ABC123DEFG")  # not in the vault, so read from .env
+    monkeypatch.setenv("ALFRED_APNS_KEY_ID", "ABC123DEFG")  # not in the vault, so read from .env
     monkeypatch.setattr(apns, "APNS_TEAM_ID", "TEAM123456")
     monkeypatch.setattr(apns, "_jwt", None)
     apns._signing_key.cache_clear()
@@ -50,7 +50,7 @@ def test_devices_persist_one_per_token(tmp_path):
     devices.add(PHONE | {"environment": "production"}, "iphone")  # the same token replaces the entry
     again = Devices(tmp_path / "devices.json").all()
     assert [(d["token"], d["environment"], d["topic"], d["device"]) for d in again] == [
-        (TOKEN, "production", "com.example.jarvis", "iphone")]
+        (TOKEN, "production", "com.example.alfred", "iphone")]
     assert "passcode" not in again[0]
     assert stat.S_IMODE((tmp_path / "devices.json").stat().st_mode) == 0o600
     assert devices.remove({TOKEN}) == 1 and devices.all() == []
@@ -63,7 +63,7 @@ def test_devices_persist_one_per_token(tmp_path):
     PHONE | {"token": "../" * 30},
     PHONE | {"environment": "staging"},
     PHONE | {"topic": ""},
-    PHONE | {"topic": "com.example.jarvis/../x"},
+    PHONE | {"topic": "com.example.alfred/../x"},
 ])
 def test_validate_refuses_malformed_devices(bad):
     with pytest.raises(ValueError):
@@ -122,7 +122,7 @@ class FakeAPNs:
 def phones(tmp_path):
     devices = Devices(tmp_path / "devices.json")
     devices.add(PHONE, "iphone")
-    devices.add({"token": OTHER, "environment": "production", "topic": "com.example.jarvis"}, "ipad")
+    devices.add({"token": OTHER, "environment": "production", "topic": "com.example.alfred"}, "ipad")
     return devices
 
 
@@ -142,7 +142,7 @@ def test_send_reaches_every_app_on_its_apns_server(key, phones, monkeypatch):
         h = c["headers"]
         assert h["authorization"] == f"bearer {apns.provider_token()}"
         assert (h["apns-topic"], h["apns-push-type"], h["apns-priority"], h["apns-collapse-id"]) == (
-            "com.example.jarvis", "alert", "10", "task-3")
+            "com.example.alfred", "alert", "10", "task-3")
     assert service.closed
 
 
@@ -158,23 +158,23 @@ def test_stale_tokens_are_dropped_and_others_kept(key, phones, monkeypatch):
 
 def test_failures_keep_the_device_and_log_no_token(key, phones, monkeypatch, caplog):
     monkeypatch.setattr(apns, "_client", lambda: FakeAPNs({TOKEN: Reply(403, {"reason": "InvalidProviderToken"})}))
-    with caplog.at_level(logging.INFO, logger="jarvis.notify.apns"):
+    with caplog.at_level(logging.INFO, logger="alfred.notify.apns"):
         assert send(phones, "Calendar", "Standup in 10 minutes.") == 1
     assert len(phones.all()) == 2
     assert "HTTP 403 InvalidProviderToken" in caplog.text and TOKEN not in caplog.text
     monkeypatch.setattr(apns, "_client", lambda: FakeAPNs(error=OSError(f"connect {TOKEN}")))
-    with caplog.at_level(logging.INFO, logger="jarvis.notify.apns"):
+    with caplog.at_level(logging.INFO, logger="alfred.notify.apns"):
         assert send(phones, "Calendar", "Standup.") == 0
     assert "OSError" in caplog.text and TOKEN not in caplog.text
 
 
 def test_nothing_is_sent_until_apns_is_set_up(phones, monkeypatch, caplog, tmp_path):
     monkeypatch.setattr(apns, "APNS_KEY_FILE", tmp_path / "missing.p8")
-    monkeypatch.setenv("JARVIS_APNS_KEY_ID", "ABC123DEFG")  # not in the vault, so read from .env
+    monkeypatch.setenv("ALFRED_APNS_KEY_ID", "ABC123DEFG")  # not in the vault, so read from .env
     monkeypatch.setattr(apns, "APNS_TEAM_ID", "TEAM123456")
     service = FakeAPNs()
     monkeypatch.setattr(apns, "_client", lambda: service)
-    with caplog.at_level(logging.WARNING, logger="jarvis.notify.apns"):
+    with caplog.at_level(logging.WARNING, logger="alfred.notify.apns"):
         assert send(phones, "Calendar", "Standup.") == 0
     assert service.calls == [] and "apns_key.p8" in caplog.text
     assert len(phones.all()) == 2
@@ -222,7 +222,7 @@ def reply(body: dict) -> tuple[int, dict]:
 
 @pytest.fixture
 def site(tmp_path, monkeypatch):
-    monkeypatch.setenv("JARVIS_PASSCODE", "123456")  # no login yet: the first-setup passcode
+    monkeypatch.setenv("ALFRED_PASSCODE", "123456")  # no login yet: the first-setup passcode
     monkeypatch.setattr(server, "PUSH_ENABLED", True)
     use_profile(monkeypatch, tmp_path)
     server._failures.clear()
@@ -237,7 +237,7 @@ def test_push_native_stores_the_apps_token(site, key):
 
 
 def test_push_native_keeps_the_token_before_apns_is_set_up(site, monkeypatch):
-    monkeypatch.delenv("JARVIS_APNS_KEY_ID", raising=False)
+    monkeypatch.delenv("ALFRED_APNS_KEY_ID", raising=False)
     status, body = reply(PHONE | {"passcode": "123456"})
     assert status == 200 and body["sending"] is False and "key ID" in body["error"]
     assert len(Devices(site / "push_devices.json").all()) == 1

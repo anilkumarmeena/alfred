@@ -9,20 +9,20 @@ from pathlib import Path
 
 import pytest
 
-from jarvis import projects, tools
-from jarvis.tasks import briefs, runner
-from jarvis.tasks.worker import READ_ONLY_TOOLS
-from jarvis.tools import tasks as task_tools
+from alfred import projects, tools
+from alfred.tasks import briefs, runner
+from alfred.tasks.worker import READ_ONLY_TOOLS
+from alfred.tools import tasks as task_tools
 from tests.test_in_place import env, fake_run, git, listed, make_repo, settle  # noqa: F401  (env is a fixture)
 
 
 @pytest.fixture
 def home(env, monkeypatch):
-    """env with tmp as the home folder and JARVIS's folders inside it."""
+    """env with tmp as the home folder and Alfred's folders inside it."""
     tmp = env["tmp"]
     monkeypatch.setenv("HOME", str(tmp))
     monkeypatch.setattr(projects, "ALLOWED_ROOT", tmp)
-    monkeypatch.setattr(projects, "PROTECTED", [tmp / "jarvis" / "data", tmp / "jarvis" / "secrets"])
+    monkeypatch.setattr(projects, "PROTECTED", [tmp / "alfred" / "data", tmp / "alfred" / "secrets"])
     monkeypatch.setattr(projects, "NEW_PROJECTS_DIR", tmp / "projects")
     return env
 
@@ -98,8 +98,8 @@ REFUSALS = {
     "library any case": (lambda t: "~/library/stuff", "library"),
     "hidden": (lambda t: "~/.config/thing", "hidden"),
     "hidden deeper": (lambda t: "~/code/.cache/thing", "hidden"),
-    "jarvis data": (lambda t: "~/jarvis/data/newproj", "JARVIS's own data"),
-    "jarvis secrets": (lambda t: "~/jarvis/secrets", "JARVIS's own secrets"),
+    "alfred data": (lambda t: "~/alfred/data/newproj", "Alfred's own data"),
+    "alfred secrets": (lambda t: "~/alfred/secrets", "Alfred's own secrets"),
     "relative": (lambda t: "projects/thing", "absolute"),
     "registered": (lambda t: str(t / "video-agent"), "project video-agent"),
     "registered with tilde and slash": (lambda t: "~/video-agent/", "project video-agent"),
@@ -235,7 +235,7 @@ def test_in_place_task_in_a_repo_with_no_commits(home, monkeypatch):
     assert task["base"] == git(astro, "hash-object", "-t", "tree", "/dev/null")  # the empty tree
     assert task["changes"] == "uncommitted: 1 file changed, 2 insertions(+); 1 untracked file in the folder"
     assert not has_commits(astro)
-    assert git(astro, "for-each-ref", "refs/jarvis/") == "" and git(astro, "stash", "list") == ""
+    assert git(astro, "for-each-ref", "refs/alfred/") == "" and git(astro, "stash", "list") == ""
     assert any("no commits yet" in e["text"] for e in r.store.history(task["id"]))
 
 
@@ -373,7 +373,7 @@ def test_project_tools_are_registered_and_not_open_to_task_sessions():
     assert "task_merge" in names and "task_merge" not in READ_ONLY_TOOLS
 
 
-# ── Defaults and JARVIS itself ──────────────────────────────────
+# ── Defaults and Alfred itself ──────────────────────────────────
 
 
 def test_an_existing_repo_is_registered_in_place_by_default(home):
@@ -382,12 +382,12 @@ def test_an_existing_repo_is_registered_in_place_by_default(home):
     assert out["in_place"] is True and entries()["existing"]["in_place"] is True
 
 
-def test_jarvis_itself_is_registered_with_worktrees_even_when_asked_for_in_place(home, monkeypatch):
-    jarvis = make_repo(home["tmp"] / "jarvis")
-    monkeypatch.setattr(projects, "JARVIS_REPO", jarvis)
-    out = projects.register("jarvis", "~/jarvis/", in_place=True)
-    assert out["in_place"] is False and entries()["jarvis"]["in_place"] is False
-    assert projects.find("jarvis").in_place is False
+def test_alfred_itself_is_registered_with_worktrees_even_when_asked_for_in_place(home, monkeypatch):
+    alfred = make_repo(home["tmp"] / "alfred")
+    monkeypatch.setattr(projects, "ALFRED_REPO", alfred)
+    out = projects.register("alfred", "~/alfred/", in_place=True)
+    assert out["in_place"] is False and entries()["alfred"]["in_place"] is False
+    assert projects.find("alfred").in_place is False
 
 
 # ── Changing and removing ───────────────────────────────────────
@@ -427,16 +427,16 @@ def test_update_refuses_what_it_cant_do_and_changes_nothing(home, change, messag
     assert entries() == before
 
 
-def test_update_refuses_worktrees_without_git_history_and_in_place_for_jarvis(home, monkeypatch):
+def test_update_refuses_worktrees_without_git_history_and_in_place_for_alfred(home, monkeypatch):
     projects.register("scratch")
     with pytest.raises(ValueError, match="scratch isn't a git repository"):
         projects.update("scratch", in_place=False)
     assert entries()["scratch"]["in_place"] is True
-    monkeypatch.setattr(projects, "JARVIS_REPO", make_repo(home["tmp"] / "jarvis"))
-    projects.register("jarvis", "~/jarvis")
+    monkeypatch.setattr(projects, "ALFRED_REPO", make_repo(home["tmp"] / "alfred"))
+    projects.register("alfred", "~/alfred")
     with pytest.raises(ValueError, match="never in place"):
-        projects.update("jarvis", in_place=True)
-    assert projects.update("jarvis", about="Me")["in_place"] is False
+        projects.update("alfred", in_place=True)
+    assert projects.update("alfred", about="Me")["in_place"] is False
     with pytest.raises(ValueError, match="Unknown project 'nope'"):
         projects.update("nope", about="x")
 
@@ -549,9 +549,9 @@ def test_an_in_place_task_in_a_folder_of_repos_saves_each_repos_work_and_lists_i
     assert task["status"] == "done" and task["base"] is None
     assert task["changes"] == ("across its git repos apps/web, backend, frontend; created backend/api.py; "
                                "modified frontend/app.py")
-    saved = git(top / "backend", "for-each-ref", "--format=%(refname)", "refs/jarvis/")
-    assert saved.startswith(f"refs/jarvis/task-{task['id']}-")
-    assert git(top / "frontend", "for-each-ref", "refs/jarvis/") == ""  # it had nothing uncommitted
+    saved = git(top / "backend", "for-each-ref", "--format=%(refname)", "refs/alfred/")
+    assert saved.startswith(f"refs/alfred/task-{task['id']}-")
+    assert git(top / "frontend", "for-each-ref", "refs/alfred/") == ""  # it had nothing uncommitted
     history = " ".join(e["text"] for e in r.store.history(task["id"]))
     assert "holds the git repos apps/web, backend, frontend" in history and f"{saved} in backend" in history
     assert not (top / ".git").exists()

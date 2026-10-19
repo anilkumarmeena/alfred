@@ -8,13 +8,13 @@ import { APP_SETTINGS, appNotifications, bindNative, levelTap, nativeAudio, nati
 test("nativeAudio is null in a browser, so the page keeps its own Room and web push", () => {
   assert.equal(nativeAudio({}), null);
   assert.equal(nativeAudio(globalThis), null);
-  assert.equal(nativeAudio({ Capacitor: { isNativePlatform: () => false, Plugins: { JarvisAudio: {} } } }), null);
+  assert.equal(nativeAudio({ Capacitor: { isNativePlatform: () => false, Plugins: { AlfredAudio: {} } } }), null);
   assert.equal(nativeAudio({ Capacitor: { isNativePlatform: () => true, Plugins: {} } }), null);
 });
 
-test("nativeAudio finds the JarvisAudio plugin inside the app", () => {
+test("nativeAudio finds the AlfredAudio plugin inside the app", () => {
   const plugin = {};
-  assert.equal(nativeAudio({ Capacitor: { isNativePlatform: () => true, Plugins: { JarvisAudio: plugin } } }), plugin);
+  assert.equal(nativeAudio({ Capacitor: { isNativePlatform: () => true, Plugins: { AlfredAudio: plugin } } }), plugin);
 });
 
 // ── bindNative ──────────────────────────────────────────────────
@@ -52,7 +52,7 @@ function fakePage() {
 
 test("connect starts the plugin and follows it to a live session", async () => {
   const { plugin, calls, emit } = fakePlugin(), { page, log } = fakePage();
-  const s = bindNative(plugin, page, "https://jarvis.test");
+  const s = bindNative(plugin, page, "https://alfred.test");
   await s.connect({ passcode: "pw" });
   assert.deepEqual(calls, ["start muted=false"]);
   assert.ok(s.connected());
@@ -61,7 +61,7 @@ test("connect starts the plugin and follows it to a live session", async () => {
   emit("agentState", { state: "listening" });
   assert.equal(log.at(-1), "state listening");
   emit("transcript", { id: "a", speaker: "agent", text: "Hello" });
-  assert.equal(log.at(-1), "line a jarvis Hello");
+  assert.equal(log.at(-1), "line a alfred Hello");
 });
 
 test("a refused passcode asks again, and hangup ends quietly", async () => {
@@ -273,20 +273,20 @@ test("the switch reads iOS's answer, and an older build asks through requestPerm
   let answer = "prompt";
   plugin.checkPermissions = async () => ({ microphone: "granted", notifications: answer });
   plugin.requestPermissions = async (o) => { calls.push(`request ${o?.permissions}`); answer = "granted"; return { notifications: answer }; };
-  const n = appNotifications(plugin, "https://jarvis.test");
+  const n = appNotifications(plugin, "https://alfred.test");
   assert.equal(await n.state(), "prompt");
   assert.deepEqual(await n.request("pw"), { state: "granted", registered: false });  // token deferred to next session
   assert.deepEqual(calls, ["request notifications"]);
   assert.equal(await n.state(), "granted");
 });
 
-test("a newer build registers with JARVIS straight away", async () => {
+test("a newer build registers with Alfred straight away", async () => {
   const { plugin, calls } = fakePlugin();
   plugin.requestPermissions = async () => { calls.push("requestPermissions"); return { notifications: "granted" }; };
   plugin.registerNotifications = async (o) => { calls.push(`register ${o.serverUrl} ${o.passcode}`); return { notifications: "granted" }; };
-  const n = appNotifications(plugin, "https://jarvis.test");
+  const n = appNotifications(plugin, "https://alfred.test");
   assert.deepEqual(await n.request("pw"), { state: "granted", registered: true });
-  assert.deepEqual(calls, ["register https://jarvis.test pw"]);
+  assert.deepEqual(calls, ["register https://alfred.test pw"]);
 
   plugin.registerNotifications = async () => ({ notifications: "denied" });
   assert.deepEqual(await n.request("pw"), { state: "denied", registered: false });
@@ -301,7 +301,7 @@ test("a missing or failing check counts as not asked yet", async () => {
 
 test("openSettings uses the plugin's, else follows the app-settings: link that Capacitor hands to iOS", async () => {
   const { plugin, calls } = fakePlugin(), went: string[] = [];
-  const n = appNotifications(plugin, "https://jarvis.test", (u) => went.push(u));
+  const n = appNotifications(plugin, "https://alfred.test", (u) => went.push(u));
   await n.openSettings();
   assert.deepEqual(went, [APP_SETTINGS]);
   plugin.openSettings = async () => { calls.push("openSettings"); };

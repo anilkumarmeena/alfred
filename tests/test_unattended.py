@@ -1,4 +1,4 @@
-"""Tests for scheduled resume and todo jobs (jarvis.tasks.schedules, scheduler, unattended): resuming stopped tasks and
+"""Tests for scheduled resume and todo jobs (alfred.tasks.schedules, scheduler, unattended): resuming stopped tasks and
 starting tasks for to-do items at a set time, with no conversation open."""
 
 import asyncio
@@ -12,11 +12,11 @@ from test_in_place import env  # noqa: F401  (fixture)
 from test_nudges import fake_run, finishes, settle
 from test_scheduler import FakeRunner, call
 
-from jarvis.state import todo
-from jarvis.storage import profile
-from jarvis.tasks import runner, schedules, unattended
-from jarvis.tasks.goal import COMPLETE
-from jarvis.tasks.scheduler import Scheduler
+from alfred.state import todo
+from alfred.storage import profile
+from alfred.tasks import runner, schedules, unattended
+from alfred.tasks.goal import COMPLETE
+from alfred.tasks.scheduler import Scheduler
 
 
 @pytest.fixture
@@ -38,7 +38,7 @@ def planner(monkeypatch):
         fake.asked.append((prompt, system_prompt))
         return fake.reply, 0.0
 
-    monkeypatch.setattr("jarvis.llm.claude.ask_json", ask_json)
+    monkeypatch.setattr("alfred.llm.claude.ask_json", ask_json)
     return fake
 
 
@@ -140,8 +140,8 @@ def test_a_resume_run_carries_on_stopped_tasks_and_says_which(env, monkeypatch):
     ended(r.store, "render", "stopped", kind="command")
     job = schedules.add("resume", "resume overnight", "Keep it short.", in_minutes=1)
     notified = run_job(r, job)
-    assert notified == [("JARVIS · resume overnight", f"Resumed 1 task: {stopped['id']}, mcp tools.")]
-    assert len(prompts) == 1 and "JARVIS's scheduler is carrying this task on" in prompts[0]
+    assert notified == [("Alfred · resume overnight", f"Resumed 1 task: {stopped['id']}, mcp tools.")]
+    assert len(prompts) == 1 and "Alfred's scheduler is carrying this task on" in prompts[0]
     assert prompts[0].endswith(f"{profile.name()}'s note for it: Keep it short.")
     assert r.store.get(stopped["id"])["status"] == "done"
     assert schedules.get(job["id"])["last_result"] == notified[0][1]
@@ -186,7 +186,7 @@ def test_with_nothing_to_resume_a_run_stays_silent(env):
 
 def test_resume_and_todo_runs_wait_for_a_used_up_usage_limit(env, monkeypatch):
     reset = later().timestamp() + 3600
-    monkeypatch.setattr("jarvis.llm.usage.hold_until", lambda now=None: reset)
+    monkeypatch.setattr("alfred.llm.usage.hold_until", lambda now=None: reset)
     r = FakeRunner()
     for job in (schedules.add("resume", "resume", "", in_minutes=1), schedules.add("todo", "todo", "", in_minutes=1)):
         assert run_job(r, job) == []
@@ -214,7 +214,7 @@ def test_a_todo_run_starts_linked_tasks_from_the_plan_and_says_what_it_left(list
     assert tasks[0]["instruction"] == f"Find how to load MCP tools lazily.\n\n{standing}"  # standing text ends it
     assert prompts[0].endswith(standing)
     assert todo.get(1)["done"] and todo.get(3)["done"] and not todo.get(2)["done"]  # ticked off as each finished
-    assert notified == [("JARVIS · to-dos overnight", "Started 2 tasks from your to-do list: 1, lazy MCP tools; 2, "
+    assert notified == [("Alfred · to-dos overnight", "Started 2 tasks from your to-do list: 1, lazy MCP tools; 2, "
                                                       "weekly report. Left for you: Call the dentist (needs you to call).")]
     material, system = planner.asked[0]
     sent = json.loads(material)
@@ -259,7 +259,7 @@ def test_named_items_since_ticked_off_are_said_and_a_bad_project_is_reported(lis
 def test_a_failed_plan_starts_nothing_and_says_so(listed, planner):
     r = runner.Runner()
     notified = run_job(r, schedules.add("todo", "next to-do", "", in_minutes=1))
-    assert notified == [("JARVIS · next to-do", "Couldn't start tasks for your to-do items: planning them failed. "
+    assert notified == [("Alfred · next to-do", "Couldn't start tasks for your to-do items: planning them failed. "
                                                 "They're left as they were.")]
     assert r.store.get(1) is None
 
@@ -273,7 +273,7 @@ def test_with_no_open_items_a_todo_run_stays_silent(env, planner):
 def test_a_to_do_code_task_always_names_the_finish_skill(listed, monkeypatch, planner):
     fake_run(monkeypatch, *[finishes()] * 5)
     r = runner.Runner()
-    skill = f"jarvis-skills:{unattended.FINISH_SKILL}"
+    skill = f"alfred-skills:{unattended.FINISH_SKILL}"
     planner.reply = {"tasks": [
         {"n": 1, "kind": "code_change", "project": "video-agent", "title": "lazy MCP tools",
          "instruction": "Load MCP tools only when needed."},

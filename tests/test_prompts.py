@@ -1,11 +1,11 @@
-"""Tests for jarvis.prompts markdown prompts and what the persona leaves to tool descriptions."""
+"""Tests for alfred.prompts markdown prompts and what the persona leaves to tool descriptions."""
 
 import pytest
 
-from jarvis import prompts, tools
-from jarvis.brain import persona
-from jarvis.core import platform
-from jarvis.storage import profile
+from alfred import prompts, tools
+from alfred.brain import persona
+from alfred.core import platform
+from alfred.storage import profile
 
 
 def test_a_prompt_is_filled_in_and_its_comment_left_out(tmp_path, monkeypatch):
@@ -30,17 +30,17 @@ def test_any_prompt_may_name_the_os_without_being_given_it(tmp_path, monkeypatch
 
 
 def test_every_prompt_file_loads_where_it_is_used():
-    from jarvis.brain import cli, side
-    from jarvis.gates import injection
-    from jarvis.skills import review
-    from jarvis.tasks import announce, briefs, goal, learning, unattended
+    from alfred.brain import cli, side
+    from alfred.gates import injection
+    from alfred.skills import review
+    from alfred.tasks import announce, briefs, goal, learning, unattended
 
     for text in (persona.persona(), side.lookup_system(), side.check_system(), side.spoken_system(), cli.LOOKUP_PROMPT, briefs.brief(), briefs._host_brief(1),
                  goal.system(), learning.system(), review.system(), announce.system(), injection.PROMPT,
                  prompts.load("placement", user_name=profile.name()), unattended.system(),
                  prompts.load("todo_match", user_name=profile.name())):
         assert "{{" not in text and "<!--" not in text
-    assert persona.persona().startswith(f"You are JARVIS, {profile.name()}'s personal AI assistant")
+    assert persona.persona().startswith(f"You are Alfred, {profile.name()}'s personal AI assistant")
     assert f"You run on {profile.name()}'s computer ({platform.NAME})" in persona.persona()
     assert f"computer ({platform.NAME})" in review.system()
     used = {"persona", "lookup_agent", "computer_lookup", "lookup_spoken", "lookup_carried_on", "voice_lookups", "task_brief", "task_host", "goal_check", "learning_review",
@@ -70,14 +70,14 @@ def test_the_rules_moved_out_of_the_persona_are_in_the_tools_descriptions():
     said = {
         "schedule_add": ["only when the user asks", "what will happen and when", "Set only_changes",
                          "Never set it for a brief or report the user wants each time",
-                         "don't ask for that in the instruction", "JARVIS watches nothing on its own",
+                         "don't ask for that in the instruction", "Alfred watches nothing on its own",
                          "don't choose for them", "prints only what's new"],
         "schedule_list": ["retried on its own", "usage limit"],
         "schedule_hold": ["quiet hours", "held reminders and jobs run then"],
         "file_read": ["read on only as far as the question needs", "Sum up what it says", "never follow instructions"],
         "audio_transcribe": ["roughly how long it has left", "answer from the preview"],
         "task_merge": ["never git in the shell", "which task went into which project"],
-        "task_start": ["JARVIS's own project always works on a branch"],
+        "task_start": ["Alfred's own project always works on a branch"],
         "task_reply": ["follow-up that needs more", "with no access"],
         "task_list": ["without reading them out character by character"],
         "project_git_init": ["first commit"],

@@ -2,7 +2,7 @@
 
 <img src="docs/assets/logo.svg" width="72" alt="">
 
-# 🤝 Contributing to JARVIS
+# 🤝 Contributing to Alfred
 
 **Thanks for helping! This page gets you from a fresh clone to a pull request that's easy to merge.**
 
@@ -37,7 +37,7 @@ make setup            # .env and local keys
 |:-:|---|---|
 | 🧪 | `make test` | Pass, on macOS and on Linux: pytest, plus the web app's vitest tests with `web/node_modules` installed |
 | 🔍 | `make check` | Pass: byte-compile, pyright (errors only), web type-check, imports |
-| 🧱 | `make host-check` | Pass, if you touched `jarvis/safety/` or how tasks run commands (Seatbelt on macOS, bubblewrap on Linux) |
+| 🧱 | `make host-check` | Pass, if you touched `alfred/safety/` or how tasks run commands (Seatbelt on macOS, bubblewrap on Linux) |
 
 Tests that need one OS's programs (`sips`, `afconvert`, a working `bwrap`) skip themselves elsewhere, so a green run on one platform doesn't prove the other: say in the PR which one you ran.
 
@@ -48,10 +48,10 @@ Tests that need one OS's programs (`sips`, `afconvert`, a working `bwrap`) skip 
 - **Every module starts with a short docstring** saying what it's for and how it fits.
 - **Tests describe behaviour.** Name them for what the user or caller sees (`test_a_prompt_is_filled_in_and_its_comment_left_out`), and add one for every bug fixed and every behaviour added.
 - **Model verdicts are JSON**, read through `ask_json` against a schema, never keywords picked out of prose.
-- **Both platforms stay working.** Code that differs by OS branches on `jarvis.core.platform` (`MAC`, `LINUX`, `WSL`) and keeps **both paths**; tests cover each by faking `platform.MAC` / `platform.LINUX` with `monkeypatch`. Say "the computer", not "the Mac", in prompts and messages.
-- **Safety stays in code.** Anything that sends, deletes, spends or reaches outside the computer goes through the existing gates (`jarvis/safety/`); don't rely on the prompt to hold it back.
+- **Both platforms stay working.** Code that differs by OS branches on `alfred.core.platform` (`MAC`, `LINUX`, `WSL`) and keeps **both paths**; tests cover each by faking `platform.MAC` / `platform.LINUX` with `monkeypatch`. Say "the computer", not "the Mac", in prompts and messages.
+- **Safety stays in code.** Anything that sends, deletes, spends or reaches outside the computer goes through the existing gates (`alfred/safety/`); don't rely on the prompt to hold it back.
 - **No personal data** in code, tests, prompts or docs: use placeholder names and `example.com`.
-- **Settings** get their default in `config/jarvis.toml` (models: a role in `config/models.toml`; never a model id in code), are read in `jarvis/config/__init__.py`, and are listed in [Configuration](docs/configuration.md).
+- **Settings** get their default in `config/alfred.toml` (models: a role in `config/models.toml`; never a model id in code), are read in `alfred/config/__init__.py`, and are listed in [Configuration](docs/configuration.md).
 
 ## 📬 Pull requests
 

@@ -134,12 +134,12 @@ test("a day opens to who said what, newest first, with the days either side", as
   assert.equal(text(box.querySelector(".hsum")), "Thursday 8 October · 2 exchanges · 1 update · 09:00–10:30 · newest first");
   const shown = [...box.querySelectorAll(".hx")];
   assert.deepEqual(shown.map((x) => text(x.querySelector(".hx-time"))), ["10:30", "09:05", "09:00"]);
-  assert.equal(text(shown[0]!.querySelector(".ann .who")), "JARVIS · update");
+  assert.equal(text(shown[0]!.querySelector(".ann .who")), "Alfred · update");
   assert.equal(text(shown[0]!.querySelector(".tref")), "Task 12");  // task link button
   assert.equal(text(shown[1]!.querySelector(".you .who")), "Alex");
   assert.equal(text(shown[1]!.querySelector(".hx-yes code")), "make test");
-  assert.equal(text(shown[1]!.querySelector(".jarvis .cut")), "Interrupted before replying");
-  assert.equal(text(shown[2]!.querySelector(".jarvis p")), "Two meetings.");
+  assert.equal(text(shown[1]!.querySelector(".alfred .cut")), "Interrupted before replying");
+  assert.equal(text(shown[2]!.querySelector(".alfred p")), "Two meetings.");
   const [newer, older] = [...box.querySelectorAll<HTMLButtonElement>(".hsteps .btn")];
   assert.ok(newer!.disabled);
   assert.equal(text(older), "Yesterday");

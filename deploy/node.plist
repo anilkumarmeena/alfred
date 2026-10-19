@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- JARVIS on a second machine (node mode): dials the main computer and runs the work it sends. KeepAlive restarts it
+<!-- Alfred on a second machine (node mode): dials the main computer and runs the work it sends. KeepAlive restarts it
 after a self-update or a crash. Nice 10 and LowPriorityIO as for the task runner. PATH includes the toolchains jobs
-build with, and uv for updates. Label and folders are filled in by jarvis.setup_local. -->
+build with, and uv for updates. Label and folders are filled in by alfred.setup_local. -->
 <plist version="1.0">
 <dict>
     <key>Label</key><string>${LABEL}</string>
@@ -11,11 +11,11 @@ build with, and uv for updates. Label and folders are filled in by jarvis.setup_
     <array>
         <string>${ROOT}/.venv/bin/python</string>
         <string>-m</string>
-        <string>jarvis.node</string>
+        <string>alfred.node</string>
         <string>serve</string>
     </array>
     <key>EnvironmentVariables</key>
-    <dict><key>JARVIS_HOME</key><string>${JARVIS_HOME}</string><key>PATH</key><string>${HOME}/.local/bin:${HOME}/.venv/bin:/opt/homebrew/bin:/usr/local/go/bin:${NODE}/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+    <dict><key>ALFRED_HOME</key><string>${ALFRED_HOME}</string><key>PATH</key><string>${HOME}/.local/bin:${HOME}/.venv/bin:/opt/homebrew/bin:/usr/local/go/bin:${NODE}/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ThrottleInterval</key><integer>10</integer>

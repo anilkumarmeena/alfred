@@ -6,9 +6,9 @@ import {
   activity, activityOpen, answer, approvals, ask, askGuard, closeSheet, go, lapses, openTask, paletteOpen,
   home, setHome, sheet, tasks, toast, toastAction, toastText, todoAct, toggleActivity, tuck, when, wide, type Section, type SettingsItem,
 } from "../../state/panel";
-import { now } from "../../state/store";
+import { assistantName, now } from "../../state/store";
 import {
-  BellIcon, BrainIcon, CheckIcon, CloseIcon, HistoryIcon, HomeIcon, JarvisIcon, KeysIcon, MicIcon, MoonIcon, PlugIcon, PlusIcon, PrefsIcon, ProjectsIcon, PulseIcon, SettingsIcon, ShieldIcon, SkillIcon,
+  BellIcon, BrainIcon, CheckIcon, CloseIcon, HistoryIcon, HomeIcon, AlfredIcon, KeysIcon, MicIcon, MoonIcon, PlugIcon, PlusIcon, PrefsIcon, ProjectsIcon, PulseIcon, SettingsIcon, ShieldIcon, SkillIcon,
   SpeakerIcon, TasksIcon, TodosIcon, UserIcon, WordsIcon,
 } from "../icons";
 import { Answer } from "./Answer";
@@ -28,7 +28,7 @@ export function ApprovalCard() {
           <div key={c.command}><code class="cmd">{c.command}</code>
             <div class="why">{cap(c.why)} · in {c.folder.split("/").slice(-2).join("/")}</div></div>
         ))}
-        <div class="meta">JARVIS also asks aloud when you're talking. {cap(lapses(a.expires, now.value))}.</div>
+        <div class="meta">{assistantName} also asks aloud when you're talking. {cap(lapses(a.expires, now.value))}.</div>
         <Answer key={a.id} a={a} keys />
         <button class="later" onClick={tuck}>Later · keep it in Tasks</button>
       </div>
@@ -56,7 +56,7 @@ export function Activity() {
             <span class={`dot ${x.kind}`} /><div><Markdown text={x.text} inline links={x.task == null} /></div><time>{when(x.at)}</time>
           </li>
         ))}
-        {!activity.value.length && <li class="none">What JARVIS changes for you, and how its tasks go, shows up here.</li>}
+        {!activity.value.length && <li class="none">What {assistantName} changes for you, and how its tasks go, shows up here.</li>}
       </ul>
     </div>
   );
@@ -75,17 +75,17 @@ function commands(): Command[] {
     { icon: TodosIcon, label: "Go to To-dos", run: goTo("todos") },
     { icon: ProjectsIcon, label: "Go to Projects", run: goTo("projects") },
     { icon: HistoryIcon, label: "Go to History · past conversations", run: goTo("history") },
-    { icon: JarvisIcon, label: "Go to JARVIS · skills, connections, memory", run: goTo("jarvis") },
-    { icon: SkillIcon, label: "Skills", run: goTo("jarvis", "skills") },
+    { icon: AlfredIcon, label: `Go to ${assistantName.peek()} · skills, connections, memory`, run: goTo("alfred") },
+    { icon: SkillIcon, label: "Skills", run: goTo("alfred", "skills") },
     { icon: SettingsIcon, label: "Go to Settings", run: goTo("settings") },
     { icon: PrefsIcon, label: "Behaviour · voice, voice ID, background work", run: goTo("settings", "prefs") },
     { icon: MoonIcon, label: "Do not disturb", run: goTo("settings", "dnd") },
     { icon: ShieldIcon, label: "Safety check · hidden instructions", run: goTo("settings", "safety") },
-    { icon: PlugIcon, label: "Connections", run: goTo("jarvis", "conn") },
-    { icon: BrainIcon, label: "Memory", run: goTo("jarvis", "memory") },
-    { icon: WordsIcon, label: "Vocabulary", run: goTo("jarvis", "vocabulary") },
+    { icon: PlugIcon, label: "Connections", run: goTo("alfred", "conn") },
+    { icon: BrainIcon, label: "Memory", run: goTo("alfred", "memory") },
+    { icon: WordsIcon, label: "Vocabulary", run: goTo("alfred", "vocabulary") },
     { icon: CheckIcon, label: "Remembered approvals", run: goTo("settings", "approvals") },
-    { icon: UserIcon, label: "Google accounts", run: goTo("jarvis", "accounts") },
+    { icon: UserIcon, label: "Google accounts", run: goTo("alfred", "accounts") },
     { icon: PulseIcon, label: "System", run: goTo("settings", "system") },
     { icon: BellIcon, label: "Activity", run: () => toggleActivity(true) },
     { icon: KeysIcon, label: "Keyboard shortcuts", run: goTo("settings", "keys"), hint: "?" },

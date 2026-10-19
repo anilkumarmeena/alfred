@@ -8,9 +8,9 @@ from test_in_place import env  # noqa: F401  (env is a fixture)
 from test_node_offload import World, world  # noqa: F401  (world is a fixture)
 from test_node_projects import registered, there  # noqa: F401  (there is a fixture)
 
-from jarvis.node import offload
-from jarvis.tasks import command_jobs, hold, scheduler, schedules
-from jarvis.tasks.store import COMMAND
+from alfred.node import offload
+from alfred.tasks import command_jobs, hold, scheduler, schedules
+from alfred.tasks.store import COMMAND
 
 
 def job(folder) -> dict:
@@ -85,7 +85,7 @@ def test_runs_while_this_computer_was_away_come_back_as_one_summary(there, tmp_p
     made, heard = asyncio.run(main())
     assert schedules.get(made["id"])["runs"] == 1
     said = [e["text"] for e in heard if e["type"] == "alert"]
-    assert len(said) == 1 and said[0].startswith("While JARVIS was away, Studio ran 1 scheduled job:")
+    assert len(said) == 1 and said[0].startswith("While Alfred was away, Studio ran 1 scheduled job:")
 
 
 def test_do_not_disturb_holds_the_machines_jobs_too(there, tmp_path):

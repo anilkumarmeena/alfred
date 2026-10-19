@@ -1,4 +1,4 @@
-"""Tests for jarvis.notify.fcm: devices, service account, access token, sending, and the endpoint."""
+"""Tests for alfred.notify.fcm: devices, service account, access token, sending, and the endpoint."""
 
 import asyncio
 import base64
@@ -10,15 +10,15 @@ import pytest
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
+from alfred import panel, server
+from alfred.notify import apns, fcm, push
+from alfred.notify.fcm import Devices
 from conftest import use_profile
-from jarvis import panel, server
-from jarvis.notify import apns, fcm, push
-from jarvis.notify.fcm import Devices
 
 TOKEN = "fA1b2C3d4E5:APA91b" + "x" * 140
 OTHER = "eZ9y8X7w6V5:APA91b" + "y" * 140
-PHONE = {"token": TOKEN, "topic": "com.example.jarvis", "service": "fcm"}
-PROJECT = "jarvis-push-1234"
+PHONE = {"token": TOKEN, "topic": "com.example.alfred", "service": "fcm"}
+PROJECT = "alfred-push-1234"
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ def account(tmp_path, monkeypatch):
                                 serialization.NoEncryption()).decode()
     path = tmp_path / "fcm_service_account.json"
     path.write_text(json.dumps({"type": "service_account", "project_id": PROJECT, "private_key": pem,
-                                "client_email": f"jarvis@{PROJECT}.iam.gserviceaccount.com",
+                                "client_email": f"alfred@{PROJECT}.iam.gserviceaccount.com",
                                 "token_uri": "https://evil.example/token"}))
     monkeypatch.setattr(fcm, "FCM_SERVICE_ACCOUNT_FILE", path)
     monkeypatch.setattr(fcm, "_access", None)
@@ -60,7 +60,7 @@ def test_devices_persist_one_per_token(tmp_path):
     PHONE | {"token": "../" * 50},
     PHONE | {"token": TOKEN + " "},
     PHONE | {"topic": ""},
-    PHONE | {"topic": "jarvis"},
+    PHONE | {"topic": "alfred"},
     PHONE | {"topic": "com.example/../x"},
 ])
 def test_validate_refuses_malformed_devices(bad):
@@ -78,7 +78,7 @@ def test_apns_still_refuses_fcm_tokens():
 
 def test_account_reads_the_key_file(account):
     acct = fcm.account()
-    assert acct["project"] == PROJECT and acct["email"].startswith("jarvis@") and fcm.configured()
+    assert acct["project"] == PROJECT and acct["email"].startswith("alfred@") and fcm.configured()
 
 
 @pytest.mark.parametrize("contents", ["not json", "{}", json.dumps({"project_id": PROJECT, "client_email": "a@b",
@@ -87,7 +87,7 @@ def test_an_unusable_key_file_means_not_set_up(tmp_path, monkeypatch, caplog, co
     path = tmp_path / "fcm_service_account.json"
     path.write_text(contents)
     monkeypatch.setattr(fcm, "FCM_SERVICE_ACCOUNT_FILE", path)
-    with caplog.at_level(logging.WARNING, logger="jarvis.notify.fcm"):
+    with caplog.at_level(logging.WARNING, logger="alfred.notify.fcm"):
         assert not fcm.configured()
     assert "nope" not in caplog.text
 
@@ -150,7 +150,7 @@ class FakeGoogle:
 def phones(tmp_path):
     devices = Devices(tmp_path / "devices.json")
     devices.add(PHONE, "android")
-    devices.add({"token": OTHER, "topic": "com.example.jarvis"}, "tablet")
+    devices.add({"token": OTHER, "topic": "com.example.alfred"}, "tablet")
     return devices
 
 
@@ -216,14 +216,14 @@ def test_a_refused_access_token_is_fetched_afresh_next_time(account, phones, mon
     service = FakeGoogle({TOKEN: fcm_error(401, "", "Request had invalid authentication credentials.",
                                            "UNAUTHENTICATED")})
     monkeypatch.setattr(fcm, "_client", lambda: service)
-    with caplog.at_level(logging.WARNING, logger="jarvis.notify.fcm"):
+    with caplog.at_level(logging.WARNING, logger="alfred.notify.fcm"):
         assert send(phones, "Mail", "New email.") == 1
     assert fcm._access is None and len(phones.all()) == 2
 
 
 def test_failures_keep_the_device_and_log_no_token(account, phones, monkeypatch, caplog):
     monkeypatch.setattr(fcm, "_client", lambda: FakeGoogle(error=OSError(f"connect {TOKEN}")))
-    with caplog.at_level(logging.INFO, logger="jarvis.notify.fcm"):
+    with caplog.at_level(logging.INFO, logger="alfred.notify.fcm"):
         assert send(phones, "Calendar", "Standup.") == 0
     assert "OSError" in caplog.text and TOKEN not in caplog.text and len(phones.all()) == 2
 
@@ -231,7 +231,7 @@ def test_failures_keep_the_device_and_log_no_token(account, phones, monkeypatch,
 def test_google_refusing_the_service_account_sends_nothing(account, phones, monkeypatch, caplog):
     service = FakeGoogle(oauth=Reply(400, {"error": "invalid_grant"}))
     monkeypatch.setattr(fcm, "_client", lambda: service)
-    with caplog.at_level(logging.WARNING, logger="jarvis.notify.fcm"):
+    with caplog.at_level(logging.WARNING, logger="alfred.notify.fcm"):
         assert send(phones, "Calendar", "Standup.") == 0
     assert service.calls == [] and "HTTP 400" in caplog.text and len(phones.all()) == 2
 
@@ -240,7 +240,7 @@ def test_nothing_is_sent_until_fcm_is_set_up(phones, monkeypatch, caplog, tmp_pa
     monkeypatch.setattr(fcm, "FCM_SERVICE_ACCOUNT_FILE", tmp_path / "missing.json")
     service = FakeGoogle()
     monkeypatch.setattr(fcm, "_client", lambda: service)
-    with caplog.at_level(logging.WARNING, logger="jarvis.notify.fcm"):
+    with caplog.at_level(logging.WARNING, logger="alfred.notify.fcm"):
         assert send(phones, "Calendar", "Standup.") == 0
     assert service.calls == [] and service.oauth_calls == 0 and "fcm_service_account.json" in caplog.text
 
@@ -288,7 +288,7 @@ def reply(body: dict) -> tuple[int, dict]:
 
 @pytest.fixture
 def site(tmp_path, monkeypatch):
-    monkeypatch.setenv("JARVIS_PASSCODE", "123456")  # no login yet: the first-setup passcode
+    monkeypatch.setenv("ALFRED_PASSCODE", "123456")  # no login yet: the first-setup passcode
     monkeypatch.setattr(server, "PUSH_ENABLED", True)
     use_profile(monkeypatch, tmp_path)
     server._failures.clear()

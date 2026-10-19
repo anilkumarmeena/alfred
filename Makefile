@@ -1,4 +1,4 @@
-# JARVIS: common tasks. Run `make` for the list.
+# Alfred: common tasks. Run `make` for the list.
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
@@ -35,30 +35,32 @@ export UV_SYSTEM_CERTS := 1
 endif
 endif
 endif
-# Main checkout, even when run from a task's worktree (data/worktrees/jarvis-N)
+# Main checkout, even when run from a task's worktree (data/worktrees/alfred-N)
 # Paths may contain spaces ("Office Work"): make functions split words on them, so quote paths in recipes
 GIT_COMMON := $(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
 MAIN_DIR  := $(or $(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/\.git$$||'),$(CURDIR))
-# Main checkout's Python (services, artifact-check), also from a worktree. Override with JARVIS_PYTHON=...
+# Main checkout's Python (services, artifact-check), also from a worktree. Override with ALFRED_PYTHON=...
 ifeq ($(GIT_COMMON),$(shell git rev-parse --path-format=absolute --git-dir 2>/dev/null))
-JARVIS_PYTHON ?= $(UV) python
+ALFRED_PYTHON ?= $(UV) python
 else
-JARVIS_PYTHON ?= "$(MAIN_DIR)/.venv/bin/python"
+ALFRED_PYTHON ?= "$(MAIN_DIR)/.venv/bin/python"
 endif
-# The install's settings and data (jarvis.config.files): JARVIS_HOME, else ~/.jarvis if it exists, else the checkout
-JARVIS_HOME_DIR := $(or $(JARVIS_HOME),$(if $(wildcard $(HOME)/.jarvis/.env $(HOME)/.jarvis/data),$(HOME)/.jarvis,$(MAIN_DIR)))
-MODELS_DIR := $(JARVIS_HOME_DIR)/models
-LOGS_DIR   := $(JARVIS_HOME_DIR)/logs
-# Service labels (com.jarvis.* or JARVIS_SERVICE_PREFIX): launchd on macOS, systemd user units on Linux; evaluated
+# The install's settings and data (alfred.config.files): ALFRED_HOME, else ~/.alfred if it exists, else ~/.jarvis
+# (from before the rename; setup moves it to ~/.alfred), else the checkout
+ALFRED_HOME_DIR := $(strip $(or $(ALFRED_HOME),$(JARVIS_HOME),$(if $(wildcard $(HOME)/.alfred/.env $(HOME)/.alfred/data),\
+                   $(HOME)/.alfred,$(if $(wildcard $(HOME)/.jarvis/.env $(HOME)/.jarvis/data),$(HOME)/.jarvis,$(MAIN_DIR)))))
+MODELS_DIR := $(ALFRED_HOME_DIR)/models
+LOGS_DIR   := $(ALFRED_HOME_DIR)/logs
+# Service labels (com.alfred.* or ALFRED_SERVICE_PREFIX): launchd on macOS, systemd user units on Linux; evaluated
 # lazily. Service control always runs in the main
 # checkout so a worktree never installs its own copy.
-SERVICE_CTL = cd "$(MAIN_DIR)" && $(JARVIS_PYTHON) -m jarvis.setup_local
+SERVICE_CTL = cd "$(MAIN_DIR)" && $(ALFRED_PYTHON) -m alfred.setup_local
 SERVICES    = $(shell $(SERVICE_CTL) labels)
-# Claude login: the user's own, unless .env (or the environment) sets JARVIS_CLAUDE_CONFIG_DIR, a login of JARVIS's own
-CLAUDE_DIR := $(or $(JARVIS_CLAUDE_CONFIG_DIR),$(shell sed -n "s/^JARVIS_CLAUDE_CONFIG_DIR=[\"']*\([^\"']*\)[\"']*$$/\1/p" \
-               "$(JARVIS_HOME_DIR)/.env" 2>/dev/null | tail -1))
-# ...relative to JARVIS_HOME, as jarvis.config reads it
-CLAUDE_PATH = $(if $(CLAUDE_DIR),$(if $(filter /%,$(CLAUDE_DIR)),,$(JARVIS_HOME_DIR)/)$(CLAUDE_DIR))
+# Claude login: the user's own, unless .env (or the environment) sets ALFRED_CLAUDE_CONFIG_DIR, a login of Alfred's own
+CLAUDE_DIR := $(or $(ALFRED_CLAUDE_CONFIG_DIR),$(JARVIS_CLAUDE_CONFIG_DIR),$(shell sed -nE \
+               "s/^(ALFRED|JARVIS)_CLAUDE_CONFIG_DIR=[\"']*([^\"']*)[\"']*$$/\2/p" "$(ALFRED_HOME_DIR)/.env" 2>/dev/null | tail -1))
+# ...relative to ALFRED_HOME, as alfred.config reads it
+CLAUDE_PATH = $(if $(CLAUDE_DIR),$(if $(filter /%,$(CLAUDE_DIR)),,$(ALFRED_HOME_DIR)/)$(CLAUDE_DIR))
 # Kokoro voice: kokoro-onnx's model files, from a pinned Hugging Face mirror (byte-identical to the GitHub release,
 # which serves ~120 KB/s per connection), hash-checked
 KOKORO_HF   := https://huggingface.co/fastrtc/kokoro-onnx/resolve/8d07950c9b6c87ce6809e9bba7bd494336217c2a
@@ -72,7 +74,7 @@ KOKORO_INT8 := https://github.com/thewh1teagle/kokoro-onnx/releases/download/mod
 DFN       := $(MODELS_DIR)/deepfilternet3-streaming.onnx
 DFN_URL   := https://github.com/yuyun2000/SpeechDenoiser/raw/9a1f069f562089c2f56008a8ecd897fa981fbc50/48k/denoiser_model.onnx
 DFN_SHA   := fe5eb64fa2e4154c83f8e4935e82871c850c154387ee892e0ab65fe179e7d8c9
-# Speaker check: WeSpeaker ResNet34, pinned and hash-checked; keep in step with [speech] speaker in config/jarvis.toml
+# Speaker check: WeSpeaker ResNet34, pinned and hash-checked; keep in step with [speech] speaker in config/alfred.toml
 SPK       := $(MODELS_DIR)/wespeaker-voxceleb-resnet34-LM.onnx
 SPK_URL   := https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM/resolve/f0c48c298fd835726c27956a5d617bad7115627e/voxceleb_resnet34_LM.onnx
 SPK_SHA   := 7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068
@@ -152,58 +154,58 @@ SHA256 = $$(command -v shasum >/dev/null && echo shasum -a 256 || echo sha256sum
 fetch = [ -f "$(1)" ] || { curl -fSL -o "$(1).part" $(2) && echo "$(3)  $(1).part" | $(SHA256) -c --quiet - && \
 	mv "$(1).part" "$(1)"; }
 
-models: ## Download speech, VAD, noise and speaker models (into JARVIS_HOME/models)
+models: ## Download speech, VAD, noise and speaker models (into ALFRED_HOME/models)
 	@mkdir -p "$(MODELS_DIR)"
 	@$(call fetch,$(TTS),$(KOKORO_HF)/kokoro-v1.0.onnx,$(TTS_SHA))
 	@$(call fetch,$(VOICES),$(KOKORO_HF)/voices-v1.0.bin,$(VOICES_SHA))
 	@$(call fetch,$(DFN),$(DFN_URL),$(DFN_SHA))
 	@$(call fetch,$(SPK),$(SPK_URL),$(SPK_SHA))
-# Whisper for this machine: MLX on Apple silicon, faster-whisper elsewhere (jarvis.media.whisper)
-	$(UV) python -m jarvis.media.whisper
+# Whisper for this machine: MLX on Apple silicon, faster-whisper elsewhere (alfred.media.whisper)
+	$(UV) python -m alfred.media.whisper
 # os._exit skips teardown, which native plugin libraries can crash on macOS
 	$(UV) python -c "import os, sys; from livekit.agents.__main__ import main; code = main(['download-files']); \
 		sys.stdout.flush(); sys.stderr.flush(); os._exit(code)"
 
-models-int8: ## Download the 8-bit Kokoro (~230 MB less memory, slower; JARVIS_TTS_MODEL=kokoro-v1.0.int8.onnx)
+models-int8: ## Download the 8-bit Kokoro (~230 MB less memory, slower; ALFRED_TTS_MODEL=kokoro-v1.0.int8.onnx)
 	@mkdir -p "$(MODELS_DIR)"
 	@[ -f "$(MODELS_DIR)/kokoro-v1.0.int8.onnx" ] || { curl -fSL -o "$(MODELS_DIR)/kokoro-v1.0.int8.onnx.part" \
 		$(KOKORO_INT8) && mv "$(MODELS_DIR)/kokoro-v1.0.int8.onnx.part" "$(MODELS_DIR)/kokoro-v1.0.int8.onnx"; }
 
 setup: uv-bin ## Generate keys, passcode and LiveKit config (rerunnable)
-	$(UV) python -m jarvis.setup_local
+	$(UV) python -m alfred.setup_local
 
 # The services are rewritten afterwards (a fresh process, so they get the new home); a refused move restarts them
-home-move: ## Move .env, data, secrets, models and logs out of the checkout into ~/.jarvis (or JARVIS_HOME)
+home-move: ## Move .env, data, secrets, models and logs out of the checkout into ~/.alfred (or ALFRED_HOME)
 	@$(SERVICE_CTL) stop
 	@$(SERVICE_CTL) move-home || { $(SERVICE_CTL) start; exit 1; }
 	@$(SERVICE_CTL) install
 
-claude-login: ## Log in to Claude (yours, or JARVIS's own NAME=work), check, restart services; also in Settings
-	@cd "$(MAIN_DIR)" && $(JARVIS_PYTHON) -m jarvis.claude_login login $(NAME)
+claude-login: ## Log in to Claude (yours, or Alfred's own NAME=work), check, restart services; also in Settings
+	@cd "$(MAIN_DIR)" && $(ALFRED_PYTHON) -m alfred.claude_login login $(NAME)
 
-claude-check: ## Check JARVIS's services can use a Claude login (NAME=work; default: yours)
-	@cd "$(MAIN_DIR)" && $(JARVIS_PYTHON) -m jarvis.claude_login check $(NAME)
+claude-check: ## Check Alfred's services can use a Claude login (NAME=work; default: yours)
+	@cd "$(MAIN_DIR)" && $(ALFRED_PYTHON) -m alfred.claude_login check $(NAME)
 
-claude-status: ## Show the Claude account JARVIS uses
+claude-status: ## Show the Claude account Alfred uses
 	@$(if $(CLAUDE_PATH),CLAUDE_CONFIG_DIR="$(CLAUDE_PATH)" )claude auth status | grep -E '"(loggedIn|email|orgName|subscriptionType)"'
 
 accounts: ## Google accounts (ARGS="add home ...")
-	$(UV) python -m jarvis.integrations.accounts $(or $(ARGS),list)
+	$(UV) python -m alfred.integrations.accounts $(or $(ARGS),list)
 
 about: ## Show "about you" text (ARGS="--from me.txt")
-	@$(UV) python -m jarvis.state.settings about $(ARGS)
+	@$(UV) python -m alfred.state.settings about $(ARGS)
 
 servers: ## MCP servers (ARGS="set-secret notion")
-	@$(UV) python -m jarvis.integrations.mcp_servers $(or $(ARGS),list)
+	@$(UV) python -m alfred.integrations.mcp_servers $(or $(ARGS),list)
 
 passcode: ## Show the logins' passcodes (this computer only; never over the web)
-	@$(UV) python -m jarvis.auth.logins
+	@$(UV) python -m alfred.auth.logins
 
 vault: ## Vault status (ARGS=init|rotate|reencrypt|"reset --yes")
-	@$(UV) python -m jarvis.auth.vault $(or $(ARGS),status)
+	@$(UV) python -m alfred.auth.vault $(or $(ARGS),status)
 
 chat-check: ## Check Google Chat access (LABEL=...)
-	$(UV) python -m jarvis.integrations.accounts check-chat $(LABEL)
+	$(UV) python -m alfred.integrations.accounts check-chat $(LABEL)
 
 tailscale-serve: ## Serve web app and LiveKit on the tailnet
 	tailscale serve --bg $(WEB_PORT)
@@ -213,31 +215,31 @@ tailscale-serve: ## Serve web app and LiveKit on the tailnet
 ## ── Run in the foreground ──────────────────────────────────────
 
 # Exits 0 when a task runner answers on its socket. Checked first: a second runner would take the socket over
-RUNNER_UP = import socket, sys; from jarvis.config import RUNNER_SOCKET as p; \
+RUNNER_UP = import socket, sys; from alfred.config import RUNNER_SOCKET as p; \
 	sys.exit(not p.exists() or socket.socket(socket.AF_UNIX).connect_ex(str(p)))
 
 console: ## Talk via this machine's mic, no server (starts the task runner for the session if it isn't running)
 	@mkdir -p "$(LOGS_DIR)"; \
 	if $(UV) python -c "$(RUNNER_UP)" 2>/dev/null; then echo "using the task runner that's already running"; \
 	else echo "starting the task runner for this session ($(LOGS_DIR)/console-runner.log)"; \
-		$(UV) python -m jarvis.tasks.runner >"$(LOGS_DIR)/console-runner.log" 2>&1 & runner=$$!; \
+		$(UV) python -m alfred.tasks.runner >"$(LOGS_DIR)/console-runner.log" 2>&1 & runner=$$!; \
 		trap 'kill -TERM $$runner 2>/dev/null; wait $$runner 2>/dev/null' EXIT INT TERM; fi; \
-	$(UV) python -m jarvis.voice.agent console
+	$(UV) python -m alfred.voice.agent console
 
 livekit: ## Run LiveKit server
-	$(LIVEKIT_SERVER) --config "$(JARVIS_HOME_DIR)/secrets/livekit.yaml"
+	$(LIVEKIT_SERVER) --config "$(ALFRED_HOME_DIR)/secrets/livekit.yaml"
 
 web: web-build ## Build and run web app (:8787)
-	$(UV) python -m jarvis.server
+	$(UV) python -m alfred.server
 
-web-dev: $(WEB_STAMP) ## Web app with hot reload (:5173, API via make web; API=https://host for another JARVIS)
-	JARVIS_WEB_PORT=$(WEB_PORT) JARVIS_API=$(API) $(NPM) run dev
+web-dev: $(WEB_STAMP) ## Web app with hot reload (:5173, API via make web; API=https://host for another Alfred)
+	ALFRED_WEB_PORT=$(WEB_PORT) ALFRED_API=$(API) $(NPM) run dev
 
 agent: ## Run voice agent with reload
-	$(UV) python -m jarvis.voice.agent dev
+	$(UV) python -m alfred.voice.agent dev
 
 runner: ## Run task runner
-	$(UV) python -m jarvis.tasks.runner
+	$(UV) python -m alfred.tasks.runner
 
 dev: ## Run LiveKit, web, agent and runner together
 	@$(MAKE) -j4 --no-print-directory livekit web agent runner
@@ -245,13 +247,13 @@ dev: ## Run LiveKit, web, agent and runner together
 dev-hot: ## Like dev, but live: UI on :5173 updates as you save; web server and agent restart on Python changes
 	@$(MAKE) -j5 --no-print-directory livekit web-api agent runner web-dev
 
-web-api: ## Web server only, restarted when jarvis/ changes (the UI comes from make web-dev)
-	$(UV) watchfiles --filter python "python -m jarvis.server" jarvis
+web-api: ## Web server only, restarted when alfred/ changes (the UI comes from make web-dev)
+	$(UV) watchfiles --filter python "python -m alfred.server" alfred
 
 ## ── 24/7 services (launchd on macOS, systemd on Linux) ────────
 
 services-install: setup web-build ## Install and start the services
-	$(UV) python -m jarvis.setup_local --install
+	$(UV) python -m alfred.setup_local --install
 
 # Both also handle services under stale labels (e.g. an old prefix): stop unloads them, start replaces them
 services-start: ## Start services
@@ -270,7 +272,7 @@ else
 DETACH  = $(if $(shell command -v systemd-run),systemd-run --user --collect --quiet --setenv=PATH="$$PATH" --,setsid)
 endif
 
-uninstall: ## Remove JARVIS's services (a node's too) from this computer; keeps the code, data and settings
+uninstall: ## Remove Alfred's services (a node's too) from this computer; keeps the code, data and settings
 	@$(SERVICE_CTL) uninstall
 
 uninstall-all: ## Also delete the data, settings, secrets, models, Claude logins and build files (asks; YES=1 skips)
@@ -317,18 +319,18 @@ endif
 ## ── Background tasks ─────────────────────────────────────────
 
 tasks: ## List recent tasks
-	@$(UV) python -m jarvis.tasks.runner list
+	@$(UV) python -m alfred.tasks.runner list
 
 speech-gate: ## Clips the speech gate dropped (last day)
-	@$(UV) python -m jarvis.voice.speech_gate
+	@$(UV) python -m alfred.voice.speech_gate
 
 voice-timing: ## Voice turn latency by stage (HOURS=24)
-	@$(UV) python -m jarvis.brain.timing $(HOURS)
+	@$(UV) python -m alfred.brain.timing $(HOURS)
 
 voiceprint: ## Voiceprint (ARGS=enroll|test|remove|log)
-	@$(UV) python -m jarvis.voice.speaker $(or $(ARGS),status)
+	@$(UV) python -m alfred.voice.speaker $(or $(ARGS),status)
 
-## ── A second machine that takes JARVIS's heavy work (jarvis.node) ──
+## ── A second machine that takes Alfred's heavy work (alfred.node) ──
 
 node-setup: ## On a second machine: Python dependencies only (no voice models or web app)
 	uv sync
@@ -339,19 +341,19 @@ node-login: ## On a second machine: log in its own Claude account
 
 node-pair: ## On a second machine: pair with the main computer (CODE=from Settings › Machines MAIN=https://host)
 	@[ -n "$(CODE)" ] && [ -n "$(MAIN)" ] || { echo "make node-pair CODE=... MAIN=https://<main computer>"; exit 2; }
-	$(UV) python -m jarvis.node pair "$(CODE)" "$(MAIN)"
+	$(UV) python -m alfred.node pair "$(CODE)" "$(MAIN)"
 
 node-install: ## On a second machine: install and start its service
-	$(UV) python -m jarvis.setup_local node-install
+	$(UV) python -m alfred.setup_local node-install
 
 node-stop: ## On a second machine: stop its service (stays installed)
-	@$(UV) python -m jarvis.setup_local node-stop; true
+	@$(UV) python -m alfred.setup_local node-stop; true
 
 node-check: ## On a second machine: walls, pairing, link to the main computer, tools
-	$(UV) python -m jarvis.node check
+	$(UV) python -m alfred.node check
 
 node-status: ## On a second machine: its pairing and both fingerprints
-	@$(UV) python -m jarvis.node status
+	@$(UV) python -m alfred.node status
 
 ## ── Web app (web/: Vite, TypeScript, Preact) ───────────────────
 
@@ -370,20 +372,20 @@ test: ## Run unit tests
 	$(UV) --with pytest pytest -q
 
 host-check: ## Check task sandbox walls
-	$(UV) python -m jarvis.apps.host_check check
+	$(UV) python -m alfred.apps.host_check check
 
 artifact-check: ## Test artifact publishing (FILE=page.html)
-	$(if $(CLAUDE_PATH),JARVIS_CLAUDE_CONFIG_DIR="$(CLAUDE_PATH)" )$(JARVIS_PYTHON) -m jarvis.apps.artifact_check $(if $(FILE),--file "$(abspath $(FILE))")
+	$(if $(CLAUDE_PATH),ALFRED_CLAUDE_CONFIG_DIR="$(CLAUDE_PATH)" )$(ALFRED_PYTHON) -m alfred.apps.artifact_check $(if $(FILE),--file "$(abspath $(FILE))")
 
 features: ## Write docs/features.md: every part, tool, model role and process, from the code
-	$(UV) python -m jarvis.apps.features
+	$(UV) python -m alfred.apps.features
 
 check: ## Compile, type-check, import all
-	$(UV) python -m compileall -q jarvis
+	$(UV) python -m compileall -q alfred
 # Errors only; see warnings with `uv run --with pyright pyright`
 	$(UV) --with pyright==$(PYRIGHT) pyright --level error
 	$(NPM) run typecheck
-	$(UV) python -c "import jarvis.apps.agent, jarvis.server, jarvis.setup_local, jarvis.integrations.accounts, jarvis.state.settings, jarvis.brain.cli, jarvis.tasks.runner, jarvis.tasks.notices; from jarvis import tools; print(len(tools.all_tools()), 'tools, imports ok')"
+	$(UV) python -c "import alfred.apps.agent, alfred.server, alfred.setup_local, alfred.integrations.accounts, alfred.state.settings, alfred.brain.cli, alfred.tasks.runner, alfred.tasks.notices; from alfred import tools; print(len(tools.all_tools()), 'tools, imports ok')"
 
 clean: ## Free space: empty the logs, delete Python and task caches and leftover transfers (keeps all data)
 	@find . \( -name .venv -o -name node_modules -o -name data \) -prune -o -name __pycache__ -prune -exec rm -rf {} +

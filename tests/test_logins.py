@@ -1,4 +1,4 @@
-"""Tests for jarvis.auth.logins: hashed passcodes, adopting JARVIS_PASSCODE, and the web server and panel using them."""
+"""Tests for alfred.auth.logins: hashed passcodes, adopting ALFRED_PASSCODE, and the web server and panel using them."""
 
 import asyncio
 import base64
@@ -9,9 +9,9 @@ import stat
 
 import pytest
 
-from jarvis import panel, server
-from jarvis.auth import logins, vault
-from jarvis.storage import profile
+from alfred import panel, server
+from alfred.auth import logins, vault
+from alfred.storage import profile
 from tests.test_panel import reply
 from tests.test_vault import key  # noqa: F401  (fixture: fresh master key, empty vault)
 from tests.test_web_build import Request as TokenRequest
@@ -122,11 +122,11 @@ def test_with_no_login_the_first_setup_passcode_is_checked_as_the_users(home, mo
 
 
 def test_the_shared_passcode_becomes_the_users_login_and_leaves_env(home, monkeypatch):
-    vault.ENV_FILE.write_text(f"JARVIS_USER_NAME=Alex\n{logins.VAR}=4321\n")  # shorter than a new passcode may be
+    vault.ENV_FILE.write_text(f"ALFRED_USER_NAME=Alex\n{logins.VAR}=4321\n")  # shorter than a new passcode may be
     monkeypatch.setenv(logins.VAR, "4321")
     assert logins.adopt() == "Alex"
     assert logins.check("4321") == "Alex" and "4321" not in logins.FILE.read_text()
-    assert vault.ENV_FILE.read_text() == "JARVIS_USER_NAME=Alex\n" and logins.VAR not in os.environ
+    assert vault.ENV_FILE.read_text() == "ALFRED_USER_NAME=Alex\n" and logins.VAR not in os.environ
     assert logins.adopt() == ""  # once
 
 

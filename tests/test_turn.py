@@ -1,4 +1,4 @@
-"""Tests for jarvis.voice.turn and brain.quick: per-user pace, and what the brain hears about each turn."""
+"""Tests for alfred.voice.turn and brain.quick: per-user pace, and what the brain hears about each turn."""
 
 import asyncio
 import json
@@ -10,15 +10,15 @@ from livekit import rtc
 from livekit.agents import AgentSession, llm
 from livekit.plugins import silero
 
-from jarvis import config
-from jarvis.apps import agent
-from jarvis.brain import timing
-from jarvis.brain.persona import Notes
-from jarvis.brain.timing import CURRENT, Timings
-from jarvis.llm import quick
-from jarvis.voice import speech, turn
-from jarvis.voice.session import VoiceSession
-from jarvis.voice.speech_gate import SpeechGate
+from alfred import config
+from alfred.apps import agent
+from alfred.brain import timing
+from alfred.brain.persona import Notes
+from alfred.brain.timing import CURRENT, Timings
+from alfred.llm import quick
+from alfred.voice import speech, turn
+from alfred.voice.session import VoiceSession
+from alfred.voice.speech_gate import SpeechGate
 
 
 def result(text: str) -> ResultMessage:
@@ -316,17 +316,17 @@ def test_the_agent_logs_who_spoke_each_turn_and_tells_the_brain_one_went_on_from
     voice = VoiceSession(brain, timings=timings, pacing=pacing, router=router,
                          stt=Clips([{"words": 3, "logprob": -0.4, "speaker": None}],
                                    [{"words": 5, "logprob": -1.5, "speaker": None}]))
-    jarvis = agent.JarvisAgent(voice)
+    alfred = agent.AlfredAgent(voice)
 
     async def say(text: str, stopped: float) -> str:
         await asyncio.sleep(0)
         voice.transcribed(text)
         message = llm.ChatMessage(role="user", content=[text],
                                   metrics={"started_speaking_at": stopped - 1, "stopped_speaking_at": stopped})
-        await jarvis.on_user_turn_completed(llm.ChatContext(), message)
+        await alfred.on_user_turn_completed(llm.ChatContext(), message)
         ctx = llm.ChatContext()
         ctx.add_message(role="user", content=text)
-        return "".join([c async for c in jarvis.llm_node(ctx, [], None)])
+        return "".join([c async for c in alfred.llm_node(ctx, [], None)])
 
     async def main():
         await say("Okay, great. So", 1000.0)

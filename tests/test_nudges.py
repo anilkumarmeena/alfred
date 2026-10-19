@@ -6,12 +6,12 @@ import pytest
 from claude_agent_sdk import AssistantMessage, ResultMessage, ToolUseBlock
 from test_in_place import NullReporter, env, worker_task  # noqa: F401  (env is a fixture)
 
+from alfred.storage import profile
+from alfred.tasks import runner, worker
+from alfred.tasks.store import nudges
+from alfred.tasks.worker import Outcome, nudge_text, with_nudges
+from alfred.tools import tasks as task_tools
 from conftest import use_task_cache
-from jarvis.storage import profile
-from jarvis.tasks import runner, worker
-from jarvis.tasks.store import nudges
-from jarvis.tasks.worker import Outcome, nudge_text, with_nudges
-from jarvis.tools import tasks as task_tools
 
 PROJECTS = ["video-agent", "other"]  # in place, and on its own worktree
 

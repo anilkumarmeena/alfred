@@ -9,20 +9,20 @@ import textwrap
 import pytest
 from test_approvals import drained, events
 
+from alfred import config, tools
+from alfred.brain import sdk
+from alfred.integrations import mcp_relay, mcp_servers
+from alfred.integrations.mcp_relay import Relay
+from alfred.integrations.mcp_servers import Server, Tool
+from alfred.llm import claude
+from alfred.tasks import client, connection_jobs, events as task_events, runner
+from alfred.tasks.store import CONNECTION
 from conftest import use_profile
-from jarvis import config, tools
-from jarvis.brain import sdk
-from jarvis.integrations import mcp_relay, mcp_servers
-from jarvis.integrations.mcp_relay import Relay
-from jarvis.integrations.mcp_servers import Server, Tool
-from jarvis.llm import claude
-from jarvis.tasks import client, connection_jobs, events as task_events, runner
-from jarvis.tasks.store import CONNECTION
 
 SERVER = Server("acme", "Acme", tools={"find": Tool("read"), "report": Tool("read"), "post": Tool("write", "post")})
 LISTED = [{"name": "find", "annotations": {"title": "Find"}},
           {"name": "report", "execution": {"taskSupport": "optional"}},
-          {"name": "post", "annotations": {"readOnlyHint": True}},  # server: read-only; JARVIS sorted it a write
+          {"name": "post", "annotations": {"readOnlyHint": True}},  # server: read-only; Alfred sorted it a write
           {"name": "other"}]
 
 
@@ -120,7 +120,7 @@ def quick(monkeypatch):
 
 # ── What the CLI sees ───────────────────────────────────────────
 
-def test_tools_are_marked_read_only_as_jarvis_sorted_them_and_tasks_are_kept_from_the_cli():
+def test_tools_are_marked_read_only_as_alfred_sorted_them_and_tasks_are_kept_from_the_cli():
     async def main():
         r, server, said = relay(tasks=True)
         await r.from_cli({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {}})
@@ -149,8 +149,8 @@ def test_a_call_passes_with_its_progress_under_the_clis_own_token():
 
     server, said = asyncio.run(main())
     sent = server.got[0]
-    assert sent["method"] == "tools/call" and sent["id"].startswith("jarvis-")  # the relay's own id
-    assert sent["params"]["_meta"]["progressToken"].startswith("jarvis-") and "task" not in sent["params"]
+    assert sent["method"] == "tools/call" and sent["id"].startswith("alfred-")  # the relay's own id
+    assert sent["params"]["_meta"]["progressToken"].startswith("alfred-") and "task" not in sent["params"]
     assert said[0] == {"jsonrpc": "2.0", "method": "notifications/progress",
                        "params": {"progressToken": "cli-1", "progress": 1, "total": 4}}
     assert said[1] == {"jsonrpc": "2.0", "id": 5, "result": {"content": [{"type": "text", "text": "found invoices"}]}}
@@ -410,7 +410,7 @@ def test_a_connection_task_whose_relay_is_gone_fails_and_survives_a_runner_resta
     asyncio.run(main())
 
 
-# ── JARVIS's own tools ──────────────────────────────────────────
+# ── Alfred's own tools ──────────────────────────────────────────
 
 def test_only_tools_that_change_nothing_are_marked_read_only_for_the_cli():
     reads = {t.name for t in tools.all_tools() if t.reads}

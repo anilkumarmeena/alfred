@@ -1,4 +1,4 @@
-"""Tests for jarvis.voice.barge_in: only the user's verified voice interrupts; other events pass through."""
+"""Tests for alfred.voice.barge_in: only the user's verified voice interrupts; other events pass through."""
 
 import asyncio
 import json
@@ -8,11 +8,11 @@ import pytest
 from livekit import rtc
 from livekit.agents import vad
 
-from jarvis import config
-from jarvis.state.voiceprints import Voiceprint
-from jarvis.voice import speaker
-from jarvis.voice.barge_in import BargeIn, BargeInVAD
-from jarvis.voice.speaker import RATE, SpeakerCheck, Thresholds
+from alfred import config
+from alfred.state.voiceprints import Voiceprint
+from alfred.voice import speaker
+from alfred.voice.barge_in import BargeIn, BargeInVAD
+from alfred.voice.speaker import RATE, SpeakerCheck, Thresholds
 
 DIM = 8
 USER = np.eye(DIM, dtype=np.float32)[0]
@@ -89,7 +89,7 @@ def interrupts(events: list[vad.VADEvent]) -> int | None:
 SECOND = int(RATE / WINDOW)  # 31 windows
 
 
-def test_another_voice_never_interrupts_jarvis_and_is_logged(tmp_path):
+def test_another_voice_never_interrupts_alfred_and_is_logged(tmp_path):
     g = gate(tmp_path=tmp_path)
     g.replying("speaking")
 
@@ -146,7 +146,7 @@ def test_the_judged_speech_is_the_latest_second_of_speech_windows_only():
     assert max(heard) == pytest.approx(1.0, abs=0.04)
 
 
-def test_while_jarvis_is_listening_nothing_is_held_or_judged():
+def test_while_alfred_is_listening_nothing_is_held_or_judged():
     g = gate()
     g.replying("listening")
     sent = [window(TV, n) for n in range(1, SECOND)]
@@ -154,7 +154,7 @@ def test_while_jarvis_is_listening_nothing_is_held_or_judged():
     assert g.check._embed.calls == 0 and not g.recorded
 
 
-def test_speech_that_started_before_jarvis_replied_is_judged_once_it_does():
+def test_speech_that_started_before_alfred_replied_is_judged_once_it_does():
     g = gate()
 
     async def main():
@@ -185,7 +185,7 @@ def test_in_shadow_mode_any_voice_interrupts_but_each_is_judged_and_logged(tmp_p
 
     async def main():
         events = await speak(g, [TV] * SECOND)
-        g.replying("listening")  # LiveKit interrupted JARVIS as usual
+        g.replying("listening")  # LiveKit interrupted Alfred as usual
         events += await speak(g, [TV] * 10)
         g.hear("session", end())
         await settle(g)
@@ -194,11 +194,11 @@ def test_in_shadow_mode_any_voice_interrupts_but_each_is_judged_and_logged(tmp_p
 
     events = asyncio.run(main())
     assert interrupts(events) == 16  # untouched
-    assert [i.verdict for i in g.recorded] == ["would ignore"]  # the user spoke while JARVIS wasn't replying
+    assert [i.verdict for i in g.recorded] == ["would ignore"]  # the user spoke while Alfred wasn't replying
     g.replying("speaking")
     asyncio.run(speak(g, [ME] * SECOND))
     assert g.recorded[-1].verdict == "would interrupt"
-    assert "barge-ins while JARVIS replied: would ignore 1, would interrupt 1" in speaker.summary(
+    assert "barge-ins while Alfred replied: would ignore 1, would interrupt 1" in speaker.summary(
         tmp_path / "speaker.jsonl")
 
 
@@ -240,7 +240,7 @@ def test_every_stream_follows_the_verdict_but_only_one_is_judged():
 def test_the_barge_in_check_needs_what_a_short_clip_needs_outside_a_conversation():
     g = gate()
     check = g.check
-    check.jarvis_speaking(True)
+    check.alfred_speaking(True)
     assert check.engaged()  # a reply would be let off lightly now; a barge-in isn't
     score, needed, reference = check.match(np.full(int(0.5 * RATE), 0.2, np.float32))
     assert (score, needed, reference) == (pytest.approx(0.2, abs=0.01), 0.25, speaker.OWNER)

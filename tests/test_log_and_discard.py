@@ -18,13 +18,13 @@ from test_in_place import (  # noqa: F401  (env is a fixture)
 )
 from test_nudges import until
 
-from jarvis import tools
-from jarvis.brain import persona
-from jarvis.safety import consent
-from jarvis.state import conversation
-from jarvis.tasks import api, client, runner
-from jarvis.tasks.worker import READ_ONLY_TOOLS
-from jarvis.tools import tasks as task_tools
+from alfred import tools
+from alfred.brain import persona
+from alfred.safety import consent
+from alfred.state import conversation
+from alfred.tasks import api, client, runner
+from alfred.tasks.worker import READ_ONLY_TOOLS
+from alfred.tools import tasks as task_tools
 
 # ── The log tail ────────────────────────────────────────────────
 
@@ -157,10 +157,10 @@ def test_discard_refuses_a_branch_that_is_already_merged(env, monkeypatch):
     assert task["branch"] in branches(other) and r.store.get(task["id"])["status"] == "done"
 
 
-def test_discard_only_deletes_the_branch_jarvis_made_for_the_task(env, monkeypatch):
+def test_discard_only_deletes_the_branch_alfred_made_for_the_task(env, monkeypatch):
     r, task = run_worktree_task(monkeypatch, add_new_file)
     r.store.set(task["id"], branch="main")
-    with pytest.raises(ValueError, match="wasn't made by JARVIS"):
+    with pytest.raises(ValueError, match="wasn't made by Alfred"):
         discard(r, task["id"])
     assert "main" in branches(env["other"]) and Path(task["worktree"]).exists()
 
@@ -258,8 +258,8 @@ def test_a_plain_yes_discards_at_once_without_the_model(model, gone, said):  # n
     assert gone == [7] and model.prompts == []
 
 
-# Heard in a real call: "JARVIS, good." to "Shall I go ahead?" threw away two branches of unmerged work
-@pytest.mark.parametrize("said", ["JARVIS, good.", "Sorry.", "Sure. Sorry.", "Headshot.", "Wait, which one?", ""])
+# Heard in a real call: "Alfred, good." to "Shall I go ahead?" threw away two branches of unmerged work
+@pytest.mark.parametrize("said", ["Alfred, good.", "Sorry.", "Sure. Sorry.", "Headshot.", "Wait, which one?", ""])
 def test_a_reply_that_doesnt_plainly_say_yes_discards_nothing(model, gone, said):  # noqa: F811
     with pytest.raises(ValueError, match="Not discarded.*Check back"):
         discard_on(said)
@@ -285,7 +285,7 @@ def test_the_voice_prompt_checks_back_on_a_reply_that_doesnt_fit_but_never_asks_
     prompt = persona.persona()
     rule = next(l for l in prompt.splitlines() if "When you've asked for a yes" in l)
     assert "counts at once" in rule and "never ask again" in rule
-    for unclear in ('"JARVIS, good"', '"sorry"', "a fragment", "takes it back", "talk about something else"):
+    for unclear in ('"Alfred, good"', '"sorry"', "a fragment", "takes it back", "talk about something else"):
         assert unclear in rule, unclear
     assert "nor on your guess" in rule and "check back in a few words" in rule
     assert '"good", "great", "sorry"' in consent.PROMPT  # the yes/no model reads them the same way
@@ -298,7 +298,7 @@ def test_the_voice_prompt_takes_a_request_as_the_yes_and_confirms_only_the_excep
     start = prompt.index("confirm first, in one short sentence, only these")
     exceptions = prompt[start:prompt.index("If a tool fails")]
     for kind in ("discarding a task", "Messaging other people", "you chose yourself",
-                 "JARVIS asks for the yes itself", "don't ask first"):
+                 "Alfred asks for the yes itself", "don't ask first"):
         assert kind in exceptions, kind
     # Draft-then-send steps live in the Google tools' descriptions (AI Armory), not the persona
     for name in ("chat_send", "docs_delete", "sheets_delete_tab", "calendar_send_invite", "chat_mark_read"):

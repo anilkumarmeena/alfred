@@ -1,4 +1,4 @@
-"""Tests for jarvis.state.todo: the to-do list in data/tasks.db."""
+"""Tests for alfred.state.todo: the to-do list in data/tasks.db."""
 
 import asyncio
 import json
@@ -7,12 +7,12 @@ from datetime import date, datetime
 
 import pytest
 
+from alfred import tools
+from alfred.brain import persona
+from alfred.state import todo
+from alfred.tasks import store as store_module
+from alfred.tools import core
 from conftest import use_profile
-from jarvis import tools
-from jarvis.brain import persona
-from jarvis.state import todo
-from jarvis.tasks import store as store_module
-from jarvis.tools import core
 
 TODAY = f"{date.today():%Y-%m-%d}"
 
@@ -92,7 +92,7 @@ def test_todo_tools_are_registered_and_say_the_list_is_theirs_alone():
 @pytest.fixture
 def judge(db, monkeypatch):
     """The repeat check's model call, faked: set `judge.reply` (or an exception); `judge.asked` keeps what it saw."""
-    from jarvis.llm import claude
+    from alfred.llm import claude
 
     class Judge:
         reply: dict | Exception | None = {"same": None, "merged": ""}

@@ -1,7 +1,8 @@
 // Projects: folders code tasks work in. Edit aliases, description, and in-place vs branch mode. The path changes
-// only on JARVIS's computer (make projects).
+// only on Alfred's computer (make projects).
 import { useSignal } from "@preact/signals";
 import { act, projects, type Project } from "../../state/panel";
+import { assistantName } from "../../state/store";
 import { BranchIcon, ChevronIcon, PlusIcon, ProjectsIcon } from "../icons";
 import { Empty, Led } from "./bits";
 
@@ -29,7 +30,7 @@ function Mode({ inPlace, set: choose, fixed }: { inPlace: boolean; set: (v: bool
 
 function Card({ p }: { p: Project }) {
   const open = useSignal(false), aliases = useSignal(p.aliases.join(", ")), about = useSignal(p.about), inPlace = useSignal(p.in_place);
-  const [said, led] = state(p);
+  const [said, led] = state(p), name = assistantName.value;
   const dirty = aliases.value !== p.aliases.join(", ") || about.value !== p.about || inPlace.value !== p.in_place;
   async function save() {
     set(await act("project_save", { name: p.name, aliases: aliases.value, about: about.value, in_place: inPlace.value }, `Saved ${p.name}`));
@@ -62,14 +63,14 @@ function Card({ p }: { p: Project }) {
           <button class="btn sm" onClick={async () => set(await act("project_git", { name: p.name }, `Set up git for ${p.name}`))}>Set up git</button></div>}
         <label class="lbl">Folder</label>
         <div class="field mono ro" title={p.path}>{p.path}</div>
-        <p class="hint">To move it, on JARVIS's computer: <code>uv run python -m jarvis.projects set {p.name} --path …</code></p>
+        <p class="hint">To move it, on {name}'s computer: <code>uv run python -m alfred.projects set {p.name} --path …</code></p>
         <label class="lbl">Said as</label>
         <input class="field" value={aliases.value} placeholder="other names, comma separated" onInput={(e) => { aliases.value = e.currentTarget.value; }} />
         <label class="lbl">About</label>
         <input class="field" value={about.value} onInput={(e) => { about.value = e.currentTarget.value; }} />
         <label class="lbl">Mode</label>
-        <Mode inPlace={inPlace.value} fixed={p.jarvis || (!p.machine && p.git !== "repo")} set={(v) => { inPlace.value = v; }} />
-        <p class="hint">{p.jarvis ? "JARVIS always uses a worktree for itself."
+        <Mode inPlace={inPlace.value} fixed={p.alfred || (!p.machine && p.git !== "repo")} set={(v) => { inPlace.value = v; }} />
+        <p class="hint">{p.alfred ? `${name} always uses a worktree for itself.`
           : p.machine ? `Its folder is on ${p.machine}, and its tasks and jobs run there.`
           : p.git === "multi" ? `It holds separate git repos (${p.repos?.join(", ")}), so tasks here work in place and use git in each.`
           : p.git !== "repo" ? "Worktrees need git history, so tasks here work in place."
@@ -110,7 +111,7 @@ export function ProjectsSection() {
   if (!all) return <Empty>Loading…</Empty>;
   return (
     <div class="projects">
-      {!all.length && <Empty>No projects yet. Add one, or tell JARVIS about a folder.</Empty>}
+      {!all.length && <Empty>No projects yet. Add one, or tell {assistantName} about a folder.</Empty>}
       {all.length > 0 && <div class="plist">{all.map((p) => <Card key={p.name} p={p} />)}</div>}
       {adding.value ? <AddProject done={() => { adding.value = false; }} />
         : <button class="btn wide addproj" onClick={() => { adding.value = true; }}><PlusIcon />Add project</button>}

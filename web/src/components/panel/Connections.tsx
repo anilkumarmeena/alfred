@@ -1,8 +1,9 @@
-// Connections (MCP servers): toggle, sign in (via JARVIS's browser on its computer), set keys, remove.
+// Connections (MCP servers): toggle, sign in (via Alfred's browser on its computer), set keys, remove.
 // Keys are write-only (pasted, never spoken; shown only as set/unset). Adding servers is by voice, with approval.
 import { useSignal } from "@preact/signals";
 import { badAddress, hostOf } from "../../lib/address";
 import { act, servers, toast, type Server } from "../../state/panel";
+import { assistantName } from "../../state/store";
 import { ChevronIcon, TrashIcon } from "../icons";
 import { cap, Empty, Pill } from "./bits";
 
@@ -85,7 +86,7 @@ function AddressRow({ s, a }: { s: Server; a: { var: string; value: string } }) 
 
 function Card({ s }: { s: Server }) {
   const tools = useSignal(false), signing = useSignal(false);
-  const [said, kind] = state(s);
+  const [said, kind] = state(s), name = assistantName.value;
   async function toggle() {
     const r = await act<Server[]>("server_switch", { name: s.name, on: !s.enabled }, s.enabled ? "Switched off" : "Switched on");
     if (r) servers.value = r;
@@ -108,7 +109,7 @@ function Card({ s }: { s: Server }) {
       <div class="srv-head">
         <h3>{s.label} <Pill kind={kind}>{said}</Pill>{!s.verified && s.source && <Pill kind="waiting">unverified</Pill>}</h3>
         <button class="switch" role="switch" aria-checked={s.enabled} aria-label={`${s.label} on`} disabled={!s.reviewed}
-          title={s.reviewed ? "" : "Its tools need sorting first: ask JARVIS to review them"} onClick={toggle} />
+          title={s.reviewed ? "" : `Its tools need sorting first: ask ${name} to review them`} onClick={toggle} />
       </div>
       <div class="sub">{from(s)}</div>
       <div class="cmdline" title={s.command}>{s.command}</div>
@@ -119,7 +120,7 @@ function Card({ s }: { s: Server }) {
           <span class="var">Sign-in</span>
           {s.signed_in ? <span class="st">signed in</span> : <span class="st warn">not signed in</span>}
           <button class="btn sm" disabled={signing.value} onClick={signIn}>
-            {signing.value ? "Sign in in JARVIS's browser on its computer…" : s.signed_in ? "Sign in again" : "Sign in"}
+            {signing.value ? `Sign in in ${name}'s browser on its computer…` : s.signed_in ? "Sign in again" : "Sign in"}
           </button>
         </div>
       )}

@@ -1,4 +1,4 @@
-"""Tests for jarvis.integrations.mcp_oauth: discovery, refusals, denied sign-ins, keeping and refreshing tokens."""
+"""Tests for alfred.integrations.mcp_oauth: discovery, refusals, denied sign-ins, keeping and refreshing tokens."""
 
 import asyncio
 import base64
@@ -12,9 +12,9 @@ import pytest
 from test_connections import WIKI, Auth, serving
 from test_mcp_servers import fresh  # noqa: F401  (the fixture)
 
-from jarvis.auth import vault
-from jarvis.integrations import mcp_oauth
-from jarvis.integrations.mcp_servers import Server
+from alfred.auth import vault
+from alfred.integrations import mcp_oauth
+from alfred.integrations.mcp_servers import Server
 
 URL = "https://mcp.notes.example/v1/mcp"
 AS_META = {"authorization_endpoint": "https://login.notes.example/authorize",
@@ -66,7 +66,7 @@ def test_an_older_server_is_its_own_authorization_server_and_the_401s_scope_wins
     ({"code_challenge_methods_supported": ["plain"]}, "doesn't support PKCE"),
     ({"authorization_endpoint": ""}, "doesn't say where to sign in"),
 ])
-def test_a_sign_in_jarvis_wont_use_is_refused(change, said):
+def test_a_sign_in_alfred_wont_use_is_refused(change, said):
     with pytest.raises(mcp_oauth.SignInError, match=said):
         discover({"https://mcp.notes.example/.well-known/oauth-authorization-server": AS_META | change})
 
@@ -101,7 +101,7 @@ def test_the_authorize_page_asks_with_pkce_for_the_resource_and_its_scopes():
 
 
 @pytest.mark.parametrize("status, body, said", [
-    (400, {"error": "invalid_client_metadata"}, "wouldn't register JARVIS"),
+    (400, {"error": "invalid_client_metadata"}, "wouldn't register Alfred"),
     (201, {"client_secret": "s"}, "without giving it an id"),
 ])
 def test_a_registration_that_fails_says_why(status, body, said):
@@ -113,7 +113,7 @@ def test_a_registration_that_fails_says_why(status, body, said):
 @pytest.mark.parametrize("back, said", [
     ("?error=access_denied&state={state}", "turned down \\(access_denied\\)"),
     ("?state={state}", "without a code"),
-    ("", "without JARVIS's own check"),
+    ("", "without Alfred's own check"),
 ])
 def test_a_sign_in_that_comes_back_without_a_code_keeps_nothing(fresh, back, said):
     auth = Auth()

@@ -4,7 +4,7 @@
 
 # 🗣️ Voice
 
-**How JARVIS hears you, decides you've finished, ignores what isn't you, and where the wait before it speaks goes.**
+**How Alfred hears you, decides you've finished, ignores what isn't you, and where the wait before it speaks goes.**
 
 [🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · **🗣️ Voice** · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md) · [🧭 Features](features.md)
 
@@ -12,7 +12,7 @@
 
 ---
 
-Everything on this page runs **on JARVIS's computer**. One spoken turn passes through these stages:
+Everything on this page runs **on Alfred's computer**. One spoken turn passes through these stages:
 
 ```mermaid
 flowchart TB
@@ -48,15 +48,15 @@ flowchart TB
 
 | | Stage | Code | Settings |
 |:-:|---|---|---|
-| 🔉 | [Noise filter](#-noise-filter) | `jarvis/voice/denoise.py` | [Speech in and out](configuration.md#-speech-in-and-out) |
-| ⌛ | [End of turn](#-when-youve-finished) | `jarvis/apps/agent.py`, `jarvis/voice/turn.py` | `JARVIS_TURN_SILENCE`, `JARVIS_VAD_*` |
-| 📝 | [Whisper, Kokoro](#-whisper-in-kokoro-out) | `jarvis/voice/speech.py` | [Speech in and out](configuration.md#-speech-in-and-out) |
-| 🚫 | [Speech gate](#-speech-gate) | `jarvis/voice/speech_gate.py` | [Speech gate](configuration.md#-speech-gate) |
-| 🔐 | [Speaker check, barge-in](#-speaker-check) | `jarvis/voice/speaker.py`, `barge_in.py` | [Speaker check](configuration.md#-speaker-check) |
-| 📈 | [Turn timing](#-voice-timing) | `jarvis/brain/timing.py` | none |
+| 🔉 | [Noise filter](#-noise-filter) | `alfred/voice/denoise.py` | [Speech in and out](configuration.md#-speech-in-and-out) |
+| ⌛ | [End of turn](#-when-youve-finished) | `alfred/apps/agent.py`, `alfred/voice/turn.py` | `ALFRED_TURN_SILENCE`, `ALFRED_VAD_*` |
+| 📝 | [Whisper, Kokoro](#-whisper-in-kokoro-out) | `alfred/voice/speech.py` | [Speech in and out](configuration.md#-speech-in-and-out) |
+| 🚫 | [Speech gate](#-speech-gate) | `alfred/voice/speech_gate.py` | [Speech gate](configuration.md#-speech-gate) |
+| 🔐 | [Speaker check, barge-in](#-speaker-check) | `alfred/voice/speaker.py`, `barge_in.py` | [Speaker check](configuration.md#-speaker-check) |
+| 📈 | [Turn timing](#-voice-timing) | `alfred/brain/timing.py` | none |
 
 > [!TIP]
-> Say **"learn my voice"** once. With a voiceprint, only **you** get answered and only you can interrupt JARVIS.
+> Say **"learn my voice"** once. With a voiceprint, only **you** get answered and only you can interrupt Alfred.
 
 <details>
 <summary><b>📑 On this page</b></summary>
@@ -80,16 +80,16 @@ Your mic goes through **[DeepFilterNet 3](https://github.com/Rikorose/DeepFilter
 | **Hooks in** | LiveKit's frame processor on the room's mic input: VAD, barge-in and Whisper all hear filtered audio |
 | **Runs on** | ONNX Runtime, one CPU core: ~1.4 ms per 10 ms of audio, ~40 ms added delay |
 | **Model** | `models/deepfilternet3-streaming.onnx` (16 MB), downloaded by `make models`, checked by hash |
-| **If it's missing** | The agent log says so and JARVIS uses the original audio |
+| **If it's missing** | The agent log says so and Alfred uses the original audio |
 | **Not filtered** | Terminal console mode (`make console`), which uses this computer's own mic |
 
 **Knobs**
 
 | Setting | Effect |
 |---|---|
-| `JARVIS_DENOISE_ATTEN_DB` (`18`) | The most the filter takes off any sound, so speech it mistakes for noise stays audible to Whisper |
-| `JARVIS_DENOISE=vad` | VAD hears filtered audio (turn-taking unchanged), Whisper the original: for comparing |
-| `JARVIS_DENOISE=off` | No filter |
+| `ALFRED_DENOISE_ATTEN_DB` (`18`) | The most the filter takes off any sound, so speech it mistakes for noise stays audible to Whisper |
+| `ALFRED_DENOISE=vad` | VAD hears filtered audio (turn-taking unchanged), Whisper the original: for comparing |
+| `ALFRED_DENOISE=off` | No filter |
 
 **Inspect:** `logs/agent.log` names the mode at start, logs the filter's time per frame when a call ends, and warns if a frame ever takes longer than real time.
 
@@ -99,14 +99,14 @@ Your mic goes through **[DeepFilterNet 3](https://github.com/Rikorose/DeepFilter
 
 | | Rule | Knob |
 |:-:|---|---|
-| ⏱️ | The turn ends **0.8 s** after you stop speaking, once Whisper has all your words (a pause mid-sentence splits your speech into clips; the turn waits for the last one) | `JARVIS_TURN_SILENCE` |
+| ⏱️ | The turn ends **0.8 s** after you stop speaking, once Whisper has all your words (a pause mid-sentence splits your speech into clips; the turn waits for the last one) | `ALFRED_TURN_SILENCE` |
 | 🔗 | **Went on?** If you carry on before hearing the reply, the two parts are answered together as one thought | |
-| ❓ | **Unsure words:** a turn Whisper heard with low confidence is marked, so JARVIS checks back with its best guess | `JARVIS_WHISPER_UNSURE_LOGPROB` |
-| 🏃 | **Your own pace:** if talking to JARVIS seems to take a speaker effort (unsure words, going on often, slow speech), replies get plainer | `voice_pace:<speaker>` row |
+| ❓ | **Unsure words:** a turn Whisper heard with low confidence is marked, so Alfred checks back with its best guess | `ALFRED_WHISPER_UNSURE_LOGPROB` |
+| 🏃 | **Your own pace:** if talking to Alfred seems to take a speaker effort (unsure words, going on often, slow speech), replies get plainer | `voice_pace:<speaker>` row |
 
 - The pace is kept as `voice_pace:<speaker>` in the settings table; **delete the row to start again**.
-- The VAD needs **0.2 s of unbroken speech** to start an utterance (`JARVIS_VAD_MIN_SPEECH`), so a lone click never reaches Whisper.
-- If JARVIS cuts you off mid-thought too often, raise `JARVIS_TURN_SILENCE` a little; lower answers sooner.
+- The VAD needs **0.2 s of unbroken speech** to start an utterance (`ALFRED_VAD_MIN_SPEECH`), so a lone click never reaches Whisper.
+- If Alfred cuts you off mid-thought too often, raise `ALFRED_TURN_SILENCE` a little; lower answers sooner.
 
 **Inspect:** `make voice-timing` shows how long turn ends took, and its outcome counts how many turns you went on from before hearing the reply (`unspoken`; see [Voice timing](#-voice-timing)).
 
@@ -123,20 +123,20 @@ Whisper runs on whichever backend suits the machine, picked at start:
 | 💻 | **CPU only** (other Linux, Intel Macs) | faster-whisper, int8, a thread per physical core | `small.en` |
 
 - **CPU speed:** `small.en` takes **0.61 s per 5 s clip** on an M-series CPU; expect **~1–1.5 s** on a 4–8 core x86. Large models would take several seconds a clip on a CPU, hence the smaller default.
-- **Weak CPU?** `JARVIS_STT=base.en` trades a little accuracy for speed.
-- **GPU** needs CUDA 12's cuBLAS and cuDNN 9, from the system or pip (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`). If it fails to load, JARVIS falls back to the CPU and logs why; `JARVIS_STT_DEVICE=cpu` skips trying.
-- **Before Kokoro**, everything said (and shown as text) passes `jarvis/voice/unspoken.py`, which drops the brain's private notes and says internal details plainly; see [The Brain](brain.md#-one-turn-end-to-end).
-- **Recordings** use their own model, multilingual (`small` on a CPU): see [`JARVIS_TRANSCRIBE_MODEL`](configuration.md#-speech-in-and-out).
+- **Weak CPU?** `ALFRED_STT=base.en` trades a little accuracy for speed.
+- **GPU** needs CUDA 12's cuBLAS and cuDNN 9, from the system or pip (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`). If it fails to load, Alfred falls back to the CPU and logs why; `ALFRED_STT_DEVICE=cpu` skips trying.
+- **Before Kokoro**, everything said (and shown as text) passes `alfred/voice/unspoken.py`, which drops the brain's private notes and says internal details plainly; see [The Brain](brain.md#-one-turn-end-to-end).
+- **Recordings** use their own model, multilingual (`small` on a CPU): see [`ALFRED_TRANSCRIBE_MODEL`](configuration.md#-speech-in-and-out).
 - **`make models`** downloads the models this machine will use.
 - **Intel Macs** get faster-whisper too (MLX needs Apple silicon), but are **untested**.
 
 | Knob | Default | Effect |
 |---|---|---|
-| `JARVIS_STT` | Per backend (above) | Whisper model for live voice |
-| `JARVIS_STT_DEVICE` | *(auto)* | faster-whisper: `cuda` or `cpu` |
-| `JARVIS_STT_PROMPT` | `on` | Gives Whisper the speech vocabulary and project names |
-| `JARVIS_TTS_VOICE` | `bm_george` | Kokoro voice: `bm_*`/`bf_*` British, `am_*`/`af_*` American |
-| `JARVIS_TTS_SPEED` | `1.05` | Speaking speed, 0.5 to 2.0 |
+| `ALFRED_STT` | Per backend (above) | Whisper model for live voice |
+| `ALFRED_STT_DEVICE` | *(auto)* | faster-whisper: `cuda` or `cpu` |
+| `ALFRED_STT_PROMPT` | `on` | Gives Whisper the speech vocabulary and project names |
+| `ALFRED_TTS_VOICE` | `bm_george` | Kokoro voice: `bm_*`/`bf_*` British, `am_*`/`af_*` American |
+| `ALFRED_TTS_SPEED` | `1.05` | Speaking speed, 0.5 to 2.0 |
 
 **Inspect:** `make voice-timing` reports `transcript` (Whisper's text ready) and `tts_first` (Kokoro's first audio) per turn. `logs/agent.log` names the Whisper model, device and threads when it loads.
 
@@ -166,7 +166,7 @@ Whisper's confidence alone is no help (**phantoms score like real short replies*
 
 In the app it's **Phantom filter**.
 
-| `JARVIS_SPEECH_GATE` | Behaviour |
+| `ALFRED_SPEECH_GATE` | Behaviour |
 |---|---|
 | `enforce` (default) | Drops phantoms, logged as `speech gate dropped` |
 | `shadow` (**Only log**) | Drops nothing; logs `speech gate would drop (shadow)` and saves every judged clip as a WAV |
@@ -176,7 +176,7 @@ In the app it's **Phantom filter**.
 
 ```sh
 make speech-gate                                  # the last 24 hours' drops, counted by reason
-uv run python -m jarvis.voice.speech_gate 72      # the last three days
+uv run python -m alfred.voice.speech_gate 72      # the last three days
 ```
 
 | Where | Shows |
@@ -185,11 +185,11 @@ uv run python -m jarvis.voice.speech_gate 72      # the last three days
 | `logs/speech-gate-audio/` | 16 kHz WAVs of what Whisper heard; play one with `afplay` (macOS) or `aplay` (Linux). The newest 300 are kept |
 
 - **A real reply among the drops?** Loosen the threshold named in brackets.
-- In `enforce` mode, short clips the gate lets through are still saved (`JARVIS_SPEECH_GATE_SAVE_SHORT`), so a phantom that slips past can be heard.
+- In `enforce` mode, short clips the gate lets through are still saved (`ALFRED_SPEECH_GATE_SAVE_SHORT`), so a phantom that slips past can be heard.
 
 ## 🔐 Speaker check
 
-Real speech from someone else (a TV, a colleague on a call) would otherwise reach the brain as if you'd said it. Once you've **enrolled your voice**, the speaker check drops it and JARVIS stays silent.
+Real speech from someone else (a TV, a colleague on a call) would otherwise reach the brain as if you'd said it. Once you've **enrolled your voice**, the speaker check drops it and Alfred stays silent.
 
 > [!NOTE]
 > **Without a voiceprint, nothing changes.** If the model fails, clips go through as if no voiceprint existed, and the agent log says so.
@@ -218,20 +218,20 @@ Short utterances say less about who spoke, so they need a **lower similarity sco
 | **In a conversation** | 0.1 less again for short clips; under 0.4 s of speech passes as too short to tell |
 | **This call**: after 3 s of clearly-you speech | A second reference tuned to this call's mic and room also counts |
 
-- **In a conversation** means you were the last voice heard (within 30 s), or JARVIS finished speaking under 10 s ago.
+- **In a conversation** means you were the last voice heard (within 30 s), or Alfred finished speaking under 10 s ago.
 - Once someone else has been heard, short clips **lose that leniency** until you're heard again, so a TV's "okay" isn't taken for you.
 
-### Interrupting JARVIS
+### Interrupting Alfred
 
-With a voiceprint and the check on, **only your voice cuts JARVIS off**; someone else's speech never interrupts.
+With a voiceprint and the check on, **only your voice cuts Alfred off**; someone else's speech never interrupts.
 
 - While it replies, speech is checked from **0.5 s** in (about 15 ms of CPU), then every **0.25 s** more until it matches or you stop.
 - If the check misses you, your words still interrupt once the whole utterance is transcribed and passes.
-- `JARVIS_SPEAKER_BARGE_IN=off` lets any voice interrupt.
+- `ALFRED_SPEAKER_BARGE_IN=off` lets any voice interrupt.
 
-JARVIS knows **exactly where it was cut off**: what you heard and what you didn't. What it does next depends on what you said:
+Alfred knows **exactly where it was cut off**: what you heard and what you didn't. What it does next depends on what you said:
 
-| You said | JARVIS |
+| You said | Alfred |
 |---|---|
 | A **passing remark**: "thanks", "okay", "hmm", "yes yes" | Answers in a word or two, then gives what you missed as a **one-line recap** |
 | A **question** | Answers that, and drops the rest unless it held something you need |
@@ -260,7 +260,7 @@ make voiceprint ARGS=test        # records 5 s and says how alike it is
 
 | If… | Then |
 |---|---|
-| Your own replies get dropped | Pick **Lenient** or lower `JARVIS_SPEAKER_SHORT_MARGIN` |
+| Your own replies get dropped | Pick **Lenient** or lower `ALFRED_SPEAKER_SHORT_MARGIN` |
 | A TV still gets through | Pick **Strict** |
 
 ## 🎧 Earphones and switching apps
@@ -272,13 +272,13 @@ On a phone (iOS or Android):
 <td width="50%" valign="top">
 
 **🎧 Stem press to mute**<br>
-While JARVIS is on screen, pressing the earphone button (AirPods, wired or Bluetooth) mutes or unmutes the mic: a **falling tone** for muted, a **rising** one for listening. The on-screen mute follows.
+While Alfred is on screen, pressing the earphone button (AirPods, wired or Bluetooth) mutes or unmutes the mic: a **falling tone** for muted, a **rising** one for listening. The on-screen mute follows.
 
 </td>
 <td width="50%" valign="top">
 
 **🔄 Coming back to the app (iOS)**<br>
-iOS takes the mic from a Home Screen web app in the background. On return, JARVIS shows **Mic paused**, takes the mic back and carries on (muted if you'd muted), reconnecting if the session dropped.
+iOS takes the mic from a Home Screen web app in the background. On return, Alfred shows **Mic paused**, takes the mic back and carries on (muted if you'd muted), reconnecting if the session dropped.
 
 </td>
 </tr>
@@ -289,7 +289,7 @@ iOS takes the mic from a Home Screen web app in the background. On return, JARVI
 
 ## 📈 Voice timing
 
-Every turn that reaches JARVIS is timed stage by stage, in **seconds after you stopped speaking**: one JSON line in `logs/voice-turns.jsonl` and a readable `voice turn` line in `logs/agent.log`.
+Every turn that reaches Alfred is timed stage by stage, in **seconds after you stopped speaking**: one JSON line in `logs/voice-turns.jsonl` and a readable `voice turn` line in `logs/agent.log`.
 
 ```sh
 make voice-timing            # the last 24 hours
@@ -304,7 +304,7 @@ make voice-timing HOURS=2    # the last two
 | 📤 | `sent` | Your words went to the CLI (after any yes/no check, a running command, photos) |
 | 💬 | `first_text` | The reply's first words |
 | 🔧 | `first_tool` | The model began its first tool call |
-| 🔊 | `first_audio` | JARVIS's voice started |
+| 🔊 | `first_audio` | Alfred's voice started |
 | ✅ | `done` | The model's reply ended |
 
 <details>
@@ -318,10 +318,10 @@ make voice-timing HOURS=2    # the last two
 | `tts_first` | Kokoro's first-audio time |
 | `ack` | Words said before the first tool call |
 | `tools`, `tool_names` | Tool calls made |
-| `spoke` | How long JARVIS spoke |
+| `spoke` | How long Alfred spoke |
 | `ended` | **spoken**, **interrupted**, **unspoken** (you went on before it was heard; `resumed` is your pause) or **closed** |
 | `speaker`, `logprob` | Who spoke and how well Whisper heard it |
-| `barge` | Your words cut JARVIS's last reply off: **remark**, **point** (a question) or **unsure** (left to the brain) |
+| `barge` | Your words cut Alfred's last reply off: **remark**, **point** (a question) or **unsure** (left to the brain) |
 
 </details>
 
@@ -329,7 +329,7 @@ make voice-timing HOURS=2    # the last two
 
 | Line | Tells you |
 |---|---|
-| First line | How turns ended. Many **unspoken** means JARVIS answers before you've finished; "pause before going on" shows those pauses |
+| First line | How turns ended. Many **unspoken** means Alfred answers before you've finished; "pause before going on" shows those pauses |
 | Seconds after the user stopped speaking | Each stage's median, p90 and max |
 | **Where the wait goes** | Time to first audio, split: waiting for the turn to end, before the model, model to first words, first words to voice |
 | Slowest turns | The worst turns, as log lines |

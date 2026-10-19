@@ -1,4 +1,4 @@
-"""Tests for jarvis.tasks.announce: model-worded and fixed task-end wording, kept facts, what the brain hears."""
+"""Tests for alfred.tasks.announce: model-worded and fixed task-end wording, kept facts, what the brain hears."""
 
 import asyncio
 
@@ -6,13 +6,13 @@ import pytest
 from test_data_edits import FACT, TODO, data, run_task  # noqa: F401  (fixture)
 from test_in_place import env  # noqa: F401  (fixture)
 
-from jarvis.brain import persona
-from jarvis.llm import usage
-from jarvis.tasks import announce
-from jarvis.tasks.announce import DONE, FAILED, QUESTION, STOPPED, Ending
-from jarvis.tasks.store import edits
+from alfred.brain import persona
+from alfred.llm import usage
+from alfred.tasks import announce
+from alfred.tasks.announce import DONE, FAILED, QUESTION, STOPPED, Ending
+from alfred.tasks.store import edits
 
-TICK = ("tick off the to-do matching 'MCP connection tools'", "JARVIS's check found task 125's work finishes it.")
+TICK = ("tick off the to-do matching 'MCP connection tools'", "Alfred's check found task 125's work finishes it.")
 
 
 class Model:
@@ -53,7 +53,7 @@ def test_the_fixed_words_say_each_fact_once_without_numbers_or_internals():
         "Your task, tick off to-dos when tasks finish, is done. Background tasks can now be linked to a to-do. It still "
         "needs you: the last socket test hasn't been run. I've ticked off your to-do \"MCP connection tools\". It'd "
         "also like to tick off the to-do matching 'MCP connection tools'.")
-    for robotic in ("Task 125", "data files", "suggested edits, pending", "JARVIS's check", "needs you for the rest"):
+    for robotic in ("Task 125", "data files", "suggested edits, pending", "Alfred's check", "needs you for the rest"):
         assert robotic not in announce.plain(ending)
 
 
@@ -86,7 +86,7 @@ def test_the_model_words_the_end_from_its_facts(model):
     assert "<task>tick off to-dos when tasks finish</task>" in facts and "<ended>done</ended>" in facts
     assert "<report>Background tasks can now be linked to a to-do.</report>" in facts
     assert "<check>May be unfinished: the summary says checks were re-run" in facts
-    assert ("<suggestions>\n- tick off the to-do matching 'MCP connection tools' (why: JARVIS's check found task "
+    assert ("<suggestions>\n- tick off the to-do matching 'MCP connection tools' (why: Alfred's check found task "
             "125's work finishes it.)\n</suggestions>") in facts
 
 
@@ -191,9 +191,9 @@ def test_a_greeting_says_an_update_in_whole_sentences_and_a_question_whole():
 
 
 def test_spoken_task_updates_are_worded_by_the_cheapest_model(monkeypatch):
-    from jarvis.brain import side
-    from jarvis.llm import claude, roles
-    from jarvis.llm.roles import Role
+    from alfred.brain import side
+    from alfred.llm import claude, roles
+    from alfred.llm.roles import Role
 
     asked = []
 

@@ -1,4 +1,4 @@
-"""Tests for jarvis.core.platform (which OS JARVIS runs on) and the Linux time zone fallbacks in config."""
+"""Tests for alfred.core.platform (which OS Alfred runs on) and the Linux time zone fallbacks in config."""
 
 import subprocess
 import sys
@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from jarvis import config
-from jarvis.config import ROOT
-from jarvis.core import platform
+from alfred import config
+from alfred.config import ROOT
+from alfred.core import platform
 
 
 def test_exactly_one_of_mac_and_linux_here():
@@ -32,7 +32,7 @@ def test_other_systems_are_named(monkeypatch):
     monkeypatch.setattr(platform, "MAC", False)
     monkeypatch.setattr(platform, "LINUX", False)
     monkeypatch.setattr(platform.sys, "platform", "freebsd14")
-    assert platform.unsupported() == "JARVIS runs on macOS and Linux, not freebsd14."
+    assert platform.unsupported() == "Alfred runs on macOS and Linux, not freebsd14."
 
 
 def test_mac_and_linux_are_supported(monkeypatch):
@@ -42,9 +42,9 @@ def test_mac_and_linux_are_supported(monkeypatch):
         platform.require_supported()
 
 
-def test_importing_jarvis_on_windows_says_wsl2_not_importerror():
-    """jarvis/__init__ checks before config imports pwd, which Windows lacks."""
-    done = subprocess.run([sys.executable, "-c", "import sys; sys.platform = 'win32'; import jarvis.config"],
+def test_importing_alfred_on_windows_says_wsl2_not_importerror():
+    """alfred/__init__ checks before config imports pwd, which Windows lacks."""
+    done = subprocess.run([sys.executable, "-c", "import sys; sys.platform = 'win32'; import alfred.config"],
                           cwd=ROOT, capture_output=True, text=True)
     assert done.returncode == 1 and "WSL2" in done.stderr and "Traceback" not in done.stderr
 

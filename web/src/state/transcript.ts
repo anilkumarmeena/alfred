@@ -20,7 +20,7 @@ function push(line: Line) {
 
 // New line to stream into, or the existing one cleared if the segment is re-sent. said: full text for lines that
 // arrive whole (iOS app captions), so they aren't cleared and refilled.
-export function addLine(who: "you" | "jarvis", segment?: string, said = ""): Signal<string> {
+export function addLine(who: "you" | "alfred", segment?: string, said = ""): Signal<string> {
   const old = segment && bySegment.get(segment);
   if (old) { old.value = said; return old; }
   const text = signal(said);

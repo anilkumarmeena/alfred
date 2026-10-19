@@ -1,4 +1,4 @@
-"""Tests for transcribing recordings (jarvis.media.transcribe, file tools): chunking, transcripts, previews."""
+"""Tests for transcribing recordings (alfred.media.transcribe, file tools): chunking, transcripts, previews."""
 
 import asyncio
 import base64
@@ -10,10 +10,10 @@ import wave
 import numpy as np
 import pytest
 
-from jarvis import tools
-from jarvis.media import documents, transcribe
-from jarvis.tasks import worker
-from jarvis.tools import files
+from alfred import tools
+from alfred.media import documents, transcribe
+from alfred.tasks import worker
+from alfred.tools import files
 
 av = pytest.importorskip("av")
 RATE = transcribe.RATE

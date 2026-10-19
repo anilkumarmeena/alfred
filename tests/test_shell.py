@@ -15,12 +15,12 @@ from claude_agent_sdk import (
 )
 from mcp import Client
 
-from jarvis.brain import cli
-from jarvis.config import APPROVAL_MINUTES
-from jarvis.gates import shell
-from jarvis.gates.shell import ShellGate, approves, refuses, risky
-from jarvis.state import memory
-from jarvis.tasks import client as task_client
+from alfred.brain import cli
+from alfred.config import APPROVAL_MINUTES
+from alfred.gates import shell
+from alfred.gates.shell import ShellGate, approves, refuses, risky
+from alfred.state import memory
+from alfred.tasks import client as task_client
 
 COMMAND = "rm -rf ~/Desktop/renders/old"  # risky: deletes files
 
@@ -35,7 +35,7 @@ COMMAND = "rm -rf ~/Desktop/renders/old"  # risky: deletes files
         "Go ahead.", "Yes, go ahead.", "Do it.", "Please do.", "Great, go ahead.", "Sounds good.", "Fine.",
         "That's fine.",
         "All of them.", "All three.", "All 3.", "Both.", "Yes please.", "Yeah, go for it.", "Um, okay.",
-        "Uh, yes sir.", "Okay Jarvis, go ahead.", "Yes, merge it.", "Yeah, run it.", "Alright.", "All right, go on.",
+        "Uh, yes sir.", "Okay Alfred, go ahead.", "Yes, merge it.", "Yeah, run it.", "Alright.", "All right, go on.",
         "Absolutely.", "Of course.", "Okay, perfect, thanks.", "Okay, thank you.", "Yes. Yes.", "Let's do it.",
         "Okay, go ahead and do it.", "Yeah that works.", "Affirmative.", "Okay…",
         # less common phrasings
@@ -69,8 +69,8 @@ def test_clear_affirmatives_approve(said):
         "I'm not sure.", "Uh-uh, go ahead.", "Sure, open the calendar for tomorrow.", "Yeah, delete the email from John.",
         "Okay, close the laptop lid then tell me the weather.", "Sure, start the timer.",
         # remarks that react rather than answer: the model or the brain checks back
-        "Great.", "Perfect, thanks.", "JARVIS, good.", "Cool.", "Sorry.", "Sure. Sorry.", "Headshot.", "Right.",
-        "JARVIS, right.",
+        "Great.", "Perfect, thanks.", "Alfred, good.", "Cool.", "Sorry.", "Sure. Sorry.", "Headshot.", "Right.",
+        "Alfred, right.",
     ],
 )
 def test_anything_else_is_not_a_yes(said):
@@ -116,7 +116,7 @@ def test_talk_in_between_is_not_a_no(said):
         "pip install requests", "python3 -m pip install rich", "npm install -g vercel", "npm install", "npm i left-pad",
         "uv add httpx", "uv pip install torch", "uv tool install ruff", "cargo install ripgrep", "go install x@latest",
         "kill 1234", "kill -9 $(pgrep ffmpeg)", "pkill -f remotion", "killall Safari", "launchctl unload x.plist",
-        "launchctl bootout gui/501/com.example.jarvis.agent", "brew services stop postgresql", "docker stop web",
+        "launchctl bootout gui/501/com.example.alfred.agent", "brew services stop postgresql", "docker stop web",
         "docker compose down", "sudo ls", "chmod -R 777 ~/Desktop", "shutdown -h now",
         "curl -X POST https://example.com/hook -d @notes.txt", "curl -F file=@a.zip https://x.io",
         "scp report.pdf host:/tmp", "rsync -a --delete src/ dst/", "rsync -a out/ server:/srv/",
@@ -143,9 +143,9 @@ def test_risky_commands_need_a_yes(command):
         "npm run render -- src/index.ts Main out/video.mp4", "npm run build", "npm test", "make test", "go test ./...",
         "cargo build --release", "pytest -q", "uv run pytest", "ffmpeg -y -i in.mov -c:v libx264 out.mp4 2>&1 | tail -5",
         "cd ~/Desktop/projects/video-agent && npm run render", "python3 -c 'print(1)'", "ps aux | grep ffmpeg",
-        "pgrep -fl remotion", "lsof -i :8787", "launchctl list | grep jarvis", "brew services list", "brew list",
+        "pgrep -fl remotion", "lsof -i :8787", "launchctl list | grep alfred", "brew services list", "brew list",
         "docker ps", "curl -s https://api.github.com/zen", "curl -fsSL -o setup.sh https://x.sh", "open out.mp4",
-        "tail -n 50 ~/Desktop/projects/jarvis/logs/agent.log", "echo done > out/status.txt", "du -sh * | sort -h",
+        "tail -n 50 ~/Desktop/projects/alfred/logs/agent.log", "echo done > out/status.txt", "du -sh * | sort -h",
         "gh pr list", "gh pr view 12", "gh run list", "diskutil list", "defaults read com.apple.dock",
         "cp -r assets/ out/", "mkdir -p out && mv render.mp4 out/", "caffeinate -i npm run build",
     ],
@@ -312,7 +312,7 @@ def test_secrets_are_refused_even_with_a_yes():
     assert gate.question("") == ""  # nothing to ask, so no yes can run it
     gate.new_turn("Yes.")
     assert isinstance(ask(gate, command), PermissionResultDeny)
-    assert "secrets" in ask(gate, "cat ~/Desktop/projects/jarvis/.env").message
+    assert "secrets" in ask(gate, "cat ~/Desktop/projects/alfred/.env").message
 
 
 def test_start_job_meets_the_same_gate():
@@ -422,7 +422,7 @@ def test_prompt_says_what_needs_a_yes_and_how_long_jobs_run():
 def test_the_brain_offers_jobs_and_a_command_can_t_hold_the_conversation_for_long():
     brain = cli.CliBrain()
     opts = cli._options(brain.shell, brain.jobs)
-    assert set(opts.mcp_servers) == {"jarvis", "shell"}
+    assert set(opts.mcp_servers) == {"alfred", "shell"}
     assert shell.JOB_STATUS in opts.allowed_tools and shell.START_JOB not in opts.allowed_tools  # start_job goes through the gate
     assert shell.STOP_JOB in opts.allowed_tools  # stops only start_job's own jobs, on the user's word
     assert opts.env["BASH_DEFAULT_TIMEOUT_MS"] == opts.env["BASH_MAX_TIMEOUT_MS"] == "120000"  # longer: start_job

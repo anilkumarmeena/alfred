@@ -8,7 +8,7 @@ import subprocess
 
 import pytest
 
-from jarvis import config, server
+from alfred import config, server
 
 WEB = config.ROOT / "web"
 
@@ -43,16 +43,16 @@ def reply(body) -> tuple[int, dict]:
 
 
 def test_phone_trace_lands_in_the_web_log(monkeypatch, caplog):
-    monkeypatch.setenv("JARVIS_PASSCODE", "123456")  # no login yet: the first-setup passcode
+    monkeypatch.setenv("ALFRED_PASSCODE", "123456")  # no login yet: the first-setup passcode
     server._failures.clear()
     assert ("POST", "/api/log") in {(r.method, r.resource.canonical) for r in server.app().router.routes()}
 
     assert reply({"passcode": "000000", "lines": ["x"]})[0] == 401
     assert reply({"passcode": "123456", "lines": "not a list"})[0] == 400
     lines = ["10:00:00.000 togglemicrophone(off): mute", "evil\nFAKE LOG LINE", "x" * 1000] + ["more"] * 60
-    with caplog.at_level(logging.INFO, logger="jarvis.server"):
+    with caplog.at_level(logging.INFO, logger="alfred.server"):
         assert reply({"passcode": "123456", "device": "iPhone", "lines": lines}) == (200, {"ok": True})
-    logged = [r.getMessage() for r in caplog.records if r.name == "jarvis.server" and r.levelno == logging.INFO]
+    logged = [r.getMessage() for r in caplog.records if r.name == "alfred.server" and r.levelno == logging.INFO]
     assert logged[0] == "iphone: 10:00:00.000 togglemicrophone(off): mute"
     assert logged[1] == "iphone: evil?FAKE LOG LINE"  # one line per line: no forged entries
     assert len(logged[2]) == len("iphone: ") + 300

@@ -12,10 +12,10 @@ import pytest
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from test_in_place import NullReporter, worker_task
 
+from alfred.core import platform
+from alfred.safety import host
+from alfred.tasks import host_tools, worker
 from conftest import use_task_cache
-from jarvis.core import platform
-from jarvis.safety import host
-from jarvis.tasks import host_tools, worker
 
 
 class Asking(NullReporter):
@@ -39,7 +39,7 @@ class Asking(NullReporter):
 @pytest.fixture
 def folder(tmp_path, monkeypatch):
     use_task_cache(monkeypatch, tmp_path / "cache")
-    monkeypatch.setattr(host, "dotenv_values", lambda path: {"JARVIS_PASSCODE": "x", "LIVEKIT_API_SECRET": "y",
+    monkeypatch.setattr(host, "dotenv_values", lambda path: {"ALFRED_PASSCODE": "x", "LIVEKIT_API_SECRET": "y",
                                                            "CLAUDE_CONFIG_DIR": "/c"})
     (tmp_path / "app" / "ios").mkdir(parents=True)
     return tmp_path / "app"
@@ -70,10 +70,10 @@ def test_other_tasks_dont_get_them_yet(folder, monkeypatch, kind):
     assert isinstance(call(opts, worker.HOST_RUN, command="ls"), PermissionResultDeny)
 
 
-def test_the_cli_gets_none_of_jarvis_keys(folder):
+def test_the_cli_gets_none_of_alfred_keys(folder):
     env = options(folder).env
-    assert env["JARVIS_PASSCODE"] == "" == env["LIVEKIT_API_SECRET"]
-    assert env.get("CLAUDE_CONFIG_DIR") != ""  # never blanked: unset (the user's login) or JARVIS's own login
+    assert env["ALFRED_PASSCODE"] == "" == env["LIVEKIT_API_SECRET"]
+    assert env.get("CLAUDE_CONFIG_DIR") != ""  # never blanked: unset (the user's login) or Alfred's own login
 
 
 def test_a_big_message_doesnt_end_the_task(folder):
@@ -103,7 +103,7 @@ def test_a_risky_host_command_is_put_to_the_user(folder):
                                     "words": ["brew", "install", "xcodegen"]}]}}]
 
 
-@pytest.mark.parametrize("command", ["git push origin jarvis/9-x", "ssh git@github.com", "git -C ios push --force"])
+@pytest.mark.parametrize("command", ["git push origin alfred/9-x", "ssh git@github.com", "git -C ios push --force"])
 def test_pushing_and_ssh_need_a_yes_every_time(folder, command):
     reporter = Asking(agreed=[command])
     opts = options(folder, reporter)

@@ -1,12 +1,12 @@
-"""Tests for jarvis.voice.quiet: the speaker switch, from the join token and as it changes, gating TTS."""
+"""Tests for alfred.voice.quiet: the speaker switch, from the join token and as it changes, gating TTS."""
 
 import asyncio
 import json
 
 from livekit import api
 
-from jarvis import server
-from jarvis.voice import quiet
+from alfred import server
+from alfred.voice import quiet
 from tests.test_web_build import Request
 
 
@@ -78,7 +78,7 @@ def test_follow_tracks_the_users_switch_and_ignores_other_attributes():
 
 def _claims(body: dict, monkeypatch, tmp_path):
     secret = "a-secret-long-enough-for-the-jwt-signer-0123456789"
-    monkeypatch.setenv("JARVIS_PASSCODE", "123456")  # no login yet: the first-setup passcode
+    monkeypatch.setenv("ALFRED_PASSCODE", "123456")  # no login yet: the first-setup passcode
     monkeypatch.setattr(server, "WEB_DIR", tmp_path)
     monkeypatch.setenv("LIVEKIT_API_KEY", "key")
     monkeypatch.setenv("LIVEKIT_API_SECRET", secret)

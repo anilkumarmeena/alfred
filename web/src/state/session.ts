@@ -1,5 +1,5 @@
 // LiveKit session: connect, mic and mute, speaker switch, mic recovery after iOS takes it, and auto-reconnect
-// (JARVIS restart, network drop, iOS background cut).
+// (Alfred restart, network drop, iOS background cut).
 import { Room, RoomEvent, Track, type Participant } from "livekit-client";
 import type { AgentState } from "../types";
 import { audioContext, audioCtx, resumeAudio, tap, untap, type Tap } from "../lib/audio";
@@ -13,17 +13,17 @@ import { wakeReactor, type ReactorInput } from "../lib/reactor";
 import { trace } from "../lib/trace";
 import { keepAwake } from "../lib/wake";
 import {
-  agentState, audioBlocked, canSilence, connected, hideLogin, joinMuted, live, loginShown, micMode, micPaused, muted, passcode, paused,
+  agentState, assistantName, audioBlocked, canSilence, connected, heardAssistant, hideLogin, joinMuted, live, loginShown, micMode, micPaused, muted, passcode, paused,
   phoneMuted, quality, resetSpeaker, resuming, setLink, setPasscode, setSpeakerOff, setState, showError, showLogin, speakerOff, startedAt,
 } from "./store";
 import { addDivider, addLine, hasSpoken, resetSpoken } from "./transcript";
 
 let room: Room | null = null;
-let endNote: string | null = null;  // set when the page or JARVIS ended the session on purpose
+let endNote: string | null = null;  // set when the page or Alfred ended the session on purpose
 let wantMuted = false;  // user's mute choice; the mic follows once it can
 let mic: Tap | null = null, agent: Tap | null = null;  // reactor analysers; mic also for silence detection
 let heardTrack: MediaStreamTrack | null = null;  // watched mic track: on iOS an AirPods press (un)mutes it directly
-let player: HTMLAudioElement | null = null;  // plays JARVIS
+let player: HTMLAudioElement | null = null;  // plays Alfred
 let keys: MediaKeys;  // set by initSession
 let agentReady = false;  // agent session started, so lk.chat messages reach it
 const outbox: string[] = [];  // typed messages queued for the agent
@@ -33,9 +33,9 @@ let shortDrops = 0;  // consecutive sessions the agent left soon after joining; 
 const AGENT_WAIT_MS = 15000;  // no agent by now = room was dispatched mid-restart and never will get one
 const STEADY_MS = 20000;  // agent stayed this long = not a crash
 const MAX_SHORT_DROPS = 3;
-const SPEAKER = "jarvis.speaker";  // participant attribute; "off" = agent makes no speech
+const SPEAKER = "alfred.speaker";  // participant attribute; "off" = agent makes no speech
 
-// In the native apps the JarvisAudio plugin owns the session (mic survives background, earphone button mutes).
+// In the native apps the AlfredAudio plugin owns the session (mic survives background, earphone button mutes).
 // No Room here: plugin events drive the page.
 const native: NativeSession | null = (() => {
   const plugin = nativeAudio();
@@ -84,7 +84,7 @@ function attachMic() {
 }
 
 // For keys.heard: true = digital silence, false = any sound, null = can't tell (no copy, audio stopped,
-// Safari muted the mic, or JARVIS speaking).
+// Safari muted the mic, or Alfred speaking).
 function micSilent(): boolean | null {
   if (paused.peek()) return null;  // mic is being recovered
   const t = micTrack();
@@ -155,7 +155,7 @@ export function toggleMute() {
 }
 export function pressMute() { keys.enable(); return toggleMute(); }
 
-// --- Speaker off: JARVIS replies only in the transcript ---
+// --- Speaker off: Alfred replies only in the transcript ---
 // SPEAKER attribute (also in the token, so the greeting is silent) stops agent speech; muting the player cuts a reply
 // already playing.
 function setSpeaker(off: boolean) {
@@ -283,6 +283,7 @@ export async function connect({ muted: startMuted = joinMuted.peek() } = {}): Pr
   let r: Room | null = null, micFailed = false;
   try {
     const data = await postAuthedJson("/api/token", { device: DEVICE, speaker: speakerWord() });
+    heardAssistant(data.assistant);
     if (build.served(data.build, { muted: wantMuted })) return;  // reloading into a newer build, which reconnects
     const lr = r = new Room({ audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     let agentAt = 0, agentLeft = false;  // agent join time; whether its leaving ended the session
@@ -300,7 +301,7 @@ export async function connect({ muted: startMuted = joinMuted.peek() } = {}): Pr
     lr.on(RoomEvent.TrackUnsubscribed, (track) => { if (track.mediaStreamTrack === agent?.track) agent = untap(agent); });
     lr.on(RoomEvent.ParticipantAttributesChanged, (changed) => agentChanged(lr, changed["lk.agent.state"]));
     lr.on(RoomEvent.ParticipantConnected, joined);
-    lr.on(RoomEvent.ParticipantDisconnected, (p) => {  // likely a JARVIS restart: a fresh room gets a fresh agent
+    lr.on(RoomEvent.ParticipantDisconnected, (p) => {  // likely a Alfred restart: a fresh room gets a fresh agent
       if (p.isAgent && room === lr) { agentLeft = true; lr.disconnect(); }
     });
     lr.on(RoomEvent.Reconnecting, () => { setLink("linking"); setState("reconnecting"); });
@@ -320,11 +321,11 @@ export async function connect({ muted: startMuted = joinMuted.peek() } = {}): Pr
         resumeLater(m);
       } else {
         stopResuming();
-        endSession(endNote ?? "JARVIS keeps ending the session. Tap the core to reconnect.");
+        endSession(endNote ?? `${assistantName.peek()} keeps ending the session. Tap the core to reconnect.`);
       }
     });
     lr.registerTextStreamHandler("lk.transcription", async (reader, participant) => {
-      const who = participant.identity === lr.localParticipant.identity ? "you" : "jarvis";
+      const who = participant.identity === lr.localParticipant.identity ? "you" : "alfred";
       const line = addLine(who, reader.info.attributes?.["lk.segment_id"]);
       for await (const chunk of reader) line.value += chunk;
     });
@@ -363,7 +364,7 @@ export async function connect({ muted: startMuted = joinMuted.peek() } = {}): Pr
     if (micFailed) { stopResuming(); return dropLink(msg); }
     trace(`couldn't connect: ${msg}`);
     dropLink(undefined, true);
-    resumeLater(wantMuted);  // JARVIS restart or network: retry
+    resumeLater(wantMuted);  // Alfred restart or network: retry
   } finally {
     connecting = false;
   }
@@ -375,7 +376,7 @@ export function hangup() {
   if (room) { endNote = ""; room.disconnect(); }
 }
 
-// Core tap, Connect pill, Space, or "Talk to JARVIS about it".
+// Core tap, Connect pill, Space, or "Talk to Alfred about it".
 export function activate() {
   audioCtx();
   if (!loginShown.peek()) keys.enable();  // within the gesture, so iOS allows playback later
@@ -431,14 +432,14 @@ export function pageShown(e: PageTransitionEvent) {
   if (e.persisted) returned();  // restored from bfcache
 }
 
-// Called after first render. player plays JARVIS; keepalive is a near-silent loop so phones route earphone presses
+// Called after first render. player plays Alfred; keepalive is a near-silent loop so phones route earphone presses
 // to the page.
 export function initSession(els: { player: HTMLAudioElement; keepalive: HTMLAudioElement }) {
   player = els.player;
   keys = mediaKeys({
     // In the app the plugin owns the earphone button.
     audio: mobile && !native ? els.keepalive : null, session: navigator.mediaSession, Metadata: window.MediaMetadata,
-    setMuted, isMuted: () => wantMuted, log: trace,
+    setMuted, isMuted: () => wantMuted, log: trace, title: () => assistantName.peek(),
     cue: (m) => { if (!speakerOff.peek()) chime(audioContext(), m); },
     artwork: [{ src: `${import.meta.env.BASE_URL}icon-512.png`, sizes: "512x512", type: "image/png" }],
   });

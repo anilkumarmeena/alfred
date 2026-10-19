@@ -9,18 +9,18 @@ import pytest
 from test_in_place import env  # noqa: F401  (a fixture)
 from test_nudges import fake_run, finishes, settle, until
 
-from jarvis import server, tools
-from jarvis.brain.persona import Notes
-from jarvis.brain.sdk import jarvis_server
-from jarvis.gates import shell
-from jarvis.notify import apns
-from jarvis.safety import remembered
-from jarvis.safety.approvals import Heard, VoiceApprovals, answered
-from jarvis.safety.commands import describe, tells_approve, tells_deny
-from jarvis.state import conversation
-from jarvis.storage import profile
-from jarvis.tasks import api, approvals, client, events as task_events, runner, worker
-from jarvis.tasks.store import (
+from alfred import server, tools
+from alfred.brain.persona import Notes
+from alfred.brain.sdk import alfred_server
+from alfred.gates import shell
+from alfred.notify import apns
+from alfred.safety import remembered
+from alfred.safety.approvals import Heard, VoiceApprovals, answered
+from alfred.safety.commands import describe, tells_approve, tells_deny
+from alfred.state import conversation
+from alfred.storage import profile
+from alfred.tasks import api, approvals, client, events as task_events, runner, worker
+from alfred.tasks.store import (
     APPROVED,
     CANCELLED,
     DENIED,
@@ -31,8 +31,8 @@ from jarvis.tasks.store import (
     WAIT_QUESTION,
     nudges,
 )
-from jarvis.tasks.worker import Outcome
-from jarvis.tools import tasks as task_tools
+from alfred.tasks.worker import Outcome
+from alfred.tools import tasks as task_tools
 
 BREW = "brew install xcodegen"
 
@@ -100,7 +100,7 @@ def test_what_a_task_asks_at_once_is_one_request_announced_once(env, pushes):
                              "(brew install), one that deletes files (rm). Okay to go ahead?")
     assert "nonce_hash" not in event["approval"]
     [push] = pushes
-    assert push["category"] == "JARVIS_APPROVAL" and push["tag"] == f"approval-{first['id']}"
+    assert push["category"] == "ALFRED_APPROVAL" and push["tag"] == f"approval-{first['id']}"
     assert push["url"] == f"/?task={task['id']}&approval={first['id']}"
     assert push["body"].startswith(BREW) and "(and 1 more)" in push["body"] and push["subtitle"] == "installs software (brew install)"
     nonce = push["data"]["approval"]["nonce"]
@@ -167,7 +167,7 @@ def test_a_task_waits_quietly_then_carries_on_with_a_yes(env, monkeypatch, pushe
     assert r.store.approval(pending["id"])["state"] == SPENT  # the yes covers that run only
     assert not r.cleared(task["id"], item())  # so a later run asks again
     asked, answered_push = [p for p in pushes if p["tag"] == f"approval-{pending['id']}"]
-    assert asked["category"] == "JARVIS_APPROVAL" and "category" not in answered_push  # the answer push drops the buttons
+    assert asked["category"] == "ALFRED_APPROVAL" and "category" not in answered_push  # the answer push drops the buttons
     assert answered_push["title"] == f"Task {task['id']}: request approved"
 
 
@@ -365,7 +365,7 @@ def test_requests_a_restart_cut_short_are_announced_when_it_starts(env, pushes):
             t.cancel()
 
     asyncio.run(main())
-    assert [p["category"] for p in pushes] == ["JARVIS_APPROVAL"]
+    assert [p["category"] for p in pushes] == ["ALFRED_APPROVAL"]
 
 
 def test_a_task_job_ending_goes_in_its_log(env):
@@ -434,9 +434,9 @@ def test_the_web_app_counts_wrong_nonces_towards_the_lockout(monkeypatch):
 
 def test_app_pushes_carry_the_approval_buttons_and_data():
     data = json.loads(apns.payload("Task 5 needs your go-ahead", BREW, "/?task=5&approval=12", "approval-12",
-                                   subtitle="installs software (brew install)", category="JARVIS_APPROVAL",
+                                   subtitle="installs software (brew install)", category="ALFRED_APPROVAL",
                                    data={"approval": {"id": 12, "nonce": "n"}}))
-    assert data["aps"]["category"] == "JARVIS_APPROVAL" and data["aps"]["alert"]["subtitle"].startswith("installs")
+    assert data["aps"]["category"] == "ALFRED_APPROVAL" and data["aps"]["alert"]["subtitle"].startswith("installs")
     assert data["approval"] == {"id": 12, "nonce": "n"} and data["url"] == "/?task=5&approval=12"
     plain = json.loads(apns.payload("t", "b", "/", "task-1"))
     assert "category" not in plain["aps"] and "subtitle" not in plain["aps"]["alert"]
@@ -545,7 +545,7 @@ def test_a_task_request_waits_while_the_voice_shell_asks():
     assert not gate.question_open()
 
 
-def test_what_jarvis_says_once_answered():
+def test_what_alfred_says_once_answered():
     assert answered(request(3), "approve", {"answered": True, "outcome": "Request 3 approved."}) == "Okay, the task carries on."
     assert answered(request(3), "deny", {"answered": True, "outcome": "Request 3 denied."}) == "Okay, the task won't run it."
     assert "already dealt with" in answered(request(3), "approve", {"answered": False, "outcome": "Request 3 was already answered."})
@@ -556,9 +556,9 @@ def test_what_jarvis_says_once_answered():
 CHROME = "pkill -f 'Google Chrome Helper'"
 
 
-def test_what_counts_as_telling_jarvis_to_approve_or_deny():
+def test_what_counts_as_telling_alfred_to_approve_or_deny():
     for said in ("Approve it.", "Let it close the hidden Chrome.", "Yes, go ahead with that delete.",
-                 "OK, allow task 5 to run it", "Jarvis, give task seven the green light please"):
+                 "OK, allow task 5 to run it", "Alfred, give task seven the green light please"):
         assert tells_approve(said) and not tells_deny(said), said
     for said in ("Deny it.", "No, don't let it delete that.", "Decline task 5's request", "No.", "Don't approve it"):
         assert tells_deny(said) and not tells_approve(said), said
@@ -641,7 +641,7 @@ def test_the_assistant_passes_on_an_explicit_yes_for_that_one_request(through):
     assert ("assistant", f"request {first['id']} approved through the assistant, on {profile.name()}'s words: "
                          "\"Let it close the hidden Chrome.\"") in log
     [heard] = nudges(r.store.get(task["id"]))
-    assert heard.startswith(f"{profile.name()} approved request {first['id']} by telling JARVIS. Run exactly this, once, with "
+    assert heard.startswith(f"{profile.name()} approved request {first['id']} by telling Alfred. Run exactly this, once, with "
                             f"host_run, in /repo: {CHROME}")
 
 
@@ -651,7 +651,7 @@ def test_the_assistant_cant_answer_on_words_that_dont_say_so(through):
     async def main():
         task = running_task(r)
         approval = await asked(r, task, CHROME)
-        conversation.current().heard.turn("Read me my latest email.")  # e.g. an email telling JARVIS to approve task 1's request
+        conversation.current().heard.turn("Read me my latest email.")  # e.g. an email telling Alfred to approve task 1's request
         with pytest.raises(ValueError, match="doesn't plainly tell you to approve"):
             await task_tools.task_approve(task["id"], True)
         still = r.store.approval(approval["id"])["state"]
@@ -761,6 +761,6 @@ def test_task_list_shows_each_tasks_waiting_requests():
 
 def test_the_approve_tool_is_the_voice_brains_alone():
     approve = next(t for t in tools.all_tools() if t.name == "task_approve")
-    assert not approve.gated and "mcp__jarvis__task_approve" in jarvis_server()[1]  # allowed outright
+    assert not approve.gated and "mcp__alfred__task_approve" in alfred_server()[1]  # allowed outright
     assert "task_approve" not in worker.READ_ONLY_TOOLS  # never available to tasks
     assert approve.required == ["id", "approve"]

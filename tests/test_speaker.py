@@ -1,4 +1,4 @@
-"""Tests for jarvis.voice.speaker: voiceprints, judging utterances, dropping other speakers, enrolling."""
+"""Tests for alfred.voice.speaker: voiceprints, judging utterances, dropping other speakers, enrolling."""
 
 import asyncio
 import base64
@@ -10,14 +10,14 @@ import pytest
 from livekit import rtc
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
-from jarvis import config, panel, tools
-from jarvis.panel import preferences as panel_preferences
-from jarvis.state import conversation, preferences, settings, voiceprints
-from jarvis.state.voiceprints import OWNER, Voiceprint
-from jarvis.voice import speaker, speech
-from jarvis.voice.floor import Floor
-from jarvis.voice.speaker import RATE, WINDOW, SpeakerCheck, Thresholds
-from jarvis.voice.speech_gate import SpeechGate
+from alfred import config, panel, tools
+from alfred.panel import preferences as panel_preferences
+from alfred.state import conversation, preferences, settings, voiceprints
+from alfred.state.voiceprints import OWNER, Voiceprint
+from alfred.voice import speaker, speech
+from alfred.voice.floor import Floor
+from alfred.voice.speaker import RATE, WINDOW, SpeakerCheck, Thresholds
+from alfred.voice.speech_gate import SpeechGate
 
 DIM = 8  # real embeddings are 256-d; distinct voices, and voice vs room sound, are near-orthogonal
 USER = np.eye(DIM, dtype=np.float32)[0]
@@ -168,11 +168,11 @@ def test_in_shadow_mode_someone_else_is_only_logged(tmp_path):
     assert j.verdict == "would drop" and not j.drop and j.other
 
 
-def test_a_short_yes_right_after_jarvis_speaks_needs_less():
+def test_a_short_yes_right_after_alfred_speaks_needs_less():
     c, clock = check()
     assert c.judge(clip(0.6, 0.2)).drop  # cold: 0.25 needed
-    c.jarvis_speaking(True)
-    c.jarvis_speaking(False)
+    c.alfred_speaking(True)
+    c.alfred_speaking(False)
     clock.now += 3
     j = c.judge(clip(0.6, 0.2))
     assert j.engaged and j.needed == 0.15 and j.verdict == "kept"
@@ -200,8 +200,8 @@ def test_once_someone_else_is_heard_short_clips_lose_the_benefit():
     clock.now += 1
     j = c.judge(clip(0.6, 0.2))
     assert not j.engaged and j.drop
-    c.jarvis_speaking(True)  # the user asked something, and JARVIS answers it
-    c.jarvis_speaking(False)
+    c.alfred_speaking(True)  # the user asked something, and Alfred answers it
+    c.alfred_speaking(False)
     clock.now += 1
     assert c.judge(clip(0.6, 0.2)).verdict == "kept"
 
@@ -243,7 +243,7 @@ def test_a_failing_model_lets_clips_through_and_says_so_once(caplog):
         raise RuntimeError("onnx went away")
 
     c._embed = type("Broken", (), {"available": True, "__call__": staticmethod(broken)})()
-    with caplog.at_level(logging.ERROR, "jarvis.voice.speaker"):
+    with caplog.at_level(logging.ERROR, "alfred.voice.speaker"):
         assert c.judge(clip(3, 0.0)) is None and c.judge(clip(3, 0.0)) is None
     assert len([r for r in caplog.records if "couldn't judge" in r.message]) == 1
 
@@ -251,7 +251,7 @@ def test_a_failing_model_lets_clips_through_and_says_so_once(caplog):
 def test_a_missing_model_turns_the_check_off(caplog):
     c, _ = check()
     c._embed = speaker.Embedder(config.ROOT / "models/none-such.onnx")
-    with caplog.at_level(logging.WARNING, "jarvis.voice.speaker"):
+    with caplog.at_level(logging.WARNING, "alfred.voice.speaker"):
         c.use("on", [Voiceprint(USER, 25, 0.8)], 0.35)
     assert not c.on and "make models" in caplog.text
 
@@ -268,7 +268,7 @@ def test_use_takes_the_conversations_settings_and_forgets_the_last_ones():
 
 def test_every_judged_clip_is_logged_and_summarised(tmp_path, caplog):
     c, _ = check(tmp_path=tmp_path)
-    with caplog.at_level(logging.INFO, "jarvis.voice.speaker"):
+    with caplog.at_level(logging.INFO, "alfred.voice.speaker"):
         c.record(c.judge(clip(3, 0.7)), "What's on today?")
         c.record(c.judge(clip(3, 0.0)), "tomato")
     lines = [json.loads(l) for l in (tmp_path / "speaker.jsonl").read_text().splitlines()]
@@ -347,9 +347,9 @@ def test_enrolling_by_voice_collects_clips_then_keeps_the_voiceprint(monkeypatch
     told = c.start_enrollment()
     assert c.enrolling and "thirty seconds" in told and "stop" in told
     assert c.collect(clip(5, 0.9), "My day started early.") is None
-    c.jarvis_speaking(True)
-    assert c.collect(clip(5, 0.0), "JARVIS's own voice") is None  # collected nothing while JARVIS speaks
-    c.jarvis_speaking(False)
+    c.alfred_speaking(True)
+    assert c.collect(clip(5, 0.0), "Alfred's own voice") is None  # collected nothing while Alfred speaks
+    c.alfred_speaking(False)
     assert c.collect(clip(4, 0.92), "and then") is None
     said = c.collect(clip(4, 0.88), "that's all.")
     assert said.startswith("Got it") and "ignore other voices" in said and not c.enrolling
@@ -533,7 +533,7 @@ def test_the_check_and_its_threshold_are_preferences():
 def test_the_panel_shows_enrolls_and_forgets_the_voiceprint(monkeypatch):
     forget_all()
     got = asyncio.run(panel.call("voiceprint", {}))
-    assert got["owner"] is None and got["passage"] == speaker.PASSAGE and got["seconds"] == 30
+    assert got["owner"] is None and got["passage"] == speaker.passage() and got["seconds"] == 30
     heard = []
 
     def enroll(audio, via):

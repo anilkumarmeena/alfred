@@ -1,4 +1,4 @@
-"""Tests for jarvis.safety.remembered: once/session/always scopes, rule coverage, voice and panel answers, withdrawing."""
+"""Tests for alfred.safety.remembered: once/session/always scopes, rule coverage, voice and panel answers, withdrawing."""
 
 import asyncio
 import time
@@ -9,18 +9,18 @@ from test_approvals import BREW, asked, events, item, pushes, running_task, thro
 from test_in_place import env  # noqa: F401  (a fixture)
 from test_shell import Clock, ask
 
+from alfred import panel, tools
+from alfred.gates.shell import ShellGate
+from alfred.safety import remembered
+from alfred.safety.approvals import RuleOffer, VoiceApprovals
+from alfred.safety.commands import Own, said_breadth, said_scope, tells_approve, yes_scope
+from alfred.state import conversation
+from alfred.storage import profile
+from alfred.tasks import client, runner
+from alfred.tasks.store import APPROVED, PENDING
+from alfred.tools import tasks as task_tools
+from alfred.voice import session as voice_session
 from conftest import use_profile
-from jarvis import panel, tools
-from jarvis.gates.shell import ShellGate
-from jarvis.safety import remembered
-from jarvis.safety.approvals import RuleOffer, VoiceApprovals
-from jarvis.safety.commands import Own, said_breadth, said_scope, tells_approve, yes_scope
-from jarvis.state import conversation
-from jarvis.storage import profile
-from jarvis.tasks import client, runner
-from jarvis.tasks.store import APPROVED, PENDING
-from jarvis.tools import tasks as task_tools
-from jarvis.voice import session as voice_session
 
 
 @pytest.fixture
@@ -104,7 +104,7 @@ def test_secrets_always_ask():
 def test_a_rule_covers_its_command_however_it_is_wrapped_and_nothing_else(db):
     [kept] = rule("brew install ffmpeg")
     assert kept["covers"] == "“brew install ffmpeg” exactly (installs software)"
-    assert kept["who"] == "for background tasks and JARVIS's own shell, in any folder, until withdrawn"
+    assert kept["who"] == "for background tasks and Alfred's own shell, in any folder, until withdrawn"
     for same in ("brew install ffmpeg", "HOMEBREW_NO_AUTO_UPDATE=1 brew install ffmpeg", "/opt/homebrew/bin/brew install ffmpeg",
                  "cd ios && brew install ffmpeg", "brew install ffmpeg 2>&1 | tail -5"):
         assert covered(same), same
@@ -481,7 +481,7 @@ def test_the_panel_lists_withdraws_and_answers_for_longer(db, monkeypatch):
 
 
 def test_the_prompt_says_how_answers_go_further_and_what_always_asks():
-    from jarvis.brain import persona
+    from alfred.brain import persona
     assert "always ask, every time" in persona.persona() and "Never suggest an \"always\" yourself" in persona.persona()
     assert f"{profile.name()}" in persona.persona()
     assert "so just do it" in tools.get("approval_rule_forget").description

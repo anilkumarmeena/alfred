@@ -1,4 +1,4 @@
-"""Tests for jarvis.auth.credentials: vault storage, .env fallback and migration, panel entry that never echoes keys."""
+"""Tests for alfred.auth.credentials: vault storage, .env fallback and migration, panel entry that never echoes keys."""
 
 import asyncio
 import json
@@ -7,10 +7,10 @@ import stat
 
 import pytest
 
-from jarvis import config, panel, setup_local
-from jarvis.auth import credentials, vault
-from jarvis.notify import apns
-from jarvis.state import settings
+from alfred import config, panel, setup_local
+from alfred.auth import credentials, vault
+from alfred.notify import apns
+from alfred.state import settings
 
 CLIENT = {"installed": {"client_id": "123.apps.googleusercontent.com", "client_secret": "GOCSPX-real-secret",
                         "redirect_uris": ["http://localhost"]}}
@@ -19,7 +19,7 @@ SECRET = "a-secret-long-enough-for-the-jwt-signer-0123456789"
 
 @pytest.fixture
 def key(monkeypatch, tmp_path):
-    """Master key, empty vault, scratch .env and livekit.yaml, no JARVIS keys in the environment."""
+    """Master key, empty vault, scratch .env and livekit.yaml, no Alfred keys in the environment."""
     monkeypatch.setattr(config, "MASTER_KEY", vault.new_key())
     monkeypatch.setattr(vault, "ENV_FILE", tmp_path / "dotenv")
     monkeypatch.setattr(config, "GOOGLE_CLIENT_SECRET", "")
@@ -52,16 +52,16 @@ def test_a_vault_that_wont_open_falls_back_to_env(key, monkeypatch):
 
 
 def test_adopting_moves_what_env_holds_into_the_vault_and_out_of_env(key, monkeypatch):
-    vault.ENV_FILE.write_text(f"JARVIS_USER_NAME=Alex\nLIVEKIT_API_KEY=jarvisab12\nexport LIVEKIT_API_SECRET={SECRET}\n"
+    vault.ENV_FILE.write_text(f"ALFRED_USER_NAME=Alex\nLIVEKIT_API_KEY=alfredab12\nexport LIVEKIT_API_SECRET={SECRET}\n"
                               f"{vault.VAR}={config.MASTER_KEY}\n")
-    monkeypatch.setenv("LIVEKIT_API_KEY", "jarvisab12")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "alfredab12")
     monkeypatch.setenv("LIVEKIT_API_SECRET", SECRET)
     client = key / "client_secret_123.json"
     client.write_text(json.dumps(CLIENT))
     monkeypatch.setattr(config, "GOOGLE_CLIENT_SECRET", str(client))
     assert credentials.adopt() == ["LiveKit API key", "LiveKit API secret", "Google OAuth client"]
     text = vault.ENV_FILE.read_text()
-    assert "LIVEKIT" not in text and "JARVIS_USER_NAME=Alex" in text and config.MASTER_KEY in text
+    assert "LIVEKIT" not in text and "ALFRED_USER_NAME=Alex" in text and config.MASTER_KEY in text
     assert stat.S_IMODE(vault.ENV_FILE.stat().st_mode) == 0o600
     assert "LIVEKIT_API_SECRET" not in os.environ and credentials.get(credentials.LIVEKIT_SECRET) == SECRET
     assert json.loads(credentials.get(credentials.GOOGLE_CLIENT)) == CLIENT and client.exists()  # the user removes it
@@ -70,10 +70,10 @@ def test_adopting_moves_what_env_holds_into_the_vault_and_out_of_env(key, monkey
 
 def test_without_a_vault_key_adopting_leaves_env_alone(key, monkeypatch):
     monkeypatch.setattr(config, "MASTER_KEY", "not-a-key")
-    vault.ENV_FILE.write_text("LIVEKIT_API_KEY=jarvisab12\n")
-    monkeypatch.setenv("LIVEKIT_API_KEY", "jarvisab12")
-    assert credentials.adopt() == [] and "jarvisab12" in vault.ENV_FILE.read_text()
-    assert credentials.get(credentials.LIVEKIT_KEY) == "jarvisab12"
+    vault.ENV_FILE.write_text("LIVEKIT_API_KEY=alfredab12\n")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "alfredab12")
+    assert credentials.adopt() == [] and "alfredab12" in vault.ENV_FILE.read_text()
+    assert credentials.get(credentials.LIVEKIT_KEY) == "alfredab12"
 
 
 @pytest.mark.parametrize("c, value", [(credentials.APNS_KEY_ID, "abc"), (credentials.LIVEKIT_SECRET, "short"),
@@ -114,11 +114,11 @@ def test_the_panel_sets_keys_shows_only_where_they_come_from_and_rewrites_liveki
 
 
 def test_the_old_variables_are_kept_out_of_sessions_and_commands(monkeypatch):
-    from jarvis.integrations import mcp_servers
-    from jarvis.safety import host
+    from alfred.integrations import mcp_servers
+    from alfred.safety import host
 
     monkeypatch.setattr(host, "dotenv_values", lambda path: {})  # moved out of .env
     monkeypatch.setenv("LIVEKIT_API_SECRET", SECRET)  # as LiveKit's worker puts it back
     assert "LIVEKIT_API_SECRET" not in host.scrubbed_env()
     blanked = mcp_servers.session_env()
-    assert all(blanked[var] == "" for var in [*credentials.VARS, "JARVIS_PASSCODE"])
+    assert all(blanked[var] == "" for var in [*credentials.VARS, "ALFRED_PASSCODE"])

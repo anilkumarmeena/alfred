@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from jarvis.llm import claude
+from alfred.llm import claude
 
 SCHEMA = {"type": "object", "properties": {"met": {"type": "boolean"}, "said": {"type": "string"}},
           "required": ["met"]}
@@ -64,7 +64,7 @@ def test_ask_json_puts_the_schema_to_the_model_and_returns_what_it_says(replies)
 
 def test_a_malformed_reply_is_none_and_logged_without_its_words(replies, caplog):
     replies.queue.append("Yes, the secret project shipped.")
-    with caplog.at_level(logging.WARNING, logger="jarvis.llm.claude"):
+    with caplog.at_level(logging.WARNING, logger="alfred.llm.claude"):
         found, cost = asyncio.run(claude.ask_json("Did it ship?", SCHEMA, "s", "claude-x"))
     assert (found, cost) == (None, 0.01)
     assert "wasn't JSON matching its schema" in caplog.text and "secret project" not in caplog.text

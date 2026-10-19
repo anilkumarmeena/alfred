@@ -1,4 +1,4 @@
-"""Tests for the Linux desktop (jarvis.core.desktop, jarvis.tools.desktop): user folders, notifications, opening,
+"""Tests for the Linux desktop (alfred.core.desktop, alfred.tools.desktop): user folders, notifications, opening,
 the clipboard and the volume. Run anywhere: the OS, the programs and the session are faked."""
 
 import asyncio
@@ -6,10 +6,10 @@ import time
 
 import pytest
 
-from jarvis import tools
-from jarvis.core import desktop, platform
-from jarvis.tasks import events
-from jarvis.tools import desktop as desktop_tools
+from alfred import tools
+from alfred.core import desktop, platform
+from alfred.tasks import events
+from alfred.tools import desktop as desktop_tools
 
 NAMES = {"desktop_notify", "desktop_open", "desktop_set_volume", "desktop_copy", "desktop_read_clipboard"}
 
@@ -57,11 +57,11 @@ def test_on_the_mac_user_folders_are_the_usual_ones(monkeypatch):
 
 @pytest.mark.skipif(not platform.MAC, reason="the Mac's folders")
 def test_on_the_mac_files_and_audio_go_where_they_always_did(monkeypatch):
-    from jarvis import config
-    from jarvis.tools import files
+    from alfred import config
+    from alfred.tools import files
 
     assert files.LOOK_IN == ["~/Downloads", "~/Desktop", "~/Documents"]
-    if not desktop.os.environ.get("JARVIS_AUDIO_DIR"):
+    if not desktop.os.environ.get("ALFRED_AUDIO_DIR"):
         assert config.AUDIO_DIR == desktop.Path("~/Downloads").expanduser()
 
 
@@ -105,9 +105,9 @@ def test_a_tool_is_offered_only_while_its_program_and_a_desktop_are_there(regist
 
 def test_a_notification_goes_through_notify_send(registered, session):
     session["installed"].add("notify-send")
-    said = asyncio.run(tools.run("desktop_notify", {"title": "JARVIS", "message": "-Done"}))
+    said = asyncio.run(tools.run("desktop_notify", {"title": "Alfred", "message": "-Done"}))
     assert said == ("Notification shown.", False)
-    assert session["ran"] == [(("notify-send", "--app-name=JARVIS", "--", "JARVIS", "-Done"), None, True)]
+    assert session["ran"] == [(("notify-send", "--app-name=Alfred", "--", "Alfred", "-Done"), None, True)]
 
 
 @pytest.mark.parametrize("env, installed, copy_argv, paste_argv", [
@@ -220,8 +220,8 @@ def test_on_linux_task_notifications_use_notify_send_and_failures_are_swallowed(
 
     monkeypatch.setattr(events, "mac_notify", mac)
     monkeypatch.setattr(desktop, "notify", notify)
-    asyncio.run(Runner()._notify("JARVIS · task 1", "Done."))
+    asyncio.run(Runner()._notify("Alfred · task 1", "Done."))
     assert shown == []  # no notify-send: skipped quietly
     session["installed"].add("notify-send")
-    asyncio.run(Runner()._notify("JARVIS · task 1", "Done."))
-    assert shown == [("JARVIS · task 1", "Done.")]
+    asyncio.run(Runner()._notify("Alfred · task 1", "Done."))
+    assert shown == [("Alfred · task 1", "Done.")]

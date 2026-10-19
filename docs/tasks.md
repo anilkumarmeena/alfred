@@ -4,7 +4,7 @@
 
 # 🛠️ Tasks and proactive work
 
-**Everything JARVIS does in the background: tasks you start by voice, shell jobs, approvals, the scheduler, monitoring, notices and the learning review.**
+**Everything Alfred does in the background: tasks you start by voice, shell jobs, approvals, the scheduler, monitoring, notices and the learning review.**
 
 [🏠 Home](../README.md) · [🚀 Setup](setup.md) · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · **🛠️ Tasks** · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md) · [🧭 Features](features.md)
 
@@ -12,7 +12,7 @@
 
 ---
 
-All of it runs in the **task runner** (`jarvis/tasks/`), apart from any voice session, so it **carries on after you hang up**.
+All of it runs in the **task runner** (`alfred/tasks/`), apart from any voice session, so it **carries on after you hang up**.
 
 ```mermaid
 flowchart TB
@@ -32,7 +32,7 @@ flowchart TB
 ```
 
 > [!TIP]
-> You never have to wait: start a task, **keep talking**, start another. JARVIS speaks up when each one is done or has a question.
+> You never have to wait: start a task, **keep talking**, start another. Alfred speaks up when each one is done or has a question.
 
 <details>
 <summary><b>📑 On this page</b></summary>
@@ -50,7 +50,7 @@ flowchart TB
 
 ## 🧵 Background tasks
 
-Ask for anything that takes a while and JARVIS starts a task. Keep talking, start more; JARVIS says when each is done or has a question, and you **answer out loud**.
+Ask for anything that takes a while and Alfred starts a task. Keep talking, start more; Alfred says when each is done or has a question, and you **answer out loud**.
 
 | Say | What happens |
 |---|---|
@@ -61,7 +61,7 @@ Ask for anything that takes a while and JARVIS starts a task. Keep talking, star
 | "merge task 12" | After your yes: merges its branch, deletes the branch and worktree |
 | "stop the merge" | Stops a merge under way: its tests stop and nothing is merged, the folder left as it was and the branch kept |
 | "throw away task 12" | After your plain yes (checked in code, like a command's): discards it |
-| "start a new project called weather app" | A folder in `JARVIS_NEW_PROJECTS_DIR`, added as an in-place project, no git |
+| "start a new project called weather app" | A folder in `ALFRED_NEW_PROJECTS_DIR`, added as an in-place project, no git |
 | "set up git for weather app" | Puts it under git once the first version has settled |
 
 - **Merge** goes into the project's own checkout, as one commit: the task's title and the start of its summary. Its in-between commits ("… (unfinished)", catch-up merges) stay off your branch.
@@ -70,7 +70,7 @@ Ask for anything that takes a while and JARVIS starts a task. Keep talking, star
 
 ### One after another
 
-Work can wait for other work: say "once that's merged, start the rebuild" or "when the fix is done, merge it" and JARVIS sets it up there and then, rather than trying to remember it.
+Work can wait for other work: say "once that's merged, start the rebuild" or "when the fix is done, merge it" and Alfred sets it up there and then, rather than trying to remember it.
 
 | Say | What happens |
 |---|---|
@@ -81,7 +81,7 @@ Work can wait for other work: say "once that's merged, start the rebuild" or "wh
 
 - **Nothing runs while it waits.** No model, no slot, no checking in: the runner settles waiting work at the moment it already announces a task ending or a merge, and once at start for anything that ended while it was down. Waits survive restarts.
 - **Chains of any length**, several tasks waiting for one, and one waiting for several all work. A wait that would make a loop (a merge waiting for a task that waits for that merge) is refused.
-- **When it starts by itself**, JARVIS says so in a sentence.
+- **When it starts by itself**, Alfred says so in a sentence.
 - **When what it waited for goes wrong** (a task fails, is stopped or thrown away, or a merge fails), the waiting task **doesn't start**: it's held and you're asked whether to start it anyway ("go ahead" starts it, "stop it" drops it). A merge waiting on it is called off, and you're told. If the work it waited for comes right after all (you carry the failed task on and it finishes), a held task still starts by itself.
 - **Waiting tasks show** in the task list with what they still wait for, and stop like queued ones; stopping one holds whatever waited for it in turn. "Stop" on a finished task whose merge is waiting calls that merge off.
 
@@ -90,28 +90,28 @@ Work can wait for other work: say "once that's merged, start the rebuild" or "wh
 | Mode | Behaviour |
 |---|---|
 | **In place** (default) | Straight into the project's folder, **uncommitted** for you to review, unless you ask it to commit ("fix it and commit"); one task at a time per project |
-| **Worktree** (`projects set NAME --worktrees`) | Own worktree and `jarvis/<id>-...` branch per task, **committed but never pushed** |
-| **JARVIS's own repo** | Always uses worktrees |
+| **Worktree** (`projects set NAME --worktrees`) | Own worktree and `alfred/<id>-...` branch per task, **committed but never pushed** |
+| **Alfred's own repo** | Always uses worktrees |
 | **A folder of several repos** (say a `frontend` and a `backend` repo side by side) | Always in place: the task is told its repos and uses git in each; worktrees and setting up git over them are refused |
 
 ### What tasks can and can't see
 
 | | Area | Access |
 |:-:|---|---|
-| 👀 | **Your other projects** (`JARVIS_TASK_READ_DIRS`), JARVIS's voice session logs | Read, not change. **Secrets stay hidden** |
+| 👀 | **Your other projects** (`ALFRED_TASK_READ_DIRS`), Alfred's voice session logs | Read, not change. **Secrets stay hidden** |
 | 🧩 | **The project's Claude Code setup** | Its CLAUDE.md, subagents, skills, slash commands; **not** its settings or hooks |
-| 🔒 | **JARVIS's own data** (projects, to-dos, memory) | Off limits: tasks **suggest edits** instead |
+| 🔒 | **Alfred's own data** (projects, to-dos, memory) | Off limits: tasks **suggest edits** instead |
 
-- The project's setup is **scanned for hidden instructions** first; skipping its settings and hooks keeps JARVIS's permissions and sandbox in force.
+- The project's setup is **scanned for hidden instructions** first; skipping its settings and hooks keeps Alfred's permissions and sandbox in force.
 - **Suggested edits:** small ones are applied when the task finishes and you're told; bigger ones (deleting memory, changing a project's settings) wait for your yes.
-- **Goal loop:** when a task says it's finished, a short model call checks the result against what was asked and sends it back to finish what it can (`JARVIS_GOAL_LOOP`, up to 2 rounds) before you hear about it.
+- **Goal loop:** when a task says it's finished, a short model call checks the result against what was asked and sends it back to finish what it can (`ALFRED_GOAL_LOOP`, up to 2 rounds) before you hear about it.
 - **Stalled tasks:** a running task with no sign of progress for **15 minutes** is flagged and offered a nudge or a stop.
-- **Out of steps:** a task that uses up its turns before finishing carries on by itself in the same session, keeping what it did, up to **3 times** per request (`JARVIS_TASK_CONTINUES`). Past that it stops and says so; a reply or message carries it on with a fresh three. A watch's check isn't carried on: it's checked again when next due.
-- **Kept light:** a task's account, connection and GitLab download tools are listed by name and load through tool search when first used (`JARVIS_TOOL_SEARCH`); only its few others load up front. Its prompt is cached for five minutes, not an hour, since an hour's cache costs twice as much to write.
+- **Out of steps:** a task that uses up its turns before finishing carries on by itself in the same session, keeping what it did, up to **3 times** per request (`ALFRED_TASK_CONTINUES`). Past that it stops and says so; a reply or message carries it on with a fresh three. A watch's check isn't carried on: it's checked again when next due.
+- **Kept light:** a task's account, connection and GitLab download tools are listed by name and load through tool search when first used (`ALFRED_TOOL_SEARCH`); only its few others load up front. Its prompt is cached for five minutes, not an hour, since an hour's cache costs twice as much to write.
 - **Usage limit:** a task cut short by Claude's usage limit says so once (with a notification and push), waits queued (holding no slot or project folder) and carries on by itself when the limit resets, once per reset. With another Claude login set up (Settings › Claude logins) whose limit isn't used up, it doesn't wait: it carries on at once on that login, in the same session, and a task already waiting moves over within five minutes of one becoming usable. A limit on its model alone doesn't wait: it carries on with a lighter model. A message to it, sent before or during the wait, sends it on at once. Scheduled runs leave this to the scheduler, which runs them again after the reset.
 
 > [!NOTE]
-> **JARVIS never stops a task on its own.** A stalled task is only flagged; you decide.
+> **Alfred never stops a task on its own.** A stalled task is only flagged; you decide.
 
 <details>
 <summary><b>💻 From a terminal: the runner CLI</b></summary>
@@ -120,10 +120,10 @@ Work can wait for other work: say "once that's merged, start the rebuild" or "wh
 
 ```sh
 make tasks                                                         # list them
-uv run python -m jarvis.tasks.runner show|log|reply|stop|merge|discard|rerun ID
-uv run python -m jarvis.tasks.runner edits ID apply|dismiss N...   # a task's suggested edits
-uv run python -m jarvis.tasks.runner approvals                     # requests waiting for a yes
-uv run python -m jarvis.tasks.runner approve ID [session|always]   # or: deny ID
+uv run python -m alfred.tasks.runner show|log|reply|stop|merge|discard|rerun ID
+uv run python -m alfred.tasks.runner edits ID apply|dismiss N...   # a task's suggested edits
+uv run python -m alfred.tasks.runner approvals                     # requests waiting for a yes
+uv run python -m alfred.tasks.runner approve ID [session|always]   # or: deny ID
 ```
 
 </details>
@@ -140,13 +140,13 @@ To-dos live in the `todos` table of `data/tasks.db`, not in memory.
 | "Start a task on the phone app from my list" | A task linked to the item |
 | "At 3 a.m. start tasks for the next two to-dos" | [Scheduled](#-scheduler): linked tasks start then, on their own |
 
-- A **linked task**, once checked finished, ticks its item off, or JARVIS offers to reword the item to what's left.
+- A **linked task**, once checked finished, ticks its item off, or Alfred offers to reword the item to what's left.
 - A task started **without naming an item** is matched against your open items as it finishes; a clear match is **offered** for ticking off, never ticked unasked.
-- **No repeats.** An item already on the list, open or done, isn't added twice, whether you ask for it or a task or the [learning review](#-learning-review) suggests it. Same wording (ignoring case and punctuation) is a repeat; an item sharing most of its words with others goes to a quick model check (`JARVIS_TODO_MATCH`). An open repeat stays, taking in any new detail; a done one comes back on the list when you ask for it, and is refused when a task suggests it. JARVIS says which item it matched. What you type in the panel goes in as it is.
+- **No repeats.** An item already on the list, open or done, isn't added twice, whether you ask for it or a task or the [learning review](#-learning-review) suggests it. Same wording (ignoring case and punctuation) is a repeat; an item sharing most of its words with others goes to a quick model check (`ALFRED_TODO_MATCH`). An open repeat stays, taking in any new detail; a done one comes back on the list when you ask for it, and is refused when a task suggests it. Alfred says which item it matched. What you type in the panel goes in as it is.
 
 ## 💻 Shell commands and long jobs
 
-JARVIS runs everyday commands itself: checks, builds, tests, renders, git commits. **Only risky ones wait for your yes**: deleting files, pushing, installing or removing software, stopping processes, changing system settings, sending data off the computer.
+Alfred runs everyday commands itself: checks, builds, tests, renders, git commits. **Only risky ones wait for your yes**: deleting files, pushing, installing or removing software, stopping processes, changing system settings, sending data off the computer.
 
 It asks **"Okay to go ahead?"**; answer within **five minutes**, even after talking about something else.
 
@@ -156,7 +156,7 @@ It asks **"Okay to go ahead?"**; answer within **five minutes**, even after talk
 | ❌ | "no", "don't", "cancel", "never mind", "I'd rather not"... | **No**: dropped |
 | ➖ | A lone "thank you" or "bye" | **Neither** |
 
-A reply the word lists can't read goes to a short model call that sees only your words and what's waiting (`JARVIS_CONSENT`). A remark or apology alone ("JARVIS, good", "sorry") isn't a yes: JARVIS checks back instead of acting.
+A reply the word lists can't read goes to a short model call that sees only your words and what's waiting (`ALFRED_CONSENT`). A remark or apology alone ("Alfred, good", "sorry") isn't a yes: Alfred checks back instead of acting.
 
 These voice commands run in Claude Code's own sandbox, which on Linux needs **bubblewrap** and **socat** installed.
 
@@ -199,14 +199,14 @@ flowchart LR
     linkStyle default stroke:#64748b
 ```
 
-- The fix task **only fixes the code**: its walls hide the keys the command needs, so it never runs the command itself. When it finishes, **JARVIS reruns the command once**, as it always runs it (same folder, outside the walls, with its keys), and says how that went, unless the fix says the cause remains (an expired login, say).
+- The fix task **only fixes the code**: its walls hide the keys the command needs, so it never runs the command itself. When it finishes, **Alfred reruns the command once**, as it always runs it (same folder, outside the walls, with its keys), and says how that went, unless the fix says the cause remains (an expired login, say).
 - A rerun that fails again is **only reported**, so it can't loop.
 - Jobs outside a project, or started with "don't fix it if it fails", are only explained.
-- A `claude` the command calls runs on **the Claude login JARVIS runs on** (Settings › Claude logins, in priority order). If the run fails because Claude says that login is signed out or its limit is used up, JARVIS passes the login over and **reruns the command on the next one**; with none left, it just says so.
+- A `claude` the command calls runs on **the Claude login Alfred runs on** (Settings › Claude logins, in priority order). If the run fails because Claude says that login is signed out or its limit is used up, Alfred passes the login over and **reruns the command on the next one**; with none left, it just says so.
 
 ## ✋ Approvals
 
-Background tasks run their commands on JARVIS's computer **inside walls** that hide secrets and JARVIS's own files. A **risky** command becomes a request that waits for your answer, up to `JARVIS_TASK_APPROVAL_HOURS` (**12 h**).
+Background tasks run their commands on Alfred's computer **inside walls** that hide secrets and Alfred's own files. A **risky** command becomes a request that waits for your answer, up to `ALFRED_TASK_APPROVAL_HOURS` (**12 h**).
 
 ```mermaid
 flowchart LR
@@ -229,7 +229,7 @@ flowchart LR
 
 | | Ways to answer |
 |:-:|---|
-| 🗣️ | **By voice**, right after JARVIS asks, or later ("approve it") |
+| 🗣️ | **By voice**, right after Alfred asks, or later ("approve it") |
 | 📱 | The **app's buttons** |
 | 💻 | `runner approve N` in a terminal |
 
@@ -238,7 +238,7 @@ flowchart LR
 
 ### Changes through a connection
 
-A task with the **accounts** access uses your [connections](integrations.md#-connections) (those marked for research) the way the conversation does: **reading is free**, and each call to a **changing** tool (a merge request comment, an inline review note on a diff line, an issue, a merge) becomes a request like a risky command's. JARVIS reads out what it would do, from the tool's own phrase and the call's arguments ("Your task, the MR review, wants to run a GitLab call to comment on web/player merge request 280 at src/ads.ts line 42, saying '…'. Okay to go ahead?"), and the app's **Approve** and **Deny** buttons answer it too.
+A task with the **accounts** access uses your [connections](integrations.md#-connections) (those marked for research) the way the conversation does: **reading is free**, and each call to a **changing** tool (a merge request comment, an inline review note on a diff line, an issue, a merge) becomes a request like a risky command's. Alfred reads out what it would do, from the tool's own phrase and the call's arguments ("Your task, the MR review, wants to run a GitLab call to comment on web/player merge request 280 at src/ads.ts line 42, saying '…'. Okay to go ahead?"), and the app's **Approve** and **Deny** buttons answer it too.
 
 - **A yes covers that exact call once**, with exactly the same arguments: posting the same comment again asks again.
 - **Never remembered**, and never covered by your words ordering something ("push it"): each call needs its own yes.
@@ -253,13 +253,13 @@ A task with a **GitLab** connection also gets two reading tools that use the con
 |---|---|---|
 | **Walls** | Seatbelt (`sandbox-exec`) | **bubblewrap** (`bwrap`), required |
 | **Without them** | Always there | Commands **refuse to run**, saying how to fix it |
-| **Restarting JARVIS** | A task runs `make services-restart` itself | A task can't reach systemd, so it **asks you** to run it |
+| **Restarting Alfred** | A task runs `make services-restart` itself | A task can't reach systemd, so it **asks you** to run it |
 | **Other processes** | Visible, their environments not | **Invisible**: a PID namespace of its own |
 | **Keyrings** | Keychain reads refused | Keyring files and the Secret Service hidden |
 | **Secret-named files** | Hidden anywhere, by a pattern rule | Found by a walk at launch (100k entries, 8 levels deep) |
 
 - **Overall** the Linux walls match macOS's on most rules: **stricter** on processes and keyrings, **weaker** on secret-named files deep in your home.
-- **Linux only:** your home and `~/.config` take **no new top-level entries**, so a tool that makes its own folder on first use (`~/.cargo`, say) must be **run once yourself**, outside JARVIS. **`sudo`**, setuid programs and **snap-packaged tools** don't work inside.
+- **Linux only:** your home and `~/.config` take **no new top-level entries**, so a tool that makes its own folder on first use (`~/.cargo`, say) must be **run once yourself**, outside Alfred. **`sudo`**, setuid programs and **snap-packaged tools** don't work inside.
 - **The GPU on macOS:** sandboxed commands, in tasks and the voice shell, can use Metal, so MLX Whisper and its tests run there. Only the GPU device and Metal's shader compiler are let in. Metal's shader caches stay closed, so code that compiles Metal source at run time (`mx.compile`, say) still needs a host command.
 - **What host commands are for:** what the inner sandbox blocks: signed Xcode builds, `devicectl` and Homebrew on macOS; Docker, `adb` and emulators on Linux.
 - **`make host-check`** tests the walls on either system.
@@ -326,7 +326,7 @@ The runner runs what you schedule by voice, once or on a repeat. Jobs live in `d
 
 | | Rule | Detail |
 |:-:|---|---|
-| 📥 | **Missed runs don't pile up** | A missed reminder or one-off runs once when JARVIS is back, saying how late |
+| 📥 | **Missed runs don't pile up** | A missed reminder or one-off runs once when Alfred is back, saying how late |
 | ⏭️ | **No overlaps** | A run whose previous one is still going is skipped |
 | 🔁 | **Retries** | A scheduled task failing on a passing error retries after 5, 15 and 30 minutes |
 | 🌙 | **Quiet hours** | Watches pause; reminders keep their times |
@@ -346,7 +346,7 @@ A missed **daily** job runs once if missed by under 2 hours, else waits.
 <td width="50%" valign="top">
 
 **📊 Claude usage**<br>
-"How much usage do I have left?" Scheduled work **waits for the reset** once a limit is used up, or once the five-hour window is 90% used (`JARVIS_USAGE_HOLD`).
+"How much usage do I have left?" Scheduled work **waits for the reset** once a limit is used up, or once the five-hour window is 90% used (`ALFRED_USAGE_HOLD`).
 
 </td>
 </tr>
@@ -354,7 +354,7 @@ A missed **daily** job runs once if missed by under 2 hours, else waits.
 
 ## 👀 Monitoring
 
-JARVIS watches **nothing on its own**: no mail, calendar, Chat or other service polling is built in (only each connection's [sign-in check](integrations.md#-sign-in-checks)). Ask for what you want kept an eye on ("let me know about new issues on my repo", "keep an eye on that price") and JARVIS offers the ways that fit, then sets up the one you pick:
+Alfred watches **nothing on its own**: no mail, calendar, Chat or other service polling is built in (only each connection's [sign-in check](integrations.md#-sign-in-checks)). Ask for what you want kept an eye on ("let me know about new issues on my repo", "keep an eye on that price") and Alfred offers the ways that fit, then sets up the one you pick:
 
 | | Way | Costs | Good for |
 |:-:|---|---|---|
@@ -366,7 +366,7 @@ The script prints only what's new, keeping its own note of what it has seen; a r
 
 ## 🔔 Notices
 
-Every 15 minutes the runner checks on **JARVIS itself** and speaks up unasked:
+Every 15 minutes the runner checks on **Alfred itself** and speaks up unasked:
 
 | | Notice | When |
 |:-:|---|---|
@@ -402,10 +402,10 @@ Trivia, one-off requests, anything memory already says, and **anything read from
 |:-:|---|---|
 | 💡 | **New facts** | Saved at once and listed in the bell |
 | ✋ | **Rewriting or deleting memory**, adding to-dos | Wait for your yes |
-| 👂 | **Misheard words** ("Yavis" for JARVIS) | Go into the speech vocabulary so Whisper expects them (**Settings → Vocabulary**) |
+| 👂 | **Misheard words** ("Yavis" for Alfred) | Go into the speech vocabulary so Whisper expects them (**Settings → Vocabulary**) |
 | 🧩 | **A repeated multi-step workflow** | May be suggested as a [skill](integrations.md#-skills), always after your yes |
 
-`JARVIS_LEARNING=off` turns it off.
+`ALFRED_LEARNING=off` turns it off.
 
 ---
 

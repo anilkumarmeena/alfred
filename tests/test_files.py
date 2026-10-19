@@ -12,12 +12,12 @@ from datetime import datetime
 
 import pytest
 
-from jarvis import tools
-from jarvis.brain import sdk
-from jarvis.core import platform
-from jarvis.media import documents
-from jarvis.tasks import worker
-from jarvis.tools import files
+from alfred import tools
+from alfred.brain import sdk
+from alfred.core import platform
+from alfred.media import documents
+from alfred.tasks import worker
+from alfred.tools import files
 
 pytest.importorskip("pypdfium2")
 openpyxl = pytest.importorskip("openpyxl")
@@ -293,7 +293,7 @@ def test_file_read_never_reads_a_secret(tmp_path):
     (tmp_path / "link.txt").symlink_to(tmp_path / ".env")
     for path in (tmp_path / ".env", tmp_path / "secrets" / "notes.txt", tmp_path / "link.txt", "~/.ssh/id_rsa"):
         content, is_error = asyncio.run(tools.run("file_read", {"path": str(path)}))
-        assert is_error and "JARVIS never reads those" in content, path
+        assert is_error and "Alfred never reads those" in content, path
 
 
 def test_file_read_says_what_is_wrong(tmp_path):

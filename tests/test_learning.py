@@ -1,4 +1,4 @@
-"""Tests for jarvis.tasks.learning: when the review runs, reading its suggestions, and how the runner keeps them."""
+"""Tests for alfred.tasks.learning: when the review runs, reading its suggestions, and how the runner keeps them."""
 
 import asyncio
 import json
@@ -9,15 +9,15 @@ from datetime import date
 import pytest
 from test_in_place import env  # noqa: F401  (a fixture)
 
+from alfred import tools
+from alfred.llm import retry, roles
+from alfred.llm.roles import Role
+from alfred.skills import home
+from alfred.state import activity, memory, todo
+from alfred.storage import profile
+from alfred.tasks import announce, api, data_edits, learning, runner
+from alfred.tasks.store import edits
 from conftest import use_profile
-from jarvis import tools
-from jarvis.llm import retry, roles
-from jarvis.llm.roles import Role
-from jarvis.skills import home
-from jarvis.state import activity, memory, todo
-from jarvis.storage import profile
-from jarvis.tasks import announce, api, data_edits, learning, runner
-from jarvis.tasks.store import edits
 
 TODAY = f"{date.today():%Y-%m-%d}"
 MEMORY = "## User\n- Alex prefers short answers (2026-09-01)\n\n## Environment\n- Alex's laptop is a MacBook Air (2026-09-02)\n"
@@ -220,14 +220,14 @@ def test_the_review_call_has_no_tools_and_untrusted_content_is_named_as_such(dat
 def test_the_review_saves_plans_as_plans_until_they_are_confirmed_done():
     text = learning.system()
     assert f'"{profile.name()} plans to' in text and "never as if it's already done" in text
-    assert f"only when {profile.name()} confirms it's done: JARVIS saying it did it" in text
+    assert f"only when {profile.name()} confirms it's done: Alfred saying it did it" in text
     assert "concrete job for later belongs on the to-do list" in text
     assert "only asked for, discussed, scheduled or started is a plan" in text
     assert "Leave out what's in progress, running, scheduled or watched right now" in text
 
 
 @pytest.mark.parametrize("fact, done", [
-    ("JARVIS's iPhone app is built", True),
+    ("Alfred's iPhone app is built", True),
     ("The offline mode for Atlas was merged last week", True),
     ("Atlas now has an offline mode", True),
     ("Alex's home server was set up with Docker", True),
@@ -254,11 +254,11 @@ def test_a_review_rewriting_a_plan_as_done_says_why_it_asks(data):
 
 
 def test_a_finished_work_fact_from_a_review_is_held_not_saved(data):
-    built = REMEMBER | {"section": "environment", "fact": "JARVIS now supports Telegram"}
+    built = REMEMBER | {"section": "environment", "fact": "Alfred now supports Telegram"}
     _, task, events, _ = run_learned([REMEMBER, built])
     assert [(e["status"], bool(e.get("needs_yes"))) for e in edits(task)] == [("applied", False), ("pending", True)]
     assert "Telegram" not in profile.current().memory_file.read_text()
-    assert events[0]["text"].endswith("save to memory, under Alex's environment: JARVIS now supports Telegram.")
+    assert events[0]["text"].endswith("save to memory, under Alex's environment: Alfred now supports Telegram.")
 
 
 # ── What it makes of the reply ──────────────────────────────────
@@ -295,7 +295,7 @@ def test_suggestions_become_data_edits_with_memory_lines_by_their_exact_text(dat
         {"action": "forget", "line": 9, "reason": "No such line."},
         {"action": "update", "line": 0, "fact": "x", "reason": "No such line."},
         {"action": "todo_add", "item": "Try Zed's vim mode"},
-        {"action": "project_update", "name": "jarvis", "about": "x", "reason": "Not the review's to suggest."},
+        {"action": "project_update", "name": "alfred", "about": "x", "reason": "Not the review's to suggest."},
     ], lines, TODAY)
     assert found == [
         {"action": "remember", "section": "user", "fact": "Alex uses Zed for editing", "reason": "Said so."},
@@ -317,11 +317,11 @@ def test_an_update_to_a_future_date_in_a_fact_is_kept(data):
 
 
 def test_helpers_count_the_user_s_words_and_cut_a_long_conversation_at_an_entry(data):
-    text = "[09:00] Alex: one two three\nJARVIS: four five\n\n[09:05] JARVIS (announced): six seven\n\n[09:06] Alex: eight\n"
+    text = "[09:00] Alex: one two three\nAlfred: four five\n\n[09:05] Alfred (announced): six seven\n\n[09:06] Alex: eight\n"
     assert learning.user_words(text) == 4
     assert learning.span([("2026-10-06", "[23:50] Alex: hi\n"), ("2026-10-07", text)]) == "2026-10-06 23:50 to 2026-10-07 09:06"
     assert learning.span([("2026-10-07", text)]) == "2026-10-07 09:00 to 09:06"
-    long = learning.transcript([("2026-10-07", "".join(f"[09:{i:02}] Alex: line {i}\nJARVIS: ok\n\n" for i in range(60)))], 300)
+    long = learning.transcript([("2026-10-07", "".join(f"[09:{i:02}] Alex: line {i}\nAlfred: ok\n\n" for i in range(60)))], 300)
     assert long.startswith("(earlier exchanges left out)\n[09:") and "line 59" in long and "line 1\n" not in long
 
 

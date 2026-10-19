@@ -10,11 +10,11 @@ import pytest
 from test_in_place import env  # noqa: F401  (fixture)
 from test_nudges import fake_run, finishes, settle, until
 
-from jarvis import config
-from jarvis.llm import claude_logins, retry, usage
-from jarvis.tasks import runner
-from jarvis.tasks.store import Store
-from jarvis.tasks.worker import STEPS_OUT, Outcome
+from alfred import config
+from alfred.llm import claude_logins, retry, usage
+from alfred.tasks import runner
+from alfred.tasks.store import Store
+from alfred.tasks.worker import STEPS_OUT, Outcome
 
 
 @pytest.fixture(autouse=True)
@@ -64,8 +64,8 @@ def test_a_task_out_of_steps_carries_on_in_its_session_and_finishes(env, monkeyp
     assert prompts[1:] == [runner.CONTINUED, runner.CONTINUED]  # same session, everything it did kept
     assert task["status"] == "done" and task["error"] is None and task["summary"] == "Watched it to the end."
     assert logged(r, task["id"], runner.CONTINUED_LOG) == [
-        "ran out of steps, so JARVIS carried it on by itself (1 of 3)",
-        "ran out of steps, so JARVIS carried it on by itself (2 of 3)"]
+        "ran out of steps, so Alfred carried it on by itself (1 of 3)",
+        "ran out of steps, so Alfred carried it on by itself (2 of 3)"]
     assert len(said) == 1  # carrying on isn't announced, only the ending
 
 
@@ -74,7 +74,7 @@ def test_carrying_on_stops_at_the_cap_and_says_so(env, monkeypatch):
     prompts = fake_run(monkeypatch, steps_out(), steps_out(), steps_out())
     _, task, said = asyncio.run(run_one())
     assert len(prompts) == 3 and task["status"] == "failed"
-    assert task["error"] == (f"{STEPS_OUT} again after JARVIS carried it on by itself 2 times, the most it does, so it "
+    assert task["error"] == (f"{STEPS_OUT} again after Alfred carried it on by itself 2 times, the most it does, so it "
                              "needs a reply to carry on")
     assert len(said) == 1 and "2 times" in said[0]
 
@@ -192,7 +192,7 @@ def test_a_wait_for_the_reset_survives_a_restart(env, monkeypatch):
     assert runner.RESUMED_LOG not in interrupted  # nothing was cut off
 
 
-@pytest.mark.parametrize("after", [3600, -60])  # still to come, or passed while JARVIS was down
+@pytest.mark.parametrize("after", [3600, -60])  # still to come, or passed while Alfred was down
 def test_a_crash_while_waiting_doesnt_lose_the_wait(env, monkeypatch, after):
     store = Store()
     waiting = store.create("research", "Flights", "Find flights to Goa.", None)

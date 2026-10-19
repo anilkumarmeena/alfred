@@ -1,5 +1,5 @@
-"""Tests for stopping the voice brain's background steps when the user asks: kept tool calls (jarvis.brain.kept),
-background lookups (jarvis.brain.side), background_stop, and task_stop on a merge carrying on in the background."""
+"""Tests for stopping the voice brain's background steps when the user asks: kept tool calls (alfred.brain.kept),
+background lookups (alfred.brain.side), background_stop, and task_stop on a merge carrying on in the background."""
 
 import asyncio
 import time
@@ -7,11 +7,11 @@ import time
 import pytest
 from test_kept import MERGE, run, settle, taking, unscreened  # noqa: F401  (run and unscreened are fixtures)
 
-from jarvis.brain.kept import Kept
-from jarvis.brain.side import Jobs
-from jarvis.state import conversation
-from jarvis.tasks import client
-from jarvis.tools import side as side_tools, tasks as task_tools
+from alfred.brain.kept import Kept
+from alfred.brain.side import Jobs
+from alfred.state import conversation
+from alfred.tasks import client
+from alfred.tools import side as side_tools, tasks as task_tools
 
 STOPPED = {"id": 5, "title": "the Chat fix", "kind": "code_change", "status": "done", "seen": 1,
            "updated": time.time(), "spoken": "Task 5, the Chat fix, wasn't merged: its merge was stopped, so nothing "

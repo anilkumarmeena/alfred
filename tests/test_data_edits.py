@@ -1,4 +1,4 @@
-"""Tests for tasks.data_edits: suggested edits to JARVIS's data files, checks, applying, dismissing, voice side."""
+"""Tests for tasks.data_edits: suggested edits to Alfred's data files, checks, applying, dismissing, voice side."""
 
 import asyncio
 from datetime import date
@@ -7,15 +7,15 @@ import pytest
 from test_in_place import NullReporter, env, worker_task  # noqa: F401  (env is a fixture)
 from test_nudges import fake_run, settle
 
+from alfred import projects, tools
+from alfred.brain import persona
+from alfred.state import memory, todo
+from alfred.storage import profile
+from alfred.tasks import announce, client, data_edits, reporting, runner, worker
+from alfred.tasks.store import edits
+from alfred.tasks.worker import Outcome
+from alfred.tools import tasks as task_tools
 from conftest import use_task_cache
-from jarvis import projects, tools
-from jarvis.brain import persona
-from jarvis.state import memory, todo
-from jarvis.storage import profile
-from jarvis.tasks import announce, client, data_edits, reporting, runner, worker
-from jarvis.tasks.store import edits
-from jarvis.tasks.worker import Outcome
-from jarvis.tools import tasks as task_tools
 
 TODAY = f"{date.today():%Y-%m-%d}"
 
@@ -45,7 +45,7 @@ def suggests(*proposals: dict):
 
 
 TODO = {"action": "todo_add", "item": "Try the new push self-test", "reason": "It needs a real phone."}
-FACT = {"action": "remember", "fact": "Alex's iPhone app is called jarvis-app", "section": "environment",
+FACT = {"action": "remember", "fact": "Alex's iPhone app is called alfred-app", "section": "environment",
         "reason": "Found while wiring push."}
 FORGET = {"action": "forget", "text": "short answers", "reason": "Out of date."}
 
@@ -97,7 +97,7 @@ def test_a_memory_suggestion_names_its_section_and_says_which():
     edit = data_edits.check(FACT | {"section": " Environment "})
     assert edit["section"] == "environment"
     assert data_edits.describe(edit) == \
-        f"save to memory, under {memory.title('environment')}: Alex's iPhone app is called jarvis-app"
+        f"save to memory, under {memory.title('environment')}: Alex's iPhone app is called alfred-app"
 
 
 def test_an_edit_that_would_overfill_memory_is_refused_with_its_facts(data):
@@ -212,7 +212,7 @@ def test_applying_and_dismissing_by_number(data, monkeypatch):
         return applied, dismissed, again
 
     applied, dismissed, again = asyncio.run(main())
-    saved = f"- Alex's iPhone app is called jarvis-app ({TODAY})"
+    saved = f"- Alex's iPhone app is called alfred-app ({TODAY})"
     assert applied["outcome"] == ["edit 1 applied: Added to the to-do list: Try the new push self-test",
                                   f"edit 2 applied: Saved to {memory.title('environment')} ({len(saved)} of 3,000)."]
     assert f"- [ ] Build the iPhone app (added {TODAY})\n- [ ] Try the new push self-test (added {TODAY})\n" in todo.read()
@@ -352,7 +352,7 @@ def test_the_task_tool_says_what_it_noted_or_what_to_fix(data, monkeypatch):
 
 
 def test_a_suggested_to_do_the_list_has_is_refused_or_merged_into_it(data, monkeypatch):
-    from jarvis.llm import claude
+    from alfred.llm import claude
 
     async def judged(prompt, *args, **options):
         return {"same": 1, "merged": "Build the iPhone app, with push notifications"}, 0.0
@@ -397,7 +397,7 @@ def test_every_task_kind_can_suggest_edits(data, monkeypatch):
         assert "propose_data_edit" in prompt and f"rather than leaving {profile.name()} edits to make by hand" in prompt
 
 
-def test_task_edits_lets_jarvis_make_small_edits_and_ask_about_bigger_ones():
+def test_task_edits_lets_alfred_make_small_edits_and_ask_about_bigger_ones():
     edits_rules = tools.get("task_edits").description
     assert "needs_yes" in edits_rules and "Apply small, low-risk ones without asking" in edits_rules
     assert "Ask first" in edits_rules and "prompted by an email or web page" in edits_rules

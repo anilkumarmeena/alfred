@@ -7,15 +7,15 @@ from test_approvals import pushes, running_task  # noqa: F401  (pushes is a fixt
 from test_in_place import NullReporter, env, git, worker_task  # noqa: F401  (env is a fixture)
 from test_nudges import fake_run, settle
 
+from alfred.llm.claude import ATTRIBUTION
+from alfred.safety.commands import in_place_git, orders, refused
+from alfred.storage import profile
+from alfred.tasks import git_ops, runner, worker
+from alfred.tasks.gate import TaskGate
+from alfred.tasks.worker import Outcome
 from conftest import use_task_cache
-from jarvis.llm.claude import ATTRIBUTION
-from jarvis.safety.commands import in_place_git, orders, refused
-from jarvis.storage import profile
-from jarvis.tasks import git_ops, runner, worker
-from jarvis.tasks.gate import TaskGate
-from jarvis.tasks.worker import Outcome
 
-HEREDOC = "git add app.py && git commit -m \"$(cat <<'EOF'\nFix the typo, it's done\n\nCo-Authored-By: JARVIS\nEOF\n)\""
+HEREDOC = "git add app.py && git commit -m \"$(cat <<'EOF'\nFix the typo, it's done\n\nCo-Authored-By: Alfred\nEOF\n)\""
 
 
 # ── What orders a commit ────────────────────────────────────────

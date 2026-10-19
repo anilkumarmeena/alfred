@@ -9,24 +9,24 @@ from test_in_place import NullReporter, env, worker_task  # noqa: F401  (env is 
 from test_nudges import fake_run, settle
 from test_task_access import call, denied_paths, mac  # noqa: F401  (mac is a fixture)
 
-from jarvis import tools
-from jarvis.brain import persona, sdk
-from jarvis.storage import profile
-from jarvis.tasks import access, briefs, client, gate, reporting, runner, worker
-from jarvis.tasks.worker import Outcome
-from jarvis.tools import tasks as task_tools
+from alfred import tools
+from alfred.brain import persona, sdk
+from alfred.storage import profile
+from alfred.tasks import access, briefs, client, gate, reporting, runner, worker
+from alfred.tasks.worker import Outcome
+from alfred.tools import tasks as task_tools
 
 
 @pytest.fixture
 def box(mac, monkeypatch):
-    """mac fixture folders, JARVIS's repo and data under projects, and a code_question project, video."""
-    jarvis = mac["projects"] / "jarvis"
-    monkeypatch.setattr(worker, "DATA_DIR", jarvis / "data")
-    monkeypatch.setattr(gate, "ROOT", jarvis)
-    monkeypatch.setattr(briefs, "ROOT", jarvis)
+    """mac fixture folders, Alfred's repo and data under projects, and a code_question project, video."""
+    alfred = mac["projects"] / "alfred"
+    monkeypatch.setattr(worker, "DATA_DIR", alfred / "data")
+    monkeypatch.setattr(gate, "ROOT", alfred)
+    monkeypatch.setattr(briefs, "ROOT", alfred)
     video = mac["projects"] / "video"
     monkeypatch.setattr(worker.projects, "find", lambda name: type("P", (), {"path": video}))
-    return mac | {"jarvis": jarvis, "video": video, "own": jarvis / "data" / "tasks" / "9"}
+    return mac | {"alfred": alfred, "video": video, "own": alfred / "data" / "tasks" / "9"}
 
 
 def granted(*names: str) -> dict:
@@ -88,14 +88,14 @@ def test_a_code_question_granted_shell_leaves_the_checkout_unwritten(box):
     assert "can't write there" in opts.system_prompt["append"]
 
 
-def test_a_code_question_on_jarvis_itself_can_still_write_its_own_folder(box, monkeypatch):
-    monkeypatch.setattr(worker.projects, "find", lambda name: type("P", (), {"path": box["jarvis"]}))
+def test_a_code_question_on_alfred_itself_can_still_write_its_own_folder(box, monkeypatch):
+    monkeypatch.setattr(worker.projects, "find", lambda name: type("P", (), {"path": box["alfred"]}))
     opts = worker._options(question("shell"), NullReporter())
     rules = json.loads(opts.settings)["permissions"]["deny"]
     edits = [r.removeprefix("Edit(/").removesuffix(")").removesuffix("/**") for r in rules if r.startswith("Edit(")]
     own = box["own"].resolve()
     assert not any(own.is_relative_to(e) for e in edits)
-    assert str((box["jarvis"] / "logs").resolve()) in edits
+    assert str((box["alfred"] / "logs").resolve()) in edits
 
 
 def test_a_code_question_granted_mac_runs_host_commands_from_its_own_folder(box):
@@ -108,15 +108,15 @@ def test_a_code_question_granted_mac_runs_host_commands_from_its_own_folder(box)
     assert "host_run" in opts.system_prompt["append"]
 
 
-def test_projects_lets_a_task_edit_other_projects_but_never_secrets_or_jarvis(box):
+def test_projects_lets_a_task_edit_other_projects_but_never_secrets_or_alfred(box):
     plain = worker._options(worker_task(worktree=str(box["worktree"])), NullReporter())
     assert not allowed(call(plain, "Write", file_path=str(box["code"])))
     opts = worker._options(worker_task(worktree=str(box["worktree"]), **granted("projects")), NullReporter())
     assert allowed(call(opts, "Edit", file_path=str(box["code"])))
-    assert allowed(call(opts, "Write", file_path=str(box["worktree"] / "new.py")))  # its own worktree, in JARVIS's data
+    assert allowed(call(opts, "Write", file_path=str(box["worktree"] / "new.py")))  # its own worktree, in Alfred's data
     for name in ("env_local", "key", "agent_log", "env"):
         denied = call(opts, "Write", file_path=str(box[name]))
-        assert isinstance(denied, PermissionResultDeny) and "JARVIS's own files" in denied.message, name
+        assert isinstance(denied, PermissionResultDeny) and "Alfred's own files" in denied.message, name
     assert "edit files in" in opts.system_prompt["append"]
 
 
@@ -130,7 +130,7 @@ def test_research_granted_projects_reads_and_edits_them(box):
 
 def test_a_code_task_granted_accounts_reads_mail(box):
     opts = worker._options(worker_task(worktree=str(box["worktree"]), **granted("accounts")), NullReporter())
-    assert "jarvis" in opts.mcp_servers
+    assert "alfred" in opts.mcp_servers
     assert "You can read" in opts.system_prompt["append"] and "accounts (" not in opts.system_prompt["append"]
 
 
@@ -145,10 +145,10 @@ NEVER = {"sheets_delete_tab", "sheets_draft_delete_tab", "docs_delete", "docs_dr
 
 @pytest.fixture
 def served(monkeypatch):
-    """Names of the tools each task session's jarvis server offers."""
+    """Names of the tools each task session's alfred server offers."""
     monkeypatch.setattr(sdk, "create_sdk_mcp_server", lambda name, tools: {"type": "sdk", "name": name,
                                                                            "tools": [t.name for t in tools]})
-    return lambda opts: set(opts.mcp_servers["jarvis"]["tools"])
+    return lambda opts: set(opts.mcp_servers["alfred"]["tools"])
 
 
 @pytest.mark.parametrize("kind", ["research", "code_change", "code_question"])
@@ -158,15 +158,15 @@ def test_tasks_with_accounts_edit_sheets_and_docs_but_never_delete_or_send(box, 
              "code_question": lambda: question("accounts")}
     opts = worker._options(tasks[kind](), NullReporter())
     assert SHEETS_DOCS_EDITS <= served(opts) and "sheets_read" in served(opts)
-    assert {f"mcp__jarvis__{n}" for n in SHEETS_DOCS_EDITS} <= set(opts.allowed_tools)  # as the voice has them
-    assert not NEVER & served(opts) and not {f"mcp__jarvis__{n}" for n in NEVER} & set(opts.allowed_tools)
+    assert {f"mcp__alfred__{n}" for n in SHEETS_DOCS_EDITS} <= set(opts.allowed_tools)  # as the voice has them
+    assert not NEVER & served(opts) and not {f"mcp__alfred__{n}" for n in NEVER} & set(opts.allowed_tools)
     prompt = opts.system_prompt if kind == "research" else opts.system_prompt["append"]
     assert "edit their Google Sheets and Docs" in prompt and "delete sheet tabs or delete doc content" in prompt
 
 
 def test_tasks_without_accounts_get_no_google_tools(box):
     opts = worker._options(worker_task(worktree=str(box["worktree"])), NullReporter())
-    assert "jarvis" not in opts.mcp_servers and not any(t.startswith("mcp__jarvis__") for t in opts.allowed_tools)
+    assert "alfred" not in opts.mcp_servers and not any(t.startswith("mcp__alfred__") for t in opts.allowed_tools)
 
 
 def test_doc_images_come_from_links_or_files_the_task_may_read_never_secrets(box):
@@ -332,10 +332,10 @@ def test_a_running_task_granted_more_carries_on_with_it_after_its_turn(env, monk
     assert "You now have artifacts" in prompts[1] and after["status"] == "done"
 
 
-# ── JARVIS's side ───────────────────────────────────────────────
+# ── Alfred's side ───────────────────────────────────────────────
 
 
-def test_jarvis_passes_access_on_and_knows_when_to_grant_it(monkeypatch):
+def test_alfred_passes_access_on_and_knows_when_to_grant_it(monkeypatch):
     sent = []
 
     async def start(kind, title, instruction, project=None, access=None, order="", todo="", machine="", after=None,
@@ -388,8 +388,8 @@ def test_a_read_only_task_has_only_the_access_it_started_with_and_is_never_given
 def test_a_read_only_task_reads_accounts_without_edits_and_runs_commands_without_the_network(box):
     reads = worker._options(worker_task(kind="research", project=None, read_only=1, **granted("accounts")),
                             NullReporter())
-    assert "mcp__jarvis__gmail_search" in reads.allowed_tools
-    assert not {f"mcp__jarvis__{t}" for t in worker.GOOGLE_EDIT_TOOLS} & set(reads.allowed_tools)
+    assert "mcp__alfred__gmail_search" in reads.allowed_tools
+    assert not {f"mcp__alfred__{t}" for t in worker.GOOGLE_EDIT_TOOLS} & set(reads.allowed_tools)
     assert not {"Artifact", "Write", "Bash"} & set(reads.tools) and "CLAUDE_CODE_ARTIFACT" not in reads.env
     assert "You can only read" in reads.system_prompt and "edit their Google" not in reads.system_prompt
     assert "request_access" not in reads.system_prompt
@@ -397,7 +397,7 @@ def test_a_read_only_task_reads_accounts_without_edits_and_runs_commands_without
                             NullReporter())
     assert "Bash" in looks.tools and looks.sandbox["network"] == {"allowedDomains": []}
     assert "can't reach the network" in looks.system_prompt and "any host" not in looks.system_prompt
-    assert not any(t.startswith("mcp__jarvis__") for t in looks.allowed_tools)  # no mail without accounts
+    assert not any(t.startswith("mcp__alfred__") for t in looks.allowed_tools)  # no mail without accounts
     files = worker._options(question() | {"read_only": 1}, NullReporter())
     assert "Artifact" not in files.tools and "request_access" not in files.system_prompt["append"]
 

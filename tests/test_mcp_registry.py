@@ -9,8 +9,8 @@ import httpx
 import pytest
 from test_connections import GITHUB, runners, serving  # noqa: F401  (runners: the fixture)
 
-from jarvis.integrations import mcp_registry, mcp_servers
-from jarvis.integrations.mcp_registry import Way
+from alfred.integrations import mcp_registry, mcp_servers
+from alfred.integrations.mcp_registry import Way
 
 
 def entry(**fields) -> dict:
@@ -63,7 +63,7 @@ def test_a_search_of_several_words_tries_the_longest_word_next_and_stops_at_a_fi
     assert asked == ["my notion pages", "notion"] and [s["name"] for s in found] == ["com.notion/notion-mcp"]
 
 
-def test_the_best_match_is_its_own_name_then_its_publishers_then_one_jarvis_can_run(runners):
+def test_the_best_match_is_its_own_name_then_its_publishers_then_one_alfred_can_run(runners):
     named = entry(name="io.github.someone/linear-mcp")
     publisher = entry(name="app.linear/tools")
     mentioned = entry(name="io.github.other/better-linear-sync")
@@ -77,7 +77,7 @@ def test_the_best_match_is_its_own_name_then_its_publishers_then_one_jarvis_can_
 
 # ── The ways to run one ─────────────────────────────────────────
 
-def test_the_ways_jarvis_cant_run_each_say_why(runners, monkeypatch):
+def test_the_ways_alfred_cant_run_each_say_why(runners, monkeypatch):
     server = entry(remotes=[{"type": "streamable-http", "url": "http://plain.example/mcp"}, "junk"],
                    packages=[{"registryType": "npm", "identifier": "a", "transport": {"type": "streamable-http"}},
                              {"registryType": "pypi", "version": "1"},
@@ -87,9 +87,9 @@ def test_the_ways_jarvis_cant_run_each_say_why(runners, monkeypatch):
                              {"registryType": "nuget", "identifier": "c"}, "junk"])
     can, cant = mcp_registry.ways(server)
     assert can == [] and [w.problem for w in cant] == [
-        "its URL isn't https", "the package serves over HTTP itself, which JARVIS doesn't start",
+        "its URL isn't https", "the package serves over HTTP itself, which Alfred doesn't start",
         "it doesn't name its package", "it takes its key on the command line, where other programs could read it",
-        "it's nuget JARVIS can't run"]
+        "it's nuget Alfred can't run"]
     monkeypatch.setattr(mcp_registry, "which", lambda name: None)
     [way] = mcp_registry.ways(entry(packages=[{"registryType": "pypi", "identifier": "notes-mcp"}]))[1]
     assert way.problem == "uvx isn't installed on this computer"
@@ -113,17 +113,17 @@ def test_a_hosted_entry_fills_its_url_and_headers_settings_said_secrets_kept_apa
         "variables": {"region": {"description": "Your region", "isRequired": True, "choices": ["eu", "us"]}},
         "headers": [{"name": "X-Api-Key", "value": "{api_key}", "variables": {"api_key": {"isSecret": True}}},
                     {"name": "X-Workspace", "description": "Workspace id", "isRequired": True},
-                    {"name": "X-Client", "value": "jarvis", "isRequired": False}]}])
+                    {"name": "X-Client", "value": "alfred", "isRequired": False}]}])
     way = mcp_registry.ways(found)[0][0]
     assert [n.var for n in way.needs] == ["region", "api_key", "X-Workspace", "X-Client"]
     server, still = mcp_registry.build(found, way, "notes", "Notes")
     assert sorted(n.var for n in still) == ["X-Workspace", "region"]
     server, still = mcp_registry.build(found, way, "notes", "Notes", {"region": "eu", "X-Workspace": "w1"})
     assert still == [] and server.url == "https://eu.notes.example/mcp"
-    assert server.headers == {"X-Api-Key": "{api_key}", "X-Workspace": "w1", "X-Client": "jarvis"}
+    assert server.headers == {"X-Api-Key": "{api_key}", "X-Workspace": "w1", "X-Client": "alfred"}
     assert server.secret_env == {"api_key": "notes.api_key"} and mcp_servers.problems(server) == []
-    with pytest.raises(ValueError, match="JARVIS can't run Notes that way: it's nuget"):
-        mcp_registry.build(found, Way("other", {}, problem="it's nuget JARVIS can't run"), "notes", "Notes")
+    with pytest.raises(ValueError, match="Alfred can't run Notes that way: it's nuget"):
+        mcp_registry.build(found, Way("other", {}, problem="it's nuget Alfred can't run"), "notes", "Notes")
 
 
 def test_a_python_package_is_pinned_and_takes_its_arguments_as_given(runners):
@@ -155,7 +155,7 @@ def test_names_for_secrets_and_variables_are_safe():
     assert mcp_registry._env_var("***") == "SECRET"
     assert mcp_registry._secret_name("notes", "Api Key!") == "notes.api_key"
     assert mcp_registry.slug("The Big Notes MCP Server for Teams and Everyone") == "the_big_notes_for_teams_and"
-    assert mcp_registry.slug("MCP") == "server" and mcp_registry.slug("jarvis") == "jarvis_mcp"
+    assert mcp_registry.slug("MCP") == "server" and mcp_registry.slug("alfred") == "alfred_mcp"
     assert mcp_registry.label_of({"name": "x/y", "title": "T" * 41}) == "Y"
     assert mcp_registry.label_of({"name": ""}) == "Server"
 

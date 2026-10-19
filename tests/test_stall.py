@@ -10,12 +10,12 @@ from test_notices import AFTERNOON, Notifier
 from test_nudges import FakeClient, result, settle, until, worker_run
 from test_subagents import Recorder
 
-from jarvis.llm import usage
-from jarvis.safety import host
-from jarvis.tasks import notices, runner, stall
-from jarvis.tasks.stall import GRACE, Pulse
-from jarvis.tasks.worker import HOST_RUN, JOB_WAIT, Outcome
-from jarvis.tools import tasks as task_tools
+from alfred.llm import usage
+from alfred.safety import host
+from alfred.tasks import notices, runner, stall
+from alfred.tasks.stall import GRACE, Pulse
+from alfred.tasks.worker import HOST_RUN, JOB_WAIT, Outcome
+from alfred.tools import tasks as task_tools
 
 NOW = AFTERNOON.timestamp()
 MINUTE = 60
@@ -233,7 +233,7 @@ def test_a_stall_is_said_once_and_again_only_after_it_moved_on(tmp_path):
     given = asyncio.run(told.check())
     text = "Task 7, retry logic, seems stuck: no progress for 20 minutes. Nudge it or stop it?"
     assert [(n.text, n.task_id) for n in given] == [(text, 7)]
-    assert notify.sent == [("JARVIS · tasks", text)]
+    assert notify.sent == [("Alfred · tasks", text)]
     assert phone == [("Tasks", text, "/?task=7", "task-7")]
     assert events[0]["tasks"] == [7] and "Shall I nudge it with a message, or stop it?" in events[0]["text"]
 

@@ -1,14 +1,14 @@
-// Machines: other computers JARVIS sends heavy work to. Pairing starts here with a one-time code, which the machine
+// Machines: other computers Alfred sends heavy work to. Pairing starts here with a one-time code, which the machine
 // runs (make node-pair); it connects once its fingerprint is confirmed here. Never by voice.
 import { useSignal } from "@preact/signals";
 import { act, ago, machines, type Machine, type Machines, type PairingCode } from "../../state/panel";
-import { now } from "../../state/store";
+import { assistantName, now } from "../../state/store";
 import { EditIcon, TrashIcon } from "../icons";
 import { cap, Empty, Led, Pill } from "./bits";
 
 export function machinesSummary(): [string, "ok" | "warn" | null] {
   const m = machines.value;
-  if (!m) return ["Other computers JARVIS sends heavy work to", null];
+  if (!m) return [`Other computers ${assistantName.value} sends heavy work to`, null];
   const pending = m.machines.filter((x) => x.status === "pending"), paired = m.machines.filter((x) => x.status === "paired");
   if (pending.length) return [`${pending.map((x) => x.name).join(", ")} waiting for you to confirm`, "warn"];
   if (!paired.length) return ["None yet: add one to send it renders, builds and tasks", null];
@@ -83,7 +83,7 @@ function AddMachine({ fingerprint }: { fingerprint: string }) {
   return (
     <div class="note">
       <div class="grow">
-        <div>On the other computer, in its JARVIS folder, run:</div>
+        <div>On the other computer, in its Alfred folder, run:</div>
         <pre class="tlog">make node-pair CODE={code.value.code} MAIN={location.origin}</pre>
         <p class="hint">The code works once, for {minutes} more minute{minutes === 1 ? "" : "s"}. That computer then shows two
           fingerprints: this computer's should read <code>{code.value.main_fingerprint || fingerprint}</code>. The new
@@ -95,7 +95,7 @@ function AddMachine({ fingerprint }: { fingerprint: string }) {
 }
 
 function Placement({ m, kind, label }: { m: Machines; kind: string; label: string }) {
-  const options: [string, string][] = [["here", "This computer"], ["auto", "Let JARVIS choose"],
+  const options: [string, string][] = [["here", "This computer"], ["auto", `Let ${assistantName.value} choose`],
     ...m.machines.filter((x) => x.status === "paired").map((x): [string, string] => [String(x.id), x.name])];
   const chosen = m.placement[kind] ?? "here";
   return (
@@ -125,7 +125,7 @@ export function MachinesPage() {
       {!m.machines.length && <Empty>No machines yet. Pair one to send it renders, builds and Claude tasks.</Empty>}
       {m.can_pair ? <AddMachine fingerprint={m.fingerprint} />
         : <p class="hint">Only {m.owner}'s login, the owner's, pairs, confirms or forgets machines.</p>}
-      <p class="hint">A machine runs JARVIS in node mode, signed in to its own Claude account. Work sent there runs behind
+      <p class="hint">A machine runs Alfred in node mode, signed in to its own Claude account. Work sent there runs behind
         the same walls as here: risky commands wait for your yes, asked from this computer, and keys and accounts never
         leave it. It updates itself to this computer's code when it's idle.</p>
       {paired && <>
@@ -133,7 +133,7 @@ export function MachinesPage() {
         {Object.entries(m.kinds).map(([kind, label]) => <Placement key={kind} m={m} kind={kind} label={label} />)}
         <label class="lbl">Research</label>
         <div class="field locked">This computer</div>
-        <p class="hint">JARVIS always says where a job runs. If the machine chosen doesn't answer, or its Claude account has
+        <p class="hint">{assistantName} always says where a job runs. If the machine chosen doesn't answer, or its Claude account has
           hit its limit, the job runs here instead. Research, and tasks that read your mail or accounts, always run here;
           a project that lives on a machine always runs there. You can also say where when you ask ("run this one here").</p>
       </>}

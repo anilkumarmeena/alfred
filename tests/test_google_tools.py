@@ -5,15 +5,15 @@ import asyncio
 import pytest
 from ai_armory.toolsets.google import GoogleSettings, current
 
+from alfred import config, tools
+from alfred.brain import cli
+from alfred.gates import draft_gate
+from alfred.integrations import accounts
+from alfred.safety.commands import ALFRED_SECRETS
+from alfred.storage import profile
+from alfred.tasks import worker
+from alfred.tools import google
 from conftest import use_profile
-from jarvis import config, tools
-from jarvis.brain import cli
-from jarvis.gates import draft_gate
-from jarvis.integrations import accounts
-from jarvis.safety.commands import JARVIS_SECRETS
-from jarvis.storage import profile
-from jarvis.tasks import worker
-from jarvis.tools import google
 
 TOOLS = {
     "gmail": {"gmail_search", "gmail_read", "gmail_create_draft", "gmail_modify", "gmail_draft_send",
@@ -32,7 +32,7 @@ TOOLS = {
 }
 GATED = {"gmail_send", "chat_send", "calendar_send_invite", "calendar_send_update", "calendar_send_response",
          "calendar_delete_event", "docs_delete", "sheets_delete_tab"}
-# JARVIS's own attachment tools (jarvis.tools.files)
+# Alfred's own attachment tools (alfred.tools.files)
 OWN = {"gmail_attachments", "gmail_attachment_read", "gmail_attachment_transcribe"}
 
 
@@ -43,7 +43,7 @@ def google_tools() -> dict[str, tools.Tool]:
 def test_every_google_tool_comes_from_ai_armory_under_its_own_name():
     assert set(google_tools()) == set().union(*TOOLS.values())
     assert not any(n.startswith(tuple(TOOLS)) for n, t in {t.name: t for t in tools.all_tools()}.items()
-                   if not t.armory and n not in OWN)  # no copy of JARVIS's own is left
+                   if not t.armory and n not in OWN)  # no copy of Alfred's own is left
 
 
 def test_only_sends_and_deletes_wait_for_a_yes_and_email_is_sent_only_that_way():
@@ -55,7 +55,7 @@ def test_only_sends_and_deletes_wait_for_a_yes_and_email_is_sent_only_that_way()
     assert draft_gate.SENDS == GATED - {"calendar_delete_event", "docs_delete", "sheets_delete_tab"}
 
 
-def test_the_settings_are_jarvis_accounts_sign_ins_and_wording():
+def test_the_settings_are_alfred_accounts_sign_ins_and_wording():
     s = current()
     assert isinstance(s, GoogleSettings) and s == google.settings(accounts.load())
     assert [(a.label, a.email, a.description, a.chat) for a in s.accounts] == [
@@ -63,19 +63,19 @@ def test_the_settings_are_jarvis_accounts_sign_ins_and_wording():
     assert s.default_label == "work" and s.chat_labels == google.CHAT_LABELS == ["work"]
     assert s.token_dir == profile.current().secrets and s.timezone == profile.current().timezone and s.user_name == profile.name()
     assert s.sign_in("work") == "the Sign in button beside the work account on the control panel's Google accounts page"
-    assert s.image_folder == "JARVIS doc images" and s.draft_minutes == 2 * config.APPROVAL_MINUTES
+    assert s.image_folder == "Alfred doc images" and s.draft_minutes == 2 * config.APPROVAL_MINUTES
     assert s.host_approval  # a send or delete goes through only for a draft the gate approved
-    assert {str(p) for p in JARVIS_SECRETS} <= set(s.blocked_paths)
+    assert {str(p) for p in ALFRED_SECRETS} <= set(s.blocked_paths)
 
 
 def test_the_cli_brain_gets_every_google_tool_but_sends_and_deletes_only_through_its_gate():
     brain = cli.CliBrain()
     opts = cli._options(brain.shell, brain.jobs)
     for name in set().union(*TOOLS.values()) - GATED:
-        assert f"mcp__jarvis__{name}" in opts.allowed_tools, name
-    assert not {f"mcp__jarvis__{n}" for n in GATED} & set(opts.allowed_tools)  # so every call reaches the gate
-    others = {"mcp__jarvis__skill_confirm", "mcp__jarvis__connection_confirm"}  # skills' and connections'
-    assert draft_gate.gated() - others == {f"mcp__jarvis__{n}" for n in GATED}
+        assert f"mcp__alfred__{name}" in opts.allowed_tools, name
+    assert not {f"mcp__alfred__{n}" for n in GATED} & set(opts.allowed_tools)  # so every call reaches the gate
+    others = {"mcp__alfred__skill_confirm", "mcp__alfred__connection_confirm"}  # skills' and connections'
+    assert draft_gate.gated() - others == {f"mcp__alfred__{n}" for n in GATED}
     assert isinstance(brain.shell, draft_gate.DraftGate) and opts.can_use_tool is brain.shell
 
 
@@ -127,5 +127,5 @@ def test_bad_input_is_refused_before_anything_runs():
 # ── Signing in ──────────────────────────────────────────────────
 
 def test_checking_chat_on_an_account_without_it_says_how_to_turn_it_on():
-    with pytest.raises(SystemExit, match="uv run python -m jarvis.integrations.accounts set personal --chat"):
+    with pytest.raises(SystemExit, match="uv run python -m alfred.integrations.accounts set personal --chat"):
         accounts._check_chat("personal")

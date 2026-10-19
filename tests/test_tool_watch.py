@@ -1,4 +1,4 @@
-"""Tests for jarvis.tasks.tool_watch: which tools a watch may call, calling them, reading their results into items,
+"""Tests for alfred.tasks.tool_watch: which tools a watch may call, calling them, reading their results into items,
 and old Gmail and Chat watches becoming tool watches."""
 
 import asyncio
@@ -10,12 +10,12 @@ from datetime import datetime, timedelta
 import pytest
 from test_mcp_servers import fresh  # noqa: F401  (fixture)
 
+from alfred.integrations import mcp_servers
+from alfred.integrations.mcp_servers import Server, Tool
+from alfred.storage import database, profile
+from alfred.tasks import schedules, tool_watch
+from alfred.tasks.scheduler import ProbeFailed
 from conftest import use_profile
-from jarvis.integrations import mcp_servers
-from jarvis.integrations.mcp_servers import Server, Tool
-from jarvis.storage import database, profile
-from jarvis.tasks import schedules, tool_watch
-from jarvis.tasks.scheduler import ProbeFailed
 
 
 def test_a_result_is_read_as_the_list_in_it_or_its_lines():
@@ -128,9 +128,9 @@ def test_old_gmail_and_chat_watches_become_tool_watches_after_the_resume_and_tod
     assert (chat["probe"], chat["target"], chat["expect"], chat["baseline"]) == ("tool", "chat_unread", "Priya", None)
     assert schedules.arguments(chat) == {"mentions_only": True, "days": 1} and chat["status"] == "paused"
     assert (url["probe"], url["target"], url["arguments"]) == ("url", "https://app.example", None)
-    assert schedules.check_text(gmail) == ('JARVIS calls the tool: gmail_search with {"query": "from:priya", '
+    assert schedules.check_text(gmail) == ('Alfred calls the tool: gmail_search with {"query": "from:priya", '
                                            '"max_results": 10}')
-    assert schedules.check_text(done) == ('JARVIS calls the tool: gmail_search with {"query": "from:sam", '
+    assert schedules.check_text(done) == ('Alfred calls the tool: gmail_search with {"query": "from:sam", '
                                           '"max_results": 10}')  # finished ones too, as the app lists them
     assert schedules.picks(resume) == {"tasks": [12, 14]} and schedules.work_text(resume) == "resumes tasks 12, 14"
 

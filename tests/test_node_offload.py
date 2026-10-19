@@ -1,4 +1,4 @@
-"""Tests for sending work to another machine (jarvis.node.offload and .work): long commands and Claude tasks run there,
+"""Tests for sending work to another machine (alfred.node.offload and .work): long commands and Claude tasks run there,
 report back in order, come home with their files, and keep the same gates as here."""
 
 import asyncio
@@ -10,13 +10,13 @@ import pytest
 from test_in_place import env, git  # noqa: F401  (env is a fixture)
 from test_node_link import until
 
-from jarvis.auth import vault
-from jarvis.llm import claude
-from jarvis.node import agent as agents, keys, machines, offload, work
-from jarvis.node.journal import Journal
-from jarvis.node.link import Refused, memory_pair
-from jarvis.tasks import command_jobs, runner
-from jarvis.tasks.worker import Outcome
+from alfred.auth import vault
+from alfred.llm import claude
+from alfred.node import agent as agents, keys, machines, offload, work
+from alfred.node.journal import Journal
+from alfred.node.link import Refused, memory_pair
+from alfred.tasks import command_jobs, runner
+from alfred.tasks.worker import Outcome
 
 SUMMARY = "Rendered the video."
 
@@ -451,7 +451,7 @@ def test_a_run_cut_off_by_a_restart_there_carries_on_in_its_session(world, tmp_p
 def test_a_machine_lost_with_work_on_it_is_a_notice_until_it_comes_back(world, tmp_path):
     from datetime import datetime
 
-    from jarvis.tasks import notices
+    from alfred.tasks import notices
 
     lost = [{"node": 1, "name": "Studio", "minutes": 45, "since": 1000.0, "tasks": [7, 8]}]
     check = notices.task_notices(runner.Runner().store, lost=lambda now: lost)

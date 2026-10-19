@@ -12,14 +12,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from alfred import config, server, tools
+from alfred.apps import audio_file as audio_job
+from alfred.core import platform
+from alfred.core.speakable import speakable
+from alfred.media import audio_file as af
+from alfred.state import preferences, shared_files
+from alfred.tasks import client as task_client, worker
 from conftest import use_profile
-from jarvis import config, server, tools
-from jarvis.apps import audio_file as audio_job
-from jarvis.core import platform
-from jarvis.core.speakable import speakable
-from jarvis.media import audio_file as af
-from jarvis.state import preferences, shared_files
-from jarvis.tasks import client as task_client, worker
 
 
 def fake_speak(text: str, voice: str, speed: float) -> np.ndarray:
@@ -106,7 +106,7 @@ def test_lengths_and_estimates_are_said_plainly():
 
 def test_file_names_are_safe_and_never_overwrite(tmp_path):
     assert af.file_name('Q3: "plans"/notes?') == "Q3 plans notes"
-    assert af.file_name("...") == "JARVIS audio"
+    assert af.file_name("...") == "Alfred audio"
     assert len(af.file_name("x" * 200)) == 80
     (tmp_path / "Brief.m4a").touch()
     (tmp_path / "Brief 2.m4a").touch()
@@ -291,7 +291,7 @@ def test_sent_to_the_phone_as_a_push_that_plays_it(work, monkeypatch):
         pushed.append((title, body, url, tag))
         return 1
 
-    from jarvis.notify import push
+    from alfred.notify import push
     monkeypatch.setattr(push, "send_push", send_push)
     said = af.make(spec(work, phone=True), fake_speak, ["bm_george"], audio_job.deliver)
     assert said.endswith("Sent to the phone.")
@@ -303,7 +303,7 @@ def test_sent_to_the_phone_as_a_push_that_plays_it(work, monkeypatch):
     pushed.clear()
     monkeypatch.setattr(push, "send_push", lambda *a, **k: asyncio.sleep(0, 0))
     assert af.make(spec(work, phone=True), fake_speak, ["bm_george"], audio_job.deliver).endswith(
-        "no phone has JARVIS's notifications on.")
+        "no phone has Alfred's notifications on.")
     monkeypatch.setattr(config, "PUSH_ENABLED", False)
     assert "notifications are off on the computer" in af.make(spec(work, phone=True), fake_speak, ["bm_george"], audio_job.deliver)
 
@@ -361,11 +361,11 @@ def test_the_tool_starts_a_job_and_says_how_long_and_where(jobs, work):
     assert not error
     assert said.startswith("Started job 7, the audio file Monday briefing: about 1 minute of audio, to be saved as "
                            f"Monday briefing.m4a in {af.shown(work / 'Downloads')}. Making it takes roughly 1 minute.")
-    assert said.endswith("JARVIS says when it's done.")
+    assert said.endswith("Alfred says when it's done.")
     [(command, title, folder, summarize, auto_fix, report)] = jobs.launched
     assert title == "the audio file Monday briefing" and folder == str(config.ROOT)
     assert report and not summarize and not auto_fix  # its last line says what it made; nothing to fix if it fails
-    assert " -m jarvis.apps.audio_file " in command
+    assert " -m alfred.apps.audio_file " in command
     [file] = (work / "audio").glob("*.json")
     assert oct(file.stat().st_mode & 0o777) == "0o600"  # private: holds the user's text
     assert str(file) in command

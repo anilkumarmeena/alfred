@@ -1,4 +1,4 @@
-"""Tests for jarvis.brain.timing: LiveKit measures and JARVIS marks, one record per turn when spoken or cut off."""
+"""Tests for alfred.brain.timing: LiveKit measures and Alfred marks, one record per turn when spoken or cut off."""
 
 import asyncio
 import json
@@ -7,11 +7,11 @@ import pytest
 from claude_agent_sdk import ResultMessage, StreamEvent
 from livekit.agents import llm
 
-from jarvis.apps import agent
-from jarvis.brain import cli, timing
-from jarvis.brain.timing import CURRENT, Timings
-from jarvis.state import memory
-from jarvis.voice.session import VoiceSession
+from alfred.apps import agent
+from alfred.brain import cli, timing
+from alfred.brain.timing import CURRENT, Timings
+from alfred.state import memory
+from alfred.voice.session import VoiceSession
 
 
 class Clock:
@@ -144,14 +144,14 @@ class Brain:
 
 def test_the_agent_times_its_reply_from_the_users_turn_to_its_first_words(timed):
     timings, clock, path = timed
-    jarvis = agent.JarvisAgent(VoiceSession(Brain("Half past three."), timings=timings))
+    alfred = agent.AlfredAgent(VoiceSession(Brain("Half past three."), timings=timings))
     message = llm.ChatMessage(role="user", content=["What's the time?"], metrics=heard_at(999.0))
 
     async def main():
-        await jarvis.on_user_turn_completed(llm.ChatContext(), message)
+        await alfred.on_user_turn_completed(llm.ChatContext(), message)
         ctx = llm.ChatContext()
         ctx.add_message(role="user", content="What's the time?")
-        return "".join([chunk async for chunk in jarvis.llm_node(ctx, [], None)])
+        return "".join([chunk async for chunk in alfred.llm_node(ctx, [], None)])
 
     assert asyncio.run(main()) == "Half past three."
     timings.spoke({"started_speaking_at": 1000.4}, False)

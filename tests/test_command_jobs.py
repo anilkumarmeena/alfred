@@ -17,19 +17,19 @@ from test_in_place import env as repos  # noqa: F401  (a fixture)
 from test_nudges import fake_run, finishes
 from test_scheduler import NOW, Clock, at
 
-from jarvis import config, tools
-from jarvis.brain import sdk
-from jarvis.gates import shell
-from jarvis.gates.shell import ShellGate
-from jarvis.llm import claude, claude_logins, usage
-from jarvis.llm.roles import Role
-from jarvis.safety import host
-from jarvis.tasks import client, command_jobs, events as task_events, runner, schedules, stall
-from jarvis.tasks.command_jobs import Triage, parse_triage
-from jarvis.tasks.scheduler import Scheduler
-from jarvis.tasks.store import COMMAND
-from jarvis.tasks.worker import Outcome
-from jarvis.tools import schedules as schedule_tools, tasks as task_tools
+from alfred import config, tools
+from alfred.brain import sdk
+from alfred.gates import shell
+from alfred.gates.shell import ShellGate
+from alfred.llm import claude, claude_logins, usage
+from alfred.llm.roles import Role
+from alfred.safety import host
+from alfred.tasks import client, command_jobs, events as task_events, runner, schedules, stall
+from alfred.tasks.command_jobs import Triage, parse_triage
+from alfred.tasks.scheduler import Scheduler
+from alfred.tasks.store import COMMAND
+from alfred.tasks.worker import Outcome
+from alfred.tools import schedules as schedule_tools, tasks as task_tools
 
 EIGHT = at(days=1, hours=-1, minutes=-15)  # tomorrow at 08:00, when a daily 08:00 job first runs
 SUMMARY = "Made two videos and queued them for upload."
@@ -184,13 +184,13 @@ def test_a_job_that_cant_run_is_refused_saying_why(env, folder, error):
     assert r.store.recent() == []
 
 
-def test_a_job_runs_in_a_session_of_its_own_without_jarviss_keys(env, monkeypatch):
-    monkeypatch.setattr(host, "dotenv_values", lambda path: {"JARVIS_TEST_SECRET": "x"})
-    monkeypatch.setenv("JARVIS_TEST_SECRET", "hunter2")
+def test_a_job_runs_in_a_session_of_its_own_without_alfreds_keys(env, monkeypatch):
+    monkeypatch.setattr(host, "dotenv_values", lambda path: {"ALFRED_TEST_SECRET": "x"})
+    monkeypatch.setenv("ALFRED_TEST_SECRET", "hunter2")
 
     async def main():
         r = make()
-        task = r.start_command('echo "secret=$JARVIS_TEST_SECRET"; pwd; sleep 0.2', "the env check",
+        task = r.start_command('echo "secret=$ALFRED_TEST_SECRET"; pwd; sleep 0.2', "the env check",
                                str(env["project"]), summarize=False)
         pid = r.commands.get(task["id"])["pid"]
         session = os.getsid(pid)
@@ -341,7 +341,7 @@ def test_an_ordinary_failure_is_fixed_then_rerun_and_the_rerun_says_it_all(env, 
     assert (fixer["kind"], fixer["project"], fixer["fixes"], fixer["title"]) == \
            ("code_change", "video-agent", first["id"], "Fix the produce run")
     for part in ("exit code 3", "ffmpeg: not found", command, str(env["project"]), f"Command task {first['id']}",
-                 "Never run the command yourself", "secrets are hidden from you", "JARVIS runs the command once more",
+                 "Never run the command yourself", "secrets are hidden from you", "Alfred runs the command once more",
                  "with its keys", "whether the cause is now dealt with"):
         assert part in briefs[0]
     assert first["status"] == "failed" and command_jobs.spec(first)["fix_task"] == fixer["id"]
@@ -460,7 +460,7 @@ def test_a_job_outside_any_project_or_with_fixing_off_is_never_fixed(env):
 
     r, tasks = asyncio.run(main())
     assert [t["status"] for t in tasks] == ["failed"] * 3 and len(r.store.recent()) == 3  # no fix task
-    assert tasks[0]["project"] is None and tasks[2]["project"] is None  # JARVIS's own data is no project
+    assert tasks[0]["project"] is None and tasks[2]["project"] is None  # Alfred's own data is no project
     assert all("the action is report" in p for p in triaged(env))  # the model is told; FIX it says is taken as REPORT
 
 
@@ -679,7 +679,7 @@ def test_a_scheduled_run_that_fails_is_fixed_and_rerun_as_the_jobs_latest(env, m
     assert (rerun["job"], job["last_task"], command_jobs.spec(rerun)["attempt"]) == (job["id"], rerun["id"], 2)
     assert schedules.run_of(job)["outcome"] == "failed" and job["last_result"].startswith("Failed after 0 seconds")
     assert [t["id"] for t in r.store.runs(job["id"])] == [rerun["id"], first + 1, first]
-    # JARVIS reruns it itself, exactly as the schedule runs it: a command task with the job's own settings
+    # Alfred reruns it itself, exactly as the schedule runs it: a command task with the job's own settings
     ran, again = command_jobs.spec(r.store.get(first)), command_jobs.spec(rerun)
     same = ("folder", "timeout_minutes", "log_file", "summarize", "auto_fix", "report")
     assert [again[k] for k in same] == [ran[k] for k in same] == [str(env["project"]), 30, "logs/*.log", False, True,
@@ -727,7 +727,7 @@ def logins(env, tmp_path, monkeypatch):
     return claude_logins.make("work")
 
 
-def test_a_command_runs_on_the_claude_login_jarvis_runs_on(env, logins):
+def test_a_command_runs_on_the_claude_login_alfred_runs_on(env, logins):
     async def main():
         r = make()
         own = r.start_command('echo "on=$CLAUDE_CONFIG_DIR."', "own", str(env["project"]), summarize=False)
@@ -905,15 +905,15 @@ def test_the_runner_being_down_is_said_not_raised(monkeypatch):
     for name in ("start_command", "tasks", "task", "stop"):
         monkeypatch.setattr(client, name, down)
     jobs = shell.Jobs()
-    assert asyncio.run(jobs.start("make", "build")).startswith("Not started: JARVIS's task runner isn't running")
-    assert asyncio.run(jobs.stop_job(title="build")) == "Not stopped: JARVIS's task runner isn't running."
+    assert asyncio.run(jobs.start("make", "build")).startswith("Not started: Alfred's task runner isn't running")
+    assert asyncio.run(jobs.stop_job(title="build")) == "Not stopped: Alfred's task runner isn't running."
 
 
 # ── Shell gate ──────────────────────────────────────────────────
 
 
 def call(gate: ShellGate, tool: str, **args):
-    return asyncio.run(gate(f"mcp__jarvis__{tool}", args, None))
+    return asyncio.run(gate(f"mcp__alfred__{tool}", args, None))
 
 
 def test_the_gate_weighs_a_command_job_as_the_command_itself(env):
@@ -954,9 +954,9 @@ def test_changing_a_command_jobs_command_or_folder_meets_the_gate_too(env):
 
 
 def test_the_schedule_tools_that_can_keep_a_command_are_never_allowed_outright():
-    _, allowed = sdk.jarvis_server()
-    assert "mcp__jarvis__schedule_list" in allowed and "mcp__jarvis__schedule_cancel" in allowed
-    assert not {"mcp__jarvis__schedule_add", "mcp__jarvis__schedule_change"} & set(allowed)
+    _, allowed = sdk.alfred_server()
+    assert "mcp__alfred__schedule_list" in allowed and "mcp__alfred__schedule_cancel" in allowed
+    assert not {"mcp__alfred__schedule_add", "mcp__alfred__schedule_change"} & set(allowed)
     assert set(schedules.COMMAND_TOOLS) == {t.name for t in tools.all_tools() if t.shell}
 
 

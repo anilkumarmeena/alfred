@@ -1,14 +1,14 @@
-"""Tests for jarvis.voice.floor: announcements wait while anyone talks or a question is open, then go once, in order."""
+"""Tests for alfred.voice.floor: announcements wait while anyone talks or a question is open, then go once, in order."""
 
 import asyncio
 
 import pytest
 from livekit.agents import llm
 
-from jarvis.apps import agent
-from jarvis.safety.approvals import VoiceApprovals
-from jarvis.voice import floor as floor_module
-from jarvis.voice.floor import (
+from alfred.apps import agent
+from alfred.safety.approvals import VoiceApprovals
+from alfred.voice import floor as floor_module
+from alfred.voice.floor import (
     QUESTION_MINUTES,
     REPEAT_MINUTES,
     WORDS_SECONDS,
@@ -17,7 +17,7 @@ from jarvis.voice.floor import (
     Floor,
     asks_question,
 )
-from jarvis.voice.session import VoiceSession
+from alfred.voice.session import VoiceSession
 
 
 class Clock:
@@ -116,7 +116,7 @@ def test_a_reply_asks_a_question_when_it_ends_with_one():
 # ── What holds an announcement ──────────────────────────────────
 
 
-def test_announcements_wait_while_jarvis_thinks_or_speaks_or_the_user_speaks():
+def test_announcements_wait_while_alfred_thinks_or_speaks_or_the_user_speaks():
     floor = Floor(Clock())
     for state in ("initializing", "thinking", "speaking"):
         assert floor.held(state, "listening")
@@ -152,7 +152,7 @@ def test_an_open_question_holds_announcements_until_the_user_answers():
     floor = Floor(clock)
     floor.said("Shall I do both?")
     clock.now += 60
-    assert floor.held("listening", "listening") == "JARVIS asked a question"
+    assert floor.held("listening", "listening") == "Alfred asked a question"
     floor.turn()  # the user answered
     assert floor.held("listening", "listening") is None
 
@@ -186,7 +186,7 @@ def test_talking_that_isnt_an_answer_keeps_the_question_open_longer():
     clock.now += QUESTION_MINUTES * 60 - 10
     assert floor.held("listening", "speaking")  # speech the gate then drops as noise
     clock.now += 30
-    assert floor.held("listening", "listening") == "JARVIS asked a question"
+    assert floor.held("listening", "listening") == "Alfred asked a question"
     clock.now += QUESTION_MINUTES * 60
     assert floor.held("listening", "listening") is None
 
@@ -319,20 +319,20 @@ def chat(text: str) -> llm.ChatContext:
     return ctx
 
 
-async def reply(jarvis: agent.JarvisAgent, text: str) -> str:
-    return "".join([chunk async for chunk in jarvis.llm_node(chat(text), [], None)])
+async def reply(alfred: agent.AlfredAgent, text: str) -> str:
+    return "".join([chunk async for chunk in alfred.llm_node(chat(text), [], None)])
 
 
 def test_the_agent_opens_a_question_with_a_reply_that_asks_one_and_closes_it_on_the_next_turn():
     async def main():
         floor = Floor(Clock())
         brain = Brain("I'd trim four parts. ", "Shall I go ahead?")
-        jarvis = agent.JarvisAgent(VoiceSession(brain, floor=floor))
+        alfred = agent.AlfredAgent(VoiceSession(brain, floor=floor))
         floor.heard("Just check the kiosk doc.")
-        assert await reply(jarvis, "Just check the kiosk doc.") == "I'd trim four parts. Shall I go ahead?"
+        assert await reply(alfred, "Just check the kiosk doc.") == "I'd trim four parts. Shall I go ahead?"
         assert floor.question and floor.words_at is None
         brain.reply = ("Trimming it now.",)
-        await reply(jarvis, "Sure, go ahead.")
+        await reply(alfred, "Sure, go ahead.")
         assert not floor.question
 
     asyncio.run(main())
@@ -373,7 +373,7 @@ def test_a_brain_turn_of_its_own_is_spoken_and_never_merged_with_another():
     said, brain, floor = asyncio.run(main())
     assert said == ["Merged into master.", "Merged into master."]
     assert brain.notes == ["follow-up: [merged] merge it"] * 2  # nothing else noted: the brain spoke it itself
-    assert floor.recent[-1] == ("JARVIS", "Merged into master.")
+    assert floor.recent[-1] == ("Alfred", "Merged into master.")
 
 
 def test_a_brain_turn_with_nothing_to_say_stays_quiet():

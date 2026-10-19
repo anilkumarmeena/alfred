@@ -1,4 +1,4 @@
-// Bridge to the native apps' JarvisAudio plugin, which runs the LiveKit session natively (mic survives background,
+// Bridge to the native apps' AlfredAudio plugin, which runs the LiveKit session natively (mic survives background,
 // earphone button mutes). The page opens no Room; it drives the plugin and follows its events.
 // In a browser nativeAudio() is null. No imports: Capacitor exposes the plugin on window.Capacitor.
 // iOS app notifications also go through the plugin (appNotifications): the web view has no Web Push.
@@ -9,7 +9,7 @@ type Listener = (e: any) => void;
 /** iOS Mic Mode: `active` is in effect now, `preferred` is the user's Control Center choice. */
 export interface MicMode { active: string; preferred: string }
 
-/** JarvisAudio plugin subset used by the page. Optional methods may be missing in older app builds. */
+/** AlfredAudio plugin subset used by the page. Optional methods may be missing in older app builds. */
 export interface NativeAudio {
   start(o: { serverUrl?: string; passcode: string; device?: string; muted?: boolean; speakerOff?: boolean }): Promise<unknown>;
   stop(): Promise<void>;
@@ -24,19 +24,19 @@ export interface NativeAudio {
   showMicModes?(): Promise<void>;  // iOS only
   checkPermissions?(): Promise<{ notifications?: string }>;
   requestPermissions?(o?: { permissions: string[] }): Promise<{ notifications?: string }>;
-  registerNotifications?(o: { serverUrl?: string; passcode: string }): Promise<{ notifications?: string }>;  // asks, then sends the token to JARVIS
-  openSettings?(): Promise<unknown>;  // JARVIS's page in iOS Settings
+  registerNotifications?(o: { serverUrl?: string; passcode: string }): Promise<{ notifications?: string }>;  // asks, then sends the token to Alfred
+  openSettings?(): Promise<unknown>;  // Alfred's page in iOS Settings
   addListener(event: string, fn: Listener): Promise<Handle> | Handle;
 }
 
-/** The plugin inside the JARVIS app, else null. */
+/** The plugin inside the Alfred app, else null. */
 export function nativeAudio(win: any = globalThis): NativeAudio | null {
   const cap = win?.Capacitor;
   if (!cap?.isNativePlatform?.()) return null;
-  return cap.Plugins?.JarvisAudio ?? null;
+  return cap.Plugins?.AlfredAudio ?? cap.Plugins?.JarvisAudio ?? null;  // app builds from before the rename: JarvisAudio
 }
 
-/** "ios" or "android" inside the JARVIS app, else "". */
+/** "ios" or "android" inside the Alfred app, else "". */
 export function nativePlatform(win: any = globalThis): string {
   const cap = win?.Capacitor;
   return cap?.isNativePlatform?.() ? String(cap.getPlatform?.() ?? "") : "";
@@ -52,7 +52,7 @@ export const APP_SETTINGS = "app-settings:";
 /** iOS app notifications (APNs via the plugin). */
 export interface AppNotifications {
   state(): Promise<Permission>;
-  /** Ask iOS (dialog shows only once). `registered`: token already sent to JARVIS, not deferred to next session. */
+  /** Ask iOS (dialog shows only once). `registered`: token already sent to Alfred, not deferred to next session. */
   request(passcode: string): Promise<{ state: Permission; registered: boolean }>;
   /** Open iOS Settings, the only way to re-allow notifications once refused. */
   openSettings(): Promise<void>;
@@ -90,7 +90,7 @@ export interface NativePage {
   setMuted(v: boolean): void;
   setPaused(v: "" | "recovering"): void;  // a call or Siri holds the mic
   setQuality(q: string | null): void;
-  line(id: string, who: "you" | "jarvis", text: string): void;  // caption; replaces the line with this id
+  line(id: string, who: "you" | "alfred", text: string): void;  // caption; replaces the line with this id
   ended(message?: string): void;  // message set unless the user ended it
   unauthorized(message: string): void;  // passcode refused
   setMicMode?(m: MicMode | null): void;  // iOS; null outside a session
@@ -151,7 +151,7 @@ export function bindNative(plugin: NativeAudio, page: NativePage, origin = globa
   on("connection", (e) => (e.state === "disconnected" ? down(e.reason, e.message) : up(e.state)));
   on("agentState", (e) => { agentKnown = true; if (connected()) page.setState(e.state); });
   on("mute", (e) => { chose(e.source); muted = !!e.muted; page.setMuted(muted); });
-  on("transcript", (e) => page.line(e.id, e.speaker === "you" ? "you" : "jarvis", e.text));
+  on("transcript", (e) => page.line(e.id, e.speaker === "you" ? "you" : "alfred", e.text));
   on("interruption", (e) => page.setPaused(e.state === "began" ? "recovering" : ""));
   on("quality", (e) => page.setQuality(e.quality));
   on("levels", (e) => { levels.mic = +e.mic || 0; levels.agent = +e.agent || 0; });

@@ -2,22 +2,32 @@
 import { computed, signal } from "@preact/signals";
 import type { AgentState, Focus, Link, Paused } from "../types";
 import type { MicMode, Permission } from "../lib/native";
-import { PASSCODE_KEY, PUSH_KEY, SPEAKER_KEY, storage } from "../lib/storage";
+import { ASSISTANT_KEY, PASSCODE_KEY, PUSH_KEY, SPEAKER_KEY, storage } from "../lib/storage";
 
-const STATES: Record<AgentState, [string, string]> = {
+// The name the user gave the assistant (Settings › About you), from the server's hello and token replies; this
+// device's last one until then, so the page never flashes the default
+export const PRODUCT = "Alfred";
+export const assistantName = signal(storage.get(ASSISTANT_KEY) || PRODUCT);
+export function heardAssistant(name: unknown) {
+  if (typeof name !== "string" || !name.trim() || name === assistantName.peek()) return;
+  assistantName.value = name.trim();
+  storage.set(ASSISTANT_KEY, assistantName.value);
+}
+
+const STATES = (name: string): Record<AgentState, [string, string]> => ({
   idle: ["Standing by", "Tap the core to connect"],
   connecting: ["Connecting", "Opening a secure channel"],
   initializing: ["Starting up", "Warming up systems"],
   listening: ["Listening", "Go ahead, I'm listening"],
   thinking: ["Thinking", "Working on it"],
   speaking: ["Speaking", "Talk any time to interrupt"],
-  reconnecting: ["Reconnecting", "Lost JARVIS for a moment, hold on"],
-};
-const PAUSED: Record<Exclude<Paused, "">, string> = {
+  reconnecting: ["Reconnecting", `Lost ${name} for a moment, hold on`],
+});
+const PAUSED = (name: string): Record<Exclude<Paused, "">, string> => ({
   recovering: "Getting the mic back",
   retry: "Tap the core to turn the mic back on",
-  resuming: "Reconnecting to JARVIS",
-};
+  resuming: `Reconnecting to ${name}`,
+});
 
 export const agentState = signal<AgentState>("idle");  // body[data-state]
 export const link = signal<Link>("off");  // body[data-link]: the header's status pill
@@ -59,8 +69,9 @@ export const pushOn = computed(() => !!pushSub.value || appNotify.value === "gra
 export const pushLater = signal(storage.get(PUSH_KEY) === "later");
 
 export const readout = computed(() => {
-  const s = agentState.value, why = paused.value ? PAUSED[paused.value] : "";
-  let [label, hint] = STATES[s] || STATES.idle;
+  const name = assistantName.value, states = STATES(name);
+  const s = agentState.value, why = paused.value ? PAUSED(name)[paused.value] : "";
+  let [label, hint] = states[s] || states.idle;
   if (why && s !== "reconnecting") [label, hint] = ["Mic paused", why];
   else if (connected.value && muted.value && s !== "connecting" && s !== "reconnecting") {
     [label, hint] = ["Muted", phoneMuted.value ? "Press the earphone button to unmute" : "Tap the core to unmute"];
@@ -70,7 +81,7 @@ export const readout = computed(() => {
   return { label, hint };
 });
 
-export const coreLabel = computed(() => !connected.value ? "Connect to JARVIS"
+export const coreLabel = computed(() => !connected.value ? `Connect to ${assistantName.value}`
   : paused.value ? "Turn the microphone back on" : muted.value ? "Unmute microphone" : "Mute microphone");
 
 const two = (n: number) => String(n).padStart(2, "0");

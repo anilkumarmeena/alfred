@@ -1,4 +1,4 @@
-"""Tests for jarvis.state.vocabulary: storage, Whisper prompt, fixing mishearings, review learning, panel and voice."""
+"""Tests for alfred.state.vocabulary: storage, Whisper prompt, fixing mishearings, review learning, panel and voice."""
 
 import asyncio
 import json
@@ -8,14 +8,14 @@ import pytest
 from test_in_place import env  # noqa: F401  (fixture)
 from test_learning import Reviewer, data, suggesting, talk, watcher  # noqa: F401  (fixtures and helpers)
 
+from alfred import panel, projects, tools
+from alfred.state import activity, vocabulary
+from alfred.state.vocabulary import Entry, Vocabulary
+from alfred.storage import profile
+from alfred.tasks import data_edits, learning, runner
+from alfred.tasks.store import edits
+from alfred.tools import core  # noqa: F401  (registers the voice tools)
 from conftest import use_profile
-from jarvis import panel, projects, tools
-from jarvis.state import activity, vocabulary
-from jarvis.state.vocabulary import Entry, Vocabulary
-from jarvis.storage import profile
-from jarvis.tasks import data_edits, learning, runner
-from jarvis.tasks.store import edits
-from jarvis.tools import core  # noqa: F401  (registers the voice tools)
 
 TODAY = f"{date.today():%Y-%m-%d}"
 
@@ -30,10 +30,17 @@ def words(tmp_path, monkeypatch):
 # ── Keeping it ──────────────────────────────────────────────────
 
 
-def test_before_any_change_it_is_the_seed_and_nothing_is_written(words):
-    [jarvis] = vocabulary.entries()
-    assert jarvis.word == "JARVIS" and "Yavis" in jarvis.heard and not jarvis.learned
-    assert not words.exists()
+def test_before_any_change_it_is_empty_and_nothing_is_written(words):
+    assert vocabulary.entries() == [] and not words.exists()
+
+
+def test_speech_recognition_always_expects_the_assistant_s_own_name_first(words, monkeypatch):
+    assert vocabulary.load().terms == ("Alfred",)
+    monkeypatch.setattr(profile, "assistant", lambda: "Friday")
+    vocabulary.add("Priya", ["Pria"])
+    assert vocabulary.load().terms == ("Friday", "Priya")
+    vocabulary.add("friday", ["Fried day"])  # already an entry: not twice
+    assert vocabulary.load().terms == ("Priya", "friday") and ("Fried day", "friday") in vocabulary.load().fixes
 
 
 def test_words_are_kept_as_markdown_one_per_line(words):
@@ -41,7 +48,6 @@ def test_words_are_kept_as_markdown_one_per_line(words):
     vocabulary.add("Kubernetes", learned=True)
     text = words.read_text()
     assert text.startswith("# Vocabulary\n")
-    assert "- JARVIS (heard as: Yavis, Cajarves, Jarves) (" in text  # the seed is kept once something changes
     assert f"- Priya (heard as: Pria, Preya) ({TODAY})\n" in text
     assert f"- Kubernetes ({TODAY}, learned)\n" in text
     assert vocabulary.parse(text) == vocabulary.entries()
@@ -93,10 +99,11 @@ def test_the_users_own_words_are_never_dropped_to_make_room(words, monkeypatch):
 
 def test_an_entry_is_rewritten_or_removed_by_its_word(words):
     vocabulary.add("Pria", ["Priya"], learned=True)
+    vocabulary.add("Pria Two")
     assert vocabulary.save("pria", "Priya", ["Pria", "Preya"]) == "Saved Priya."
     assert vocabulary.find(vocabulary.entries(), "Priya") == Entry("Priya", ["Pria", "Preya"], TODAY, False)
     with pytest.raises(ValueError, match="already"):
-        vocabulary.save("Priya", "JARVIS", [])
+        vocabulary.save("Priya", "Pria Two", [])
     assert vocabulary.remove("PRIYA") == "Removed Priya from the vocabulary."
     with pytest.raises(ValueError, match="isn't in"):
         vocabulary.remove("Priya")
@@ -108,13 +115,13 @@ def test_an_entry_is_rewritten_or_removed_by_its_word(words):
 
 
 def test_the_prompt_has_the_users_words_then_projects_then_learned_ones_newest_first():
-    found = [Entry("JARVIS", ["Yavis"]), Entry("Old", [], "2026-01-01", True), Entry("Priya", [], "2026-02-01", True),
+    found = [Entry("Alfred", ["Yavis"]), Entry("Old", [], "2026-01-01", True), Entry("Priya", [], "2026-02-01", True),
              Entry("Zed"), Entry("ai armory", ["ai army"], "2026-03-01", True)]
     v = vocabulary.build(found, ["AI Armory", "Hermes Agent"])
-    assert v.terms == ("JARVIS", "Zed", "AI Armory", "Hermes Agent", "Priya", "Old")
-    assert v.prompt() == "JARVIS, Zed, AI Armory, Hermes Agent, Priya, Old."
-    assert v.prompt(limit=20) == "JARVIS, Zed."  # cut short, the most important stay
-    assert set(v.fixes) == {("Yavis", "JARVIS"), ("ai army", "ai armory")}
+    assert v.terms == ("Alfred", "Zed", "AI Armory", "Hermes Agent", "Priya", "Old")
+    assert v.prompt() == "Alfred, Zed, AI Armory, Hermes Agent, Priya, Old."
+    assert v.prompt(limit=20) == "Alfred, Zed."  # cut short, the most important stay
+    assert set(v.fixes) == {("Yavis", "Alfred"), ("ai army", "ai armory")}
     assert Vocabulary().prompt() == ""
 
 
@@ -132,23 +139,23 @@ def test_project_names_are_given_as_spoken(env):
 def test_load_reads_the_file_and_the_project_list(env, tmp_path, monkeypatch):
     vocabulary.add("Priya", ["Pria"])
     v = vocabulary.load(projects.load)
-    assert v.terms == ("JARVIS", "Priya", "video agent", "other") and ("Pria", "Priya") in v.fixes
+    assert v.terms == ("Alfred", "Priya", "video agent", "other") and ("Pria", "Priya") in v.fixes
 
 
 def test_mishearings_are_put_right_as_whole_words_in_any_case():
-    v = Vocabulary(("JARVIS", "AI Armory"), (("Yavis", "JARVIS"), ("ai army", "AI Armory"), ("hey yavis", "JARVIS")))
-    assert v.correct("Hey Yavis, YAVIS's list; yavis.") == "JARVIS, JARVIS's list; JARVIS."
+    v = Vocabulary(("Alfred", "AI Armory"), (("Yavis", "Alfred"), ("ai army", "AI Armory"), ("hey yavis", "Alfred")))
+    assert v.correct("Hey Yavis, YAVIS's list; yavis.") == "Alfred, Alfred's list; Alfred."
     assert v.correct("open the AI-army repo, then the ai  army one") == "open the AI Armory repo, then the AI Armory one"
     assert v.correct("Yavisian, preyavis and Yavis-like stay") == "Yavisian, preyavis and Yavis-like stay"
     assert v.correct("") == ""
 
 
 def test_an_echo_of_the_prompt_is_only_several_of_its_words_and_nothing_else():
-    v = Vocabulary(("JARVIS", "AI Armory", "Hermes Agent", "Priya"))
-    assert v.echo("JARVIS, AI Armory, Hermes Agent.") and v.echo("Priya. JARVIS, Hermes Agent, AI Armory, Priya")
-    assert not v.echo("JARVIS")
-    assert not v.echo("JARVIS, open AI Armory and Hermes Agent")
-    assert not v.echo("JARVIS, AI Armory.")
+    v = Vocabulary(("Alfred", "AI Armory", "Hermes Agent", "Priya"))
+    assert v.echo("Alfred, AI Armory, Hermes Agent.") and v.echo("Priya. Alfred, Hermes Agent, AI Armory, Priya")
+    assert not v.echo("Alfred")
+    assert not v.echo("Alfred, open AI Armory and Hermes Agent")
+    assert not v.echo("Alfred, AI Armory.")
     assert not Vocabulary().echo("anything")
 
 
@@ -158,18 +165,18 @@ needs_dictionary = pytest.mark.skipif(not any(p.exists() for p in vocabulary.DIC
 
 @needs_dictionary
 def test_the_review_keeps_only_mishearings_that_are_not_everyday_words():
-    assert vocabulary.plausible_mishearing("Yavis", "JARVIS")
-    assert vocabulary.plausible_mishearing("cajarves", "JARVIS")
-    assert vocabulary.plausible_mishearing("our yavis", "JARVIS")  # one odd word is enough
-    for everyday in ("service", "services", "jar this", "OK", "ya", "Jarvis", "talked", "running"):
-        assert not vocabulary.plausible_mishearing(everyday, "JARVIS"), everyday
+    assert vocabulary.plausible_mishearing("Yavis", "Alfred")
+    assert vocabulary.plausible_mishearing("cajarves", "Alfred")
+    assert vocabulary.plausible_mishearing("our yavis", "Alfred")  # one odd word is enough
+    for everyday in ("service", "services", "jar this", "OK", "ya", "Alfred", "talked", "running"):
+        assert not vocabulary.plausible_mishearing(everyday, "Alfred"), everyday
 
 
 def test_without_the_system_dictionary_a_short_list_of_common_words_stands_in(monkeypatch, tmp_path):
     monkeypatch.setattr(vocabulary, "DICTIONARIES", (tmp_path / "missing",))
     vocabulary._dictionary.cache_clear()
     try:
-        assert not vocabulary.plausible_mishearing("the", "Zed") and vocabulary.plausible_mishearing("Yavis", "JARVIS")
+        assert not vocabulary.plausible_mishearing("the", "Zed") and vocabulary.plausible_mishearing("Yavis", "Alfred")
     finally:
         vocabulary._dictionary.cache_clear()
 
@@ -210,7 +217,7 @@ def test_the_review_sees_the_vocabulary_and_is_asked_for_misheard_words(data, wo
     clock.now += 11 * 60
     assert asyncio.run(w.check())
     [prompt] = reviewer.prompts
-    assert "<vocabulary>\n- JARVIS (heard as: Yavis, Cajarves, Jarves)\n- Priya (heard as: Pria)\n</vocabulary>" in prompt
+    assert "<vocabulary>\n- Priya (heard as: Pria)\n</vocabulary>" in prompt
     assert '"action": "vocabulary"' in learning.system() and "heard_as" in learning.system()
 
 
@@ -219,13 +226,13 @@ def test_misheard_words_keep_only_what_the_user_actually_said():
     found = learning.to_edits([
         {"action": "vocabulary", "word": "Priya", "heard_as": ["Pria", "Preya"], "reason": "Spelt out."},
         {"action": "vocabulary", "word": "priya", "heard_as": ["Pria"], "reason": "Twice."},
-        {"action": "vocabulary", "word": "JARVIS", "heard_as": ["cajarves", "JARVIS", 3]},
+        {"action": "vocabulary", "word": "Alfred", "heard_as": ["cajarves", "Alfred", 3]},
         {"action": "vocabulary", "word": "AI Armory", "heard_as": "A I army"},
         {"action": "vocabulary", "word": " ", "heard_as": ["x"]},
     ], [], TODAY, said)
     assert found == [
         {"action": "vocabulary", "word": "Priya", "reason": "Spelt out.", "heard_as": ["Pria"]},
-        {"action": "vocabulary", "word": "JARVIS", "reason": "From the conversation.", "heard_as": ["cajarves"]},
+        {"action": "vocabulary", "word": "Alfred", "reason": "From the conversation.", "heard_as": ["cajarves"]},
         {"action": "vocabulary", "word": "AI Armory", "reason": "From the conversation."},
     ]
 
@@ -239,7 +246,7 @@ def test_misheard_words_have_their_own_cap_beside_the_suggestions():
 
 
 def test_the_user_said_lines_are_only_theirs(data):
-    text = "[09:00] Alex: open the ai army\nJARVIS: Opening Yavis.\n\n[09:01] JARVIS (announced): Pria\n\n"
+    text = "[09:00] Alex: open the ai army\nAlfred: Opening Yavis.\n\n[09:01] Alfred (announced): Pria\n\n"
     assert learning.said_by_user([("2026-10-07", text)]) == "open the ai army"
 
 
@@ -271,23 +278,24 @@ def call(name: str, body: dict | None = None):
 
 
 def test_the_panel_lists_adds_edits_and_removes_words(words, monkeypatch):
-    monkeypatch.setattr(vocabulary, "project_terms", lambda projects=tuple: ["JARVIS", "Video Agent"])
+    monkeypatch.setattr(vocabulary, "project_terms", lambda projects=tuple: ["Priya", "Video Agent"])
     shown = call("vocabulary")
-    assert [e["word"] for e in shown["entries"]] == ["JARVIS"] and shown["projects"] == ["Video Agent"]
+    assert shown["entries"] == [] and shown["projects"] == ["Priya", "Video Agent"]
     assert shown["max"] == vocabulary.MAX_ENTRIES and shown["prompt"] is True
     shown = call("vocabulary_add", {"word": "Priya", "heard": "Pria, Preya"})
     assert shown["entries"][-1] == {"word": "Priya", "heard": ["Pria", "Preya"], "date": TODAY, "learned": False}
+    assert shown["projects"] == ["Video Agent"]  # an entry already
     shown = call("vocabulary_save", {"old": "Priya", "word": "Priya", "heard": ["Preeya"]})
     assert shown["entries"][-1]["heard"] == ["Preeya"]
-    shown = call("vocabulary_remove", {"word": "JARVIS"})
-    assert [e["word"] for e in shown["entries"]] == ["Priya"] and shown["projects"] == ["JARVIS", "Video Agent"]
+    shown = call("vocabulary_remove", {"word": "Priya"})
+    assert shown["entries"] == [] and shown["projects"] == ["Priya", "Video Agent"]
     with pytest.raises(ValueError, match="empty"):
         call("vocabulary_add", {"word": " "})
     with pytest.raises(ValueError, match="heard must be text"):
         call("vocabulary_add", {"word": "Zed", "heard": 3})
 
 
-def test_jarvis_adds_a_word_when_told_it_misheard_one(words):
+def test_alfred_adds_a_word_when_told_it_misheard_one(words):
     t = tools.get("vocabulary_add")
     assert t.changes and "heard_as" in t.properties
     assert t.fn("Priya", ["Pria"]) == "Added Priya to the vocabulary, heard as Pria."

@@ -46,7 +46,7 @@ test("a photo is scaled down to fit, never up", () => {
   assert.deepEqual(fitSize(0, 0), [1, 1]);
 });
 
-test("a photo picked goes to JARVIS at once, and waits for the next turn", async () => {
+test("a photo picked goes to Alfred at once, and waits for the next turn", async () => {
   attach(file());
   assert.equal(photo.value?.state, "sending");
   assert.equal(await photoReady(), true);
@@ -60,13 +60,13 @@ test("a photo picked goes to JARVIS at once, and waits for the next turn", async
 test("the next thing the user says or types takes it", async () => {
   attach(file());
   await photoReady();
-  addLine("jarvis").value = "Hello.";  // JARVIS lines don't consume it
+  addLine("alfred").value = "Hello.";  // Alfred lines don't consume it
   assert.equal(photo.value?.state, "ready");
   addLine("you").value = "What's this?";
   assert.equal(photo.value, null);
 });
 
-test("removing it before asking takes it back off JARVIS", async () => {
+test("removing it before asking takes it back off Alfred", async () => {
   attach(file());
   await photoReady();
   const id = photo.value!.id;
@@ -88,7 +88,7 @@ test("picking another replaces it, and one removed while sending is dropped when
 });
 
 test("a photo that doesn't get there says why, and isn't sent with the next turn", async () => {
-  fake.fail = new Error("That isn't a picture JARVIS can read.");
+  fake.fail = new Error("That isn't a picture Alfred can read.");
   attach(file());
   assert.equal(await photoReady(), false);
   assert.equal(photo.value?.state, "failed");

@@ -1,17 +1,17 @@
-"""Tests for jarvis.voice.session: turn routing (rule offer, request, brain, spoken over), prompt requests, what a call
+"""Tests for alfred.voice.session: turn routing (rule offer, request, brain, spoken over), prompt requests, what a call
 holds."""
 
 import asyncio
 
 import pytest
 
-from jarvis.brain.kept import Kept
-from jarvis.state import conversation
-from jarvis.storage import profile
-from jarvis.tasks import client
-from jarvis.voice import floor as floor_module, session as voice_session
-from jarvis.voice.floor import Floor
-from jarvis.voice.session import VoiceSession
+from alfred.brain.kept import Kept
+from alfred.state import conversation
+from alfred.storage import profile
+from alfred.tasks import client
+from alfred.voice import floor as floor_module, session as voice_session
+from alfred.voice.floor import Floor
+from alfred.voice.session import VoiceSession
 
 REQUEST = {"id": 13, "task": 117, "summary": "a command that deletes files",
            "spoken": "Task 117 wants to delete files. Okay to go ahead?"}
@@ -20,7 +20,7 @@ OTHER = {"id": 14, "task": 118, "summary": "a command that stops a process",
 
 
 class Brain:
-    """Fake CLI brain (jarvis.brain.VoiceBrain)."""
+    """Fake CLI brain (alfred.brain.VoiceBrain)."""
 
     def __init__(self, *reply: str) -> None:
         self.reply = reply or ("Sure.",)
@@ -157,7 +157,7 @@ def test_a_yes_to_a_tasks_request_goes_to_the_runner_not_the_brain():
     assert said == "Okay, the task carries on."
     assert voice.runner.answers == [(13, "approve", "voice", "once", True)]
     assert voice.brain.asked == [] and voice.asks.open is None
-    assert not voice.floor.question and voice.floor.recent[-1] == ("JARVIS", said)
+    assert not voice.floor.question and voice.floor.recent[-1] == ("Alfred", said)
     assert voice.brain.notes[-1].endswith("approved task 117's request 13 to run a command that deletes files.")
 
 
@@ -313,7 +313,7 @@ def test_whats_heard_of_a_reply_that_began_before_this_one_isnt_taken_for_it():
     async def main():
         voice = call(Brain(*NEWS))
         await reply(voice, "Any news?")
-        voice.spoke("Hello Sam. JARVIS online.", {"started_speaking_at": 1.0}, interrupted=True)  # long before
+        voice.spoke("Hello Sam. Alfred online.", {"started_speaking_at": 1.0}, interrupted=True)  # long before
         voice.spoke("".join(NEWS), {}, interrupted=False)
         await reply(voice, "Thanks.")
         return voice
@@ -497,13 +497,13 @@ def test_with_nothing_waiting_or_the_runner_down_the_greeting_is_just_hello():
             raise client.RunnerUnavailable("down")
 
     voice = call()
-    assert asyncio.run(voice.greeting()) == f"Hello {profile.name()}. JARVIS online." and voice.brain.notes == []
-    assert asyncio.run(call(runner=Down()).greeting()) == f"Hello {profile.name()}. JARVIS online."
+    assert asyncio.run(voice.greeting()) == f"Hello {profile.name()}. Alfred online." and voice.brain.notes == []
+    assert asyncio.run(call(runner=Down()).greeting()) == f"Hello {profile.name()}. Alfred online."
 
 
 def test_updates_with_nothing_to_say_are_only_counted():
     greeting = asyncio.run(call(runner=Runner(unseen=[update(5, "done", "")])).greeting())
-    assert greeting == f"Hello {profile.name()}. JARVIS online. There is one task update waiting."
+    assert greeting == f"Hello {profile.name()}. Alfred online. There is one task update waiting."
 
 
 class Marks(Runner):

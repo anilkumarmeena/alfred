@@ -1,4 +1,4 @@
-"""Tests for jarvis.tasks.client against a fake runner on a Unix socket."""
+"""Tests for alfred.tasks.client against a fake runner on a Unix socket."""
 
 import asyncio
 import logging
@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from aiohttp import web
 
-from jarvis.tasks import client
+from alfred.tasks import client
 
 
 def test_the_runner_stopping_mid_stream_is_it_being_down_not_an_error(monkeypatch, tmp_path):
@@ -44,14 +44,14 @@ def test_the_runner_stopping_mid_stream_is_it_being_down_not_an_error(monkeypatc
 
 
 def test_a_tool_finding_the_runner_down_logs_one_line_not_a_traceback(monkeypatch, caplog):
-    from jarvis import tools
+    from alfred import tools
 
     async def down(*_args, **_kwargs):
         raise client.RunnerUnavailable(client.DOWN)
 
     monkeypatch.setattr(client, "tasks", down)
-    with caplog.at_level(logging.WARNING, logger="jarvis.tools"):
+    with caplog.at_level(logging.WARNING, logger="alfred.tools"):
         content, is_error = asyncio.run(tools.run("task_list", {}))
     assert is_error and client.DOWN in content  # the model still hears how to start it
-    [record] = [r for r in caplog.records if r.name == "jarvis.tools"]
+    [record] = [r for r in caplog.records if r.name == "alfred.tools"]
     assert record.levelno == logging.WARNING and record.exc_info is None

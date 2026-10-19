@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from test_node_link import connect, mine, paired, until  # noqa: F401  (mine is a fixture)
 
-from jarvis.node import bundles, hub as hubs, update
+from alfred.node import bundles, hub as hubs, update
 
 
 def git(repo: Path, *args: str) -> str:

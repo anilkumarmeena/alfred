@@ -1,4 +1,4 @@
-"""Tests for jarvis.state.memory: recent.md, the daily conversation logs and searching them; long-term memory limits."""
+"""Tests for alfred.state.memory: recent.md, the daily conversation logs and searching them; long-term memory limits."""
 
 import asyncio
 import subprocess
@@ -6,13 +6,13 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from alfred import tools
+from alfred.brain import cli, persona, side
+from alfred.config import DATA_DIR, ROOT
+from alfred.safety import commands
+from alfred.state import memory
+from alfred.storage import profile
 from conftest import use_profile
-from jarvis import tools
-from jarvis.brain import cli, persona, side
-from jarvis.config import DATA_DIR, ROOT
-from jarvis.safety import commands
-from jarvis.state import memory
-from jarvis.storage import profile
 
 
 @pytest.fixture
@@ -31,8 +31,8 @@ def test_each_exchange_goes_into_the_day_s_file_as_well_as_recent(logs):
     memory.log_exchange("delete the old renders", "Clearing them out.")
     day = (logs / f"{today()}.md").read_text()
     assert day.startswith(f"# Conversations, {datetime.now(profile.tz()):%A %-d %B %Y}\n\n[")
-    assert "] Alex: what's on today?\nJARVIS: Two meetings.\n\n[" in day
-    assert day.endswith("] Alex: delete the old renders\nJARVIS: Clearing them out.\n\n")
+    assert "] Alex: what's on today?\nAssistant: Two meetings.\n\n[" in day
+    assert day.endswith("] Alex: delete the old renders\nAssistant: Clearing them out.\n\n")
     assert day.count("# Conversations") == 1
     assert "Alex: what's on today?" in memory.read_recent()
 
@@ -43,15 +43,15 @@ def test_the_day_s_file_keeps_everything_while_recent_is_trimmed(logs, monkeypat
         memory.log_exchange(f"question {n}", f"answer {n}")
     assert len(memory.read_recent()) <= 200 and "question 0\n" not in memory.read_recent()
     day = (logs / f"{today()}.md").read_text()
-    assert all(f"Alex: question {n}\nJARVIS: answer {n}" in day for n in range(20))
+    assert all(f"Alex: question {n}\nAssistant: answer {n}" in day for n in range(20))
 
 
 def test_approvals_and_announcements_are_logged(logs):
     memory.log_announcement("Task 12, fix the build, is done. ")
     memory.log_exchange("yes go ahead", "Done.", ["rm -rf ~/Desktop/renders/old"])
     day = (logs / f"{today()}.md").read_text()
-    assert "] JARVIS (announced): Task 12, fix the build, is done.\n\n" in day
-    assert "] Alex: yes go ahead\n(Approved: rm -rf ~/Desktop/renders/old)\nJARVIS: Done.\n\n" in day
+    assert "] Assistant (announced): Task 12, fix the build, is done.\n\n" in day
+    assert "] Alex: yes go ahead\n(Approved: rm -rf ~/Desktop/renders/old)\nAssistant: Done.\n\n" in day
     assert "Approved" not in memory.read_recent()
 
 
@@ -60,10 +60,10 @@ def test_a_reply_cut_off_is_logged_as_interrupted_rather_than_blank(logs):
     memory.log_exchange("is the first turn slow?", "The first turn starts the", interrupted=True)
     memory.log_exchange("thanks", "")  # an empty reply is logged as is
     day = (logs / f"{today()}.md").read_text()
-    assert "] Alex: I think\nJARVIS: (interrupted before replying)\n\n" in day
-    assert "] Alex: is the first turn slow?\nJARVIS: The first turn starts the (interrupted)\n\n" in day
-    assert day.endswith("] Alex: thanks\nJARVIS: \n\n")
-    assert "Alex: I think\nJARVIS: (interrupted before replying)" in memory.read_recent()
+    assert "] Alex: I think\nAssistant: (interrupted before replying)\n\n" in day
+    assert "] Alex: is the first turn slow?\nAssistant: The first turn starts the (interrupted)\n\n" in day
+    assert day.endswith("] Alex: thanks\nAssistant: \n\n")
+    assert "Alex: I think\nAssistant: (interrupted before replying)" in memory.read_recent()
 
 
 def test_the_prompt_says_a_stray_bye_mid_work_is_noise():
@@ -74,7 +74,7 @@ def test_the_prompt_says_a_stray_bye_mid_work_is_noise():
 def test_notes_are_logged_as_announcements(logs):
     notes = persona.Notes()
     notes.note("Task 3 needs your answer.")
-    assert "JARVIS (announced): Task 3 needs your answer." in (logs / f"{today()}.md").read_text()
+    assert "Assistant (announced): Task 3 needs your answer." in (logs / f"{today()}.md").read_text()
     assert "Task 3 needs your answer." in notes.turn("what is it?")
 
 
@@ -86,7 +86,7 @@ def test_the_voice_brain_logs_the_commands_a_yes_approved(logs, monkeypatch):
     asyncio.run(spoken_reply(b, "clear out the old renders"))
     asyncio.run(spoken_reply(b, "Yes."))
     day = (logs / f"{today()}.md").read_text()
-    assert f"Alex: Yes.\n(Approved: {COMMAND})\nJARVIS:" in day
+    assert f"Alex: Yes.\n(Approved: {COMMAND})\nAssistant:" in day
     assert day.count("(Approved:") == 1
 
 
@@ -96,21 +96,21 @@ def write_day(logs, day: str, *entries: str) -> None:
 
 
 def test_search_finds_exchanges_with_every_word_newest_first(logs):
-    write_day(logs, "2026-09-20", "[09:00] Alex: where are the logs kept?\nJARVIS: In data.",
-              "[09:05] Alex: thanks\nJARVIS: Any time.")
-    write_day(logs, "2026-09-21", "[10:00] Alex: move the logs\nJARVIS: Moved the\nconversation logs.")
+    write_day(logs, "2026-09-20", "[09:00] Alex: where are the logs kept?\nAssistant: In data.",
+              "[09:05] Alex: thanks\nAssistant: Any time.")
+    write_day(logs, "2026-09-21", "[10:00] Alex: move the logs\nAssistant: Moved the\nconversation logs.")
     found = memory.search_conversations("LOGS")
     assert found.index("2026-09-21 [10:00]") < found.index("2026-09-20 [09:00]")
     assert "Moved the\nconversation logs." in found and "Any time" not in found
-    assert memory.search_conversations("where logs") == "2026-09-20 [09:00] Alex: where are the logs kept?\nJARVIS: In data."
+    assert memory.search_conversations("where logs") == "2026-09-20 [09:00] Alex: where are the logs kept?\nAssistant: In data."
     assert memory.search_conversations("renders") == "No conversations mention 'renders'."
 
 
 def test_search_by_date_or_recent_days(logs):
     old = f"{datetime.now(profile.tz()).date() - timedelta(days=10):%Y-%m-%d}"
-    write_day(logs, old, "[09:00] Alex: old one\nJARVIS: Yes.")
-    write_day(logs, today(), "[11:00] Alex: new one\nJARVIS: Yes.", "[11:30] JARVIS (announced): Task 4 is done.")
-    assert memory.search_conversations(date=old) == f"{old} [09:00] Alex: old one\nJARVIS: Yes."
+    write_day(logs, old, "[09:00] Alex: old one\nAssistant: Yes.")
+    write_day(logs, today(), "[11:00] Alex: new one\nAssistant: Yes.", "[11:30] Assistant (announced): Task 4 is done.")
+    assert memory.search_conversations(date=old) == f"{old} [09:00] Alex: old one\nAssistant: Yes."
     recent = memory.search_conversations(days=3)
     assert "new one" in recent and "Task 4 is done" in recent and "old one" not in recent
     assert memory.search_conversations("one", days=30).count("Alex:") == 2
@@ -121,7 +121,7 @@ def test_search_by_date_or_recent_days(logs):
 
 def test_search_keeps_its_answer_short(logs, monkeypatch):
     monkeypatch.setattr(memory, "SEARCH_MAX_CHARS", 300)
-    write_day(logs, today(), *(f"[10:{n:02}] Alex: note {n}\nJARVIS: {'x' * 50}" for n in range(20)))
+    write_day(logs, today(), *(f"[10:{n:02}] Alex: note {n}\nAssistant: {'x' * 50}" for n in range(20)))
     found = memory.search_conversations("note")
     assert len(found) < 500 and found.startswith(f"{today()} [10:19]")
     assert found.endswith("older matches not shown; narrow the search.)")
@@ -132,7 +132,7 @@ def test_search_with_no_logs_yet(logs):
 
 
 def test_conversation_search_is_a_voice_tool(logs):
-    write_day(logs, today(), "[10:00] Alex: hello\nJARVIS: Hello.")
+    write_day(logs, today(), "[10:00] Alex: hello\nAssistant: Hello.")
     assert "conversation_search" in {t.name for t in tools.all_tools()}
     content, is_error = asyncio.run(tools.run("conversation_search", {"text": "hello", "days": 1}))
     assert not is_error and "Alex: hello" in content
@@ -147,19 +147,19 @@ def test_the_logs_stay_out_of_git_and_within_reach_of_the_shell_and_lookup():
     ignored = subprocess.run(["git", "check-ignore", "-q", inside], cwd=ROOT)
     assert ignored.returncode == 0
     path = str(profile.current().conversations / "2026-09-27.md")
-    assert not any(path.startswith(str(p)) for p in commands.JARVIS_SECRETS) and not commands.names_secret(path)
+    assert not any(path.startswith(str(p)) for p in commands.ALFRED_SECRETS) and not commands.names_secret(path)
 
 
 def test_the_file_lookup_knows_the_layout_and_starts_from_the_repo():
     prompt = side.lookup_system()
-    assert f"JARVIS's folder, {ROOT}" in prompt
+    assert f"Alfred's folder, {ROOT}" in prompt
     for where in ("memory.md", "conversations/YYYY-MM-DD.md", "tasks.db", "secrets/"):
         assert where in prompt
     assert "the project list and the to-do list (read it with tables and query, not Read or Grep)" in prompt
     assert "projects.toml" not in prompt and "improvements.md" not in prompt
-    for path in ("jarvis/", "server.py", "web/", "tests/", "docs/architecture.md", "deploy/", "README.md", "Makefile"):
+    for path in ("alfred/", "server.py", "web/", "tests/", "docs/architecture.md", "deploy/", "README.md", "Makefile"):
         assert path in prompt, path
-        assert (ROOT / path).exists() or (ROOT / "jarvis" / path).exists(), path  # the map names only what exists
+        assert (ROOT / path).exists() or (ROOT / "alfred" / path).exists(), path  # the map names only what exists
     assert side.FILE_READS == ["Read", "Glob", "Grep"] and side.LOOKUP_READS < side.LOOKUP_TURNS
 
 
@@ -190,10 +190,10 @@ def fill(section: str, size: int, n: int = 5) -> list[str]:
 
 def test_each_fact_goes_under_its_section_s_heading(mem):
     assert memory.remember("  Likes   short answers ", "user") == "Saved to About Alex (34 of 2,000)."
-    assert memory.remember("Runs JARVIS on an M2", "Environment") == "Saved to Alex's environment (35 of 3,000)."
+    assert memory.remember("Runs Alfred on an M2", "Environment") == "Saved to Alex's environment (35 of 3,000)."
     memory.remember("Speaks English only", "user")
     assert mem.read_text() == (f"## User\n{dated('Likes short answers')}\n{dated('Speaks English only')}\n\n"
-                               f"## Environment\n{dated('Runs JARVIS on an M2')}\n")
+                               f"## Environment\n{dated('Runs Alfred on an M2')}\n")
     with pytest.raises(ValueError, match="section must be user or environment"):
         memory.remember("Likes tea", "home")
     with pytest.raises(ValueError, match="empty"):

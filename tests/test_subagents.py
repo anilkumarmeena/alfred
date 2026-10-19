@@ -19,14 +19,14 @@ from claude_agent_sdk import (
 from test_in_place import NullReporter, env, worker_task  # noqa: F401  (env is a fixture)
 from test_nudges import FakeClient, Pending, result, said, worker_run
 
+from alfred.brain import cli
+from alfred.gates import mcp_gate, shell
+from alfred.llm import roles
+from alfred.llm.claude import BUILTIN_AGENTS_DENIED
+from alfred.llm.roles import Role
+from alfred.state import memory
+from alfred.tasks import runner, worker
 from conftest import use_profile, use_task_cache
-from jarvis.brain import cli
-from jarvis.gates import mcp_gate, shell
-from jarvis.llm import roles
-from jarvis.llm.claude import BUILTIN_AGENTS_DENIED
-from jarvis.llm.roles import Role
-from jarvis.state import memory
-from jarvis.tasks import runner, worker
 
 EDITS = {"Edit", "Write", "NotebookEdit"}
 MAIN = ToolPermissionContext(tool_use_id="t1")
@@ -343,14 +343,14 @@ def voice_options(tmp_path, monkeypatch):
 
 
 def test_voice_brain_has_no_subagent_or_file_read_that_could_hold_a_turn(voice_options):
-    """File lookups go through file_lookup (jarvis.brain.side), which can't keep the turn waiting."""
+    """File lookups go through file_lookup (alfred.brain.side), which can't keep the turn waiting."""
     opts = voice_options
     assert not opts.agents and not {"Agent", "Task", "Read", "Glob", "Grep"} & set(opts.tools)
     assert not EDITS & set(opts.tools)
     assert opts.disallowed_tools == BUILTIN_AGENTS_DENIED  # no MCP server is on in the tests' database
-    assert {"mcp__jarvis__file_lookup", "mcp__jarvis__computer_lookup"} <= set(opts.allowed_tools)
+    assert {"mcp__alfred__file_lookup", "mcp__alfred__computer_lookup"} <= set(opts.allowed_tools)
     assert "file_lookup" in opts.system_prompt and "code_question background task" in opts.system_prompt
-    assert {"jarvis", "shell"} <= set(opts.mcp_servers) and shell.JOB_STATUS in opts.allowed_tools  # long jobs kept
+    assert {"alfred", "shell"} <= set(opts.mcp_servers) and shell.JOB_STATUS in opts.allowed_tools  # long jobs kept
 
 
 def test_voice_prompt_hands_multi_step_work_to_background_tasks(voice_options):
@@ -362,7 +362,7 @@ def test_voice_prompt_hands_multi_step_work_to_background_tasks(voice_options):
     assert "only to do one thing" in shell.prompt() and "never a chain of several" in shell.prompt()
     assert "use computer_lookup, even when it's one command" in shell.prompt() and "start_job" in shell.prompt()
     for words in ("You talk; helpers and tasks do the work", "computer_lookup for anything about this computer",
-                  "JARVIS refuses more"):
+                  "Alfred refuses more"):
         assert words in prompt
 
 

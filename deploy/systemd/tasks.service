@@ -1,20 +1,20 @@
-# JARVIS task runner, a systemd user unit. Nice=10 and the idle I/O class (inherited by tasks) give the voice agent CPU
-# and disk first. PATH includes the toolchains tasks build with. Label and folders are filled in by jarvis.setup_local.
+# Alfred task runner, a systemd user unit. Nice=10 and the idle I/O class (inherited by tasks) give the voice agent CPU
+# and disk first. PATH includes the toolchains tasks build with. Label and folders are filled in by alfred.setup_local.
 [Unit]
-Description=JARVIS task runner (${LABEL})
+Description=Alfred task runner (${LABEL})
 
 [Service]
 Type=exec
 WorkingDirectory=${ROOT}
 Environment="PATH=${HOME}/.local/bin:${HOME}/.venv/bin:/usr/local/go/bin:${NODE}/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
-Environment="JARVIS_HOME=${JARVIS_HOME}"
-ExecStart="${ROOT}/.venv/bin/python" -m jarvis.tasks.runner
+Environment="ALFRED_HOME=${ALFRED_HOME}"
+ExecStart="${ROOT}/.venv/bin/python" -m alfred.tasks.runner
 Restart=always
 RestartSec=10
 Nice=10
 IOSchedulingClass=idle
-StandardOutput=append:${JARVIS_HOME}/logs/tasks.log
-StandardError=append:${JARVIS_HOME}/logs/tasks.log
+StandardOutput=append:${ALFRED_HOME}/logs/tasks.log
+StandardError=append:${ALFRED_HOME}/logs/tasks.log
 
 [Install]
 WantedBy=default.target

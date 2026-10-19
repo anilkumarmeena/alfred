@@ -1,4 +1,4 @@
-"""Tests for jarvis.skills: folder and table, session plugin, installs with script review, voice flow, suggestions, panel."""
+"""Tests for alfred.skills: folder and table, session plugin, installs with script review, voice flow, suggestions, panel."""
 
 import asyncio
 import io
@@ -18,15 +18,15 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from test_in_place import worker_task
 from test_task_host import Asking
 
+from alfred import panel, tools
+from alfred.brain import cli
+from alfred.gates import draft_gate
+from alfred.llm.claude import ATTRIBUTION
+from alfred.skills import home, install, review
+from alfred.storage import profile
+from alfred.tasks import data_edits, learning, worker
+from alfred.tools import skills as skill_tools  # noqa: F401  (registers the skill tools)
 from conftest import use_profile, use_task_cache
-from jarvis import panel, tools
-from jarvis.brain import cli
-from jarvis.gates import draft_gate
-from jarvis.llm.claude import ATTRIBUTION
-from jarvis.skills import home, install, review
-from jarvis.storage import profile
-from jarvis.tasks import data_edits, learning, worker
-from jarvis.tools import skills as skill_tools  # noqa: F401  (registers the skill tools)
 
 STANDUP = "1. Read yesterday's commits with git log.\n2. Read today's calendar.\n3. Say three bullet points."
 PDF_MD = """---
@@ -169,7 +169,7 @@ def test_the_session_plugin_links_only_usable_skills_and_nothing_else(skills_hom
     home.install(staged(tmp_path, text=home.sanitize(PDF_MD)[0]), "pdf", "x")  # scripts not approved
     where = tmp_path / "plugin"
     found = home.plugin(where)
-    assert [home.qualified(s) for s in found] == ["jarvis-skills:standup-notes"]
+    assert [home.qualified(s) for s in found] == ["alfred-skills:standup-notes"]
     assert json.loads((where / ".claude-plugin" / "plugin.json").read_text())["name"] == home.PLUGIN
     assert sorted(p.name for p in where.iterdir()) == [".claude-plugin", "skills"]
     assert [p.name for p in (where / "skills").iterdir()] == ["standup-notes"]
@@ -328,7 +328,7 @@ def test_the_scan_flags_what_matters_whatever_a_model_says(tmp_path):
     assert flags[0] == "reaches the network (scripts/a.py, scripts/b.sh)"
     manual(tmp_path, "inline", "---\nname: inline\ndescription: x\n---\nContext: !`cat .env`\n")
     assert [f.split(" (")[0] for f in review.scan(tmp_path / "inline")] == [
-        "has commands in its SKILL.md meant to run as it loads, which JARVIS doesn't run",
+        "has commands in its SKILL.md meant to run as it loads, which Alfred doesn't run",
         "mentions secrets or credentials in its instructions"]
 
 
@@ -429,12 +429,12 @@ def run(name: str, args: dict):
 
 
 def confirm(gate, draft_id: str, said: str = "make that a skill", yes: str = "Yes.") -> tuple[str, str]:
-    """Run a skill_confirm turn held for the question, then the answer; return what JARVIS asked and what it did."""
+    """Run a skill_confirm turn held for the question, then the answer; return what Alfred asked and what it did."""
     gate.new_turn(said)
-    assert isinstance(asyncio.run(gate("mcp__jarvis__skill_confirm", {"draft_id": draft_id}, None)), PermissionResultDeny)
+    assert isinstance(asyncio.run(gate("mcp__alfred__skill_confirm", {"draft_id": draft_id}, None)), PermissionResultDeny)
     asked = gate.question("")
     assert gate.new_turn(yes) == [draft_gate.PREFIX + draft_id]
-    assert isinstance(asyncio.run(gate("mcp__jarvis__skill_confirm", {"draft_id": draft_id}, None)), PermissionResultAllow)
+    assert isinstance(asyncio.run(gate("mcp__alfred__skill_confirm", {"draft_id": draft_id}, None)), PermissionResultAllow)
     done, error = run("skill_confirm", {"draft_id": draft_id})
     assert not error, done
     return asked, done
@@ -445,7 +445,7 @@ def test_the_skill_tools_are_registered_and_only_confirming_waits_for_a_yes():
     assert set(found) == {"skills_list", "skill_read", "skill_draft", "skill_install", "skill_enable", "skill_disable",
                           "skill_delete", "skill_confirm"}
     assert [n for n, t in found.items() if t.gated] == ["skill_confirm"]
-    assert "mcp__jarvis__skill_confirm" in draft_gate.gated()
+    assert "mcp__alfred__skill_confirm" in draft_gate.gated()
     assert list(found["skill_confirm"].properties) == ["draft_id"]
     assert "skill_confirm" not in worker.READ_ONLY_TOOLS and not any(n.startswith("skill") for n in worker.READ_ONLY_TOOLS)
 
@@ -530,10 +530,10 @@ def test_deleting_by_voice_needs_a_yes(skills_home, gate):
 def test_a_no_drops_the_draft(skills_home, gate):
     draft, _ = run("skill_draft", {"name": "notes", "description": "Notes.", "instructions": "Write them."})
     gate.new_turn("make it a skill")
-    asyncio.run(gate("mcp__jarvis__skill_confirm", {"draft_id": draft["draft_id"]}, None))
+    asyncio.run(gate("mcp__alfred__skill_confirm", {"draft_id": draft["draft_id"]}, None))
     gate.question("")
     assert gate.new_turn("No, don't.") == []
-    assert isinstance(asyncio.run(gate("mcp__jarvis__skill_confirm", {"draft_id": draft["draft_id"]}, None)), PermissionResultDeny)
+    assert isinstance(asyncio.run(gate("mcp__alfred__skill_confirm", {"draft_id": draft["draft_id"]}, None)), PermissionResultDeny)
 
 
 REVIEW_MD = """---
@@ -659,14 +659,14 @@ def test_the_voice_brain_gets_the_usable_skills_as_its_own_plugin(skills_home, m
     home.save("standup-notes", "Writes the standup.", STANDUP)
     home.install(staged(tmp_path, text=home.sanitize(PDF_MD)[0]), "pdf", "x")  # not approved: left out
     opts = cli._options(brain.shell, brain.jobs)
-    assert opts.skills == ["jarvis-skills:standup-notes"] and "Skill" in opts.tools
+    assert opts.skills == ["alfred-skills:standup-notes"] and "Skill" in opts.tools
     [plugin] = opts.plugins
     assert Path(plugin["path"]) == skills_home / ".sessions" / f"voice-{os.getpid()}"
     settings = json.loads(opts.settings)
     assert settings["disableAllHooks"] is True and settings["permissions"]["deny"]  # the secrets stay hidden
-    assert settings["attribution"] == ATTRIBUTION  # its commits credit JARVIS
-    assert "jarvis-skills:standup-notes: Writes the standup." in opts.system_prompt
-    assert "skill_draft" in opts.system_prompt and "mcp__jarvis__skill_confirm" not in opts.allowed_tools
+    assert settings["attribution"] == ATTRIBUTION  # its commits credit Alfred
+    assert "alfred-skills:standup-notes: Writes the standup." in opts.system_prompt
+    assert "skill_draft" in opts.system_prompt and "mcp__alfred__skill_confirm" not in opts.allowed_tools
 
 
 def test_the_sdk_hands_the_cli_the_plugin_and_one_allow_rule_per_skill(skills_home):
@@ -680,7 +680,7 @@ def test_the_sdk_hands_the_cli_the_plugin_and_one_allow_rule_per_skill(skills_ho
     command = SubprocessCLITransport("hi", replace(opts, cli_path="/bin/true", can_use_tool=None))._build_command()
     assert command[command.index("--plugin-dir") + 1] == opts.plugins[0]["path"]
     allowed = command[command.index("--allowedTools") + 1].split(",")
-    assert "Skill(jarvis-skills:standup-notes)" in allowed and "Skill" not in allowed  # only the listed skills
+    assert "Skill(alfred-skills:standup-notes)" in allowed and "Skill" not in allowed  # only the listed skills
     assert opts.setting_sources == []  # still no user or project settings
 
 
@@ -694,13 +694,13 @@ def test_tasks_get_the_usable_skills_too(skills_home, tmp_path, monkeypatch, kin
     task = worker_task(kind=kind, worktree=str(tmp_path / "plain"), in_place=1, branch="main",
                        project=None if kind == "research" else "video-agent")
     opts = worker._options(task, Asking())
-    assert opts.skills == ["jarvis-skills:standup-notes"] and "Skill" in opts.tools
-    assert opts.plugins == [{"type": "local", "path": str(tmp_path / "data" / "tasks" / "9" / "jarvis-skills")}]
+    assert opts.skills == ["alfred-skills:standup-notes"] and "Skill" in opts.tools
+    assert opts.plugins == [{"type": "local", "path": str(tmp_path / "data" / "tasks" / "9" / "alfred-skills")}]
     flags = json.loads(opts.settings)
     assert flags["disableAllHooks"] is True and flags["disableSkillShellExecution"] is True
     assert flags["attribution"] == ATTRIBUTION
     prompt = opts.system_prompt if isinstance(opts.system_prompt, str) else opts.system_prompt["append"]
-    assert "jarvis-skills:standup-notes: Writes the standup." in prompt
+    assert "alfred-skills:standup-notes: Writes the standup." in prompt
 
 
 # ── The learning review ─────────────────────────────────────────
@@ -733,7 +733,7 @@ def test_the_review_reads_earlier_requests_and_the_skills_there_are(skills_home,
     use_profile(monkeypatch, name="Alex")
     (tmp_path / "conversations").mkdir()
     (tmp_path / "conversations" / "2026-09-01.md").write_text("[09:00] Alex: too old to count\n")
-    (tmp_path / "conversations" / "2026-10-05.md").write_text("[09:00] Alex: write my standup notes\n[09:01] JARVIS: Done.\n")
+    (tmp_path / "conversations" / "2026-10-05.md").write_text("[09:00] Alex: write my standup notes\n[09:01] Alfred: Done.\n")
     today = "[09:00] Alex: write my standup notes again\n"
     (tmp_path / "conversations" / "2026-10-07.md").write_text(today + "[10:00] Alex: and now the new part\n")
     now = datetime(2026, 10, 7, 10, 30, tzinfo=profile.tz())

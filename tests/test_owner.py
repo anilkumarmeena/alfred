@@ -1,4 +1,4 @@
-"""Tests for the persona's owner details (jarvis.brain): the "about you" setting and Google accounts."""
+"""Tests for the persona's owner details (alfred.brain): the "about you" setting and Google accounts."""
 
 import io
 import sqlite3
@@ -7,15 +7,15 @@ from pathlib import Path
 
 import pytest
 
-import jarvis
+import alfred
+from alfred.brain import persona
+from alfred.integrations import accounts
+from alfred.state import settings
+from alfred.storage import profile
+from alfred.tools import google
 from conftest import use_profile
-from jarvis.brain import persona
-from jarvis.integrations import accounts
-from jarvis.state import settings
-from jarvis.storage import profile
-from jarvis.tools import google
 
-JARVIS = Path(jarvis.__file__).parent
+Alfred = Path(alfred.__file__).parent
 
 
 @pytest.fixture
@@ -65,7 +65,7 @@ def test_the_command_shows_and_sets_about_you(db, capsys, monkeypatch, tmp_path)
     assert capsys.readouterr().out.startswith('No "about you" yet. Set it with')
     assert settings.main(["about", "--set", "Works at Acme.\nHas two cats."]) == 0
     assert capsys.readouterr().out == ('"About you" is now:\nWorks at Acme.\nHas two cats.\n'
-                                       "Restart the services for JARVIS to see the change: make services-restart\n")
+                                       "Restart the services for Alfred to see the change: make services-restart\n")
     (tmp_path / "me.txt").write_text("From a file.\n")
     settings.main(["about", "--from", str(tmp_path / "me.txt")])
     assert settings.about() == "From a file."
@@ -91,9 +91,9 @@ def test_the_persona_has_about_you_then_the_accounts_under_about_the_user():
 
 
 def test_no_owners_details_or_fixed_accounts_are_left_in_the_code():
-    persona_code = Path(persona.__file__).read_text() + (JARVIS / "prompts" / "persona.md").read_text()
+    persona_code = Path(persona.__file__).read_text() + (Alfred / "prompts" / "persona.md").read_text()
     assert "Works at" not in persona_code and "day job" not in persona_code and "portfolio" not in persona_code
-    for path in JARVIS.rglob("*.py"):
+    for path in Alfred.rglob("*.py"):
         code = path.read_text()
         assert "WORK_ACCOUNT" not in code and "PERSONAL_ACCOUNT" not in code and "GOOGLE_ACCOUNTS" not in code, path
         assert "GOOGLE_CHAT_ACCOUNTS" not in code and "USER_EMPLOYER" not in code, path

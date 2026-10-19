@@ -12,14 +12,14 @@ from test_approvals import announced, drained, events, pushes  # noqa: F401  (pu
 from test_in_place import NullReporter, env, worker_task  # noqa: F401  (env is a fixture)
 from test_mcp_servers import GL_TOKEN, fresh, gitlab, seeded  # noqa: F401  (fresh is a fixture)
 
+from alfred.gates import mcp_gate
+from alfred.integrations.mcp_servers import Server, Tool
+from alfred.storage import profile
+from alfred.tasks import approvals, repo_files, runner, worker
+from alfred.tasks.connection_calls import NEVER, WHY, ConnectionGate, call_item
+from alfred.tasks.gate import TaskGate
+from alfred.tasks.store import APPROVED, nudges
 from conftest import use_task_cache
-from jarvis.gates import mcp_gate
-from jarvis.integrations.mcp_servers import Server, Tool
-from jarvis.storage import profile
-from jarvis.tasks import approvals, repo_files, runner, worker
-from jarvis.tasks.connection_calls import NEVER, WHY, ConnectionGate, call_item
-from jarvis.tasks.gate import TaskGate
-from jarvis.tasks.store import APPROVED, nudges
 
 THREAD = "mcp__gitlab__create_merge_request_thread"
 TODO = "mcp__gitlab__mark_todo_done"
@@ -68,12 +68,12 @@ def test_a_tasks_comment_waits_for_a_yes_read_out_from_the_call_then_goes_throug
         return r, task, pending, first, answer, again, twice, drained(q)
 
     r, task, pending, first, answer, again, twice, sent = asyncio.run(main())
-    assert isinstance(first, PermissionResultDeny) and f"JARVIS has asked them (request {pending['id']})" in first.message
+    assert isinstance(first, PermissionResultDeny) and f"Alfred has asked them (request {pending['id']})" in first.message
     assert pending["summary"] == f"a GitLab call to {SAID}" and pending["remember"]["never"] == NEVER
     [event] = [e for e in sent if e["type"] == "approval"]
     assert event["text"] == f"Your task, the MR review, wants to run a GitLab call to {SAID}. Okay to go ahead?"
     [push, *_] = pushes
-    assert push["category"] == "JARVIS_APPROVAL" and push["body"] == f"{SAID}\nin GitLab" and push["subtitle"] == WHY
+    assert push["category"] == "ALFRED_APPROVAL" and push["body"] == f"{SAID}\nin GitLab" and push["subtitle"] == WHY
     assert answer["state"] == APPROVED and isinstance(again, PermissionResultAllow)
     assert isinstance(twice, PermissionResultDeny)  # a yes covers one call: posting twice is asked again
     [heard] = nudges(r.store.get(task["id"]))

@@ -1,4 +1,4 @@
-"""Tests for jarvis.llm.usage: shared usage-limit state and its effects: lighter model, held runs, warnings."""
+"""Tests for alfred.llm.usage: shared usage-limit state and its effects: lighter model, held runs, warnings."""
 
 import asyncio
 import json
@@ -7,9 +7,9 @@ from datetime import datetime
 import pytest
 from claude_agent_sdk import RateLimitEvent, RateLimitInfo
 
-from jarvis import tools
-from jarvis.llm import claude, roles, usage
-from jarvis.storage import profile
+from alfred import tools
+from alfred.llm import claude, roles, usage
+from alfred.storage import profile
 
 NOW = datetime(2026, 10, 6, 13, 0, tzinfo=profile.tz()).timestamp()  # a Tuesday, 13:00
 
@@ -82,11 +82,11 @@ def test_warnings_are_keyed_per_window_so_each_is_said_once():
     said("allowed_warning", utilization=0.91)
     [(key, text)] = usage.alerts(NOW)
     assert key == f"usage:five_hour:{int(NOW + 7200)}:close"
-    assert text == "JARVIS has used 91% of Claude's five-hour limit; it resets at 3 PM."
+    assert text == "Alfred has used 91% of Claude's five-hour limit; it resets at 3 PM."
     said("rejected", kind="seven_day_opus", hours=48)
     texts = dict(usage.alerts(NOW))
     assert texts[f"usage:seven_day_opus:{int(NOW + 48 * 3600)}:out"] == (
-        "Claude's weekly Opus limit is used up, until it resets on Thursday at 1 PM; JARVIS uses Sonnet meanwhile.")
+        "Claude's weekly Opus limit is used up, until it resets on Thursday at 1 PM; Alfred uses Sonnet meanwhile.")
 
 
 def test_usage_left_says_what_is_known(monkeypatch):

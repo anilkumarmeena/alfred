@@ -1,4 +1,4 @@
-"""Tests for JARVIS's skills reaching runs on another machine: the ones switched on here, each version fetched once,
+"""Tests for Alfred's skills reaching runs on another machine: the ones switched on here, each version fetched once,
 checked on arrival, and loaded into the run there as they would be here."""
 
 import asyncio
@@ -7,9 +7,9 @@ from pathlib import Path
 from test_in_place import env  # noqa: F401  (env is a fixture)
 from test_node_offload import World, finished, world  # noqa: F401  (world is a fixture)
 
-from jarvis.node import machines
-from jarvis.skills import home as skills
-from jarvis.tasks.worker import Outcome
+from alfred.node import machines
+from alfred.skills import home as skills
+from alfred.tasks.worker import Outcome
 
 
 def runs_seeing_skills(tmp_path: Path, seen: list[list[str]]):

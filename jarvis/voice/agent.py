@@ -1,7 +1,6 @@
-"""Kept so `python -m jarvis.voice.agent` (the voice service, make console and make dev) still starts the voice
-process, which is jarvis.apps.agent."""
+"""Old entry point: python -m jarvis.voice.agent (see jarvis)."""
+
+from jarvis import hand_over
 
 if __name__ == "__main__":
-    from jarvis.apps import agent
-
-    agent.main()
+    hand_over("alfred.voice.agent")

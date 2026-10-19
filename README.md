@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/banner.svg" alt="JARVIS — a personal voice assistant that lives on your computer" width="100%">
+<img src="docs/assets/banner.svg" alt="Alfred — a personal voice assistant that lives on your computer" width="100%">
 
 <br>
 
@@ -17,7 +17,7 @@
 
 ---
 
-JARVIS listens, thinks and speaks **on your own computer**: macOS, Linux, or Windows via WSL2. Speech recognition, speech synthesis, noise filtering and speaker verification all run **on-device**; only the thinking goes to **Claude**. Talk to it from the terminal, a browser, or your **phone** (iOS or Android). It reads and drafts your mail, runs your calendar, does **code and research tasks in the background** while you keep talking, and tells you what's new **before you ask**.
+Alfred listens, thinks and speaks **on your own computer**: macOS, Linux, or Windows via WSL2. Speech recognition, speech synthesis, noise filtering and speaker verification all run **on-device**; only the thinking goes to **Claude**. Talk to it from the terminal, a browser, or your **phone** (iOS or Android). It reads and drafts your mail, runs your calendar, does **code and research tasks in the background** while you keep talking, and tells you what's new **before you ask**. And it goes by **whatever name you give it**: Alfred is only where it starts.
 
 <table>
 <tr>
@@ -30,7 +30,7 @@ Whisper, Kokoro, the noise filter and your voiceprint run locally. Data, secrets
 <td width="33%" valign="top">
 
 ### 🧠 A real brain
-The `claude` CLI with JARVIS's own tools, web search, a sandboxed shell and Google, MCP and desktop integrations.
+The `claude` CLI with Alfred's own tools, web search, a sandboxed shell and Google, MCP and desktop integrations.
 
 </td>
 <td width="33%" valign="top">
@@ -156,11 +156,11 @@ Four **services** keep it running (launchd on macOS, systemd user units on Linux
 **1. Install** — LiveKit, Python packages, models and the web app:
 
 ```sh
-git clone https://github.com/anilkumarmeena/jarvis.git && cd jarvis
+git clone https://github.com/anilkumarmeena/alfred.git && cd alfred
 make install
 ```
 
-**2. Sign in and configure** — JARVIS uses your Claude Code login (`make claude-login` if you aren't signed in), then `.env`, keys and your passcode:
+**2. Sign in and configure** — Alfred uses your Claude Code login (`make claude-login` if you aren't signed in), then `.env`, keys and your passcode:
 
 ```sh
 make claude-status    # make claude-login if it says loggedIn: false
@@ -185,7 +185,7 @@ open http://localhost:8787   # xdg-open on Linux
 
 | Extra | Unlocks |
 |---|---|
-| **Tailscale** | Reaching JARVIS from your phone over HTTPS |
+| **Tailscale** | Reaching Alfred from your phone over HTTPS |
 | **Google Cloud OAuth client** | Gmail, Calendar, Docs, Sheets, Slides, Drive and Chat |
 | **Your services' own CLIs**, signed in | Those services from the shell and background tasks |
 | **`ffmpeg`** | mp3 audio files (and m4a on Linux) |
@@ -257,7 +257,7 @@ Layers, contracts and configuration outside the package: the why and the plan
 
 ## 🔐 Security model
 
-JARVIS acts on your behalf, so what it may do alone is deliberately narrow. Every guard is **enforced in code**, not left to the model.
+Alfred acts on your behalf, so what it may do alone is deliberately narrow. Every guard is **enforced in code**, not left to the model.
 
 | | Guard | What it means |
 |:-:|---|---|

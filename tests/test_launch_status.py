@@ -6,11 +6,11 @@ import pytest
 from test_in_place import env  # noqa: F401  (a fixture)
 from test_nudges import settle, until
 
-from jarvis.brain import persona
-from jarvis.tasks import client, runner
-from jarvis.tasks.worker import Outcome
-from jarvis import tools
-from jarvis.tools import tasks as task_tools
+from alfred import tools
+from alfred.brain import persona
+from alfred.tasks import client, runner
+from alfred.tasks.worker import Outcome
+from alfred.tools import tasks as task_tools
 
 
 def gated_run(monkeypatch, gate: asyncio.Event) -> list[str]:

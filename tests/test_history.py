@@ -1,4 +1,4 @@
-"""Tests for jarvis.state.history: days, a day's exchanges and search over the log; the passcode-gated panel."""
+"""Tests for alfred.state.history: days, a day's exchanges and search over the log; the passcode-gated panel."""
 
 import asyncio
 import json
@@ -6,25 +6,25 @@ from datetime import datetime
 
 import pytest
 
+from alfred import panel, server
+from alfred.state import history, memory
+from alfred.storage import profile
 from conftest import use_profile
-from jarvis import panel, server
-from jarvis.state import history, memory
-from jarvis.storage import profile
 
 DAY = """# Conversations, Monday 5 October 2026
 
 [09:00] Alex: what's on today?
-JARVIS: Two meetings, Sir.
+Assistant: Two meetings, Sir.
 
 [09:05] Alex: run the tests
 then tell me
 (Approved: make test)
-JARVIS: All 40 pass. Task 12 is next. (interrupted)
+Assistant: All 40 pass. Task 12 is next. (interrupted)
 
 [09:06] Alex: never mind
-JARVIS: (interrupted before replying)
+Assistant: (interrupted before replying)
 
-[10:30] JARVIS (announced): Task 12, the login page, is done.
+[10:30] Assistant (announced): Task 12, the login page, is done.
 
 """
 
@@ -55,6 +55,20 @@ def test_a_day_reads_as_who_said_what_newest_first(logs):
     assert announced == {"n": 4, "time": "10:30", "kind": "announcement", "said": "Task 12, the login page, is done."}
 
 
+def test_a_day_logged_before_the_rename_reads_the_same(logs):
+    write(logs, "2026-10-04", DAY.replace("Assistant", "JARVIS"))
+    write(logs, "2026-10-05", DAY)
+    assert history.day("2026-10-04")["entries"] == history.day("2026-10-05")["entries"]
+
+
+def test_the_log_is_the_same_whatever_the_assistant_is_called(logs, monkeypatch):
+    monkeypatch.setattr(profile, "assistant", lambda: "Friday")
+    memory.log_exchange("hi", "Hello.")
+    memory.log_announcement("Task 3 is done.")
+    day = (logs / f"{datetime.now():%Y-%m-%d}.md").read_text()
+    assert "Assistant: Hello." in day and "Assistant (announced): Task 3 is done." in day and "Friday" not in day
+
+
 def test_what_log_exchange_writes_reads_back_the_same(logs):
     memory.log_exchange("  where are the logs?  ", "In data.", approved=["ls data"])
     memory.log_exchange("and the tests?", "", interrupted=True)
@@ -71,8 +85,8 @@ def test_what_log_exchange_writes_reads_back_the_same(logs):
 
 def test_days_are_listed_newest_first_a_page_at_a_time(logs):
     write(logs, "2026-10-05", DAY)
-    write(logs, "2026-10-03", "[22:00] Alex: good night\nJARVIS: Good night.\n\n")
-    write(logs, "2026-10-01", "[08:00] Alex: morning\nJARVIS: Morning.\n\n")
+    write(logs, "2026-10-03", "[22:00] Alex: good night\nAssistant: Good night.\n\n")
+    write(logs, "2026-10-01", "[08:00] Alex: morning\nAssistant: Morning.\n\n")
     write(logs, "notes.md", "not a day")
     write(logs, "2026-13-45", "not a date")
     page = history.days(limit=2)
@@ -86,7 +100,7 @@ def test_days_are_listed_newest_first_a_page_at_a_time(logs):
 
 def test_a_day_names_the_days_either_side_and_an_empty_one_is_empty(logs):
     for day in ("2026-10-01", "2026-10-03", "2026-10-05"):
-        write(logs, day, "[08:00] Alex: hi\nJARVIS: Hello.\n\n")
+        write(logs, day, "[08:00] Alex: hi\nAssistant: Hello.\n\n")
     middle = history.day("2026-10-03")
     assert (middle["newer"], middle["older"]) == ("2026-10-05", "2026-10-01")
     gap = history.day("2026-10-04")
@@ -94,7 +108,7 @@ def test_a_day_names_the_days_either_side_and_an_empty_one_is_empty(logs):
 
 
 def test_a_long_preview_is_shortened(logs):
-    write(logs, "2026-10-05", f"[08:00] Alex: {'word ' * 60}\nJARVIS: Yes.\n\n")
+    write(logs, "2026-10-05", f"[08:00] Alex: {'word ' * 60}\nAssistant: Yes.\n\n")
     preview = history.days()["days"][0]["preview"]
     assert len(preview) == history.PREVIEW_CHARS and preview.endswith("…")
 
@@ -113,7 +127,7 @@ def test_a_line_in_no_known_shape_is_kept_as_a_note(logs):
 
 def test_search_finds_every_word_in_any_case_across_days_newest_first(logs):
     write(logs, "2026-10-05", DAY)
-    write(logs, "2026-10-01", "[08:00] Alex: are the TESTS green?\nJARVIS: They pass.\n\n")
+    write(logs, "2026-10-01", "[08:00] Alex: are the TESTS green?\nAssistant: They pass.\n\n")
     found = history.search("tests  PASS")
     assert found["text"] == "tests pass" and not found["more"]
     assert [(h["date"], h["time"]) for h in found["hits"]] == [("2026-10-05", "09:05"), ("2026-10-01", "08:00")]
@@ -124,7 +138,7 @@ def test_search_finds_every_word_in_any_case_across_days_newest_first(logs):
 
 
 def test_search_stops_at_its_limit_and_says_there_is_more(logs):
-    write(logs, "2026-10-05", "".join(f"[09:{m:02d}] Alex: ping {m}\nJARVIS: Pong.\n\n" for m in range(5)))
+    write(logs, "2026-10-05", "".join(f"[09:{m:02d}] Alex: ping {m}\nAssistant: Pong.\n\n" for m in range(5)))
     found = history.search("ping", limit=3)
     assert [h["said"] for h in found["hits"]] == ["ping 4", "ping 3", "ping 2"] and found["more"]
 
@@ -155,10 +169,10 @@ def reply(action: str, body: dict) -> tuple[int, dict]:
 
 @pytest.fixture
 def site(logs, monkeypatch):
-    monkeypatch.setenv("JARVIS_PASSCODE", "123456")  # no login yet: the first-setup passcode
+    monkeypatch.setenv("ALFRED_PASSCODE", "123456")  # no login yet: the first-setup passcode
     monkeypatch.setattr(server, "_failures", [])
     write(logs, "2026-10-05", DAY)
-    write(logs, "2026-10-01", "[08:00] Alex: morning\nJARVIS: Morning.\n\n")
+    write(logs, "2026-10-01", "[08:00] Alex: morning\nAssistant: Morning.\n\n")
 
 
 def test_history_is_behind_the_passcode(site):

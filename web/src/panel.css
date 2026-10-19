@@ -21,7 +21,7 @@ kbd { display: inline-block; min-width: 18px; padding: 2px 5px; border-radius: 5
   font: 700 10.5px/17px var(--sans); letter-spacing: 0; text-align: center; box-shadow: 0 0 0 2px var(--bg); animation: bump .5s ease; }
 .bdg.dot { top: 4px; left: calc(50% + 7px); width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--bg), 0 0 8px var(--accent); }
 
-/* Task mentions in JARVIS's lines */
+/* Task mentions in Alfred's lines */
 .tref { display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; margin: 0 1px; border-radius: 6px; border: 1px solid rgba(79,209,255,.3);
   background: rgba(79,209,255,.08); color: #9fe3ff; font: inherit; line-height: 1.35; vertical-align: baseline; }
 .tref::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .8; }
@@ -314,8 +314,8 @@ body[data-panel="dock"] .pedit { padding-left: 19px; }  /* past the light, under
 .hx-msg.you { align-self: flex-end; max-width: 88%; padding: 8px 12px; border-radius: 16px 16px 5px 16px; background: rgba(255,255,255,.05);
   border: 1px solid rgba(255,255,255,.08); color: #bcd0db; font-size: 14.5px; }
 .hx-msg.you .who { color: var(--muted); text-align: right; }
-.hx-msg.jarvis { padding-left: 12px; border-left: 2px solid rgba(79,209,255,.55); font-size: 14.5px; }
-.hx-msg.jarvis .who { color: var(--accent); opacity: .85; }
+.hx-msg.alfred { padding-left: 12px; border-left: 2px solid rgba(79,209,255,.55); font-size: 14.5px; }
+.hx-msg.alfred .who { color: var(--accent); opacity: .85; }
 .hx-msg.ann { border-left-color: rgba(255,181,71,.5); }
 .hx-msg.ann .who { color: var(--accent-2); }
 .hx-msg.note { color: var(--muted); font-size: 13.5px; }
@@ -558,7 +558,7 @@ body[data-panel="dock"] .todos .row.none { padding: 12px 0; }
   body[data-panel="home"] .composer { width: min(100%, 660px); }
   body[data-panel="home"] #core { width: min(32vh, 290px); }
   body[data-panel="home"] .stage { padding-top: 1.5vh; }
-  body[data-panel="home"] .msg.jarvis { font-size: 18px; }
+  body[data-panel="home"] .msg.alfred { font-size: 18px; }
 
   /* A section's page fills the room; the call carries on (the sidebar has Mute and End) */
   body[data-panel="side"] :is(main, footer) { display: none; }

@@ -15,10 +15,10 @@ import numpy as np
 import pytest
 from livekit import rtc
 
-from jarvis import config
-from jarvis.state import preferences
-from jarvis.voice import speech, speech_gate
-from jarvis.voice.speech_gate import RATE, WINDOW, Measure, SpeechGate, Thresholds
+from alfred import config
+from alfred.state import preferences
+from alfred.voice import speech, speech_gate
+from alfred.voice.speech_gate import RATE, WINDOW, Measure, SpeechGate, Thresholds
 
 LOOSE = Thresholds(min_seconds=0.3, min_speech_seconds=0.1, min_dbfs=-55, no_speech=0.8, weak_speech_seconds=0.25,
                    faint_speech_seconds=0.25, faint_dbfs=-28, faint_max_seconds=1.4, phantom_dbfs=-22,
@@ -72,7 +72,7 @@ def test_real_short_replies_always_get_through(caplog):
     for mode in ("shadow", "enforce"):
         g = gate(mode, (0.5, 0.85))
         for text in ("Okay.", "No.", "Yes.", "Go ahead.", "Sure, go ahead.", "Yeah."):
-            with caplog.at_level(logging.INFO, "jarvis.voice.speech_gate"):
+            with caplog.at_level(logging.INFO, "alfred.voice.speech_gate"):
                 assert g.passes(g.measure(clip(1.4, (0.5, 0.85))), text, no_speech=0.1, avg_logprob=-0.8)
     assert "speech gate" not in caplog.text
 
@@ -80,7 +80,7 @@ def test_real_short_replies_always_get_through(caplog):
 def test_a_real_thank_you_gets_through_when_said_clearly(caplog):
     """A phantom phrase passes only when loud, with enough speech, and Whisper is sure."""
     g = gate("enforce", (0.4, 1.1))
-    with caplog.at_level(logging.INFO, "jarvis.voice.speech_gate"):
+    with caplog.at_level(logging.INFO, "alfred.voice.speech_gate"):
         assert g.passes(g.measure(clip(1.8, (0.4, 1.1), level=0.3)), "Thank you.", no_speech=0.0, avg_logprob=-0.6)
     assert "speech gate" not in caplog.text
     g = gate("enforce", (0.5, 0.85))  # the same words with a short reply's 0.35 s of speech
@@ -89,7 +89,7 @@ def test_a_real_thank_you_gets_through_when_said_clearly(caplog):
 
 def test_a_phantom_thank_you_on_noise_is_logged_in_shadow_mode_and_kept(tmp_path, caplog):
     g = gate("shadow", None, tmp_path)
-    with caplog.at_level(logging.INFO, "jarvis.voice.speech_gate"):
+    with caplog.at_level(logging.INFO, "alfred.voice.speech_gate"):
         assert g.passes(g.measure(clip(1.2)), "Thank you.", no_speech=0.93)
     line = caplog.text
     assert "would drop (shadow)" in line and "no speech" in line and "too quiet" in line
@@ -160,7 +160,7 @@ def test_faint_needs_all_three():
     # real phantoms that passed the audio checks and reached the brain as user turns
     ("Thank you.", 1.204, -27.8, 0.352),
     ("Thank you.", 1.588, -31.1, 0.512),
-    ("Thank you.", 1.556, -32.4, 0.736),  # plenty of VAD "speech", but quiet: the tail of JARVIS's own voice
+    ("Thank you.", 1.556, -32.4, 0.736),  # plenty of VAD "speech", but quiet: the tail of Alfred's own voice
     ("Thank you.", 1.908, -17.9, 0.352),  # loud enough, but little speech
     ("Thank you.", 1.172, -15.9, 0.224),
     ("like", 1.364, -25.1, 0.352),
@@ -196,7 +196,7 @@ def test_phantom_phrases_are_matched_whole_and_without_punctuation():
     weak = heard(1.3, -30.0, 0.3, -0.7)
     for text in ("THANK YOU", "thank you.", "Thank you...", "Bye. Bye.", "So."):
         assert "phantom phrase" in speech_gate.reasons(weak, LOOSE, text), text
-    for text in ("Thank you, Jarvis.", "So what's next?", "Like this."):
+    for text in ("Thank you, Alfred.", "So what's next?", "Like this."):
         assert speech_gate.reasons(weak, LOOSE, text) == [], text
 
 
@@ -235,7 +235,7 @@ def test_a_looping_transcript_is_dropped():
 
 def test_the_new_measurements_are_logged(tmp_path, caplog):
     g = gate("enforce", (0.5, 0.85), tmp_path)
-    with caplog.at_level(logging.INFO, "jarvis.voice.speech_gate"):
+    with caplog.at_level(logging.INFO, "alfred.voice.speech_gate"):
         assert not g.passes(g.measure(clip(1.4, (0.5, 0.85), level=0.02)), "Thank you.", 0.0, avg_logprob=-0.6123)
     record = records(tmp_path)[0]
     assert record["reasons"] == ["phantom phrase"] and record["avg_logprob"] == -0.612
@@ -331,7 +331,7 @@ def test_the_real_silero_hears_no_speech_in_silence_or_hum():
 def test_each_clip_is_saved_as_the_wav_whisper_heard_and_its_line_says_where(tmp_path, caplog):
     g = gate("shadow", None, tmp_path)
     audio = clip(1.172)
-    with caplog.at_level(logging.INFO, "jarvis.voice.speech_gate"):
+    with caplog.at_level(logging.INFO, "alfred.voice.speech_gate"):
         assert g.passes(g.measure(audio), "Thank you.", no_speech=0.0, audio=audio)
     record = records(tmp_path)[0]
     path = tmp_path / "audio" / record["audio"].rsplit("/", 1)[-1]
@@ -435,9 +435,9 @@ def test_short_clips_are_pruned_to_the_same_limit(tmp_path):
 
 def test_the_phantom_and_vad_settings(monkeypatch):
     monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)  # the real .env mustn't leak in
-    for var in ("JARVIS_SPEECH_GATE_PHANTOM_DBFS", "JARVIS_SPEECH_GATE_PHANTOM_SPEECH_SECONDS",
-                "JARVIS_SPEECH_GATE_PHANTOMS", "JARVIS_SPEECH_GATE_MIN_LOGPROB", "JARVIS_SPEECH_GATE_UNSURE_SPEECH_SECONDS",
-                "JARVIS_SPEECH_GATE_MAX_COMPRESSION", "JARVIS_VAD_MIN_SPEECH", "JARVIS_VAD_THRESHOLD"):
+    for var in ("ALFRED_SPEECH_GATE_PHANTOM_DBFS", "ALFRED_SPEECH_GATE_PHANTOM_SPEECH_SECONDS",
+                "ALFRED_SPEECH_GATE_PHANTOMS", "ALFRED_SPEECH_GATE_MIN_LOGPROB", "ALFRED_SPEECH_GATE_UNSURE_SPEECH_SECONDS",
+                "ALFRED_SPEECH_GATE_MAX_COMPRESSION", "ALFRED_VAD_MIN_SPEECH", "ALFRED_VAD_THRESHOLD"):
         monkeypatch.delenv(var, raising=False)
     try:
         importlib.reload(config)
@@ -445,8 +445,8 @@ def test_the_phantom_and_vad_settings(monkeypatch):
                 config.SPEECH_GATE_MIN_LOGPROB, config.SPEECH_GATE_UNSURE_SPEECH_SECONDS,
                 config.SPEECH_GATE_MAX_COMPRESSION) == (-22, 0.6, [], -1.0, 0.5, 2.4)
         assert (config.VAD_MIN_SPEECH, config.VAD_THRESHOLD) == (0.2, 0.5)
-        monkeypatch.setenv("JARVIS_SPEECH_GATE_PHANTOMS", "Thank you., cheers ,")
-        monkeypatch.setenv("JARVIS_VAD_MIN_SPEECH", "0.15")
+        monkeypatch.setenv("ALFRED_SPEECH_GATE_PHANTOMS", "Thank you., cheers ,")
+        monkeypatch.setenv("ALFRED_VAD_MIN_SPEECH", "0.15")
         importlib.reload(config)
         assert config.SPEECH_GATE_PHANTOMS == ["Thank you.", "cheers"] and config.VAD_MIN_SPEECH == 0.15
     finally:
@@ -461,36 +461,36 @@ def test_the_default_phantoms_never_include_a_real_reply():
 
 def test_saving_is_on_by_default_only_in_shadow_mode(monkeypatch):
     monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)  # the real .env mustn't leak in
-    for var in ("JARVIS_SPEECH_GATE", "JARVIS_SPEECH_GATE_SAVE_AUDIO", "JARVIS_SPEECH_GATE_AUDIO_KEEP",
-                "JARVIS_SPEECH_GATE_SAVE_SHORT", "JARVIS_SPEECH_GATE_SHORT_SECONDS",
-                "JARVIS_SPEECH_GATE_SHORT_SPEECH_SECONDS", "JARVIS_SPEECH_GATE_FAINT_SPEECH_SECONDS",
-                "JARVIS_SPEECH_GATE_FAINT_DBFS", "JARVIS_SPEECH_GATE_FAINT_MAX_SECONDS"):
+    for var in ("ALFRED_SPEECH_GATE", "ALFRED_SPEECH_GATE_SAVE_AUDIO", "ALFRED_SPEECH_GATE_AUDIO_KEEP",
+                "ALFRED_SPEECH_GATE_SAVE_SHORT", "ALFRED_SPEECH_GATE_SHORT_SECONDS",
+                "ALFRED_SPEECH_GATE_SHORT_SPEECH_SECONDS", "ALFRED_SPEECH_GATE_FAINT_SPEECH_SECONDS",
+                "ALFRED_SPEECH_GATE_FAINT_DBFS", "ALFRED_SPEECH_GATE_FAINT_MAX_SECONDS"):
         monkeypatch.delenv(var, raising=False)
     try:
         importlib.reload(config)
         assert preferences.speech_gate() == "enforce" and preferences.speech_gate_save_audio() is False
-        monkeypatch.setenv("JARVIS_SPEECH_GATE", "shadow")
+        monkeypatch.setenv("ALFRED_SPEECH_GATE", "shadow")
         importlib.reload(config)
         assert preferences.speech_gate_save_audio() is True
         assert config.SPEECH_GATE_AUDIO_KEEP == 300
         assert config.SPEECH_GATE_AUDIO_DIR == config.LOGS_DIR / "speech-gate-audio"
         assert (config.SPEECH_GATE_FAINT_SPEECH_SECONDS, config.SPEECH_GATE_FAINT_DBFS,
                 config.SPEECH_GATE_FAINT_MAX_SECONDS) == (0.25, -28, 1.4)
-        monkeypatch.setenv("JARVIS_SPEECH_GATE", "enforce")
+        monkeypatch.setenv("ALFRED_SPEECH_GATE", "enforce")
         importlib.reload(config)
         assert preferences.speech_gate_save_audio() is False
         assert config.SPEECH_GATE_SAVE_SHORT is True  # short clips it lets through are still saved
         assert (config.SPEECH_GATE_SHORT_SECONDS, config.SPEECH_GATE_SHORT_SPEECH_SECONDS) == (2.0, 0.5)
-        monkeypatch.setenv("JARVIS_SPEECH_GATE_SAVE_SHORT", "off")
-        monkeypatch.setenv("JARVIS_SPEECH_GATE_FAINT_DBFS", "-32")
+        monkeypatch.setenv("ALFRED_SPEECH_GATE_SAVE_SHORT", "off")
+        monkeypatch.setenv("ALFRED_SPEECH_GATE_FAINT_DBFS", "-32")
         importlib.reload(config)
         assert config.SPEECH_GATE_SAVE_SHORT is False and config.SPEECH_GATE_FAINT_DBFS == -32
-        monkeypatch.setenv("JARVIS_SPEECH_GATE_SAVE_AUDIO", "on")
-        monkeypatch.setenv("JARVIS_SPEECH_GATE_AUDIO_KEEP", "50")
+        monkeypatch.setenv("ALFRED_SPEECH_GATE_SAVE_AUDIO", "on")
+        monkeypatch.setenv("ALFRED_SPEECH_GATE_AUDIO_KEEP", "50")
         importlib.reload(config)
         assert preferences.speech_gate_save_audio() is True and config.SPEECH_GATE_AUDIO_KEEP == 50
-        monkeypatch.setenv("JARVIS_SPEECH_GATE", "shadow")
-        monkeypatch.setenv("JARVIS_SPEECH_GATE_SAVE_AUDIO", "off")
+        monkeypatch.setenv("ALFRED_SPEECH_GATE", "shadow")
+        monkeypatch.setenv("ALFRED_SPEECH_GATE_SAVE_AUDIO", "off")
         importlib.reload(config)
         assert preferences.speech_gate_save_audio() is False
     finally:

@@ -9,20 +9,20 @@ from test_in_place import env  # noqa: F401  (a fixture)
 from test_nudges import fake_run, finishes, settle
 from test_shell import ask
 
-from jarvis.gates.shell import ShellGate
-from jarvis.safety import approvals
-from jarvis.safety.approvals import Heard
-from jarvis.safety.commands import agreed_to, ordered, orders, same_risk
-from jarvis.state import conversation
-from jarvis.storage import profile
-from jarvis.tasks import client, runner
-from jarvis.tasks.store import APPROVED, CANCELLED, PENDING, SPENT
-from jarvis.tasks.worker import Outcome
-from jarvis.tools import tasks as task_tools
-from jarvis.voice import session as voice_session
+from alfred.gates.shell import ShellGate
+from alfred.safety import approvals
+from alfred.safety.approvals import Heard
+from alfred.safety.commands import agreed_to, ordered, orders, same_risk
+from alfred.state import conversation
+from alfred.storage import profile
+from alfred.tasks import client, runner
+from alfred.tasks.store import APPROVED, CANCELLED, PENDING, SPENT
+from alfred.tasks.worker import Outcome
+from alfred.tools import tasks as task_tools
+from alfred.voice import session as voice_session
 
 PUSH = "git push origin master"
-RESTART = "launchctl kickstart -k gui/501/com.example.jarvis.agent"
+RESTART = "launchctl kickstart -k gui/501/com.example.alfred.agent"
 
 
 # ── What the user's words order ─────────────────────────────────
@@ -31,11 +31,11 @@ RESTART = "launchctl kickstart -k gui/501/com.example.jarvis.agent"
 @pytest.mark.parametrize("said, command", [
     # real phrasings that must count as orders
     ("okay I think you can push the changes new changes",
-     "cd /Users/me/jarvis && git status -sb | head -3 && git push 2>&1 | tail -3"),
+     "cd /Users/me/alfred && git status -sb | head -3 && git push 2>&1 | tail -3"),
     ("Merge and push.", PUSH),
     ("Yeah, I think we can restart now.", RESTART),
     ("okay i think we can restart now as you already pulled the data", "launchctl kickstart -k gui/$(id -u)/x.tasks"),
-    ("Restart the tasks service.", "launchctl bootout gui/501/com.example.jarvis.tasks"),
+    ("Restart the tasks service.", "launchctl bootout gui/501/com.example.alfred.tasks"),
     ("Restart LiveKit.", "brew services restart livekit"),
     ("Force push it.", "git push --force origin master"),
     ("Delete the build folder.", "rm -rf build"),
@@ -85,8 +85,8 @@ def test_what_words_order():
     assert orders("Don't push.") == set() and orders("What's on my calendar?") == set()
 
 
-def test_a_clear_yes_to_jarvis_own_question_goes_for_what_it_asked():
-    asked_push = "I've merged it into JARVIS, Sir. Shall I push the changes?"
+def test_a_clear_yes_to_alfred_own_question_goes_for_what_it_asked():
+    asked_push = "I've merged it into Alfred, Sir. Shall I push the changes?"
     assert agreed_to(asked_push, "Yes.", PUSH) and agreed_to(asked_push, "Yeah, go ahead.", PUSH)
     assert agreed_to("Do you want me to merge and restart now?", "Yes, let's proceed.", RESTART)
     assert not agreed_to(asked_push, "Why?", PUSH)  # no yes
@@ -99,9 +99,9 @@ def test_a_clear_yes_to_jarvis_own_question_goes_for_what_it_asked():
 
 def test_a_command_doing_the_same_risky_things_is_the_same():
     assert same_risk("git push", "git status -sb | head -3 && git push 2>&1 | tail -3")
-    assert same_risk("cd ~/jarvis && git push", "cd ~/jarvis && git push origin HEAD 2>&1 | tail -3") is False
-    assert same_risk("cd ~/jarvis && git push", "cd ~/jarvis && git log -1 && git push 2>&1 | tail -3")
-    assert not same_risk("cd ~/jarvis && git push", "cd ~/ai-armory && git push")  # another folder
+    assert same_risk("cd ~/alfred && git push", "cd ~/alfred && git push origin HEAD 2>&1 | tail -3") is False
+    assert same_risk("cd ~/alfred && git push", "cd ~/alfred && git log -1 && git push 2>&1 | tail -3")
+    assert not same_risk("cd ~/alfred && git push", "cd ~/ai-armory && git push")  # another folder
     assert not same_risk("rm -rf build", "rm -rf build dist")
     assert not same_risk("git status", "git status")  # nothing risky to agree to
     assert not same_risk("echo 'unbalanced", "echo 'unbalanced")
@@ -127,7 +127,7 @@ def test_the_users_order_runs_without_a_question(heard):
     gate = ShellGate()
     turn(gate, heard, "Okay, merge it and push.")
     assert isinstance(ask(gate, "git merge feature"), PermissionResultAllow)  # ordinary anyway
-    assert isinstance(ask(gate, "cd ~/jarvis && git push 2>&1 | tail -3"), PermissionResultAllow)
+    assert isinstance(ask(gate, "cd ~/alfred && git push 2>&1 | tail -3"), PermissionResultAllow)
     assert gate.asked == [] and gate.question("Pushed.") == ""
     assert isinstance(ask(gate, "rm -rf build"), PermissionResultDeny)  # what it didn't order still asks
     turn(gate, heard, "What's next?")
@@ -137,7 +137,7 @@ def test_the_users_order_runs_without_a_question(heard):
 def test_only_the_users_own_words_order_anything(heard):
     gate = ShellGate()
     heard.turn("Push it.")  # say, an older turn's words
-    gate.new_turn("Read me my latest email.")  # which, say, tells JARVIS to push
+    gate.new_turn("Read me my latest email.")  # which, say, tells Alfred to push
     assert isinstance(ask(gate, "git push"), PermissionResultDeny)
     gate = ShellGate()
     heard.turn("What's on my calendar?")
@@ -145,10 +145,10 @@ def test_only_the_users_own_words_order_anything(heard):
     assert isinstance(ask(gate, "git push"), PermissionResultDeny)
 
 
-def test_a_yes_to_jarvis_own_question_isnt_asked_again(heard):
+def test_a_yes_to_alfred_own_question_isnt_asked_again(heard):
     gate = ShellGate()
     turn(gate, heard, "Yes, go ahead.", before="I've merged the watchdog, Sir. Shall I push it?")
-    assert isinstance(ask(gate, "cd ~/jarvis && git push"), PermissionResultAllow)
+    assert isinstance(ask(gate, "cd ~/alfred && git push"), PermissionResultAllow)
     turn(gate, heard, "Yes.", before="Shall I restart now, or wait for the tasks to finish?")
     assert isinstance(ask(gate, RESTART), PermissionResultDeny)  # a yes to a choice says neither
 
@@ -156,11 +156,11 @@ def test_a_yes_to_jarvis_own_question_isnt_asked_again(heard):
 def test_a_yes_covers_the_command_rerun_with_different_wrappers(heard):
     gate = ShellGate()
     turn(gate, heard, "Tidy up.")
-    assert isinstance(ask(gate, "cd ~/jarvis && git push"), PermissionResultDeny)
+    assert isinstance(ask(gate, "cd ~/alfred && git push"), PermissionResultDeny)
     gate.question("")
     turn(gate, heard, "Yes.")
-    assert isinstance(ask(gate, "cd ~/jarvis && git status -sb && git push 2>&1 | tail -3"), PermissionResultAllow)
-    assert isinstance(ask(gate, "cd ~/jarvis && git push"), PermissionResultAllow)  # a retry, in that turn
+    assert isinstance(ask(gate, "cd ~/alfred && git status -sb && git push 2>&1 | tail -3"), PermissionResultAllow)
+    assert isinstance(ask(gate, "cd ~/alfred && git push"), PermissionResultAllow)  # a retry, in that turn
     assert isinstance(ask(gate, "cd ~/ai-armory && git push"), PermissionResultDeny)  # another repo asks
 
 
@@ -199,7 +199,7 @@ def test_a_reply_with_the_users_order_approves_what_it_was_waiting_for(env, monk
     r, task, push, delete, after = asyncio.run(main())
     assert r.store.approval(push["id"])["state"] == SPENT and r.store.approval(push["id"])["via"] == "order"
     assert r.store.approval(delete["id"])["state"] == CANCELLED  # what the words didn't order is asked afresh
-    assert f"{profile.name()} approved request {push['id']} by telling JARVIS to do it" in prompts[1]
+    assert f"{profile.name()} approved request {push['id']} by telling Alfred to do it" in prompts[1]
     assert pushed == [True, True, False]
     log = [(e["kind"], e["text"]) for e in r.store.history(task["id"])]
     assert ("order", f"{profile.name()}'s own words, which go ahead for what they order: \"Okay, merge and push.\"") in log

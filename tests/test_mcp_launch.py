@@ -1,12 +1,12 @@
-"""Tests for jarvis.integrations.mcp_launch beyond test_mcp_servers: HTTP relay/probe, read-only, start failures."""
+"""Tests for alfred.integrations.mcp_launch beyond test_mcp_servers: HTTP relay/probe, read-only, start failures."""
 
 import pytest
 from test_mcp_servers import fresh, github, seeded  # noqa: F401  (fixture)
 
-from jarvis.apps import mcp_launch as launcher
-from jarvis.auth import vault
-from jarvis.integrations import mcp_bridge, mcp_launch, mcp_relay, mcp_servers
-from jarvis.integrations.mcp_servers import Server
+from alfred.apps import mcp_launch as launcher
+from alfred.auth import vault
+from alfred.integrations import mcp_bridge, mcp_launch, mcp_relay, mcp_servers
+from alfred.integrations.mcp_servers import Server
 
 WIKI = Server("wiki", "Wiki", transport="http", url="https://mcp.wiki.example/mcp", reviewed=True)
 

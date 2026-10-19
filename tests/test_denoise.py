@@ -1,4 +1,4 @@
-"""Tests for jarvis.voice.denoise: attenuation limit, frame sizes, fallback, VAD-only mode."""
+"""Tests for alfred.voice.denoise: attenuation limit, frame sizes, fallback, VAD-only mode."""
 
 import asyncio
 import logging
@@ -9,8 +9,8 @@ import pytest
 from livekit import rtc
 from livekit.agents import vad
 
-from jarvis.config import DENOISE_MODEL
-from jarvis.voice import denoise
+from alfred.config import DENOISE_MODEL
+from alfred.voice import denoise
 
 model = pytest.mark.skipif(not DENOISE_MODEL.is_file(), reason="needs the DeepFilterNet model (make models)")
 
@@ -57,7 +57,7 @@ def test_each_frame_comes_back_as_long_as_it_went_in(rate, n):
 def test_no_model_means_the_original_audio(tmp_path, caplog):
     junk = tmp_path / "junk.onnx"
     junk.write_bytes(b"not a model")
-    with caplog.at_level(logging.WARNING, logger="jarvis.voice.denoise"):
+    with caplog.at_level(logging.WARNING, logger="alfred.voice.denoise"):
         assert denoise.load(tmp_path / "missing.onnx", "on") is None
         assert denoise.load(junk, "vad") is None
     assert len(caplog.records) == 2 and all("original mic audio" in r.getMessage() for r in caplog.records)
@@ -82,7 +82,7 @@ def test_a_failing_filter_passes_the_original_through(caplog):
 
     processor = denoise.DeepFilterNet(Broken())
     frame = rtc.AudioFrame(noise(0.05, 24000).tobytes(), 24000, 1, 1200)
-    with caplog.at_level(logging.ERROR, logger="jarvis.voice.denoise"):
+    with caplog.at_level(logging.ERROR, logger="alfred.voice.denoise"):
         assert processor._process(frame) is frame
     assert not processor.enabled  # so LiveKit stops calling it
     assert "original mic audio" in caplog.records[0].getMessage()
@@ -160,7 +160,7 @@ def test_vad_only_mode_falls_back_to_the_original_if_the_filter_fails(caplog):
         stream.end_input()
         return inner, [ev async for ev in stream]
 
-    with caplog.at_level(logging.ERROR, logger="jarvis.voice.denoise"):
+    with caplog.at_level(logging.ERROR, logger="alfred.voice.denoise"):
         inner, events = asyncio.run(main())
     assert np.array_equal(np.concatenate(inner.heard), x)  # the VAD carried on with the original
     end = next(ev for ev in events if ev.type == vad.VADEventType.END_OF_SPEECH)

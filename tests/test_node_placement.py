@@ -1,4 +1,4 @@
-"""Tests for jarvis.node.placement: where a job runs, by the user's word, their setting and an online check."""
+"""Tests for alfred.node.placement: where a job runs, by the user's word, their setting and an online check."""
 
 import asyncio
 import json
@@ -7,8 +7,8 @@ import time
 import pytest
 from test_node_link import mine, paired  # noqa: F401  (mine is a fixture)
 
-from jarvis.llm import claude, usage
-from jarvis.node import home, machines, placement
+from alfred.llm import claude, usage
+from alfred.node import home, machines, placement
 
 FREE = {"same_protocol": True, "free": 2, "usage": {}, "online": True}
 USED_UP = {"five_hour": {"status": "rejected", "resets_at": time.time() + 3600, "overage": "rejected"}}
@@ -84,7 +84,7 @@ def test_a_machine_that_cant_take_a_task_says_why(mine):
     assert choose(Hub({studio.id: FREE | {"free": 0}}), placement.COMMANDS).node == studio.id  # commands take no slot
 
 
-def test_letting_jarvis_choose_asks_the_model_among_those_able(mine, monkeypatch):
+def test_letting_alfred_choose_asks_the_model_among_those_able(mine, monkeypatch):
     studio, _ = paired("Studio")
     paired("Laptop")
     asked = []
@@ -141,7 +141,7 @@ def test_a_command_goes_only_where_its_programs_are(mine, here_has):
     assert choose(Hub({laptop.id: lacks}), placement.COMMANDS, command="ffmpeg -i a b") == placement.HERE  # nowhere has it
 
 
-def test_letting_jarvis_choose_shows_the_model_each_computers_room(mine, monkeypatch, here_has):
+def test_letting_alfred_choose_shows_the_model_each_computers_room(mine, monkeypatch, here_has):
     studio, _ = paired("Studio")
     asked = []
 

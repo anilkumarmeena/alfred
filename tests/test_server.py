@@ -1,4 +1,4 @@
-"""Tests for jarvis.server: passcode-protected endpoints, bad input, lockout, and LiveKit token contents.
+"""Tests for alfred.server: passcode-protected endpoints, bad input, lockout, and LiveKit token contents.
 
 Handlers are called directly; the sandboxed test run can't open a port.
 """
@@ -11,11 +11,11 @@ import re
 import pytest
 from livekit import api
 
+from alfred import server
+from alfred.auth import logins
+from alfred.state import todo
+from alfred.voice import quiet
 from conftest import use_profile
-from jarvis import server
-from jarvis.auth import logins
-from jarvis.state import todo
-from jarvis.voice import quiet
 
 KEY, SECRET = "devkey", "a-livekit-secret-long-enough-to-sign-with"
 LOGIN, RIGHT, WRONG = "Robin", "123456", "000000"  # one login, hashed in a scratch logins.json, and its passcode
@@ -65,13 +65,13 @@ def token(body: dict | None = None, **request) -> tuple[int, dict]:
 
 def test_a_token_joins_a_fresh_room_of_its_own_as_the_user(site):
     status, got = token({"device": "iPhone 15!"})
-    assert status == 200 and set(got) == {"token", "url", "build"}
+    assert status == 200 and set(got) == {"token", "url", "build", "assistant"} and got["assistant"] == "Alfred"
     claims = api.TokenVerifier(KEY, SECRET).verify(got["token"])
     assert re.fullmatch(r"robin-iphone15-[0-9a-f]{4}", claims.identity)
     assert claims.name == LOGIN  # whose passcode it was
     video = claims.video
     assert video is not None and video.room_join and video.can_publish and video.can_subscribe
-    assert video.can_update_own_metadata and re.fullmatch(r"jarvis-[0-9a-f]{8}", video.room or "")
+    assert video.can_update_own_metadata and re.fullmatch(r"alfred-[0-9a-f]{8}", video.room or "")
     assert (claims.attributes or {})[quiet.SPEAKER] == "on"
     other = api.TokenVerifier(KEY, SECRET).verify(token()[1]["token"])
     assert other.video is not None and other.video.room != video.room  # each connection a session of its own
@@ -144,7 +144,7 @@ def test_a_shared_file_link_that_isnt_known_finds_nothing(site):
 
 
 def test_the_phone_log_takes_lines_only_and_cleans_them(site, caplog):
-    caplog.set_level(logging.INFO, "jarvis.server")
+    caplog.set_level(logging.INFO, "alfred.server")
     assert call(server.phone_log, Request({"passcode": RIGHT, "lines": "one"}))[0] == 400
     lines = [f"press {i} ☃\x1b[31m" for i in range(server.MAX_LOG_LINES + 5)]
     sent = Request({"passcode": RIGHT, "device": "iPhone", "lines": lines})

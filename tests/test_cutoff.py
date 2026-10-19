@@ -1,9 +1,9 @@
-"""Tests for jarvis.voice.cutoff: where a talked-over reply was cut off, remark or point, and what the brain is told."""
+"""Tests for alfred.voice.cutoff: where a talked-over reply was cut off, remark or point, and what the brain is told."""
 
 import pytest
 
-from jarvis.voice import cutoff
-from jarvis.voice.cutoff import POINT, REMARK, Cut, Reply
+from alfred.voice import cutoff
+from alfred.voice.cutoff import POINT, REMARK, Cut, Reply
 
 STORY = "The meeting moved to Friday. Priya can't make it, so I've asked Sam to cover. The room is booked too."
 
@@ -105,9 +105,15 @@ ASKED = Cut("Shall I tell Sam? He's", "free all day.", False)
 
 
 @pytest.mark.parametrize("words", ["Thank you.", "thanks", "Okay.", "Hmm.", "Right, right.", "Yes yes", "Got it.",
-                                   "Oh wow!", "Thank you so much, JARVIS.", "Okay, thanks.", "That's great.", "uh-huh"])
+                                   "Oh wow!", "Thank you so much, Alfred.", "Okay, thanks.", "That's great.", "uh-huh"])
 def test_plain_acknowledgements_are_remarks(words):
     assert cutoff.obvious(CUT, words) == REMARK
+
+
+def test_the_assistant_s_name_counts_as_a_filler_whatever_the_user_calls_it(monkeypatch):
+    monkeypatch.setattr(cutoff.profile, "assistant", lambda: "Mister Bean")
+    assert cutoff.obvious(CUT, "Thanks, Mister Bean.") == REMARK
+    assert cutoff.obvious(CUT, "Thanks, Alfred.") is None  # not its name any more: someone else's, perhaps
 
 
 @pytest.mark.parametrize("words", ["What about Monday?", "Thanks, can you email Sam?", "Really?"])
@@ -120,7 +126,7 @@ def test_anything_less_plain_is_left_to_the_brain(words):
     assert cutoff.obvious(CUT, words) is None
 
 
-def test_a_yes_after_jarvis_asked_something_may_answer_it_so_the_brain_decides():
+def test_a_yes_after_alfred_asked_something_may_answer_it_so_the_brain_decides():
     assert cutoff.obvious(ASKED, "Yes.") is None
 
 

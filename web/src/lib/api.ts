@@ -1,5 +1,6 @@
 import type { PanelAction } from "./panelActions";
 import { PASSCODE_KEY, storage } from "./storage";
+import { assistantName } from "../state/store";
 
 // POST JSON with the saved passcode (checked by every endpoint except /api/push/key).
 export function postAuthed(path: string, fields: Record<string, unknown>): Promise<Response> {
@@ -17,7 +18,7 @@ export async function postAuthedJson(path: string, fields: Record<string, unknow
   const res = await postAuthed(path, fields);
   const data = await res.json().catch(() => ({}));
   if (res.status === 401) throw new Unauthorized("Wrong passcode.");
-  if (!res.ok) throw new Error(data.error || "Couldn't reach JARVIS.");
+  if (!res.ok) throw new Error(data.error || `Couldn't reach ${assistantName.peek()}.`);
   return data;
 }
 

@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
+from alfred import projects
+from alfred.tasks import events, git_ops, merge_check, runner, worker
+from alfred.tasks.worker import Outcome
+from alfred.tools import tasks as task_tools
 from conftest import use_profile, use_task_cache
-from jarvis import projects
-from jarvis.tasks import events, git_ops, merge_check, runner, worker
-from jarvis.tasks.worker import Outcome
-from jarvis.tools import tasks as task_tools
 
 
 def git(repo: Path, *args: str) -> str:
@@ -140,8 +140,8 @@ def test_in_place_task_edits_the_repo_folder_without_worktree_branch_or_commit(e
     assert task["changes"] == "uncommitted: 1 untracked file in the folder"
 
     # The user's uncommitted work was saved before the run, outside the stash list
-    refs = git(video, "for-each-ref", "--format=%(refname)", "refs/jarvis/").splitlines()
-    assert len(refs) == 1 and refs[0].startswith(f"refs/jarvis/task-{task['id']}-")
+    refs = git(video, "for-each-ref", "--format=%(refname)", "refs/alfred/").splitlines()
+    assert len(refs) == 1 and refs[0].startswith(f"refs/alfred/task-{task['id']}-")
     assert git(video, "show", f"{refs[0]}:app.py") == "print('mine, uncommitted')"
     assert git(video, "stash", "list") == ""
     assert task["base"] == git(video, "rev-parse", refs[0])
@@ -179,7 +179,7 @@ def test_clean_in_place_repo_saves_nothing_and_measures_from_head(env, monkeypat
 
     task = asyncio.run(main())
     assert task["base"] == git(video, "rev-parse", "HEAD")
-    assert git(video, "for-each-ref", "refs/jarvis/") == ""
+    assert git(video, "for-each-ref", "refs/alfred/") == ""
     assert task["changes"] == "uncommitted: no changes"
 
 
@@ -201,7 +201,7 @@ def test_projects_opted_out_keep_the_worktree_behaviour(env, monkeypatch):
     worktree = env["tmp"] / "worktrees" / f"other-{task['id']}"
     assert task["in_place"] == 0
     assert seen["tasks"][0]["worktree"] == str(worktree)
-    assert task["branch"] == f"jarvis/{task['id']}-add-a-thing"
+    assert task["branch"] == f"alfred/{task['id']}-add-a-thing"
     assert "1 file changed" in task["changes"]
     assert not (other / "new.py").exists()
     assert git(other, "log", "-1", "--format=%s", task["branch"]) == "add a thing"
@@ -323,7 +323,7 @@ class NullReporter:
 
 def worker_task(**fields) -> dict:
     return {"id": 9, "kind": "code_change", "project": "video-agent", "session_id": None, "in_place": 0,
-            "worktree": "/repo", "branch": "jarvis/9-x", "base": "abcdef1234"} | fields
+            "worktree": "/repo", "branch": "alfred/9-x", "base": "abcdef1234"} | fields
 
 
 def test_in_place_worker_runs_in_the_repo_and_refuses_git_writes(env, monkeypatch):
@@ -342,7 +342,7 @@ def test_worktree_worker_is_unchanged(env, monkeypatch):
     use_task_cache(monkeypatch, env["tmp"] / "cache")
     opts = worker._options(worker_task(), NullReporter())
     assert opts.cwd == "/repo" and opts.disallowed_tools == worker.BUILTIN_AGENTS_DENIED
-    assert "fresh git worktree of video-agent, on branch jarvis/9-x" in opts.system_prompt["append"]
+    assert "fresh git worktree of video-agent, on branch alfred/9-x" in opts.system_prompt["append"]
 
 
 def test_brief_describes_in_place_tasks_without_a_task_branch():
@@ -350,35 +350,35 @@ def test_brief_describes_in_place_tasks_without_a_task_branch():
     inplace = task_tools._brief(base | {"in_place": 1, "branch": "main", "changes": "uncommitted: no changes"})
     assert "branch" not in inplace
     assert "checked-out branch main" in inplace["in_place"] and "uncommitted" in inplace["in_place"]
-    normal = task_tools._brief(base | {"in_place": 0, "branch": "jarvis/1-t"})
-    assert normal["branch"] == "jarvis/1-t" and "in_place" not in normal
+    normal = task_tools._brief(base | {"in_place": 0, "branch": "alfred/1-t"})
+    assert normal["branch"] == "alfred/1-t" and "in_place" not in normal
 
 
-# ── JARVIS's own repo ───────────────────────────────────────────
+# ── Alfred's own repo ───────────────────────────────────────────
 
 
 @pytest.fixture
-def jarvis(env, monkeypatch):
-    """env plus JARVIS's own repo listed as an in-place project."""
-    repo = make_repo(env["tmp"] / "jarvis")
-    monkeypatch.setattr(projects, "JARVIS_REPO", repo)
-    listed("jarvis", repo)
+def alfred(env, monkeypatch):
+    """env plus Alfred's own repo listed as an in-place project."""
+    repo = make_repo(env["tmp"] / "alfred")
+    monkeypatch.setattr(projects, "ALFRED_REPO", repo)
+    listed("alfred", repo)
     return repo
 
 
-def test_jarvis_is_never_in_place_whatever_its_entry_says(jarvis):
-    assert projects.find("jarvis").in_place is False
+def test_alfred_is_never_in_place_whatever_its_entry_says(alfred):
+    assert projects.find("alfred").in_place is False
     with projects._db() as db:
-        db.execute("update projects set path = ? where name = 'jarvis'", (f"{jarvis}/",))  # with a trailing slash
-    assert projects.find("jarvis").in_place is False
-    assert {p["name"]: p["in_place"] for p in task_tools.projects_list()} == {"video-agent": True, "other": False, "jarvis": False}
+        db.execute("update projects set path = ? where name = 'alfred'", (f"{alfred}/",))  # with a trailing slash
+    assert projects.find("alfred").in_place is False
+    assert {p["name"]: p["in_place"] for p in task_tools.projects_list()} == {"video-agent": True, "other": False, "alfred": False}
 
 
-def test_jarvis_code_tasks_get_their_own_worktree_and_branch(jarvis, env, monkeypatch):
-    r, task = run_worktree_task(monkeypatch, add_new_file, project="jarvis")
-    assert task["in_place"] == 0 and task["branch"] == f"jarvis/{task['id']}-add-a-thing"
-    assert task["worktree"] == str(env["tmp"] / "worktrees" / f"jarvis-{task['id']}")
-    assert not (jarvis / "new.py").exists()
+def test_alfred_code_tasks_get_their_own_worktree_and_branch(alfred, env, monkeypatch):
+    r, task = run_worktree_task(monkeypatch, add_new_file, project="alfred")
+    assert task["in_place"] == 0 and task["branch"] == f"alfred/{task['id']}-add-a-thing"
+    assert task["worktree"] == str(env["tmp"] / "worktrees" / f"alfred-{task['id']}")
+    assert not (alfred / "new.py").exists()
 
 
 # ── Merging a task's branch ─────────────────────────────────────
@@ -414,8 +414,8 @@ def test_merge_merges_the_branch_then_deletes_it_and_its_worktree(env, monkeypat
     merged = asyncio.run(r.merge(task["id"]))
     assert (other / "new.py").read_text() == "x = 1\n"
     assert git(other, "log", "-1", "--format=%P") == head  # one commit, one parent: not a merge commit
-    assert git(other, "log", "-1", "--format=%B") == (f"add a thing\n\nDid it.\nDetails.\n\nJARVIS-Task: {task['id']}\n"
-                                                      "Co-Authored-By: JARVIS")
+    assert git(other, "log", "-1", "--format=%B") == (f"add a thing\n\nDid it.\nDetails.\n\nAlfred-Task: {task['id']}\n"
+                                                      "Co-Authored-By: Alfred")
     assert branches(other) == ["main"]
     assert not worktree.exists() and str(worktree) not in git(other, "worktree", "list")
     assert "merged into main" in merged["spoken"] and "branch deleted" in merged["spoken"]
@@ -529,13 +529,13 @@ def test_squash_message_keeps_the_opening_of_the_summary_and_ends_with_the_co_au
     long = "word " * 400
     paras = git_ops.squash_message("Fix the thing", f"Fixed it.\n\n# What changed\n\n{long}\n\nMore.", 7).split("\n\n")
     assert paras[0] == "Fix the thing" and paras[1:-1] == ["Fixed it.", "# What changed"]  # the long one didn't fit
-    assert paras[-1] == "JARVIS-Task: 7\nCo-Authored-By: JARVIS"
+    assert paras[-1] == "Alfred-Task: 7\nCo-Authored-By: Alfred"
     cut = git_ops.squash_message("t", long, 7).split("\n\n")[1]
     assert cut.endswith("word…") and len(cut) <= git_ops.SQUASH_BODY + 1
     two = git_ops.squash_message("t", "a" * 600 + "\n\n" + "b" * 599, 7).split("\n\n")
     assert two[1:-1] == ["a" * 600]  # 1201 characters joined: the second paragraph is left out, not cut
     assert git_ops.squash_message("Fix\n  the thing ", "", 7).startswith("Fix the thing\n\n")
-    assert git_ops.squash_message("t", "", 7) == "t\n\nJARVIS-Task: 7\nCo-Authored-By: JARVIS"
+    assert git_ops.squash_message("t", "", 7) == "t\n\nAlfred-Task: 7\nCo-Authored-By: Alfred"
 
 
 def test_merge_refuses_a_dirty_checkout_or_uncommitted_worktree_changes(env, monkeypatch):
@@ -558,12 +558,12 @@ def test_merge_refuses_in_place_tasks(env, monkeypatch):
         asyncio.run(r.merge(task["id"]))
 
 
-def test_merge_works_for_jarvis_itself(jarvis, monkeypatch):
+def test_merge_works_for_alfred_itself(alfred, monkeypatch):
     async def passing(folder, venv, tests=()):  # its tests run first: tests/test_merge_check.py
         return set()
 
     monkeypatch.setattr(merge_check, "failures", passing)
-    r, task = run_worktree_task(monkeypatch, add_new_file, project="jarvis")
+    r, task = run_worktree_task(monkeypatch, add_new_file, project="alfred")
     merged = asyncio.run(r.merge(task["id"]))
-    assert (jarvis / "new.py").exists() and branches(jarvis) == ["main"]
+    assert (alfred / "new.py").exists() and branches(alfred) == ["main"]
     assert "merged into main as one commit, its tests passing" in merged["spoken"]

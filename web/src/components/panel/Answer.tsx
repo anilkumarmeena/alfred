@@ -2,6 +2,7 @@
 // its kind) and saves only from the confirm button. Some commands can never be remembered.
 import { useSignal } from "@preact/signals";
 import { answer, type Approval, type Breadth } from "../../state/panel";
+import { assistantName } from "../../state/store";
 import { CheckIcon } from "../icons";
 import { cap } from "./bits";
 
@@ -13,7 +14,7 @@ export function Answer({ a, small = false, keys = false }: { a: Approval; small?
     const choices: [Breadth, string, string][] = [["exact", "This command", r.exact], ["kind", "Any like it", r.kind]];
     return (
       <div class="remember">
-        <div class="lab">Always allow, for background tasks and JARVIS's own shell, in any folder:</div>
+        <div class="lab">Always allow, for background tasks and {assistantName}'s own shell, in any folder:</div>
         <div class="radios col" role="radiogroup" aria-label="What to allow">
           {choices.filter(([, , covers]) => covers).map(([b, label, covers]) => (
             <button key={b} type="button" role="radio" aria-checked={breadth.value === b} class={breadth.value === b ? "on" : ""}

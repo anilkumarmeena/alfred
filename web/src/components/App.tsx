@@ -1,7 +1,7 @@
 import { effect } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import { home, shown, sheet, wide } from "../state/panel";
-import { agentState, link, live, loginShown, muted, paused, reading, sideBySide, speakerOff } from "../state/store";
+import { agentState, assistantName, link, live, loginShown, muted, paused, reading, sideBySide, speakerOff } from "../state/store";
 import { lines } from "../state/transcript";
 import { Controls } from "./Controls";
 import { Header } from "./Header";
@@ -29,6 +29,8 @@ export function App() {
     setData("muted", muted.value ? "" : null);
     setData("paused", paused.value || null);
     setData("speaker", speakerOff.value ? "off" : null);
+    // The transcript labels the assistant's lines with its name (styles.css: .msg.alfred::before)
+    document.documentElement.style.setProperty("--assistant", JSON.stringify(assistantName.value));
     // Split only once there's a conversation, and never beside the desktop sidebar (Home stacks the call instead).
     const desk = shown.value && wide.value;
     const split = lines.value.length && !loginShown.value && !desk && sideBySide.value;

@@ -3,10 +3,10 @@ models are asked for by role."""
 
 import pytest
 
-from jarvis import config, setup_local
-from jarvis.config import files
-from jarvis.config.files import ConfigError
-from jarvis.config.models import Models
+from alfred import config, setup_local
+from alfred.config import files
+from alfred.config.files import ConfigError
+from alfred.config.models import Models
 
 TABLE = {
     "tiers": {"deep": "model-deep", "balanced": "model-balanced", "fast": "model-fast"},
@@ -27,7 +27,7 @@ def test_a_role_names_a_tier_another_role_or_a_model():
 
 
 def test_a_roles_variable_wins_and_a_role_that_follows_it_follows_the_variable_too():
-    models = Models(TABLE, env={"JARVIS_TASK_MODEL": "model-from-env"})
+    models = Models(TABLE, env={"ALFRED_TASK_MODEL": "model-from-env"})
     assert models.role("task") == "model-from-env" and models.role("goal") == "model-from-env"
     assert models.role("voice") == "model-deep"
 
@@ -61,7 +61,7 @@ def test_the_shipped_defaults_give_every_role_the_code_asks_for():
 def test_the_users_file_lays_over_the_shipped_defaults_key_by_key(tmp_path):
     shipped = tmp_path / "shipped"
     shipped.mkdir()
-    (shipped / "jarvis.toml").write_text('[tasks]\nmax_turns = 150\neffort = "high"\n')
+    (shipped / "alfred.toml").write_text('[tasks]\nmax_turns = 150\neffort = "high"\n')
     (shipped / "models.toml").write_text('[tiers]\nfast = "a"\n')
     home = tmp_path / "home"
     home.mkdir()
@@ -75,31 +75,31 @@ def test_the_users_file_lays_over_the_shipped_defaults_key_by_key(tmp_path):
 
 def test_a_named_config_file_must_be_there(tmp_path):
     with pytest.raises(ConfigError, match="isn't there"):
-        files.load(tmp_path, env={"JARVIS_CONFIG": str(tmp_path / "missing.toml")})
+        files.load(tmp_path, env={"ALFRED_CONFIG": str(tmp_path / "missing.toml")})
     (tmp_path / "bad.toml").write_text("[tasks\n")
     with pytest.raises(ConfigError, match="isn't valid TOML"):
-        files.load(tmp_path, env={"JARVIS_CONFIG": str(tmp_path / "bad.toml")})
+        files.load(tmp_path, env={"ALFRED_CONFIG": str(tmp_path / "bad.toml")})
 
 
-def test_home_is_the_variable_else_dot_jarvis_once_it_holds_an_install_else_the_checkout(tmp_path):
-    assert files.home({"JARVIS_HOME": str(tmp_path / "mine")}, tmp_path) == tmp_path / "mine"
+def test_home_is_the_variable_else_dot_alfred_once_it_holds_an_install_else_the_checkout(tmp_path):
+    assert files.home({"ALFRED_HOME": str(tmp_path / "mine")}, tmp_path) == tmp_path / "mine"
     assert files.home({}, tmp_path) == files.ROOT
-    (tmp_path / ".jarvis").mkdir()
-    (tmp_path / ".jarvis/config.toml").write_text("")
+    (tmp_path / ".alfred").mkdir()
+    (tmp_path / ".alfred/config.toml").write_text("")
     assert files.home({}, tmp_path) == files.ROOT  # a lone config.toml mustn't swap in an empty install
-    (tmp_path / ".jarvis/.env").write_text("")
-    assert files.home({}, tmp_path) == tmp_path / ".jarvis"
+    (tmp_path / ".alfred/.env").write_text("")
+    assert files.home({}, tmp_path) == tmp_path / ".alfred"
 
 
 def test_a_setting_is_the_variable_else_the_files_kept_in_range(monkeypatch):
-    monkeypatch.setenv("JARVIS_GOAL_ROUNDS", "9")
-    assert config.whole("goal.rounds", "JARVIS_GOAL_ROUNDS", 0, 5) == 5
-    monkeypatch.setenv("JARVIS_GOAL_ROUNDS", "not a number")
-    assert config.whole("goal.rounds", "JARVIS_GOAL_ROUNDS", 0, 5) == 2
-    monkeypatch.setenv("JARVIS_GOAL_LOOP", "off")
-    assert config.flag("goal.loop", "JARVIS_GOAL_LOOP") is False
-    monkeypatch.setenv("JARVIS_GOAL_LOOP", "maybe")
-    assert config.flag("goal.loop", "JARVIS_GOAL_LOOP") is True
+    monkeypatch.setenv("ALFRED_GOAL_ROUNDS", "9")
+    assert config.whole("goal.rounds", "ALFRED_GOAL_ROUNDS", 0, 5) == 5
+    monkeypatch.setenv("ALFRED_GOAL_ROUNDS", "not a number")
+    assert config.whole("goal.rounds", "ALFRED_GOAL_ROUNDS", 0, 5) == 2
+    monkeypatch.setenv("ALFRED_GOAL_LOOP", "off")
+    assert config.flag("goal.loop", "ALFRED_GOAL_LOOP") is False
+    monkeypatch.setenv("ALFRED_GOAL_LOOP", "maybe")
+    assert config.flag("goal.loop", "ALFRED_GOAL_LOOP") is True
 
 
 def test_move_home_takes_the_installs_files_out_of_the_checkout(tmp_path):
@@ -107,11 +107,11 @@ def test_move_home_takes_the_installs_files_out_of_the_checkout(tmp_path):
     (root / "data").mkdir(parents=True)
     (root / "data/tasks.db").write_text("db")
     (root / ".env").write_text("KEY=1\n")
-    (root / "jarvis").mkdir()
+    (root / "alfred").mkdir()
     assert setup_local.move_home(home, root) == [".env", "data"]
     assert (home / "data/tasks.db").read_text() == "db" and (home / ".env").read_text() == "KEY=1\n"
     assert (root / "data").is_symlink() and (root / "data/tasks.db").read_text() == "db"  # old paths still work
-    assert (root / "jarvis").is_dir() and not (root / ".env").exists()
+    assert (root / "alfred").is_dir() and not (root / ".env").exists()
     assert setup_local.move_home(home, root) == []  # the link isn't moved again
 
 
@@ -152,25 +152,25 @@ def test_remember_home_links_the_default_home_once(tmp_path):
     user.mkdir()
     there.mkdir()
     assert setup_local.remember_home(there, user) is True
-    assert (user / ".jarvis").resolve() == there.resolve()
+    assert (user / ".alfred").resolve() == there.resolve()
     assert setup_local.remember_home(there, user) is False
 
 
 def test_a_roles_variable_may_name_a_tier():
-    assert Models(TABLE, env={"JARVIS_TASK_MODEL": "fast"}).role("goal") == "model-fast"
+    assert Models(TABLE, env={"ALFRED_TASK_MODEL": "fast"}).role("goal") == "model-fast"
 
 
 def test_a_quoted_off_in_config_toml_is_off(monkeypatch):
-    monkeypatch.delenv("JARVIS_GOAL_LOOP", raising=False)
+    monkeypatch.delenv("ALFRED_GOAL_LOOP", raising=False)
     for written, expected in (("off", False), ("false", False), ("on", True), (False, False), (True, True)):
         monkeypatch.setitem(config.SETTINGS["goal"], "loop", written)
-        assert config.flag("goal.loop", "JARVIS_GOAL_LOOP") is expected, written
+        assert config.flag("goal.loop", "ALFRED_GOAL_LOOP") is expected, written
 
 
 def test_on_off_preferences_fall_back_to_the_shipped_default(monkeypatch):
-    from jarvis.state import preferences
+    from alfred.state import preferences
 
-    for var in ("JARVIS_BROWSER", "JARVIS_BROWSER_WINDOW", "JARVIS_INJECTION_CHECK"):
+    for var in ("ALFRED_BROWSER", "ALFRED_BROWSER_WINDOW", "ALFRED_INJECTION_CHECK"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(preferences, "stored", lambda key, db_file=None: "")
     monkeypatch.setitem(config.DEFAULTS, "browser", "off")
@@ -181,7 +181,7 @@ def test_on_off_preferences_fall_back_to_the_shipped_default(monkeypatch):
 
 
 def test_a_worktree_belongs_to_the_checkout_its_git_file_names(tmp_path):
-    main, tree = tmp_path / "code/jarvis", tmp_path / "home/data/worktrees/t1"
+    main, tree = tmp_path / "code/alfred", tmp_path / "home/data/worktrees/t1"
     (main / ".git/worktrees/t1").mkdir(parents=True)
     tree.mkdir(parents=True)
     (tree / ".git").write_text(f"gitdir: {main}/.git/worktrees/t1\n")

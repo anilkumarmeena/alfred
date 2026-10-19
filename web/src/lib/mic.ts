@@ -72,6 +72,7 @@ export interface MediaKeysOptions {
   isMuted(): boolean;
   Metadata?: new (init: { title: string; artist: string; artwork: MediaImage[] }) => unknown;
   artwork?: MediaImage[];
+  title?(): string;  // Now Playing title: the assistant's name
   cue?(muted: boolean): void;
   log?(line: string): void;
   gesture?(): boolean;
@@ -91,7 +92,7 @@ export type MediaKeys = ReturnType<typeof mediaKeys>;
 // - play/pause/stop each toggle; a duplicate report of one press (within `gap`) is dropped.
 // - The near-silent loop plays while visible since iOS only sends presses to a playing page. Hidden, everything
 //   is torn down so no Now Playing controls show.
-export function mediaKeys({ audio, session, setMuted, isMuted, Metadata, artwork = [], cue = () => {}, log = () => {},
+export function mediaKeys({ audio, session, setMuted, isMuted, Metadata, artwork = [], title = () => "", cue = () => {}, log = () => {},
   gesture = () => !!(typeof navigator !== "undefined" && navigator.userActivation && navigator.userActivation.isActive),
   now = Date.now, later = setTimeout, gap = 700, settle = 1500, delay = 400, hush = 1000 }: MediaKeysOptions) {
   let ready = false, visible = true, url = "", micActive: boolean | null = null, pressedAt = -Infinity, shownAt = -Infinity;
@@ -184,7 +185,7 @@ export function mediaKeys({ audio, session, setMuted, isMuted, Metadata, artwork
     if (Metadata) {
       try {
         session!.metadata = live
-          ? new Metadata({ title: "JARVIS", artist: paused ? "Mic paused" : muted ? "Muted" : "Listening", artwork })
+          ? new Metadata({ title: title(), artist: paused ? "Mic paused" : muted ? "Muted" : "Listening", artwork })
           : null;
       } catch {}
     }

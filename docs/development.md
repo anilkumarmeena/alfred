@@ -34,7 +34,7 @@
 The packages sit in **layers**, and an import may only point **down** (`tests/test_architecture.py` fails otherwise). **[Features](features.md)** lists every part, tool, model role and process, generated from the code; the reasoning behind the layout is in **[Architecture review](architecture-review.md)**.
 
 ```text
-jarvis/
+alfred/
 │  ── entry points: processes, and what wires them ──────────────────────────────────────
 ├── apps/            agent (the voice process), runner (the task runner's), mcp_launch, audio_file,
 │                    host_check, artifact_check, features (make features)
@@ -67,14 +67,14 @@ jarvis/
 │                    remembered approvals, the hidden-instruction scan
 ├── llm/             the only code that talks to Claude: roles, one-shot calls, sessions,
 │                    the SDK facade, logins, usage limits, retries
-├── auth/            the vault, panel logins, JARVIS's own keys
+├── auth/            the vault, panel logins, Alfred's own keys
 ├── storage/         the database (connections, migrations), the settings table, profiles
-├── config/          typed settings read from config/*.toml, JARVIS_HOME and .env
+├── config/          typed settings read from config/*.toml, ALFRED_HOME and .env
 ├── prompts/         the long prompts as markdown, {{name}} placeholders filled by prompts.load()
 ├── contracts/       Protocols and data a lower layer names for a higher one to fill in
 └── core/            platform.py (which OS), files, processes, speakable text, the GPU shim
 
-config/              the shipped settings: jarvis.toml (every default) and models.toml (model roles)
+config/              the shipped settings: alfred.toml (every default) and models.toml (model roles)
 web/                 the phone web app (Vite + TypeScript + Preact), served from web/dist
 tests/               pytest, plus web/tests/ (vitest)
 deploy/              launchd plists, systemd/ user unit templates
@@ -85,19 +85,19 @@ docs/                these pages
 
 | | File | For |
 |:-:|---|---|
-| 📞 | `jarvis/apps/agent.py`, `jarvis/voice/session.py` | **One call**: LiveKit's side, and the `VoiceSession` |
-| 🧠 | `jarvis/brain/cli.py`, `jarvis/llm/` | **The brain**: the `claude` CLI through the Agent SDK, which only `jarvis/llm/` talks to |
-| 🧰 | `jarvis/tools/__init__.py` | **The tool registry**: `@tool` and AI Armory's tool sets |
-| ⚙️ | `jarvis/tasks/runner.py`, `jarvis/tasks/worker.py` | **Background tasks**: the runner, its HTTP API and one task's run |
-| 🛡️ | `jarvis/safety/`, `jarvis/gates/` | **Every guard**: the rules, and the gates that apply them to each tool call |
-| 🎛️ | `config/*.toml`, `jarvis/config/` | **Every setting**: defaults and model roles in the TOML files, read by `jarvis.config` ([Configuration](configuration.md)) |
-| 🧩 | `jarvis/core/platform.py` | **Which OS**: `MAC`, `LINUX`, `WSL`, `APPLE_SILICON`, `NAME` ([Platform layer](architecture.md#-platform-layer)) |
+| 📞 | `alfred/apps/agent.py`, `alfred/voice/session.py` | **One call**: LiveKit's side, and the `VoiceSession` |
+| 🧠 | `alfred/brain/cli.py`, `alfred/llm/` | **The brain**: the `claude` CLI through the Agent SDK, which only `alfred/llm/` talks to |
+| 🧰 | `alfred/tools/__init__.py` | **The tool registry**: `@tool` and AI Armory's tool sets |
+| ⚙️ | `alfred/tasks/runner.py`, `alfred/tasks/worker.py` | **Background tasks**: the runner, its HTTP API and one task's run |
+| 🛡️ | `alfred/safety/`, `alfred/gates/` | **Every guard**: the rules, and the gates that apply them to each tool call |
+| 🎛️ | `config/*.toml`, `alfred/config/` | **Every setting**: defaults and model roles in the TOML files, read by `alfred.config` ([Configuration](configuration.md)) |
+| 🧩 | `alfred/core/platform.py` | **Which OS**: `MAC`, `LINUX`, `WSL`, `APPLE_SILICON`, `NAME` ([Platform layer](architecture.md#-platform-layer)) |
 
 - **`VoiceSession`** routes each turn and speaks tasks' requests.
-- **`claude.ask_json`** (`jarvis/llm/claude.py`) is the one way a short model call gives a verdict: JSON checked against a schema. Calls name a **role** (`Role.ANNOUNCE`), never a model.
+- **`claude.ask_json`** (`alfred/llm/claude.py`) is the one way a short model call gives a verdict: JSON checked against a schema. Calls name a **role** (`Role.ANNOUNCE`), never a model.
 - **The guards:** `commands.py` (what's risky) and `scripts.py` (what a script's code does), `gates/shell.py` / `gates/draft_gate.py` (spoken yes), `host.py` (the host walls: Seatbelt on macOS, bubblewrap on Linux), `gates/injection.py` / `scan.py`.
-- **The Google and Mac tools** come from **[AI Armory](https://github.com/anilkumarmeena/ai-armory)**, a git dependency pinned to a commit in `pyproject.toml`, registered in `jarvis/tools/google.py` and `jarvis/tools/mac.py`, and imported only through `jarvis/integrations/armory.py`. The Linux desktop tools are JARVIS's own: `jarvis/tools/desktop.py` on top of `jarvis/core/desktop.py`.
-- **OS differences** stay behind `platform.MAC` / `platform.LINUX` checks; speech goes through `jarvis/media/whisper.py`, which hides whether MLX Whisper or faster-whisper runs.
+- **The Google and Mac tools** come from **[AI Armory](https://github.com/anilkumarmeena/ai-armory)**, a git dependency pinned to a commit in `pyproject.toml`, registered in `alfred/tools/google.py` and `alfred/tools/mac.py`, and imported only through `alfred/integrations/armory.py`. The Linux desktop tools are Alfred's own: `alfred/tools/desktop.py` on top of `alfred/core/desktop.py`.
+- **OS differences** stay behind `platform.MAC` / `platform.LINUX` checks; speech goes through `alfred/media/whisper.py`, which hides whether MLX Whisper or faster-whisper runs.
 
 ## 🧱 Layers and contracts
 
@@ -106,9 +106,9 @@ Four rules keep a change in one part from breaking another. **`make test` enforc
 | Rule | What it means | Checked by |
 |---|---|---|
 | **Imports point down** | A package imports only its own modules and lower layers; parts in one layer don't import each other (a short, commented allow-list in the test aside) | `tests/test_architecture.py` |
-| **One door per vendor** | Only `jarvis/llm/` imports the Claude Agent SDK (`jarvis/llm/sdk.py` re-exports what the rest uses); only `jarvis/integrations/armory.py` imports AI Armory | `tests/test_architecture.py` |
+| **One door per vendor** | Only `alfred/llm/` imports the Claude Agent SDK (`alfred/llm/sdk.py` re-exports what the rest uses); only `alfred/integrations/armory.py` imports AI Armory | `tests/test_architecture.py` |
 | **No model id in code** | Code names a **role** (`Role.ANNOUNCE`); `config/models.toml` says which model plays it | `tests/test_architecture.py` |
-| **Upward needs go through a contract** | When a lower part needs something above it, name it in `jarvis/contracts/` (a Protocol or plain data) and have `jarvis/bootstrap.py` or the process's entry point hand it in | review |
+| **Upward needs go through a contract** | When a lower part needs something above it, name it in `alfred/contracts/` (a Protocol or plain data) and have `alfred/bootstrap.py` or the process's entry point hand it in | review |
 
 <details>
 <summary><b>Where does my change go?</b></summary>
@@ -117,12 +117,12 @@ Four rules keep a change in one part from breaking another. **`make test` enforc
 
 | You're adding | Put it in | Then |
 |---|---|---|
-| A setting | `config/jarvis.toml` (default, with its variable in a comment), read in `jarvis/config/__init__.py` | Document it in [Configuration](configuration.md) |
-| A model call | A role in `config/models.toml` and `jarvis/llm/roles.py`; call `claude.ask(…, Role.X)` | |
-| A tool | A `@tool` in `jarvis/tools/<area>.py`, calling a service below; no business logic in the tool | `make features` |
-| A process | `jarvis/apps/<name>.py`, calling `bootstrap.wire()` before it starts work | `make features` |
-| A panel action | An `@action` in `jarvis/panel/<area>.py` | `make features` (the web app's action list) |
-| A prompt | `jarvis/prompts/<name>.md`, read with `prompts.load()` | |
+| A setting | `config/alfred.toml` (default, with its variable in a comment), read in `alfred/config/__init__.py` | Document it in [Configuration](configuration.md) |
+| A model call | A role in `config/models.toml` and `alfred/llm/roles.py`; call `claude.ask(…, Role.X)` | |
+| A tool | A `@tool` in `alfred/tools/<area>.py`, calling a service below; no business logic in the tool | `make features` |
+| A process | `alfred/apps/<name>.py`, calling `bootstrap.wire()` before it starts work | `make features` |
+| A panel action | An `@action` in `alfred/panel/<area>.py` | `make features` (the web app's action list) |
+| A prompt | `alfred/prompts/<name>.md`, read with `prompts.load()` | |
 
 </details>
 
@@ -134,18 +134,18 @@ The architecture test's baseline (`tests/architecture_baseline.txt`) is **empty*
 |:-:|---|---|
 | 🧪 | `make test` | The pytest suite in `tests/`, plus the web app's vitest tests |
 | 🌐 | `npm test --prefix web` | The web app's tests alone |
-| ✅ | `make check` | Byte-compiles `jarvis/`, **pyright**, web type-check, imports every entry module |
+| ✅ | `make check` | Byte-compiles `alfred/`, **pyright**, web type-check, imports every entry module |
 | 🧱 | `make host-check` | The real sandbox walls around tasks' commands (Seatbelt or bubblewrap) |
-| 🖼️ | `make artifact-check` | Publishes a tiny claude.ai artifact on JARVIS's login, the way tasks do |
+| 🖼️ | `make artifact-check` | Publishes a tiny claude.ai artifact on Alfred's login, the way tasks do |
 
 - **`make test`** fetches pytest with `uv run --with pytest`. The vitest tests are skipped if `web/node_modules` is missing (`make web-install`).
 - **Pyright** is a pinned version, errors only. Its softer rules are listed under `[tool.pyright]` in `pyproject.toml`; `uv run --with pyright pyright` shows their warnings.
 - **`make check`** passes with **only one speech engine installed**: MLX Whisper on Apple silicon, faster-whisper elsewhere (`pyproject.toml` picks by platform marker), and the other's imports are marked for pyright.
-- **`make host-check`** checks that secrets and JARVIS's files are blocked, while PyPI, the task cache and the SSH agent stay reachable, and signing in over SSH works for each SSH git host in your projects' remotes (skipped when none use SSH). Each OS has its own list: macOS adds code signing; Linux adds the session bus, other processes, `sudo` and new files at the top of home.
+- **`make host-check`** checks that secrets and Alfred's files are blocked, while PyPI, the task cache and the SSH agent stay reachable, and signing in over SSH works for each SSH git host in your projects' remotes (skipped when none use SSH). Each OS has its own list: macOS adds code signing; Linux adds the session bus, other processes, `sudo` and new files at the top of home.
 - **`make artifact-check`** takes `FILE=page.html` to publish a real page.
 
 > [!NOTE]
-> Tests use a **scratch data folder** (`tests/conftest.py` sets `JARVIS_DATA_DIR` and `JARVIS_DB_FILE`), so they never touch your data. The voice brain's tests run against a **fake `claude` CLI** (`tests/fake_cli.py`).
+> Tests use a **scratch data folder** (`tests/conftest.py` sets `ALFRED_DATA_DIR` and `ALFRED_DB_FILE`), so they never touch your data. The voice brain's tests run against a **fake `claude` CLI** (`tests/fake_cli.py`).
 
 #### One suite, two systems
 
@@ -199,15 +199,15 @@ These work the same on macOS and Linux; `make livekit` runs the `livekit-server`
 
 - **Builds:** `make web`, `services-install` and `services-restart` build first; a running server picks up a rebuild without restarting.
 - **Hot reload:** http://localhost:5173 serves `web/src` straight from disk and proxies `/api` to the web server on 8787 (`make web-api`, restarted on Python changes). Only the UI piece: `make web-dev` beside a running `make dev` or the services.
-- **UI against another JARVIS:** `make web-dev API=https://<host>.<tailnet>.ts.net` runs only the UI here, with hot reload, using that machine's API and LiveKit (through its `make tailscale-serve`). Sign in with that machine's passcode.
-- **Build ids** live in `<meta name="jarvis-build">`; the server reports the one it serves.
+- **UI against another Alfred:** `make web-dev API=https://<host>.<tailnet>.ts.net` runs only the UI here, with hot reload, using that machine's API and LiveKit (through its `make tailscale-serve`). Sign in with that machine's passcode.
+- **Build ids** live in `<meta name="alfred-build">`; the server reports the one it serves.
 
 > [!WARNING]
 > **Untrusted text in the panel.** Task summaries, memory and to-dos can come from an email or page a task read. So Markdown is rendered with raw HTML shown as text, DOMPurify keeping only plain formatting, links limited to http(s) and mailto, and images shown as links.
 
 ## 📝 Prompts
 
-The long prompts live in `jarvis/prompts/*.md`, one file each: persona, task brief, goal check, learning review, injection check, skill review...
+The long prompts live in `alfred/prompts/*.md`, one file each: persona, task brief, goal check, learning review, injection check, skill review...
 
 - **Placeholders** like `{{name}}` are filled by `prompts.load(name, ...)`.
 - **Edit them as markdown**; `tests/test_prompts.py` checks each one loads where it's used.
@@ -218,7 +218,7 @@ See **[Integrations → Adding a tool](integrations.md#-adding-a-tool)**.
 
 ## 🧰 Editing AI Armory alongside
 
-JARVIS installs AI Armory from GitHub, **pinned to a commit** (`rev` under `[tool.uv.sources]` in `pyproject.toml`), so `uv sync` and `make test` behave the same everywhere. To try changes in a local checkout before pushing them:
+Alfred installs AI Armory from GitHub, **pinned to a commit** (`rev` under `[tool.uv.sources]` in `pyproject.toml`), so `uv sync` and `make test` behave the same everywhere. To try changes in a local checkout before pushing them:
 
 **1. Install your checkout** — editable, over the pinned copy in `.venv`:
 

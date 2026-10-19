@@ -1,6 +1,6 @@
-"""Tests for how the voice prompt (jarvis.brain.PERSONA) tells JARVIS to speak."""
+"""Tests for how the voice prompt (alfred.brain.PERSONA) tells Alfred to speak."""
 
-from jarvis.brain import persona
+from alfred.brain import persona
 
 PERSONA = persona.persona()
 

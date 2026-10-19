@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from jarvis import config
-from jarvis.auth import vault
-from jarvis.state import settings
+from alfred import config
+from alfred.auth import vault
+from alfred.state import settings
 
 
 @pytest.fixture
@@ -94,7 +94,7 @@ def test_a_secret_under_a_key_thats_gone_says_so(key, monkeypatch):
     with vault._db() as db:  # as if one had been missed under the old key
         db.execute("update secrets set key_id = 'deadbeefdeadbeef'")
     monkeypatch.setattr(config, "MASTER_KEY", newest)
-    with pytest.raises(vault.VaultError, match="isn't in JARVIS_MASTER_KEY"):
+    with pytest.raises(vault.VaultError, match="isn't in ALFRED_MASTER_KEY"):
         vault.get("github.token")
 
 
@@ -107,10 +107,10 @@ def test_reencrypt_moves_secrets_under_the_first_key(key, monkeypatch):
 
 def test_init_writes_the_key_into_env_file_mode_600_keeping_the_rest(key, monkeypatch):
     monkeypatch.setattr(config, "MASTER_KEY", "")
-    vault.ENV_FILE.write_text(f"JARVIS_PASSCODE=123456\n{vault.VAR}=\n")
+    vault.ENV_FILE.write_text(f"ALFRED_PASSCODE=123456\n{vault.VAR}=\n")
     said = vault.init()
     text = vault.ENV_FILE.read_text()
-    assert "JARVIS_PASSCODE=123456" in text and text.count(vault.VAR) == 1 and config.MASTER_KEY in text
+    assert "ALFRED_PASSCODE=123456" in text and text.count(vault.VAR) == 1 and config.MASTER_KEY in text
     assert stat.S_IMODE(vault.ENV_FILE.stat().st_mode) == 0o600 and config.MASTER_KEY not in said
     assert "already" in vault.init()
 
@@ -157,4 +157,4 @@ def test_status_lists_names_never_values(key, capsys):
 
 def test_config_takes_the_key_out_of_the_environment():
     text = Path(config.__file__).read_text()
-    assert 'MASTER_KEY = os.environ.pop("JARVIS_MASTER_KEY"' in text
+    assert 'MASTER_KEY = os.environ.pop("ALFRED_MASTER_KEY"' in text

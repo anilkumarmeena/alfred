@@ -1,4 +1,4 @@
-"""Tests for jarvis.panel and its routes: to-dos, memory, preferences, sources, accounts, projects, tasks, jobs."""
+"""Tests for alfred.panel and its routes: to-dos, memory, preferences, sources, accounts, projects, tasks, jobs."""
 
 import asyncio
 import json
@@ -7,15 +7,15 @@ from datetime import date
 import pytest
 from test_in_place import env  # noqa: F401  (fixture)
 
+from alfred import config, panel, server
+from alfred.integrations import accounts
+from alfred.notify import push
+from alfred.panel import system as panel_system
+from alfred.safety.commands import describe
+from alfred.state import memory, preferences, settings, todo
+from alfred.tasks import api, client, runner, schedules
+from alfred.tasks.store import APPROVED
 from conftest import use_profile
-from jarvis import config, panel, server
-from jarvis.integrations import accounts
-from jarvis.notify import push
-from jarvis.panel import system as panel_system
-from jarvis.safety.commands import describe
-from jarvis.state import memory, preferences, settings, todo
-from jarvis.tasks import api, client, runner, schedules
-from jarvis.tasks.store import APPROVED
 
 TODAY = f"{date.today():%Y-%m-%d}"
 IPHONE = {"endpoint": "https://web.push.apple.com/abc", "keys": {"p256dh": "B" * 87, "auth": "A" * 22}}
@@ -103,17 +103,17 @@ def shown(user: list[str], environment: list[str]) -> dict:
 def test_memory_lines_are_edited_and_forgotten_exactly(db):
     memory.remember("Likes tea", "user")
     memory.remember("Likes tea, not coffee", "user")
-    memory.remember("Runs JARVIS on a Mac mini", "environment")
+    memory.remember("Runs Alfred on a Mac mini", "environment")
     first, second = memory.facts()["user"]
-    mac = f"- Runs JARVIS on a Mac mini ({TODAY})"
+    mac = f"- Runs Alfred on a Mac mini ({TODAY})"
     assert first == f"- Likes tea ({TODAY})"
     assert call("memory") == shown([first, second], [mac])
     assert call("memory_edit", {"line": first, "fact": "Likes green tea"}) == shown([f"- Likes green tea ({TODAY})", second], [mac])
     assert call("memory_edit", {"line": second, "fact": ""}) == shown([f"- Likes green tea ({TODAY})"], [mac])  # only that line
     with pytest.raises(ValueError, match="changed or gone"):
         call("memory_edit", {"line": second, "fact": "again"})
-    assert call("memory_edit", {"line": mac, "fact": "Runs JARVIS on an M2 MacBook"})["environment"] == \
-        [f"- Runs JARVIS on an M2 MacBook ({TODAY})"]  # in its own section
+    assert call("memory_edit", {"line": mac, "fact": "Runs Alfred on an M2 MacBook"})["environment"] == \
+        [f"- Runs Alfred on an M2 MacBook ({TODAY})"]  # in its own section
 
 
 def test_remember_from_the_panel_names_the_section_and_keeps_to_the_limits(db):
@@ -184,7 +184,7 @@ def test_a_voice_picked_in_the_panel_is_spoken_unless_env_sets_one(prefs, monkey
     call("preference_save", {"key": "voice", "value": "bm_lewis"})
     assert preferences.tts_voice() == "bm_lewis"
 
-    monkeypatch.setenv("JARVIS_TTS_VOICE", "af_heart")  # .env wins
+    monkeypatch.setenv("ALFRED_TTS_VOICE", "af_heart")  # .env wins
     assert preferences.tts_voice() == "af_heart" and call("preferences")["preferences"]["voice"]["env"] == "af_heart"
 
 
@@ -207,8 +207,8 @@ def test_name_and_time_zone_default_to_the_macs(prefs):
 def test_the_push_contact_is_the_default_google_account(monkeypatch):
     monkeypatch.setattr(push, "PUSH_CONTACT", "")
     assert push.contact() == "mailto:me@acme.example"  # the tests' default account (conftest)
-    monkeypatch.setattr(push, "PUSH_CONTACT", "https://example.org/jarvis")
-    assert push.contact() == "https://example.org/jarvis"
+    monkeypatch.setattr(push, "PUSH_CONTACT", "https://example.org/alfred")
+    assert push.contact() == "https://example.org/alfred"
 
 
 # ── Accounts and devices ────────────────────────────────────────
@@ -348,7 +348,7 @@ def test_tasks_come_with_the_scheduled_jobs_and_are_tagged_with_theirs(db, monke
     shown = call("tasks")
     assert [(j["title"], j["kind"], j["status"]) for j in shown["schedules"]] == [
         ("Deploy live", "watch", "active"), ("Morning brief", "task", "active")]  # soonest first; finished ones left out
-    assert shown["schedules"][0]["check"] == "JARVIS checks the page: https://app.example"
+    assert shown["schedules"][0]["check"] == "Alfred checks the page: https://app.example"
     assert shown["schedules"][1]["when"] == "every weekday at 09:00"
     assert [t["job_title"] for t in shown["tasks"]] == ["Morning brief", None]
     assert watch["id"] != brief["id"]
@@ -367,7 +367,7 @@ def test_jobs_are_paused_resumed_and_cancelled_from_the_panel(db):
 
 
 def test_do_not_disturb_from_the_panel(db, monkeypatch):
-    from jarvis.llm import usage
+    from alfred.llm import usage
 
     monkeypatch.setattr(usage, "USAGE_FILE", db / "usage.json")
     assert call("hold_status")["hold"] is None
@@ -452,7 +452,7 @@ def reply(action: str, body: dict) -> tuple[int, dict]:
 
 @pytest.fixture
 def site(db, monkeypatch):
-    monkeypatch.setenv("JARVIS_PASSCODE", "123456")  # no login yet: the first-setup passcode
+    monkeypatch.setenv("ALFRED_PASSCODE", "123456")  # no login yet: the first-setup passcode
     monkeypatch.setattr(server, "_failures", [])
 
 

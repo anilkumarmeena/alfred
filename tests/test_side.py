@@ -1,4 +1,4 @@
-"""Tests for jarvis.brain.side: background reads announced when done, read-only side jobs, file lookups that hold a
+"""Tests for alfred.brain.side: background reads announced when done, read-only side jobs, file lookups that hold a
 turn only briefly, cut-off work handed over."""
 
 import asyncio
@@ -18,15 +18,15 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from jarvis import projects, tools
-from jarvis.brain import cli, side
-from jarvis.config import SECRETS_DIR
-from jarvis.gates import shell
-from jarvis.llm import roles
-from jarvis.llm.roles import Role
-from jarvis.state import conversation, memory
-from jarvis.tasks import access, client, worker
-from jarvis.tasks.store import KINDS
+from alfred import projects, tools
+from alfred.brain import cli, side
+from alfred.config import SECRETS_DIR
+from alfred.gates import shell
+from alfred.llm import roles
+from alfred.llm.roles import Role
+from alfred.state import conversation, memory
+from alfred.tasks import access, client, worker
+from alfred.tasks.store import KINDS
 
 
 @pytest.fixture(autouse=True)
@@ -65,16 +65,16 @@ def test_a_side_job_is_announced_when_its_answer_is_in():
 
 MARKDOWN_ANSWER = """## Wake word
 
-The wake word is **hey jarvis**.
+The wake word is **hey alfred**.
 
-It's set in `jarvis/config/__init__.py` at line 88.
+It's set in `alfred/config/__init__.py` at line 88.
 
 - It can be changed with a setting.
 - It's checked on the computer.
 
 ## Check source
 
-- jarvis/core/config.py:88
+- alfred/core/config.py:88
 - docs/configuration.md"""
 
 
@@ -99,7 +99,7 @@ def unspeakable(text: str) -> bool:
 @pytest.fixture
 def wording(monkeypatch):
     """The wording model, on and faked: replies with `wording.reply` (or raises it) and records each call."""
-    from jarvis.llm import claude, usage
+    from alfred.llm import claude, usage
 
     model = SimpleNamespace(reply="", calls=[])
 
@@ -116,15 +116,15 @@ def wording(monkeypatch):
 
 
 def test_a_markdown_answer_is_announced_as_a_short_summary_once_with_the_detail_kept_for_the_brain(wording):
-    wording.reply = ("**The wake word is hey jarvis.** It's set in the config file, at `jarvis/config/__init__.py`. "
+    wording.reply = ("**The wake word is hey alfred.** It's set in the config file, at `alfred/config/__init__.py`. "
                      "You can change it with a setting. Want me to?")
     text, note = announced(MARKDOWN_ANSWER)
-    assert text == ("On the wake word: The wake word is hey jarvis. You can change it with a setting. "
+    assert text == ("On the wake word: The wake word is hey alfred. You can change it with a setting. "
                     "Want me to?")  # the model's markdown and its sentence with a path are left out too
     assert not unspeakable(text)
     [(prompt, system)] = wording.calls
     assert MARKDOWN_ANSWER in prompt and system == side.spoken_system()
-    assert note.count(MARKDOWN_ANSWER) == 1 and "hey jarvis" not in note.replace(MARKDOWN_ANSWER, "")
+    assert note.count(MARKDOWN_ANSWER) == 1 and "hey alfred" not in note.replace(MARKDOWN_ANSWER, "")
 
 
 @pytest.mark.parametrize("off", ["failed", "slow", "disabled"])
@@ -133,24 +133,24 @@ def test_without_the_wording_model_a_markdown_answer_is_trimmed_to_a_few_plain_s
         monkeypatch.setattr(side, "ANNOUNCE_ENABLED", False)
     wording.reply = RuntimeError("no") if off == "failed" else TimeoutError()
     text, note = announced(MARKDOWN_ANSWER + "\n\nOne more thing.")
-    assert text == ("On the wake word: The wake word is hey jarvis. It can be changed with a setting. "
+    assert text == ("On the wake word: The wake word is hey alfred. It can be changed with a setting. "
                     "It's checked on the computer.")  # three sentences at most, none with a path
     assert not unspeakable(text) and MARKDOWN_ANSWER in note
     assert wording.calls == [] if off == "disabled" else len(wording.calls) == 1
 
 
 def test_a_file_lookup_s_source_line_goes_to_the_brain_and_a_plain_answer_needs_no_model(wording):
-    text, note = announced("The web server listens on port 8080.\nSource: jarvis/config/__init__.py:42")
+    text, note = announced("The web server listens on port 8080.\nSource: alfred/config/__init__.py:42")
     assert text == "On the wake word: The web server listens on port 8080."
-    assert note == "Not said aloud, for follow-up questions: Source: jarvis/config/__init__.py:42"
+    assert note == "Not said aloud, for follow-up questions: Source: alfred/config/__init__.py:42"
     assert wording.calls == []
 
 
 def test_a_long_plain_answer_is_worded_down_too(wording):
-    wording.reply = "It's hey jarvis, and you can change it."
+    wording.reply = "It's hey alfred, and you can change it."
     long = " ".join(f"Point {n} about the wake word." for n in range(6))
     text, note = announced(long)
-    assert text == "On the wake word: It's hey jarvis, and you can change it."
+    assert text == "On the wake word: It's hey alfred, and you can change it."
     assert note == f"Not said aloud, for follow-up questions: {long}"
 
 
@@ -195,8 +195,8 @@ def test_an_answer_all_on_its_source_line_is_worded_by_the_model(wording):
 
 
 def test_an_answer_that_is_all_detail_still_says_it_is_back(wording):
-    wording.reply = "- jarvis/core/config.py:88"
-    assert announced("- jarvis/core/config.py:88")[0] == "The lookup on the wake word is back; ask me for the details."
+    wording.reply = "- alfred/core/config.py:88"
+    assert announced("- alfred/core/config.py:88")[0] == "The lookup on the wake word is back; ask me for the details."
 
 
 def test_a_quick_file_lookup_hands_its_turn_the_whole_answer_unworded(monkeypatch, wording):
@@ -285,7 +285,7 @@ def test_a_side_job_runs_on_its_model_with_reads_only(monkeypatch):
     assert asyncio.run(side.look("Weather in Lisbon tomorrow?")) == "It's sunny."
     options = seen["options"]
     assert options.permission_mode == "dontAsk" and options.tools == side.WEB
-    assert set(options.allowed_tools) <= set(side.WEB) | {f"mcp__jarvis__{t.name}" for t in tools.all_tools() if side.reads(t)}
+    assert set(options.allowed_tools) <= set(side.WEB) | {f"mcp__alfred__{t.name}" for t in tools.all_tools() if side.reads(t)}
     assert "Bash" not in options.allowed_tools and options.model
 
 
@@ -404,12 +404,12 @@ def test_a_file_lookup_s_database_reads_count_as_steps_too():
     run = lambda name, args: asyncio.run(reads(name, args, None))  # noqa: E731
     assert isinstance(run("mcp__db__query", {"sql": "select cost from tasks where id = 3"}), PermissionResultAllow)
     assert isinstance(run("mcp__db__tables", {}), PermissionResultDeny)
-    other = asyncio.run(side.Reads()("mcp__jarvis__task_stop", {"id": 3}, None))
+    other = asyncio.run(side.Reads()("mcp__alfred__task_stop", {"id": 3}, None))
     assert isinstance(other, PermissionResultDeny) and "isn't available" in other.message
 
 
 def test_the_database_tools_answer_a_query_and_refuse_a_write(own_profile):
-    from jarvis.storage import database
+    from alfred.storage import database
 
     with database.table("tasks", "create table tasks (id integer primary key, title text, cost real)") as c:
         c.execute("insert into tasks values (383, 'multi-repo project folders', 11.49)")
@@ -491,7 +491,7 @@ def test_a_computer_lookup_runs_only_so_many_commands_and_none_naming_secrets():
         assert commands.refused(name, args), (name, args)
     assert commands.refused("Bash", {"command": "uptime"}) == commands.refused("mcp__db__tables", {}) == ""
     assert "answer now" in commands.refused("mcp__db__query", {"sql": "select count(*) from tasks"})
-    assert commands.refused("mcp__jarvis__task_stop", {"id": 3})
+    assert commands.refused("mcp__alfred__task_stop", {"id": 3})
 
 
 def test_the_computer_lookup_tool_answers_in_the_turn_when_quick_and_else_carries_on(monkeypatch):
@@ -722,19 +722,19 @@ def test_a_task_carrying_on_a_lookup_cant_start_a_lookup_to_be_carried_on_again(
     assert set(side.DOING) == lookups and all(side._carrier(n, "x")[0] in KINDS for n in lookups)
 
 
-def test_the_project_a_brief_points_at_is_the_deepest_folder_it_names_else_one_it_names_else_jarvis(monkeypatch):
+def test_the_project_a_brief_points_at_is_the_deepest_folder_it_names_else_one_it_names_else_alfred(monkeypatch):
     home = Path.home()
-    listed = [projects.Project("JARVIS", Path("/opt/jarvis"), [], ""),
+    listed = [projects.Project("Alfred", Path("/opt/alfred"), [], ""),
               projects.Project("web", home / "code", [], ""),
               projects.Project("atlas", home / "code" / "atlas", [], ""),
               projects.Project("far", Path("/srv/far"), [], "", node=2)]
     monkeypatch.setattr(projects, "load", lambda: listed)
-    monkeypatch.setattr(projects, "JARVIS_REPO", Path("/opt/jarvis"))
+    monkeypatch.setattr(projects, "ALFRED_REPO", Path("/opt/alfred"))
     assert projects.named_in("What port does ~/code/atlas/server.py use?").name == "atlas"
     assert projects.named_in(f"Look in {home}/code for the README").name == "web"
-    assert projects.named_in(f"Look in {home}/codex for it").name == "JARVIS"  # not a folder of any of them
+    assert projects.named_in(f"Look in {home}/codex for it").name == "Alfred"  # not a folder of any of them
     assert projects.named_in("Which version is the Atlas project on?").name == "atlas"
-    assert projects.named_in("Where is the wake word set?").name == "JARVIS"
-    assert projects.named_in("What's in /srv/far/notes?").name == "JARVIS"  # lives on another machine
+    assert projects.named_in("Where is the wake word set?").name == "Alfred"
+    assert projects.named_in("What's in /srv/far/notes?").name == "Alfred"  # lives on another machine
     monkeypatch.setattr(projects, "load", lambda: listed[1:])
     assert projects.named_in("Where is the wake word set?") is None

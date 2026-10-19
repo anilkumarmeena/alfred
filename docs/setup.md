@@ -4,7 +4,7 @@
 
 # 🚀 Setup
 
-**From a fresh clone to JARVIS answering on your phone and running around the clock, on macOS, Linux or Windows through WSL2.**
+**From a fresh clone to Alfred answering on your phone and running around the clock, on macOS, Linux or Windows through WSL2.**
 
 [🏠 Home](../README.md) · **🚀 Setup** · [⚙️ Configuration](configuration.md) · [🗣️ Voice](voice.md) · [🛠️ Tasks](tasks.md) · [🔌 Integrations](integrations.md) · [📱 Mobile](mobile.md) · [👩‍💻 Development](development.md) · [🏗️ Architecture](architecture.md) · [🧭 Features](features.md)
 
@@ -12,7 +12,7 @@
 
 ---
 
-Each step builds on the one before. Steps **1–3** get JARVIS talking; steps **4–7 are optional**; step **8** keeps it running. Only steps **1** and **8** differ by platform.
+Each step builds on the one before. Steps **1–3** get Alfred talking; steps **4–7 are optional**; step **8** keeps it running. Only steps **1** and **8** differ by platform.
 
 ```mermaid
 flowchart LR
@@ -46,7 +46,7 @@ flowchart LR
 | 📁 | [7. Projects for code tasks](#-7-projects-for-code-tasks) | Repos background tasks can work on |
 | 🔁 | [8. Run it 24/7](#-8-run-it-247) | Four services that never stop: launchd or systemd |
 | 🧹 | [Uninstall](#-uninstall) | Remove the services, or everything but the code |
-| 📂 | [Where things live](#-where-things-live) | Every file and folder JARVIS keeps |
+| 📂 | [Where things live](#-where-things-live) | Every file and folder Alfred keeps |
 
 </details>
 
@@ -128,7 +128,7 @@ sudo apt install ffmpeg libnotify-bin xdg-utils wl-clipboard    # optional (xcli
 | | Package | What for |
 |:-:|---|---|
 | 🧱 | `bubblewrap` · `socat` | **Required.** bubblewrap walls in background tasks' commands; both are needed by Claude Code's own sandbox (the voice shell) |
-| 🚌 | `dbus-user-session` | `systemctl --user`, which runs JARVIS's services (most desktops have it; log out and in after installing) |
+| 🚌 | `dbus-user-session` | `systemctl --user`, which runs Alfred's services (most desktops have it; log out and in after installing) |
 | 🎤 | `libportaudio2` | The terminal mic: `make console` and `make voiceprint` |
 | 📖 | `wamerican` | A word list, so the learning review can tell everyday words from real mishearings |
 | ⬇️ | `curl`, `sha256sum`, `tar` | Fetching LiveKit and the models |
@@ -190,12 +190,12 @@ then run `wsl --shutdown` from Windows and open Ubuntu again.
 
 - **Screenshots** aren't available: WSL2 can't see the Windows screen. The clipboard and notifications work only under WSLg.
 - `make awake` has no effect: **Windows decides** when the computer sleeps.
-- Your **phone** reaches JARVIS through **Tailscale installed inside WSL2** ([step 6](#-6-your-phone-over-tailscale)).
+- Your **phone** reaches Alfred through **Tailscale installed inside WSL2** ([step 6](#-6-your-phone-over-tailscale)).
 
 ### ✅ Then, everywhere
 
 ```sh
-git clone https://github.com/anilkumarmeena/jarvis.git && cd jarvis
+git clone https://github.com/anilkumarmeena/alfred.git && cd alfred
 make install
 ```
 
@@ -222,22 +222,22 @@ make install
 <br>
 
 - **GPU:** used when one works, which needs **CUDA 12 cuBLAS and cuDNN 9**, from the system or pip (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`).
-- **CPU:** int8, one thread per physical core. `small.en` took 0.61 s per 5 s clip on an M-series CPU; expect about **1–1.5 s on a 4–8 core x86**. On a weak CPU, set `JARVIS_STT=base.en`.
-- `JARVIS_STT_DEVICE` forces `cuda` or `cpu` (empty: pick automatically); `JARVIS_TRANSCRIBE_MODEL` picks the recordings model. All settings: **[⚙️ Configuration](configuration.md)**.
+- **CPU:** int8, one thread per physical core. `small.en` took 0.61 s per 5 s clip on an M-series CPU; expect about **1–1.5 s on a 4–8 core x86**. On a weak CPU, set `ALFRED_STT=base.en`.
+- `ALFRED_STT_DEVICE` forces `cuda` or `cpu` (empty: pick automatically); `ALFRED_TRANSCRIBE_MODEL` picks the recordings model. All settings: **[⚙️ Configuration](configuration.md)**.
 
 </details>
 
 ## 🔑 2. Claude login
 
-JARVIS uses **your own Claude Code login**: if `claude` already works on this computer, there is nothing to do. Your Claude Code settings, CLAUDE.md, hooks, plugins and MCP servers still stay out of JARVIS's sessions.
+Alfred uses **your own Claude Code login**: if `claude` already works on this computer, there is nothing to do. Your Claude Code settings, CLAUDE.md, hooks, plugins and MCP servers still stay out of Alfred's sessions.
 
 ```sh
-make claude-status    # which account JARVIS uses
+make claude-status    # which account Alfred uses
 make claude-login     # sign in, if you haven't (claude auth login)
 ```
 
 > [!TIP]
-> To give JARVIS **a separate account**, set `JARVIS_CLAUDE_CONFIG_DIR=secrets/claude` in `.env`, then run `make claude-login` (it signs in to that folder) and `make services-restart`.
+> To give Alfred **a separate account**, set `ALFRED_CLAUDE_CONFIG_DIR=secrets/claude` in `.env`, then run `make claude-login` (it signs in to that folder) and `make services-restart`.
 
 A **claude.ai subscription** login (rather than an API key) also lets background tasks publish mockups and previews as claude.ai artifacts. `make artifact-check` tests it.
 
@@ -246,7 +246,7 @@ A **claude.ai subscription** login (rather than an API key) also lets background
 **Write `.env`, keys and your passcode** — safe to rerun:
 
 ```sh
-make setup            # uv run python -m jarvis.setup_local
+make setup            # uv run python -m alfred.setup_local
 ```
 
 ```mermaid
@@ -267,19 +267,20 @@ flowchart LR
 > [!TIP]
 > Lost your passcode? **`make passcode`** shows it again, on this computer only. Later changes, and logins for other people, are in the control panel under **Settings → Logins and keys**.
 
-- It **asks once where your projects are kept** (default: the folder this checkout is in) and writes `JARVIS_NEW_PROJECTS_DIR` and `JARVIS_TASK_READ_DIRS`.
-- Then **set who you are**: your name and time zone in **Settings → About you** (or `JARVIS_USER_NAME`, `JARVIS_TIMEZONE`), plus what JARVIS should know about you (below).
+- It **asks once where your projects are kept** (default: the folder this checkout is in) and writes `ALFRED_NEW_PROJECTS_DIR` and `ALFRED_TASK_READ_DIRS`.
+- Then **set who you are**: your name and time zone in **Settings → About you** (or `ALFRED_USER_NAME`, `ALFRED_TIMEZONE`), plus what Alfred should know about you (below).
+- **Name your assistant** there too, if Alfred isn't for you: it goes by whatever you choose, from your next message (or `ALFRED_ASSISTANT_NAME`).
 - Every other setting has a default: see **[⚙️ Configuration](configuration.md)**.
 
 ### About you
 
-"About you" is what JARVIS knows about you, **in your own words**, one point per line: your job, your projects, what to keep apart when reporting. It goes into JARVIS's prompt, followed by your Google accounts. Edit it in **Settings → About you**, or:
+"About you" is what Alfred knows about you, **in your own words**, one point per line: your job, your projects, what to keep apart when reporting. It goes into Alfred's prompt, followed by your Google accounts. Edit it in **Settings → About you**, or:
 
 ```sh
 make about                                                           # show it
-uv run python -m jarvis.state.settings about --set "Works at Acme."  # replace; a newline starts another point
-uv run python -m jarvis.state.settings about --from me.txt           # from a file (- for stdin)
-uv run python -m jarvis.state.settings about --clear
+uv run python -m alfred.state.settings about --set "Works at Acme."  # replace; a newline starts another point
+uv run python -m alfred.state.settings about --from me.txt           # from a file (- for stdin)
+uv run python -m alfred.state.settings about --clear
 ```
 
 ## 💻 4. Try it
@@ -297,7 +298,7 @@ open http://localhost:8787    # macOS; xdg-open on Linux
 
 ## 📬 5. Google
 
-**Everything is in the control panel:** open **JARVIS → Google accounts**. Until JARVIS has an OAuth client, the page walks you through making one, with links to each Google Cloud page.
+**Everything is in the control panel:** open **Alfred → Google accounts**. Until Alfred has an OAuth client, the page walks you through making one, with links to each Google Cloud page.
 
 **1. Create an OAuth client** — in a Google Cloud project of your own: set up the **Google Auth Platform** (External, with yourself as a test user), enable the APIs below, then create a client of either type:
 
@@ -313,25 +314,25 @@ open http://localhost:8787    # macOS; xdg-open on Linux
 | 🗄️ | Google Drive | Finding and reading files; briefly holding images a Doc copies in |
 | 💬 | Google Chat, People | Only for [Google Chat](integrations.md#-google-chat) |
 
-- **Drive:** JARVIS finds files by name or content and reads Slides through it, but **only changes Drive files it made itself**.
+- **Drive:** Alfred finds files by name or content and reads Slides through it, but **only changes Drive files it made itself**.
 
 > [!IMPORTANT]
 > While the app is in **Testing**, Google ends sign-ins after **7 days**. Publish it (Audience → Publish app) to keep them. A Workspace admin may also have to allow the app.
 
-**2. Give JARVIS the client** — paste its JSON on the Google accounts page (or in **Settings → Logins and keys**); it's kept in the vault. Or drop Google's `client_secret_….json` into `secrets/`: JARVIS moves it into the vault on its next start, and you can then delete the file.
+**2. Give Alfred the client** — paste its JSON on the Google accounts page (or in **Settings → Logins and keys**); it's kept in the vault. Or drop Google's `client_secret_….json` into `secrets/`: Alfred moves it into the vault on its next start, and you can then delete the file.
 
-**3. Add each account** — **+ Add a Google account**, give it a label (`work`, `personal`…), say what it's for, switch on **Google Chat** for a Workspace account that uses it, then **Add and sign in**. Google opens in a new tab: pick the account and allow every permission. JARVIS uses it from the next conversation, **no restart needed**.
+**3. Add each account** — **+ Add a Google account**, give it a label (`work`, `personal`…), say what it's for, switch on **Google Chat** for a Workspace account that uses it, then **Add and sign in**. Google opens in a new tab: pick the account and allow every permission. Alfred uses it from the next conversation, **no restart needed**.
 
 <details>
 <summary><b>⌨️ Adding accounts from the terminal</b></summary>
 
 <br>
 
-On JARVIS's computer; then sign each one in from the Google accounts page:
+On Alfred's computer; then sign each one in from the Google accounts page:
 
 ```sh
-uv run python -m jarvis.integrations.accounts add work --note "for work"
-uv run python -m jarvis.integrations.accounts add personal --note "my own"
+uv run python -m alfred.integrations.accounts add work --note "for work"
+uv run python -m alfred.integrations.accounts add personal --note "my own"
 ```
 
 </details>
@@ -368,17 +369,17 @@ Notifications, earphones and the native app on iOS and Android: **[📱 Mobile](
 The projects code tasks can work on live in the `projects` table of `data/tasks.db`. Add them **by voice** ("add my billing api folder as a project") or from a terminal, with **aliases** for names speech recognition might mishear:
 
 ```sh
-uv run python -m jarvis.projects add billing-api --path ~/code/billing-api \
+uv run python -m alfred.projects add billing-api --path ~/code/billing-api \
   --aliases "billing api, the billing service" --about "Billing service (work)" --worktrees
 
 # list them
-uv run python -m jarvis.projects
+uv run python -m alfred.projects
 
 # change one: --in-place, or --path, --aliases, --about, --worktrees
-uv run python -m jarvis.projects set billing-api --in-place
+uv run python -m alfred.projects set billing-api --in-place
 
 # take it off the list; the folder stays
-uv run python -m jarvis.projects remove billing-api
+uv run python -m alfred.projects remove billing-api
 ```
 
 Changes apply at once. **In place** (the default) vs **worktrees** is explained in **[🛠️ Tasks](tasks.md#where-code-changes-go)**.
@@ -393,15 +394,15 @@ make services-install
 
 | | Service | Runs |
 |:-:|---|---|
-| 📡 | `com.jarvis.livekit` | The local LiveKit server |
-| 🎙️ | `com.jarvis.agent` | The voice agent |
-| 🌐 | `com.jarvis.web` | The web app and control panel on 127.0.0.1:8787 |
-| ⚙️ | `com.jarvis.tasks` | The task runner: background tasks, notices, scheduler, learning review |
+| 📡 | `com.alfred.livekit` | The local LiveKit server |
+| 🎙️ | `com.alfred.agent` | The voice agent |
+| 🌐 | `com.alfred.web` | The web app and control panel on 127.0.0.1:8787 |
+| ⚙️ | `com.alfred.tasks` | The task runner: background tasks, notices, scheduler, learning review |
 
 | | On | They run as |
 |:-:|---|---|
 | 🍎 | **macOS** | **launchd** agents |
-| 🐧 | **Linux** and WSL2 | systemd **user** units in `~/.config/systemd/user/com.jarvis.<name>.service`; the task runner at low CPU and idle disk priority |
+| 🐧 | **Linux** and WSL2 | systemd **user** units in `~/.config/systemd/user/com.alfred.<name>.service`; the task runner at low CPU and idle disk priority |
 
 **On Linux, once:** let the services run without a login session and start at boot. `make services-install` prints this hint when it's needed:
 
@@ -411,20 +412,32 @@ sudo loginctl enable-linger $USER
 
 - Installing and starting hand your desktop session's display and D-Bus variables to the user manager, so **notifications, the clipboard and screenshots** work from the services.
 - **No systemd** (say, WSL2 without it turned on)? `make services-install` stops with a hint; `make dev` still runs everything in the foreground.
-- `uv run python -m jarvis.setup_local status` shows the units' state (`--help` for the rest).
+- `uv run python -m alfred.setup_local status` shows the units' state (`--help` for the rest).
 
 **Keeping it running:**
 
 | | To | Do |
 |:-:|---|---|
-| 🔌 | Keep the computer awake while JARVIS runs | Nothing: the agent's service runs under `caffeinate` on macOS (on the charger), `systemd-inhibit` on Linux when allowed |
+| 🔌 | Keep the computer awake while Alfred runs | Nothing: the agent's service runs under `caffeinate` on macOS (on the charger), `systemd-inhibit` on Linux when allowed |
 | 💤 | Keep running with the lid closed | `make awake`: `sudo pmset -a disablesleep 1` on macOS; masks the sleep targets (sudo) on Linux; no effect on WSL2 |
 | 🌙 | Restore normal sleep | `make sleep-normal` |
 | 🔁 | Apply a `.env` change or pulled code | `make services-restart` |
 | ⏯️ | Stop or start them | `make services-stop` · `make services-start` |
 | 📊 | Check on them | `make status` |
 
-`JARVIS_SERVICE_PREFIX` changes the `com.jarvis` part, to **run a second JARVIS** under the same user account; `make services-restart` moves the services to the new labels.
+`ALFRED_SERVICE_PREFIX` changes the `com.alfred` part, to **run a second Alfred** under the same user account; `make services-restart` moves the services to the new labels.
+
+## ⬆️ Coming from JARVIS
+
+Alfred used to be called JARVIS. An install from then moves over by itself the first time you run **`make setup`**, **`make services-install`**, **`make services-start`** or (on a second machine) **`make node-install`**:
+
+| Before | After |
+|---|---|
+| `~/.jarvis` | `~/.alfred`, with a link left at `~/.jarvis` for paths saved before |
+| `JARVIS_*` in `.env` | `ALFRED_*`, rewritten in place |
+| `com.jarvis.*` services | `com.alfred.*`, the old ones removed |
+
+Until then the old services keep starting: the checkout keeps their old entry points (`jarvis/`), each handing over to Alfred, and a second machine that updated itself carries on the same way. Your phone stays signed in. Conversation logs written before read as before.
 
 ## 🧹 Uninstall
 
@@ -432,14 +445,14 @@ Two levels. **Neither touches the code**: delete the checkout folder yourself to
 
 | | Command | Removes | Keeps |
 |:-:|---|---|---|
-| 🛑 | `make uninstall` | Every service: the four, any under an old label, and a second machine's `node` service. None comes back at login, and launchd's service logs move back into `logs/` | Your data, settings, secrets and models: `make services-install` brings JARVIS back |
-| 🗑️ | `make uninstall-all` | All of the above, plus JARVIS_HOME's `.env`, `config.toml`, `data/`, `secrets/`, `models/` and `logs/`, JARVIS's own Claude logins (signed out, so their keychain entries go too), `.venv`, `web/node_modules`, `web/dist`, and the `livekit-server` that `make livekit-bin` put in `~/.local/bin` | The code |
+| 🛑 | `make uninstall` | Every service: the four, any under an old label, and a second machine's `node` service. None comes back at login, and launchd's service logs move back into `logs/` | Your data, settings, secrets and models: `make services-install` brings Alfred back |
+| 🗑️ | `make uninstall-all` | All of the above, plus ALFRED_HOME's `.env`, `config.toml`, `data/`, `secrets/`, `models/` and `logs/`, Alfred's own Claude logins (signed out, so their keychain entries go too), `.venv`, `web/node_modules`, `web/dist`, and the `livekit-server` that `make livekit-bin` put in `~/.local/bin` | The code |
 
-`make uninstall-all` lists every path first and deletes **only after you type `delete`**. `YES=1` skips the question, for scripts. It refuses while JARVIS still runs in the foreground (`make dev`, `make console`). It removes links, never what they point to.
+`make uninstall-all` lists every path first and deletes **only after you type `delete`**. `YES=1` skips the question, for scripts. It refuses while Alfred still runs in the foreground (`make dev`, `make console`). It removes links, never what they point to.
 
 **Left for you to decide**, printed at the end when they apply:
 
-- Tailscale serving JARVIS on your tailnet: `tailscale serve reset` clears this computer's serve settings.
+- Tailscale serving Alfred on your tailnet: `tailscale serve reset` clears this computer's serve settings.
 - Sleep turned off by `make awake`: `make sleep-normal`.
 - Paired machines: run `make uninstall` on each. On a second machine, remove it in the main computer's **Settings › Machines**.
 - Shared tools stay: `uv`, a Homebrew `livekit` (`brew uninstall livekit`), and the speech models in `~/.cache/huggingface`.
@@ -454,7 +467,7 @@ Two levels. **Neither touches the code**: delete the checkout folder yourself to
 | 📖 | `data/vocabulary.md` | Names and words speech recognition should expect, and their mishearings |
 | 💬 | `data/conversations/` | Every conversation, one markdown file a day |
 | 🌿 | `data/worktrees/` | Worktrees for tasks on their own branch |
-| 🔐 | `secrets/` | Google sign-ins, JARVIS's own Claude login (if set), logins, LiveKit config, push keys |
+| 🔐 | `secrets/` | Google sign-ins, Alfred's own Claude login (if set), logins, LiveKit config, push keys |
 | 📦 | `models/` | Downloaded models |
 | 📜 | `logs/` | Service logs, voice timing, speech gate and speaker check logs |
 

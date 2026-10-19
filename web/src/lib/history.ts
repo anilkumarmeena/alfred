@@ -1,7 +1,7 @@
 // Past-conversation types (from the conversations / conversation / conversation_search panel actions) and their
 // formatting. Newest first throughout.
 
-// A logged exchange: speaker, words, commands they approved, and JARVIS's reply. Between-turn speech (e.g. a task
+// A logged exchange: speaker, words, commands they approved, and Alfred's reply. Between-turn speech (e.g. a task
 // update) is an announcement; an unrecognised line is a note.
 export interface Entry {
   n: number; time: string; kind: "exchange" | "announcement" | "note"; said: string;
@@ -18,7 +18,7 @@ export interface Found { text: string; hits: Hit[]; more: boolean }
 const DAY_MS = 86_400_000;
 const utc = (date: string) => new Date(`${date}T00:00:00Z`);
 
-// "Today", "Yesterday" or "Monday 5 October" (year added if not current). `today` is JARVIS's computer's date.
+// "Today", "Yesterday" or "Monday 5 October" (year added if not current). `today` is Alfred's computer's date.
 export function dayLabel(date: string, today: string): string {
   if (date === today) return "Today";
   const d = utc(date);

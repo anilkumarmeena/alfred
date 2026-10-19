@@ -1,11 +1,11 @@
-"""Tests for jarvis.storage.readonly: the lookups read JARVIS's database, and nothing they send can change it or reach
+"""Tests for alfred.storage.readonly: the lookups read Alfred's database, and nothing they send can change it or reach
 its secrets."""
 
 import sqlite3
 
 import pytest
 
-from jarvis.storage import database, readonly
+from alfred.storage import database, readonly
 
 
 @pytest.fixture

@@ -1,10 +1,11 @@
 // Google accounts: set up the OAuth client, add accounts, sign them in (and again), remove them.
-// A sign-in opens Google in a new tab; Google comes back to JARVIS's web service (Desktop app client, on its computer)
+// A sign-in opens Google in a new tab; Google comes back to Alfred's web service (Desktop app client, on its computer)
 // or to this page's own address (Web application client, any device). On a phone with a Desktop app client, Google's
 // last page doesn't load: its address is pasted here instead. The page follows the sign-in until it's over.
 import { useEffect } from "preact/hooks";
 import { useSignal, type Signal } from "@preact/signals";
 import { accounts, act, googleSetup, loadGoogleSetup, toast, type Account, type ApiCheck, type GoogleSetup, type SignIn, type SignInResult } from "../../state/panel";
+import { assistantName } from "../../state/store";
 import { EditIcon, TrashIcon } from "../icons";
 import { Empty, InlineForm, Led, Pill } from "./bits";
 
@@ -43,8 +44,8 @@ function Redirects({ list }: { list: string[] }) {
 function SetupCard({ setup }: { setup: GoogleSetup }) {
   return (
     <div class="srv gsetup">
-      <h3>Connect JARVIS to Google</h3>
-      <p class="sub">Once per JARVIS: make an OAuth client in your own Google Cloud project. About five minutes.</p>
+      <h3>Connect {assistantName} to Google</h3>
+      <p class="sub">Once per Alfred: make an OAuth client in your own Google Cloud project. About five minutes.</p>
       <ol class="steps">
         <li>Open the <a href={`${CONSOLE}/auth/branding`} target="_blank" rel="noopener">Google Auth Platform</a> in a project of yours
           (or a new one), set it up as <b>External</b>, and add yourself under <a href={`${CONSOLE}/auth/audience`} target="_blank" rel="noopener">Audience → Test users</a>.</li>
@@ -228,7 +229,7 @@ function SignInBox({ flow }: { flow: Signal<Flow | null> }) {
         {" "}<a href={started.url} target="_blank" rel="noopener">Open Google again</a> if no tab opened.
       </div>
       {started.next && (
-        <div class="sub">If Google says <b>Access blocked</b>, the Workspace blocks Google Chat for JARVIS: close that tab and
+        <div class="sub">If Google says <b>Access blocked</b>, the Workspace blocks Google Chat for {assistantName}: close that tab and
           {" "}<button class="linkish" onClick={() => again(1)}>try again {started.next}</button></div>
       )}
       {started.paste && <PasteForm />}
@@ -241,7 +242,7 @@ function AccountRow({ a, flow, ready }: { a: Account; flow: Signal<Flow | null>;
   const editing = useSignal(false);
   const signing = flow.value?.label === a.label;
   async function remove() {
-    if (!confirm(`Remove the ${a.label} account? JARVIS forgets its sign-in; your Google account isn't touched.`)) return;
+    if (!confirm(`Remove the ${a.label} account? ${assistantName.peek()} forgets its sign-in; your Google account isn't touched.`)) return;
     const r = await act<Account[]>("account_remove", { label: a.label }, `Removed the ${a.label} account`);
     if (r) { accounts.value = r; if (signing) flow.value = null; }
   }
@@ -296,7 +297,7 @@ function AddAccount({ flow, first }: { flow: Signal<Flow | null>; first: boolean
         <input class="field" autocomplete="off" autocapitalize="none" spellcheck={false} placeholder="work" value={label.value}
           onInput={(e) => { label.value = e.currentTarget.value; }} />
       </label>
-      <label class="glabel">What it's for <span class="sub">optional; tells JARVIS when to use it</span>
+      <label class="glabel">What it's for <span class="sub">optional; tells {assistantName} when to use it</span>
         <input class="field" autocomplete="off" placeholder="for work" value={note.value} onInput={(e) => { note.value = e.currentTarget.value; }} />
       </label>
       <div class="gchat">
@@ -321,7 +322,7 @@ export function GoogleAccountsPage() {
       {all.length > 0 && <ul class="list">{all.map((a) => <AccountRow key={a.label} a={a} flow={flow} ready={!!setup.kind} />)}</ul>}
       {setup.kind && <AddAccount flow={flow} first={!all.length} />}
       {!setup.kind && all.length > 0 && <p class="hint">Sign these in once the client is saved.</p>}
-      <p class="hint">JARVIS uses a new or changed account from the next conversation; no restart needed.</p>
+      <p class="hint">{assistantName} uses a new or changed account from the next conversation; no restart needed.</p>
     </>
   );
 }

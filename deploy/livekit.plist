@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- LiveKit media server, localhost signalling. Label and folders are filled in by jarvis.setup_local. -->
+<!-- LiveKit media server, localhost signalling. Label and folders are filled in by alfred.setup_local. -->
 <plist version="1.0">
 <dict>
     <key>Label</key><string>${LABEL}</string>
@@ -9,10 +9,10 @@
     <array>
         <string>/opt/homebrew/bin/livekit-server</string>
         <string>--config</string>
-        <string>${JARVIS_HOME}/secrets/livekit.yaml</string>
+        <string>${ALFRED_HOME}/secrets/livekit.yaml</string>
     </array>
     <key>EnvironmentVariables</key>
-    <dict><key>JARVIS_HOME</key><string>${JARVIS_HOME}</string><key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+    <dict><key>ALFRED_HOME</key><string>${ALFRED_HOME}</string><key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ThrottleInterval</key><integer>10</integer>

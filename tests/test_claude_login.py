@@ -1,4 +1,4 @@
-"""Tests for the Claude login JARVIS runs on: the user's own unless JARVIS_CLAUDE_CONFIG_DIR names one of JARVIS's."""
+"""Tests for the Claude login Alfred runs on: the user's own unless ALFRED_CLAUDE_CONFIG_DIR names one of Alfred's."""
 
 import json
 import os
@@ -8,16 +8,16 @@ from pathlib import Path
 
 import pytest
 
-from jarvis import claude_login, config
-from jarvis.brain import sdk
-from jarvis.config import ROOT
-from jarvis.llm import claude, claude_logins, usage
+from alfred import claude_login, config
+from alfred.brain import sdk
+from alfred.config import ROOT
+from alfred.llm import claude, claude_logins, usage
 
 
 def config_dirs(**env: str) -> list[str]:
     """CLAUDE_OWN_CONFIG_DIR and CLAUDE_CONFIG_DIR as a fresh process reads them (set-but-empty = unset, not .env)."""
-    code = "from jarvis import config; print(config.CLAUDE_OWN_CONFIG_DIR); print(config.CLAUDE_CONFIG_DIR)"
-    env = os.environ | {"JARVIS_CLAUDE_CONFIG_DIR": "", "CLAUDE_CONFIG_DIR": ""} | env
+    code = "from alfred import config; print(config.CLAUDE_OWN_CONFIG_DIR); print(config.CLAUDE_CONFIG_DIR)"
+    env = os.environ | {"ALFRED_CLAUDE_CONFIG_DIR": "", "CLAUDE_CONFIG_DIR": ""} | env
     return subprocess.run([sys.executable, "-c", code], env=env, cwd=ROOT, capture_output=True, text=True,
                           check=True).stdout.splitlines()
 
@@ -27,17 +27,17 @@ def test_by_default_the_cli_gets_no_config_dir_so_it_finds_the_users_login(monke
     assert "CLAUDE_CONFIG_DIR" not in sdk.sdk_options().env  # even ~/.claude would miss the macOS Keychain login
 
 
-def test_a_login_of_jarvis_own_is_passed_on(monkeypatch):
+def test_a_login_of_alfred_own_is_passed_on(monkeypatch):
     monkeypatch.setattr(config, "CLAUDE_OWN_CONFIG_DIR", "/j/secrets/claude")
     assert sdk.sdk_options().env["CLAUDE_CONFIG_DIR"] == "/j/secrets/claude"
 
 
-def test_the_cli_folder_is_the_users_unless_jarvis_has_its_own():
+def test_the_cli_folder_is_the_users_unless_alfred_has_its_own():
     assert config_dirs() == ["", str(Path.home() / ".claude")]
     assert config_dirs(CLAUDE_CONFIG_DIR="/u/claude") == ["", "/u/claude"]
     own = str(ROOT / "secrets/claude")
-    assert config_dirs(JARVIS_CLAUDE_CONFIG_DIR="secrets/claude") == [own, own]  # relative to the checkout
-    assert config_dirs(JARVIS_CLAUDE_CONFIG_DIR="/abs/claude") == ["/abs/claude", "/abs/claude"]
+    assert config_dirs(ALFRED_CLAUDE_CONFIG_DIR="secrets/claude") == [own, own]  # relative to the checkout
+    assert config_dirs(ALFRED_CLAUDE_CONFIG_DIR="/abs/claude") == ["/abs/claude", "/abs/claude"]
 
 
 # ── Named logins (core.claude_logins) ──
@@ -56,7 +56,7 @@ class Info:
     rate_limit_type, status, resets_at, utilization, overage_status = "seven_day", "rejected", 9e9, 1.0, None
 
 
-def test_jarvis_runs_on_the_first_login_by_priority(logins_dir):
+def test_alfred_runs_on_the_first_login_by_priority(logins_dir):
     assert claude_logins.order() == [""] and claude_logins.active() == ""
     claude_logins.make("work")
     assert claude_logins.order() == ["", "work"] and claude_logins.active() == ""  # a new login goes last
@@ -116,7 +116,7 @@ def test_the_macs_own_login_is_never_signed_out(logins_dir, monkeypatch):
     assert not calls and claude_logins.order() == [""]
 
 
-def test_a_used_up_limit_moves_jarvis_down_the_order_until_it_resets(logins_dir, monkeypatch, tmp_path):
+def test_a_used_up_limit_moves_alfred_down_the_order_until_it_resets(logins_dir, monkeypatch, tmp_path):
     monkeypatch.setattr(usage, "USAGE_FILE", tmp_path / "usage.json")
     claude_logins.make("work")
     usage.record(Info(), login="")
@@ -127,7 +127,7 @@ def test_a_used_up_limit_moves_jarvis_down_the_order_until_it_resets(logins_dir,
     assert claude_logins.active(now=9e9 + 1) == ""  # past the reset: back to the first
 
 
-def test_with_every_login_used_up_jarvis_stays_on_the_first(logins_dir, monkeypatch, tmp_path):
+def test_with_every_login_used_up_alfred_stays_on_the_first(logins_dir, monkeypatch, tmp_path):
     monkeypatch.setattr(usage, "USAGE_FILE", tmp_path / "usage.json")
     claude_logins.make("work")
     usage.record(Info(), login="")

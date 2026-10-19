@@ -1,11 +1,11 @@
-"""Tests for jarvis.node.sync: manifests, what to copy, and archives that can't escape their folder."""
+"""Tests for alfred.node.sync: manifests, what to copy, and archives that can't escape their folder."""
 
 import io
 import os
 import tarfile
 from pathlib import Path
 
-from jarvis.node import sync
+from alfred.node import sync
 
 
 def tree(root: Path, files: dict[str, str]) -> Path:

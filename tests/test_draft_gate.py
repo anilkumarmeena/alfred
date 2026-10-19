@@ -1,4 +1,4 @@
-"""Tests for jarvis.gates.draft_gate: Google sends/deletes (Chat, invites, Doc, Sheet tab) wait for a spoken yes."""
+"""Tests for alfred.gates.draft_gate: Google sends/deletes (Chat, invites, Doc, Sheet tab) wait for a spoken yes."""
 
 import asyncio
 
@@ -6,11 +6,11 @@ import pytest
 from ai_armory.toolsets.google import common, drafts, pending
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny, ResultMessage, StreamEvent
 
-from jarvis import tools
-from jarvis.brain import cli
-from jarvis.config import APPROVAL_MINUTES
-from jarvis.gates import draft_gate
-from jarvis.state import memory
+from alfred import tools
+from alfred.brain import cli
+from alfred.config import APPROVAL_MINUTES
+from alfred.gates import draft_gate
+from alfred.state import memory
 
 
 class Clock:
@@ -48,7 +48,7 @@ def doc_draft() -> str:
 
 
 def send(gate, draft_id, tool="chat_send"):
-    return asyncio.run(gate(f"mcp__jarvis__{tool}", {"draft_id": draft_id}, None))
+    return asyncio.run(gate(f"mcp__alfred__{tool}", {"draft_id": draft_id}, None))
 
 
 def asked(gate, draft_id, spoken="Here's the draft.", tool="chat_send"):
@@ -206,7 +206,7 @@ class SendingClient:
 
     async def receive_response(self):
         yield text_event("Here's the reply.")
-        self.results.append(await self.gate("mcp__jarvis__chat_send", {"draft_id": self.draft_id}, None))
+        self.results.append(await self.gate("mcp__alfred__chat_send", {"draft_id": self.draft_id}, None))
         yield ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=2,
                             session_id="s")
 

@@ -1,4 +1,4 @@
-"""Tests for jarvis.voice.speech: Whisper/Kokoro load once in the shared process; a down or stuck one fails fast."""
+"""Tests for alfred.voice.speech: Whisper/Kokoro load once in the shared process; a down or stuck one fails fast."""
 
 import asyncio
 import json
@@ -13,10 +13,10 @@ from livekit.agents import APIConnectionError
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
-from jarvis.media import whisper
-from jarvis.state.vocabulary import Vocabulary
-from jarvis.voice import speech
-from jarvis.voice.speech_gate import Measure, SpeechGate
+from alfred.media import whisper
+from alfred.state.vocabulary import Vocabulary
+from alfred.voice import speech
+from alfred.voice.speech_gate import Measure, SpeechGate
 
 
 class FakeExecutor:
@@ -52,33 +52,33 @@ def test_whisper_sends_the_clip_and_reads_the_reply():
 def test_whisper_is_prompted_with_the_vocabulary_and_mishearings_are_put_right():
     executor = FakeExecutor(json.dumps({"text": "Hey Yavis, open the ai army.", "no_speech": 0.0}).encode())
     stt = speech.WhisperSTT(gate=off_gate(), executor=executor)
-    stt.use_vocabulary(Vocabulary(("JARVIS", "AI Armory"), (("Yavis", "JARVIS"), ("ai army", "AI Armory"))))
+    stt.use_vocabulary(Vocabulary(("Alfred", "AI Armory"), (("Yavis", "Alfred"), ("ai army", "AI Armory"))))
     pcm = (np.sin(np.arange(4800) / 10) * 8000).astype(np.int16)
     event = asyncio.run(stt._recognize_impl([rtc.AudioFrame(pcm.tobytes(), 48000, 1, len(pcm))],
                                             conn_options=DEFAULT_API_CONNECT_OPTIONS))
-    assert event.alternatives[0].text == "Hey JARVIS, open the AI Armory."
-    assert speech.read_whisper_request(executor.calls[0][1])[1] == "JARVIS, AI Armory."
+    assert event.alternatives[0].text == "Hey Alfred, open the AI Armory."
+    assert speech.read_whisper_request(executor.calls[0][1])[1] == "Alfred, AI Armory."
 
 
 def test_with_the_prompt_off_whisper_is_unprompted_but_mishearings_are_still_put_right():
     executor = FakeExecutor(json.dumps({"text": "Yavis, hello.", "no_speech": 0.0}).encode())
     stt = speech.WhisperSTT(gate=off_gate(), executor=executor)
-    stt.use_vocabulary(Vocabulary(("JARVIS",), (("Yavis", "JARVIS"),)), prompt=False)
-    assert asyncio.run(stt._hear([rtc.AudioFrame(np.zeros(480, np.int16).tobytes(), 48000, 1, 480)])) == "JARVIS, hello."
+    stt.use_vocabulary(Vocabulary(("Alfred",), (("Yavis", "Alfred"),)), prompt=False)
+    assert asyncio.run(stt._hear([rtc.AudioFrame(np.zeros(480, np.int16).tobytes(), 48000, 1, 480)])) == "Alfred, hello."
     assert speech.read_whisper_request(executor.calls[0][1])[1] == ""
 
 
 def test_a_transcript_that_only_echoes_the_prompt_is_dropped(monkeypatch):
-    executor = FakeExecutor(json.dumps({"text": "JARVIS, AI Armory, Hermes Agent.", "no_speech": 0.0}).encode())
+    executor = FakeExecutor(json.dumps({"text": "Alfred, AI Armory, Hermes Agent.", "no_speech": 0.0}).encode())
     gate = SpeechGate("enforce", record=None, audio_dir=None)
     loud = Measure(seconds=1.5, rms_dbfs=-20, loudest_dbfs=-10, speech_seconds=1.2, speech_ratio=0.8)
     monkeypatch.setattr(gate, "measure", lambda audio: loud)
     stt = speech.WhisperSTT(gate=gate, executor=executor)
-    stt.use_vocabulary(Vocabulary(("JARVIS", "AI Armory", "Hermes Agent")))
+    stt.use_vocabulary(Vocabulary(("Alfred", "AI Armory", "Hermes Agent")))
     clip = [rtc.AudioFrame(np.zeros(480, np.int16).tobytes(), 48000, 1, 480)]
     assert asyncio.run(stt._hear(clip)) == ""
-    executor.reply = json.dumps({"text": "JARVIS, open AI Armory.", "no_speech": 0.0}).encode()
-    assert asyncio.run(stt._hear(clip)) == "JARVIS, open AI Armory."
+    executor.reply = json.dumps({"text": "Alfred, open AI Armory.", "no_speech": 0.0}).encode()
+    assert asyncio.run(stt._hear(clip)) == "Alfred, open AI Armory."
 
 
 def test_a_call_hears_through_the_shared_process():
@@ -101,7 +101,7 @@ def test_kokoro_sends_the_sentence_with_its_voice():
 
 
 def test_a_failing_shared_process_fails_clearly(caplog):
-    tts = speech.KokoroTTS(executor=FakeExecutor(error=RuntimeError("inference of jarvis_kokoro failed: boom")))
+    tts = speech.KokoroTTS(executor=FakeExecutor(error=RuntimeError("inference of alfred_kokoro failed: boom")))
     with pytest.raises(APIConnectionError) as raised:
         asyncio.run(tts.render("Hello."))
     assert "shared speech process" in str(raised.value) and not raised.value.retryable
@@ -141,9 +141,9 @@ def test_the_whisper_runner_transcribes_what_it_is_sent(monkeypatch):
     runner = speech.WhisperRunner()
     runner.initialize()  # its warm-up uses the same transcribe
     clip = np.full(160, 0.25, np.float32)
-    reply = runner.run(speech.whisper_request(clip, "JARVIS, Zoë."))
+    reply = runner.run(speech.whisper_request(clip, "Alfred, Zoë."))
     assert json.loads(reply) == {"text": "Hello.", "no_speech": 0.2, "avg_logprob": -0.3}
-    assert np.array_equal(heard[-1][0], clip) and heard[-1][1] == "JARVIS, Zoë."
+    assert np.array_equal(heard[-1][0], clip) and heard[-1][1] == "Alfred, Zoë."
 
 
 def test_an_older_shared_process_without_logprob_still_works():
@@ -174,8 +174,8 @@ def test_transcribe_averages_the_logprob_over_every_token(monkeypatch, mlx):
     assert heard["avg_logprob"] == pytest.approx(-0.4)
     assert calls[0]["condition_on_previous_text"] is False and calls[0]["language"] == "en"
     assert calls[0]["initial_prompt"] is None  # no vocabulary, no prompt
-    speech.transcribe(np.zeros(160, np.float32), prompt="JARVIS, AI Armory.")
-    assert calls[1]["initial_prompt"] == "JARVIS, AI Armory."
+    speech.transcribe(np.zeros(160, np.float32), prompt="Alfred, AI Armory.")
+    assert calls[1]["initial_prompt"] == "Alfred, AI Armory."
     monkeypatch.setitem(sys.modules, "mlx_whisper", types.SimpleNamespace(transcribe=lambda a, **k: {"text": ""}))
     assert speech.transcribe(np.zeros(160, np.float32)) == {"text": "", "no_speech": None, "avg_logprob": None}
 
@@ -205,10 +205,10 @@ def test_the_kokoro_runner_logs_each_pieces_render_time_against_its_speech(caplo
     monkeypatch.setattr(speech.time, "perf_counter", lambda: clock[0])
     runner = speech.KokoroRunner()
     runner._kokoro = FakeKokoro()
-    with caplog.at_level("INFO", logger="jarvis.voice.speech"):
+    with caplog.at_level("INFO", logger="alfred.voice.speech"):
         runner.run(json.dumps({"text": "with highs around eighteen degrees.", "voice": "bm_george",
                                "speed": 1.0}).encode())
-    [record] = [r for r in caplog.records if r.name == "jarvis.voice.speech"]
+    [record] = [r for r in caplog.records if r.name == "alfred.voice.speech"]
     assert record.levelname == level
     message = record.getMessage()
     assert message.startswith(f"Kokoro rendered 5 words in {seconds * 1000:.0f} ms for 2.0 s of speech "
@@ -230,9 +230,9 @@ def test_kokoro_loads_the_chosen_model_or_the_first_fallback_there_is(tmp_path):
 
 def test_the_full_kokoro_model_is_the_default():
     """The 8-bit model rendered 30-60% slower on an M2 Air, slower than speech under load."""
-    from jarvis import config
+    from alfred import config
 
-    if not os.environ.get("JARVIS_TTS_MODEL"):
+    if not os.environ.get("ALFRED_TTS_MODEL"):
         assert config.TTS_MODEL.name == "kokoro-v1.0.onnx"
     assert config.TTS_MODEL_FALLBACKS[0].name == "kokoro-v1.0.onnx"
 

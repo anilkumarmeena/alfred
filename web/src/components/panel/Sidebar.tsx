@@ -8,15 +8,15 @@ import { days, loadDays } from "../../state/history";
 import {
   approvals, elapsed, go, home, load, openTask, questions, section, setHome, tasks, todoAct, todos, visible, type Section, type Todo,
 } from "../../state/panel";
-import { connected, muted, now } from "../../state/store";
+import { assistantName, connected, muted, now } from "../../state/store";
 import { CheckIcon, HangupIcon, HistoryIcon, HomeIcon, MicIcon, PlusIcon } from "../icons";
 import { StatusPill } from "../Header";
 import { Empty, InlineForm } from "./bits";
 import { Markdown } from "./Markdown";
-import { Badge, SECTIONS } from "./Panel";
+import { Badge, sections } from "./Panel";
 import { checkTodo } from "./Todos";
 
-const NAV: [Section, string, () => preact.JSX.Element][] = [...SECTIONS, ["history", "History", HistoryIcon]];
+const nav = (): [Section, string, () => preact.JSX.Element][] => [...sections(), ["history", "History", HistoryIcon]];
 
 // Mute and End, for a call that carries on while a section page has the room (Home has the call bar).
 function CallButtons() {
@@ -77,12 +77,12 @@ export function Sidebar() {
   return (
     <aside class="side" aria-label="Sections">
       <div class="sbrand">
-        <span class="word">J.A.R.V.I.S.</span>
+        <span class="word">{assistantName}</span>
         <div class="slink"><StatusPill /><CallButtons /></div>
       </div>
       <nav class="snav">
         <button aria-current={home.value ? "page" : undefined} title="The call (\)" onClick={() => setHome(true)}><HomeIcon />Home</button>
-        {NAV.map(([sec, label, Icon]) => (
+        {nav().map(([sec, label, Icon]) => (
           <button key={sec} aria-current={at(sec) ? "page" : undefined} onClick={() => go(sec)}>
             <Icon />{label}<Badge sec={sec} />
             {sec === "todos" && open ? <span class="cnt">{open}</span> : null}

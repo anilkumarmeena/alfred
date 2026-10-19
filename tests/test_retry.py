@@ -1,4 +1,4 @@
-"""Tests for jarvis.llm.retry: typed failure kinds, Policy schedules, retry(), and claude.ask timeouts."""
+"""Tests for alfred.llm.retry: typed failure kinds, Policy schedules, retry(), and claude.ask timeouts."""
 
 import asyncio
 import logging
@@ -20,10 +20,10 @@ from claude_agent_sdk import (
 from test_in_place import NullReporter
 from test_nudges import FakeClient, result, worker_run
 
-from jarvis.llm import claude, retry
-from jarvis.llm.retry import ERROR, LIMIT, PASSING, CallFailed, Policy
-from jarvis.tasks import client
-from jarvis.voice import session
+from alfred.llm import claude, retry
+from alfred.llm.retry import ERROR, LIMIT, PASSING, CallFailed, Policy
+from alfred.tasks import client
+from alfred.voice import session
 
 # ── Telling failures apart ──────────────────────────────────────
 
@@ -89,7 +89,7 @@ def test_a_policy_forever_keeps_its_last_wait_and_can_retry_every_kind():
 
 
 def test_each_call_sites_schedule_is_its_policy():
-    from jarvis.tasks import learning, scheduler
+    from alfred.tasks import learning, scheduler
 
     assert scheduler.RUNS.waits == (300, 900, 1800) and scheduler.RUNS.retries == {LIMIT, PASSING}
     assert learning.RETRIES.waits == (900, 900)  # three tries, 15 minutes apart
@@ -144,7 +144,7 @@ def test_once_is_one_try():
 
 def test_retries_are_logged_by_type_and_kind_alone(caplog):
     calls = Calls(CallFailed("a secret prompt leaked into the message", PASSING))
-    with caplog.at_level(logging.INFO, logger="jarvis.llm.retry"):
+    with caplog.at_level(logging.INFO, logger="alfred.llm.retry"):
         asyncio.run(retry.retry(Policy(waits=(5,)), calls, "the summary", calls.sleep))
     assert "the summary failed (passing: CallFailed)" in caplog.text and "secret" not in caplog.text
 
@@ -197,7 +197,7 @@ def test_every_ask_has_a_timeout(monkeypatch):
 
 
 def test_the_summaries_fail_rather_than_hang(monkeypatch):
-    from jarvis.tasks import command_jobs, connection_jobs
+    from alfred.tasks import command_jobs, connection_jobs
 
     monkeypatch.setattr(claude.ask, "__defaults__", (0.05,))  # ASK_SECONDS, as the default timeout
     fake_query(monkeypatch, hang=True)

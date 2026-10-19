@@ -39,7 +39,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 header { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; max-width: 1120px; margin: 0 auto;
   font: 500 11px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
 .brand, .tools { display: flex; align-items: center; gap: 10px; }
-.word { color: var(--fg); font-size: 12px; letter-spacing: .42em; }
+.word { color: var(--fg); font-size: 12px; letter-spacing: .42em; text-transform: uppercase; }
 .link { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 button.link { background: none; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; transition: border-color .2s, color .2s; }
 button.link:hover { border-color: rgba(79,209,255,.4); color: var(--fg); }
@@ -139,8 +139,8 @@ body[data-view="login"] #transcript { visibility: hidden; }
 #log { display: flex; flex-direction: column; gap: 14px; }
 .msg { max-width: 100%; animation: rise .3s ease; }
 .msg p { margin: 0; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
-.msg.jarvis { padding-left: 13px; border-left: 2px solid rgba(79,209,255,.55); font-size: 17px; }
-.msg.jarvis::before { content: "JARVIS"; display: block; margin-bottom: 3px; font: 500 10px var(--mono); letter-spacing: .24em; color: var(--accent); opacity: .8; }
+.msg.alfred { padding-left: 13px; border-left: 2px solid rgba(79,209,255,.55); font-size: 17px; }
+.msg.alfred::before { content: var(--assistant, "Alfred"); text-transform: uppercase; display: block; margin-bottom: 3px; font: 500 10px var(--mono); letter-spacing: .24em; color: var(--accent); opacity: .8; }
 .msg.you { align-self: flex-end; max-width: 85%; padding: 9px 14px; border-radius: 18px 18px 5px 18px; font-size: 15px; color: #bcd0db;
   background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08); }
 .divider { display: flex; align-items: center; gap: 12px; font: 500 10px var(--mono); letter-spacing: .2em; text-transform: uppercase; color: var(--dim); }
@@ -270,8 +270,8 @@ body[data-layout="split"] footer { width: 100%; max-width: 1120px; margin: 0 aut
   .mini svg { width: 20px; height: 20px; }
   #status { font-size: 14px; }
   #hint { font-size: 15px; }
-  .msg.jarvis { font-size: 18px; }
-  .msg.jarvis::before { font-size: 11px; }
+  .msg.alfred { font-size: 18px; }
+  .msg.alfred::before { font-size: 11px; }
   .msg.you { font-size: 16px; }
   .divider, #suggest h2 { font-size: 11px; }
   #suggest { font-size: 15px; }

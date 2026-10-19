@@ -1,4 +1,4 @@
-"""Tests for jarvis.gates.mcp_gate: what's read out for an MCP write call, and holding it for a spoken yes."""
+"""Tests for alfred.gates.mcp_gate: what's read out for an MCP write call, and holding it for a spoken yes."""
 
 import asyncio
 import json
@@ -6,11 +6,11 @@ import json
 import pytest
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
-from jarvis.config import APPROVAL_MINUTES
-from jarvis.gates import mcp_gate
-from jarvis.integrations import mcp_servers
-from jarvis.integrations.mcp_servers import Server, Tool
-from jarvis.storage import profile
+from alfred.config import APPROVAL_MINUTES
+from alfred.gates import mcp_gate
+from alfred.integrations import mcp_servers
+from alfred.integrations.mcp_servers import Server, Tool
+from alfred.storage import profile
 
 # GitHub and GitLab with hand-written `says` phrases, as plain server rows
 GITHUB = Server("github", "GitHub", command="github-mcp-server", tools={
@@ -34,12 +34,12 @@ ACME = Server("acme", "Acme", command="acme-mcp",
                      "wipe": Tool("blocked"), "mark": Tool("own")})
 
 
-# ── What JARVIS reads out ───────────────────────────────────────
+# ── What Alfred reads out ───────────────────────────────────────
 
 def test_a_comment_is_read_out_in_full_with_where_it_goes():
     said = mcp_gate.describe(GITHUB, "add_issue_comment",
-                             {"owner": "acme","repo": "jarvis", "issue_number": 12, "body": "Looks good,\n ship it"})
-    assert said == "On GitHub, comment on acme/jarvis number 12, saying 'Looks good, ship it'."
+                             {"owner": "acme","repo": "alfred", "issue_number": 12, "body": "Looks good,\n ship it"})
+    assert said == "On GitHub, comment on acme/alfred number 12, saying 'Looks good, ship it'."
 
 
 def test_a_pull_request_names_its_branches_and_title():
@@ -184,13 +184,13 @@ def test_a_server_added_later_is_gated_from_the_next_session(gate):
     assert gate.question("") == "On Acme, post to ops, saying 'hi all'. Okay to go ahead?"
 
 
-def test_jarvis_own_tools_still_meet_the_draft_and_shell_gates(gate):
+def test_alfred_own_tools_still_meet_the_draft_and_shell_gates(gate):
     gate.new_turn("clear out the renders")
     command = {"command": "rm -rf ~/Desktop/renders/old", "dangerouslyDisableSandbox": True}
     assert isinstance(call(gate, "Bash", command), PermissionResultDeny)
     assert gate.question("") == "Okay to go ahead?"
-    assert "no draft nope for chat_send" in call(gate, "mcp__jarvis__chat_send", {"draft_id": "nope"}).message
-    assert "no draft nope for docs_delete" in call(gate, "mcp__jarvis__docs_delete", {"draft_id": "nope"}).message
+    assert "no draft nope for chat_send" in call(gate, "mcp__alfred__chat_send", {"draft_id": "nope"}).message
+    assert "no draft nope for docs_delete" in call(gate, "mcp__alfred__docs_delete", {"draft_id": "nope"}).message
 
 
 def test_a_write_and_a_risky_command_in_one_turn_are_both_asked_about(gate):

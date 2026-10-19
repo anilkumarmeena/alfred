@@ -1,4 +1,4 @@
-"""Tests for jarvis.tasks.goal: verdict parsing, the finish-check rounds and announcement, scheduled runs."""
+"""Tests for alfred.tasks.goal: verdict parsing, the finish-check rounds and announcement, scheduled runs."""
 
 import asyncio
 import os
@@ -14,10 +14,10 @@ from test_in_place import env, git  # noqa: F401  (env is a fixture)
 from test_nudges import fake_run, finishes, settle, until
 from test_scheduler import flags, with_scheduler  # noqa: F401  (flags is a fixture)
 
-from jarvis.storage import profile
-from jarvis.tasks import goal, runner, schedules
-from jarvis.tasks.goal import BLOCKED, COMPLETE, INCOMPLETE, Budget, Check
-from jarvis.tasks.worker import Outcome
+from alfred.storage import profile
+from alfred.tasks import goal, runner, schedules
+from alfred.tasks.goal import BLOCKED, COMPLETE, INCOMPLETE, Budget, Check
+from alfred.tasks.worker import Outcome
 
 
 @pytest.fixture
@@ -112,7 +112,7 @@ def test_a_check_that_gave_no_usable_reply_is_none():
     ('{"verdict": "complete", "said": "done.", "todos": [{"id": "4", "done": true}]}', None),  # an id not a number
 ])
 def test_the_check_reply_must_match_its_schema(reply, found):
-    from jarvis.llm.claude import json_reply
+    from alfred.llm.claude import json_reply
 
     assert json_reply(reply, goal.SCHEMA) == found
 
@@ -134,7 +134,7 @@ def test_incomplete_work_is_sent_back_with_what_to_finish(checks):
 def test_the_last_round_asks_for_an_honest_summary(checks):
     said, more = goal.next_step(incomplete(), 1, 1.0)
     assert said.startswith("checked, round 2 of 2")
-    assert "last time JARVIS sends it back" in more and "what is done, what isn't" in more
+    assert "last time Alfred sends it back" in more and "what is done, what isn't" in more
 
 
 def test_nothing_is_sent_back_past_the_cap_or_a_cost_limit_when_one_is_set(checks, monkeypatch):
@@ -153,9 +153,9 @@ def test_with_no_cost_limit_any_cost_is_sent_back(checks):
 @pytest.mark.parametrize("setting, model", [("", "claude-task-model"), ("claude-sonnet-5", "claude-sonnet-5")])
 def test_the_checks_model_is_a_setting_else_the_tasks_own(tmp_path, setting, model):
     # Fresh process: config is read at import. Set but empty means the default, whatever .env says
-    env = os.environ | {"JARVIS_GOAL_MODEL": setting, "JARVIS_TASK_MODEL": "claude-task-model",
-                        "JARVIS_GOAL_MAX_COST": "", "JARVIS_DB_FILE": str(tmp_path / "t.db")}
-    code = "from jarvis import config; print(config.MODELS.role('goal'), config.GOAL_MAX_COST)"
+    env = os.environ | {"ALFRED_GOAL_MODEL": setting, "ALFRED_TASK_MODEL": "claude-task-model",
+                        "ALFRED_GOAL_MAX_COST": "", "ALFRED_DB_FILE": str(tmp_path / "t.db")}
+    code = "from alfred import config; print(config.MODELS.role('goal'), config.GOAL_MAX_COST)"
     out = subprocess.run([sys.executable, "-c", code],
                          env=env, cwd=Path(__file__).parents[1], capture_output=True, text=True, check=True).stdout
     assert out.split() == [model, "0.0"]
@@ -173,7 +173,7 @@ def test_the_check_asks_the_configured_model(monkeypatch):
         yield ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
                             session_id="s", total_cost_usd=0.03, result='{"verdict": "complete", "said": "done."}')
 
-    monkeypatch.setenv("JARVIS_GOAL_MODEL", "claude-opus-5-5")
+    monkeypatch.setenv("ALFRED_GOAL_MODEL", "claude-opus-5-5")
     monkeypatch.setattr(claude_agent_sdk, "query", query)
     assert asyncio.run(goal.ask_model("material")) == (verdict(COMPLETE, "done."), 0.03)
     assert used == [("claude-opus-5-5", [], 1)]
@@ -228,7 +228,7 @@ def test_an_incomplete_task_is_sent_back_and_only_its_final_result_announced(env
     prompts = fake_run(monkeypatch, finishes("Found X."), finishes("Found X and Y."))
     r, task, said = run_task(verdict(INCOMPLETE, "Y isn't answered.", "find Y, with a source"),
                              verdict(COMPLETE, "both found."), checks=checks)
-    assert len(prompts) == 2 and prompts[1].startswith(f"JARVIS checked your result against what {profile.name()} asked")
+    assert len(prompts) == 2 and prompts[1].startswith(f"Alfred checked your result against what {profile.name()} asked")
     assert "- find Y, with a source" in prompts[1]
     assert task["status"] == "done" and task["summary"] == "Found X and Y."
     assert statuses(said) == ["Your task, a thing, is done. Found X and Y."]  # one announcement, at the end
@@ -243,7 +243,7 @@ def test_an_incomplete_task_is_sent_back_and_only_its_final_result_announced(env
 def test_after_the_cap_it_is_reported_honestly(env, pushes, monkeypatch, checks):
     prompts = fake_run(monkeypatch, *[finishes("Found X.")] * 3)
     r, task, said = run_task(*[verdict(INCOMPLETE, "Y isn't answered.")] * 3, checks=checks)
-    assert len(prompts) == 3 and "last time JARVIS sends it back" in prompts[2]
+    assert len(prompts) == 3 and "last time Alfred sends it back" in prompts[2]
     assert statuses(said) == ["Your task, a thing, is done. Found X. It may not be finished: Y isn't answered."]
     rounds = logged(r, task["id"])
     assert [line.split(": incomplete")[0] for line in rounds] == ["checked, round 1 of 2", "checked, round 2 of 2", "checked"]

@@ -2,7 +2,7 @@
 import { useRef } from "preact/hooks";
 import { useSignalEffect } from "@preact/signals";
 import { unlock } from "../state/session";
-import { loginPrompt, loginShown, showLogin } from "../state/store";
+import { assistantName, loginPrompt, loginShown, showLogin } from "../state/store";
 
 export function Login() {
   const form = useRef<HTMLFormElement>(null), input = useRef<HTMLInputElement>(null);
@@ -28,7 +28,7 @@ export function Login() {
   return (
     <form id="login" ref={form} class="card" hidden={!loginShown.value} onSubmit={submit}>
       <h1>Identity check</h1>
-      <p>Enter your passcode to bring JARVIS online.</p>
+      <p>Enter your passcode to bring {assistantName} online.</p>
       <input id="passcode" ref={input} type="password" inputMode="numeric" autoComplete="current-password" placeholder="Passcode" aria-label="Passcode" />
       <button type="submit" class="primary">Unlock</button>
     </form>

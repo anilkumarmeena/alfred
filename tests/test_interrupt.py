@@ -4,9 +4,9 @@ import asyncio
 
 from claude_agent_sdk import ClaudeSDKError
 
+from alfred.brain import cli
+from alfred.gates import shell
 from fake_cli import Hold, next_turn, result, text, tool_call, tool_done
-from jarvis.brain import cli
-from jarvis.gates import shell
 
 STORY = "tell me a story"
 
@@ -146,7 +146,7 @@ def test_the_cli_failing_mid_reply_says_so_and_the_next_turn_restarts_it(voice):
     first, second = asyncio.run(main())
     assert first == "Let me check. I can't reach Claude right now."
     assert second == "Here now." and v.clis[0].closed and len(v.clis) == 2
-    assert v.logged[0] == ("check my mail", "Let me check.", False)  # Claude's words only, not JARVIS's apology
+    assert v.logged[0] == ("check my mail", "Let me check.", False)  # Claude's words only, not Alfred's apology
 
 
 def test_a_failed_turn_with_nothing_said_apologises(voice):

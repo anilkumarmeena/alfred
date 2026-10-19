@@ -1,12 +1,12 @@
-"""Tests for jarvis.brain.budget: a spoken turn does only a little work itself and hands the rest off."""
+"""Tests for alfred.brain.budget: a spoken turn does only a little work itself and hands the rest off."""
 
 import asyncio
 
 from claude_agent_sdk import ResultMessage, StreamEvent
 
-from jarvis.brain import budget, cli
-from jarvis.gates import mcp_gate, shell
-from jarvis.state import memory
+from alfred.brain import budget, cli
+from alfred.gates import mcp_gate, shell
+from alfred.state import memory
 
 HEALTH_CHECK = ("uptime; echo ---; memory_pressure | tail -3; echo ---; sysctl vm.swapusage; echo ---; df -h / | "
                 "tail -1; echo ---; ps -Ao rss,comm -m | head -6; echo ---; softwareupdate -l 2>&1 | tail -4")
@@ -28,7 +28,7 @@ def decision(b: budget.Budget, name: str, args: dict | None = None) -> str:
 
 def test_past_a_few_calls_a_turn_s_own_work_is_refused_and_handed_off():
     b = budget.Budget(tools=3, seconds=60, clock=Clock())
-    for name in ("mcp__jarvis__calendar_list", "mcp__jarvis__gmail_search", "WebSearch"):
+    for name in ("mcp__alfred__calendar_list", "mcp__alfred__gmail_search", "WebSearch"):
         assert decision(b, name) == "", name
     refused = decision(b, "WebFetch")
     assert refused.startswith("deny") and "computer_lookup" in refused and "task_start" in refused
@@ -39,7 +39,7 @@ def test_a_turn_that_has_run_long_hands_the_rest_off():
     b = budget.Budget(tools=3, seconds=15, clock=clock)
     assert decision(b, "WebSearch") == ""
     clock.now = 16
-    assert "already taken 15 seconds" in decision(b, "mcp__jarvis__task_list")
+    assert "already taken 15 seconds" in decision(b, "mcp__alfred__task_list")
 
 
 def test_hand_offs_always_run_and_don_t_spend_the_turn():

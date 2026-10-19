@@ -1,4 +1,4 @@
-{ "id": "/", "name": "JARVIS", "short_name": "JARVIS", "description": "Personal voice assistant",
+{ "id": "/", "name": "Alfred", "short_name": "Alfred", "description": "Personal voice assistant",
   "start_url": "/", "scope": "/", "display": "standalone",
   "background_color": "#05080d", "theme_color": "#04070c",
   "icons": [{ "src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml" },

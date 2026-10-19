@@ -1,4 +1,4 @@
-// Control panel state (tasks, to-dos, projects, history, settings) as signals, loaded via jarvis.panel.
+// Control panel state (tasks, to-dos, projects, history, settings) as signals, loaded via alfred.panel.
 // Follows runner events on /api/events: approval card pop-ups, task list refreshes, the activity bell.
 import { computed, effect, signal } from "@preact/signals";
 import { panelCall, Unauthorized } from "../lib/api";
@@ -8,9 +8,9 @@ import { backoff, napper } from "../lib/retry";
 import { jobItem, jobOf, type Quiet, type Schedule, type ScheduleDetail } from "../lib/schedule";
 import { ACTIVITY_KEY, PASSCODE_KEY, SIDE_KEY, storage } from "../lib/storage";
 import { day, loadDay, loadDays } from "./history";
-import { loginShown, passcode, pushSub, setPasscode, showLogin } from "./store";
+import { heardAssistant, loginShown, passcode, pushSub, setPasscode, showLogin } from "./store";
 
-export type Section = "tasks" | "todos" | "projects" | "jarvis" | "history" | "settings";  // jarvis: what it can do and knows
+export type Section = "tasks" | "todos" | "projects" | "alfred" | "history" | "settings";  // alfred: what it can do and knows
 export type SettingsItem =
   "conn" | "accounts" | "memory" | "vocabulary" | "skills" | "approvals" | "about" | "prefs" | "dnd" | "safety"
   | "notify" | "system" | "access" | "keys" | "machines" | "claude";
@@ -23,7 +23,7 @@ export interface Task {
   stalled?: Stalled | null;  // running with no progress for a while
   command?: CommandRun | null;  // kind "command": shell job, no model
   fixes?: number | null;  // id of the failed command task this one fixes
-  machine?: string;  // the other machine it runs on (jarvis.node); absent = this computer
+  machine?: string;  // the other machine it runs on (alfred.node); absent = this computer
 }
 // A command task's run. attempt is 2+ for a rerun after a fix (`after` says what failed and what fixed it).
 export interface CommandRun {
@@ -52,7 +52,7 @@ export interface Rule {
 }
 export interface Todo { id: number; text: string; done: boolean; created: number; done_at: number | null }
 export interface Project {
-  name: string; path: string; aliases: string[]; about: string; in_place: boolean; jarvis: boolean; exists: boolean;
+  name: string; path: string; aliases: string[]; about: string; in_place: boolean; alfred: boolean; exists: boolean;
   git: string | null; changed: number | null;
   repos?: string[];  // for git "multi": the git repos its folder holds, not being one itself
   machine?: string;  // the other machine it lives on; its folder is there
@@ -106,7 +106,7 @@ export interface Server {
 export interface Service { name: string; state: string; since?: number | null; exit?: number | null }
 // A preference: Settings value ("" = none), default, and .env value (wins over both)
 export interface Preference { value: string; default: string; env: string }
-export type PrefKey = "name" | "timezone" | "voice" | "voice_speed" | "speech_gate" | "max_tasks" | "browser" | "browser_window"
+export type PrefKey = "assistant" | "name" | "timezone" | "voice" | "voice_speed" | "speech_gate" | "max_tasks" | "browser" | "browser_window"
   | "speaker_check" | "speaker_threshold" | "injection_check" | "injection_model" | "quiet_hours";
 // Voiceprint metadata (never the embedding). current: made by the speaker model in use
 export interface Voiceprint { name: string; seconds: number; consistency: number; via: string; created: number; current: boolean }
@@ -115,29 +115,29 @@ export interface Prefs { preferences: Record<PrefKey, Preference>; voices: strin
 export interface System { services: Service[]; vault: { state: string; secrets?: number; problem?: string } }
 // A login (never its passcode). this: the one this device uses; owner: the owner's, which alone pairs machines
 export interface Login { name: string; created: number; used: number | null; this: boolean; owner: boolean }
-// A JARVIS key: its source ("" = unset), never its value. required: can't be cleared
-export interface JarvisKey { name: string; label: string; hint: string; required: boolean; source: "vault" | ".env" | "file" | "" }
-export interface Access { logins: Login[]; keys: JarvisKey[] }
-// A Claude account JARVIS can run on, listed by priority. name "": this Mac's own Claude Code login. check: the last check that JARVIS's services can use it; active: the one JARVIS runs on now (the first not
-// skipped); skipped: why JARVIS passes it over ("" if it doesn't)
+// A Alfred key: its source ("" = unset), never its value. required: can't be cleared
+export interface AlfredKey { name: string; label: string; hint: string; required: boolean; source: "vault" | ".env" | "file" | "" }
+export interface Access { logins: Login[]; keys: AlfredKey[] }
+// A Claude account Alfred can run on, listed by priority. name "": this Mac's own Claude Code login. check: the last check that Alfred's services can use it; active: the one Alfred runs on now (the first not
+// skipped); skipped: why Alfred passes it over ("" if it doesn't)
 export interface ClaudeLogin {
   name: string; active: boolean; skipped: string; signed_in: boolean; email: string | null; org: string | null; plan: string | null;
   check: { ok: boolean; said: string; at: number } | null; usage: string;
 }
-// logins: the ones JARVIS may use, by priority, this Mac's own (name "") always among them
+// logins: the ones Alfred may use, by priority, this Mac's own (name "") always among them
 export interface ClaudeLogins { logins: ClaudeLogin[]; can_change: boolean }
 export interface ClaudeSignIn { state: string; url: string }
 // How a sign-in or check went, with the logins afterwards
 export interface ClaudeResult extends ClaudeLogins { ok: boolean; said: string }
 export interface Activity { id: number; at: number; text: string; kind: "ok" | "bad" | "warn" | "run"; task: number | null }
-// Another computer JARVIS sends heavy work to. online: it answered a ping just now; pending: awaiting confirmation
+// Another computer Alfred sends heavy work to. online: it answered a ping just now; pending: awaiting confirmation
 export interface Machine {
   id: number; name: string; aliases: string[]; status: "pending" | "paired"; fingerprint: string; host: string; os: string;
   cores: number; ram_gb: number; tools: string[]; version: string; up_to_date: boolean; last_seen: number | null;
   online: boolean; usage: string; free?: number; max_tasks?: number; running?: number; load?: number | null;
   updating?: boolean; update_problem?: string; takes_work?: boolean;
 }
-// Per job kind: "here", "auto" (let JARVIS choose) or a machine's id. can_pair: this login is the owner's
+// Per job kind: "here", "auto" (let Alfred choose) or a machine's id. can_pair: this login is the owner's
 export interface Machines {
   machines: Machine[]; placement: Record<string, string>; kinds: Record<string, string>; commit: string; fingerprint: string;
   owner: string; can_pair: boolean;
@@ -347,7 +347,7 @@ const SETTINGS: Record<SettingsItem, () => Promise<void>> = {
   keys: async () => {},
   machines: async () => { machines.value = await act("machines") ?? machines.peek(); },
 };
-// Loaded whenever Settings or JARVIS opens, for the summaries on their lists
+// Loaded whenever Settings or Alfred opens, for the summaries on their lists
 const LISTED: SettingsItem[] = ["system", "conn", "skills", "prefs", "access", "machines", "claude"];
 
 async function loadPrefs() { prefs.value = await act<Prefs>("preferences") ?? prefs.peek(); }
@@ -428,7 +428,7 @@ export async function forgetRule(rule: Rule) {
 
 // ── Activity, toasts, palette ───────────────────────────────────
 
-// Activity bell: shared across devices, stored on JARVIS's computer. Read state is per device (newest seen id in localStorage).
+// Activity bell: shared across devices, stored on Alfred's computer. Read state is per device (newest seen id in localStorage).
 export const activity = signal<Activity[]>([]);
 export const activityOpen = signal(false);
 const seenActivity = signal(Number(storage.get(ACTIVITY_KEY)) || 0);
@@ -483,6 +483,7 @@ function handle(event: any) {
   switch (event.type) {
     case "hello":
       build.served(event.build);  // newer build: reload now or after the voice session
+      heardAssistant(event.assistant);
       loadTasks();
       loadActivity();
       if (todos.peek()) load("todos");  // changes while the stream was down

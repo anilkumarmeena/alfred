@@ -1,11 +1,11 @@
-// Claude logins: the Claude accounts JARVIS can run on, by priority (jarvis.llm.claude_logins). JARVIS runs on the
+// Claude logins: the Claude accounts Alfred can run on, by priority (alfred.llm.claude_logins). Alfred runs on the
 // first one that's usable, moving down the list while one's limit is used up or its sign-in stopped working. This
 // Mac's own Claude Code login (name "") is on the list like any other, but always stays: the terminal uses it.
-// Signing in runs Claude Code's own sign-in on JARVIS's computer (jarvis.claude_login): Claude's page opens in a new
+// Signing in runs Claude Code's own sign-in on Alfred's computer (alfred.claude_login): Claude's page opens in a new
 // tab, on any device, and the code it shows at the end is pasted here. Only the owner's login changes them.
 import { useSignal, type Signal } from "@preact/signals";
 import { act, ago, claudeLogins, toast, type ClaudeLogin, type ClaudeLogins, type ClaudeResult, type ClaudeSignIn } from "../../state/panel";
-import { now } from "../../state/store";
+import { assistantName, now } from "../../state/store";
 import { DownIcon, TrashIcon, UpIcon } from "../icons";
 import { cap, Empty, Led, Pill } from "./bits";
 import { blankTab } from "./GoogleAccounts";
@@ -16,10 +16,10 @@ const called = (l: Pick<ClaudeLogin, "name">) => (l.name ? `the ${l.name} login`
 const broken = (l: ClaudeLogin) => !l.signed_in || l.check?.ok === false;
 
 export function claudeSummary(): [string, "ok" | "warn" | null] {
-  const c = claudeLogins.value;
-  if (!c) return ["The Claude accounts JARVIS runs on", null];
+  const c = claudeLogins.value, what = `The Claude accounts ${assistantName.value} runs on`;
+  if (!c) return [what, null];
   const on = c.logins.find((l) => l.active);
-  if (!on) return ["The Claude accounts JARVIS runs on", null];
+  if (!on) return [what, null];
   if (broken(on)) return [`${cap(called(on))} needs signing in again`, "warn"];
   const first = c.logins[0], more = c.logins.length > 1 ? ` · ${c.logins.length} logins` : "";
   if (first && !first.active) return [`On ${called(on)} for now: ${called(first)} ${first.skipped.replace(/^its /, "has its ")}`, "warn"];
@@ -72,7 +72,7 @@ function SignInBox({ flow }: { flow: Signal<Flow | null> }) {
   return (
     <div class="note gsign">
       <div class="grow">
-        Sign in to Claude in the new tab for {who}, with the account JARVIS should use.
+        Sign in to Claude in the new tab for {who}, with the account {assistantName} should use.
         {" "}<a href={f.started.url} target="_blank" rel="noopener">Open Claude's sign-in</a> if no tab opened.
       </div>
       <div class="sub">At the end Claude shows a code: copy it and paste it here.</div>
@@ -165,7 +165,7 @@ function AddForm({ flow }: { flow: Signal<Flow | null> }) {
 
 export function ClaudeLoginsPage() {
   const flow = useSignal<Flow | null>(null);
-  const c = claudeLogins.value;
+  const c = claudeLogins.value, name = assistantName.value;
   if (!c) return <Empty>Loading…</Empty>;
   return (
     <>
@@ -176,11 +176,11 @@ export function ClaudeLoginsPage() {
           <div class="grp">Add a login</div>
           <AddForm flow={flow} />
         </>
-      ) : <p class="hint">Only the owner's login can sign these in or change which one JARVIS runs on.</p>}
-      <p class="hint">JARVIS runs on the first login in this order that it can use. It moves down the list while a
+      ) : <p class="hint">Only the owner's login can sign these in or change which one {name} runs on.</p>}
+      <p class="hint">{name} runs on the first login in this order that it can use. It moves down the list while a
         login's limit is used up or its sign-in stopped working, and back up once it resets or is signed in again; a
         task already started carries on where it can. Each login is a Claude account with limits of its own. Signing in
-        here saves the login where JARVIS's services read it, so it also fixes one that stopped working after signing
+        here saves the login where {name}'s services read it, so it also fixes one that stopped working after signing
         in from a remote terminal.</p>
     </>
   );

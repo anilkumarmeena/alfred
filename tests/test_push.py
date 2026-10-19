@@ -1,4 +1,4 @@
-"""Tests for jarvis.notify.push: subscriptions, the VAPID key, sending, runner task events, web endpoints."""
+"""Tests for alfred.notify.push: subscriptions, the VAPID key, sending, runner task events, web endpoints."""
 
 import asyncio
 import json
@@ -10,11 +10,11 @@ import pytest
 from py_vapid.utils import b64urldecode
 from pywebpush import WebPushException
 
+from alfred import server
+from alfred.notify import apns, push
+from alfred.notify.push import Subscriptions, send_push, validate
+from alfred.tasks import events, runner
 from conftest import use_profile
-from jarvis import server
-from jarvis.notify import apns, push
-from jarvis.notify.push import Subscriptions, send_push, validate
-from jarvis.tasks import events, runner
 
 KEYS = {"p256dh": "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM",
         "auth": "tBHItJI5svbpez7KI4CCXg"}
@@ -161,7 +161,7 @@ def test_expired_subscriptions_are_dropped_and_others_kept(devices, tmp_path, mo
 
 def test_network_failure_keeps_the_subscription_and_logs_no_secrets(devices, tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(push, "webpush_async", FakePushService(error=OSError(f"connect to {IPHONE['endpoint']} failed")))
-    with caplog.at_level(logging.INFO, logger="jarvis.notify.push"):
+    with caplog.at_level(logging.INFO, logger="alfred.notify.push"):
         assert send(devices, tmp_path, "Calendar", "Standup starts in 10 minutes.") == 0
     assert len(devices.all()) == 2
     assert "web.push.apple.com" in caplog.text and "OSError" in caplog.text
@@ -249,7 +249,7 @@ def test_push_failure_in_the_runner_is_only_logged(pushes, monkeypatch, caplog):
         raise RuntimeError("secret-endpoint-path")
 
     monkeypatch.setattr(events, "send_push", broken)
-    with caplog.at_level(logging.WARNING, logger="jarvis.tasks.runner"):
+    with caplog.at_level(logging.WARNING, logger="alfred.tasks.runner"):
         r = asyncio.run(_finish_all(["done"]))
     assert r.store.get(1)["status"] == "done"
     assert "push failed: RuntimeError" in caplog.text and "secret-endpoint-path" not in caplog.text
@@ -272,7 +272,7 @@ class Request:
 
 @pytest.fixture
 def site(tmp_path, monkeypatch):
-    monkeypatch.setenv("JARVIS_PASSCODE", "123456")  # no login yet: the first-setup passcode
+    monkeypatch.setenv("ALFRED_PASSCODE", "123456")  # no login yet: the first-setup passcode
     monkeypatch.setattr(server, "PUSH_ENABLED", True)
     monkeypatch.setattr(push, "VAPID_KEY_FILE", tmp_path / "vapid.pem")
     use_profile(monkeypatch, tmp_path)
@@ -303,7 +303,7 @@ def test_web_push_key_subscribe_and_unsubscribe(site):
 def test_web_push_off(site, monkeypatch):
     monkeypatch.setattr(server, "PUSH_ENABLED", False)
     status, key = reply(server.push_key)
-    assert key["enabled"] is False and "key" not in key and "JARVIS_PUSH" in key["error"]
+    assert key["enabled"] is False and "key" not in key and "ALFRED_PUSH" in key["error"]
     assert reply(server.push_subscribe, {"passcode": "123456", "subscription": IPHONE})[0] == 409
     assert not (site / "vapid.pem").exists() and not (site / "push_subscriptions.json").exists()
 

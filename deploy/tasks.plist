@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- JARVIS task runner. Nice 10 and LowPriorityIO (inherited by tasks) give the voice agent CPU and disk first; not ProcessType Background, which would pin tasks to efficiency cores. PATH includes the toolchains tasks build with. Label and folders are filled in by jarvis.setup_local. -->
+<!-- Alfred task runner. Nice 10 and LowPriorityIO (inherited by tasks) give the voice agent CPU and disk first; not ProcessType Background, which would pin tasks to efficiency cores. PATH includes the toolchains tasks build with. Label and folders are filled in by alfred.setup_local. -->
 <plist version="1.0">
 <dict>
     <key>Label</key><string>${LABEL}</string>
@@ -9,10 +9,10 @@
     <array>
         <string>${ROOT}/.venv/bin/python</string>
         <string>-m</string>
-        <string>jarvis.tasks.runner</string>
+        <string>alfred.tasks.runner</string>
     </array>
     <key>EnvironmentVariables</key>
-    <dict><key>JARVIS_HOME</key><string>${JARVIS_HOME}</string><key>PATH</key><string>${HOME}/.local/bin:${HOME}/.venv/bin:/opt/homebrew/bin:/usr/local/go/bin:${NODE}/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+    <dict><key>ALFRED_HOME</key><string>${ALFRED_HOME}</string><key>PATH</key><string>${HOME}/.local/bin:${HOME}/.venv/bin:/opt/homebrew/bin:/usr/local/go/bin:${NODE}/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ThrottleInterval</key><integer>10</integer>

@@ -1,4 +1,4 @@
-"""Tests for locked updates of files more than one process reads, changes and rewrites (jarvis.core.files.update):
+"""Tests for locked updates of files more than one process reads, changes and rewrites (alfred.core.files.update):
 memory.md, vocabulary.md, recent.md, the Claude login checks and usage records. Two changes at once both survive."""
 
 import json
@@ -10,13 +10,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from alfred import config
+from alfred.core import files
+from alfred.llm import claude_logins, usage
+from alfred.state import memory, vocabulary
+from alfred.storage import profile
+from alfred.tasks import data_edits
 from conftest import use_profile
-from jarvis import config
-from jarvis.core import files
-from jarvis.llm import claude_logins, usage
-from jarvis.state import memory, vocabulary
-from jarvis.storage import profile
-from jarvis.tasks import data_edits
 
 PAUSE = 0.2  # long enough that two unlocked updates would both read before either wrote
 
@@ -48,7 +48,7 @@ def data(tmp_path, monkeypatch):
 UPDATE = """
 import sys, time
 from pathlib import Path
-from jarvis.core import files
+from alfred.core import files
 
 def change(text):
     time.sleep(float(sys.argv[3]))
@@ -151,7 +151,7 @@ def test_two_words_added_to_the_vocabulary_at_once_are_both_kept(data, monkeypat
     slowed(monkeypatch, vocabulary, "entries")
     together(lambda: vocabulary.add("Siobhan", ["Shivon"]), lambda: vocabulary.add("Kubernetes", learned=True))
     words = [e.word for e in vocabulary.entries()]
-    assert "Siobhan" in words and "Kubernetes" in words and "JARVIS" in words
+    assert words == ["Siobhan", "Kubernetes"] or words == ["Kubernetes", "Siobhan"]
 
 
 def test_two_exchanges_logged_at_once_are_both_in_recent(data, monkeypatch):

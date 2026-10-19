@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "preact/hooks";
 import { useSignal } from "@preact/signals";
 import { jobOf, kindLabel, nextRun, type Schedule } from "../../lib/schedule";
-import { now } from "../../state/store";
+import { assistantName, now } from "../../state/store";
 import {
   ACTIVE, act, ago, approvals, changeSchedule, detail, elapsed, flash, hhmm, item, jobDetail, lapses, loadSchedule,
   loadTask, loadTasks, needYou, openSchedule, openTask, questions, quiet, roomy, runnerDown, schedules, tasks, when, type Approval,
@@ -73,7 +73,7 @@ function Question({ t }: { t: Task }) {
   );
 }
 
-// Stalled running task; JARVIS never stops it on its own
+// Stalled running task; Alfred never stops it on its own
 function Stuck({ t }: { t: Task }) {
   return (
     <div class="note amber">
@@ -178,7 +178,7 @@ export function Scheduled() {
       {usage?.waiting && <div class="note amber">{usage.said} {usage.waiting}</div>}
       {jobs.length
         ? <div class="scheds">{jobs.map((j) => <JobRow key={j.id} j={j} />)}</div>
-        : <Empty>Nothing scheduled. Ask JARVIS for a reminder, a task on a schedule, or to watch for something.</Empty>}
+        : <Empty>Nothing scheduled. Ask {assistantName} for a reminder, a task on a schedule, or to watch for something.</Empty>}
     </>
   );
 }
@@ -246,7 +246,7 @@ export function TaskList() {
       {approvals.value.map((a) => <Request key={a.id} a={a} />)}
       {questions.value.map((t) => <Question key={t.id} t={t} />)}
       <div class="grp">Running</div>
-      {running.length ? running.map((t) => <Card key={t.id} t={t} />) : <Empty>Nothing running. Ask JARVIS to start a task.</Empty>}
+      {running.length ? running.map((t) => <Card key={t.id} t={t} />) : <Empty>Nothing running. Ask {assistantName} to start a task.</Empty>}
       <Scheduled />
       <div class="grp">Recent</div>
       {recent.length ? recent.map((t) => <Card key={t.id} t={t} />) : <Empty>No tasks in the last day.</Empty>}

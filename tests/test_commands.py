@@ -5,10 +5,10 @@ import re
 
 import pytest
 
-from jarvis.config import ROOT
-from jarvis.gates import shell
-from jarvis.safety import commands
-from jarvis.safety.commands import describe, names_secret, reads_environment, refused, risky
+from alfred.config import ROOT
+from alfred.gates import shell
+from alfred.safety import commands
+from alfred.safety.commands import describe, names_secret, reads_environment, refused, risky
 
 
 def test_the_voice_shell_uses_the_shared_rules():
@@ -21,7 +21,7 @@ def test_the_voice_shell_uses_the_shared_rules():
     ("git -C ~/code/app push origin main", "pushes (git push)"),
     ("cd app && npm install -g eas-cli", "installs software (npm install)"),
     ("echo $(kill -9 123)", "stops a process (kill)"),
-    ("xcrun devicectl device uninstall app --device X com.example.jarvis", "changes the iPhone (devicectl device)"),
+    ("xcrun devicectl device uninstall app --device X com.example.alfred", "changes the iPhone (devicectl device)"),
     ("curl -X POST -d @a.json https://x.io", "sends data off the computer (curl)"),
     ("echo 'unbalanced", "can't be checked (unbalanced quotes)"),
 ])
@@ -44,7 +44,7 @@ def test_building_and_installing_onto_the_iphone_runs_freely(command):
 
 
 @pytest.mark.parametrize("command", [
-    "xcrun devicectl device uninstall app --device X com.example.jarvis", "xcrun devicectl device process terminate --pid 3",
+    "xcrun devicectl device uninstall app --device X com.example.alfred", "xcrun devicectl device process terminate --pid 3",
     "xcrun devicectl device reboot --device X", "xcrun simctl erase all", "security delete-certificate -c X",
     "security add-trusted-cert x.cer", "npm install", "uv sync", "pip install requests",
 ])
@@ -128,7 +128,7 @@ def test_some_commands_are_refused_to_tasks_even_with_a_yes(command, why):
 @pytest.mark.parametrize("command", [
     "ps eww 4321", "ps -E -p 4321", "/bin/ps auxe", "sudo ps -wwE", "ps -p 1 -o pid= ; ps eww",
     "cat /proc/4321/environ", "sysctl kern.procargs2.4321", "launchctl procinfo 4321", "lldb -p 4321",
-    "echo $JARVIS_MASTER_KEY",
+    "echo $ALFRED_MASTER_KEY",
 ])
 def test_reading_other_processes_environments_is_refused_like_secrets(command):
     assert reads_environment(command) or names_secret(command), command
@@ -234,7 +234,7 @@ def test_anything_else_stays_inside_it(command):
 
 @pytest.mark.parametrize("command, why", [
     # services, sessions and power: what launchctl and shutdown say on macOS
-    ("systemctl --user restart jarvis-agent", "changes the system (systemctl restart)"),
+    ("systemctl --user restart alfred-agent", "changes the system (systemctl restart)"),
     ("systemctl stop nginx", "changes the system (systemctl stop)"),
     ("systemctl start nginx.service", "changes the system (systemctl start)"),
     ("systemctl enable --now foo.timer", "changes the system (systemctl enable)"),
@@ -333,7 +333,7 @@ def test_linux_commands_that_change_things_need_a_yes(command, why):
 
 
 @pytest.mark.parametrize("command", [
-    "systemctl", "systemctl status nginx", "systemctl --user status jarvis-agent", "systemctl list-units --failed",
+    "systemctl", "systemctl status nginx", "systemctl --user status alfred-agent", "systemctl list-units --failed",
     "systemctl --user list-units --type=service", "systemctl -t service list-units", "systemctl list-timers --all",
     "systemctl is-active nginx", "systemctl is-enabled nginx", "systemctl show -p ActiveState nginx",
     "systemctl cat nginx", "systemctl list-unit-files", "loginctl", "loginctl list-sessions", "loginctl show-user me",
@@ -413,8 +413,8 @@ def test_linux_commands_that_read_no_password_are_not_refused(command):
 
 @pytest.mark.parametrize("command, target", [
     ("make services-restart", "make services-restart"),
-    ("cd ~/jarvis && make -C . services-stop", "make services-stop"),
-    ("systemctl --user restart com.jarvis.agent", ""), ("systemctl --user -q enable foo.service", ""),
+    ("cd ~/alfred && make -C . services-stop", "make services-stop"),
+    ("systemctl --user restart com.alfred.agent", ""), ("systemctl --user -q enable foo.service", ""),
     ("systemd-run --user --scope sleep 1", ""),
 ])
 def test_on_linux_tasks_leave_the_users_systemd_session_to_them(command, target, monkeypatch):
@@ -425,7 +425,7 @@ def test_on_linux_tasks_leave_the_users_systemd_session_to_them(command, target,
     assert refused(command) == ""  # the Mac's launchd is reachable: nothing to refuse
 
 
-@pytest.mark.parametrize("command", ["systemctl --user status com.jarvis.agent", "systemctl --user", "make test",
+@pytest.mark.parametrize("command", ["systemctl --user status com.alfred.agent", "systemctl --user", "make test",
                                      "systemctl restart nginx", "make services"])
 def test_on_linux_other_systemd_and_make_commands_are_not_refused_for_the_bus(command, monkeypatch):
     monkeypatch.setattr(commands.platform, "LINUX", True)
@@ -448,7 +448,7 @@ ENV_TEMPLATES = [".env.example", ".env.sample", ".env.template"]
 
 @pytest.mark.parametrize("text", [
     "sed -i '/HEARTBEAT/d' .env.example", "cat app/.env.sample", f"cat {ROOT / '.env.example'}",
-    "cp templates/.env.template ./x", 'grep -n JARVIS "config/.env.example"',
+    "cp templates/.env.template ./x", 'grep -n Alfred "config/.env.example"',
 ])
 def test_env_templates_are_not_secrets(text):
     assert not names_secret(text), text
@@ -519,7 +519,7 @@ def test_attaching_to_another_process_reads_its_environment(command):
 @pytest.mark.parametrize("said, command", [
     ("Restart nginx.", "systemctl restart nginx"),
     ("Restart the nginx service.", "systemctl --user restart nginx.service"),
-    ("Stop the jarvis agent.", "systemctl --user stop jarvis-agent"),
+    ("Stop the alfred agent.", "systemctl --user stop alfred-agent"),
     ("Install ffmpeg.", "dnf install ffmpeg"), ("Install ffmpeg.", "apt install ffmpeg"),
     ("Install ffmpeg.", "apt-get install -y ffmpeg"),
 ])
@@ -543,7 +543,7 @@ def test_other_linux_service_changes_are_still_asked(said, command):
     ("systemctl restart nginx", False), ("secret-tool lookup a b", False), ("cp x.service ~/.config/systemd/user/", False),
 ])
 def test_linux_kinds_reuse_the_remembered_kinds(command, remembered):
-    from jarvis.safety import remembered as rules
+    from alfred.safety import remembered as rules
 
     offered = rules.pieces(command)
     assert (not offered["never"]) is remembered, offered

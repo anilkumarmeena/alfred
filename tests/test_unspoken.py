@@ -5,7 +5,7 @@ import random
 
 import pytest
 
-from jarvis.voice.unspoken import Scrubber, scrub, scrubbed
+from alfred.voice.unspoken import Scrubber, scrub, scrubbed
 
 
 @pytest.mark.parametrize("said, heard", [
@@ -26,8 +26,8 @@ def test_bracketed_and_private_notes_are_never_said(said, heard):
     ("Task 5, the Chat fix, wants to run a command.", "The task, the Chat fix, wants to run a command."),
     ("Okay, task 117 carries on.", "Okay, the task carries on."),
     ("Is the task #12 done?", "Is the task done?"),
-    ("I merged jarvis/237-keep-notes-unspoken into master.", "I merged the branch into master."),
-    ("It's on branch jarvis/237-keep-notes-unspoken now.", "It's on the branch now."),
+    ("I merged alfred/237-keep-notes-unspoken into master.", "I merged the branch into master."),
+    ("It's on branch alfred/237-keep-notes-unspoken now.", "It's on the branch now."),
     ("In /Users/sam/projects/app/voice/turn.py, the Judge decides.", "In turn.py, the Judge decides."),
     ("See app/voice/turn.py and voice/clauses.py.", "See turn.py and clauses.py."),
     ("It's in ~/Desktop/projects/app/.", "It's in app."),
@@ -57,7 +57,7 @@ def test_normal_speech_is_left_as_it_is(said):
 
 LEAKY = [
     'Your Chat fix is done. [That was task 230, "Chat fix". Its suggested edits, pending: 1. add a to-do.] Next?',
-    "It is on branch jarvis/237-keep-notes-unspoken now, and the task 12 is done.",
+    "It is on branch alfred/237-keep-notes-unspoken now, and the task 12 is done.",
     "In /Users/sam/projects/app/voice/turn.py, the Judge decides; see [the doc](https://example.com/doc) too.",
     "The <private>task 5, branch x</private> build passed, at example.com/docs/page on 13/10/2026.",
     "Done. [Note: nested [inner] thing] Next, I called task_start.",
@@ -109,21 +109,21 @@ def test_a_flush_marker_passes_through_after_what_was_held():
     assert asyncio.run(main()) == ["Half ", "past", flush, " three ", "."]
 
 
-def test_what_jarvis_shows_and_says_goes_through_the_check(monkeypatch):
+def test_what_alfred_shows_and_says_goes_through_the_check(monkeypatch):
     from livekit.agents import Agent
 
-    from jarvis.apps.agent import JarvisAgent
+    from alfred.apps.agent import AlfredAgent
 
     async def main():
         async def text():
-            for chunk in ["Done. [That was ", "task 5.] It's ", "on branch jarvis/5-fix."]:
+            for chunk in ["Done. [That was ", "task 5.] It's ", "on branch alfred/5-fix."]:
                 yield chunk
 
-        node = JarvisAgent(voice=None).transcription_node(text(), None)
+        node = AlfredAgent(voice=None).transcription_node(text(), None)
         return "".join([chunk async for chunk in node])
 
     assert asyncio.run(main()) == "Done.  It's on the branch."
     seen = []
     monkeypatch.setattr(Agent.default, "tts_node", lambda agent, text, settings: seen.append(text) or text)
-    JarvisAgent(voice=None).tts_node("text", None)
+    AlfredAgent(voice=None).tts_node("text", None)
     assert seen and seen[0].__name__ == "scrubbed"

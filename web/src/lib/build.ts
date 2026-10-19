@@ -1,8 +1,8 @@
-// Reload into a newer build when the server serves one. This build's id is <meta name="jarvis-build">
+// Reload into a newer build when the server serves one. This build's id is <meta name="alfred-build">
 // (vite.config.ts); the served id arrives in /api/events' hello and /api/token's reply. Dev server: no meta, no reloads.
 
-const RELOADED_KEY = "jarvis.reloadedFor";  // sessionStorage: build this tab last reloaded for
-const RESUME_KEY = "jarvis.resume";  // sessionStorage: session to resume after reload, "muted" | "open"
+const RELOADED_KEY = "alfred.reloadedFor";  // sessionStorage: build this tab last reloaded for
+const RESUME_KEY = "alfred.resume";  // sessionStorage: session to resume after reload, "muted" | "open"
 
 export interface Page {
   build: string;  // this page's build, "" if unknown
@@ -12,7 +12,7 @@ export interface Page {
 
 const tabStorage = (): Page["storage"] => { try { return sessionStorage; } catch { return null; } };
 const browser = (): Page => ({
-  build: (typeof document !== "undefined" && document.querySelector('meta[name="jarvis-build"]')?.getAttribute("content")) || "",
+  build: (typeof document !== "undefined" && document.querySelector('meta[name="alfred-build"]')?.getAttribute("content")) || "",
   storage: tabStorage(),
   reload: () => location.reload(),
 });

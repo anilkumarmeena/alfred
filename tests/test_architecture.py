@@ -1,5 +1,5 @@
 """The package layers (docs/architecture-review.md): imports point down, siblings in one layer don't import each other,
-only jarvis.llm talks to the Claude SDK, and no model id is written in the code.
+only alfred.llm talks to the Claude SDK, and no model id is written in the code.
 
 Imports that break the rules today are listed in architecture_baseline.txt. The list only shrinks: a new break fails,
 and so does a listed one that is gone, so whoever fixes it also takes it off the list. To see the current breaks:
@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PACKAGE = ROOT / "jarvis"
+PACKAGE = ROOT / "alfred"
 BASELINE = Path(__file__).with_name("architecture_baseline.txt")
 
 # Top first. A module may import its own package and any package in a lower layer; the entry points, which nothing
@@ -24,13 +24,13 @@ LAYERS = (
     ("brain",),  # the voice brain and its lookups; uses the tools
     ("gates",),  # what every tool call passes: spoken yes for risky ones, screening of results
     ("tools",),  # what the brain can call: thin adapters over the layers below
-    ("node",),  # the user's other machines: sending them work (jarvis.contracts.remote), and running it there
+    ("node",),  # the user's other machines: sending them work (alfred.contracts.remote), and running it there
     ("tasks", "scheduling"),  # orchestration: running work
     ("integrations", "skills", "notify", "media", "projects"),  # services the orchestration and tools use
-    ("state",),  # what JARVIS keeps for the user: memory, to-dos, settings, history
+    ("state",),  # what Alfred keeps for the user: memory, to-dos, settings, history
     ("safety",),  # policy: what may run, be read or be said; may ask a model to judge
     ("llm",),  # the model provider: the only code that talks to Claude
-    ("auth",),  # secrets: the vault, JARVIS's own keys, panel logins
+    ("auth",),  # secrets: the vault, Alfred's own keys, panel logins
     ("storage",),  # the database and the active profile
     ("config", "prompts"),
     ("contracts",),
@@ -44,13 +44,13 @@ SIBLINGS = {
 }
 
 # Only these may import these third-party packages
-OWNERS = {"claude_agent_sdk": "jarvis.llm", "ai_armory": "jarvis.integrations.armory"}
+OWNERS = {"claude_agent_sdk": "alfred.llm", "ai_armory": "alfred.integrations.armory"}
 # A Claude model id written in code; ids come from config/models.toml
 MODEL_ID = re.compile(r"""["']claude-(?:opus|sonnet|haiku|fable)[\w.-]*["']""")
 
 
 def package_of(module: str) -> str:
-    """'jarvis.tasks.runner' -> 'tasks'; the jarvis package itself sits with core (it only checks the OS)."""
+    """'alfred.tasks.runner' -> 'tasks'; the alfred package itself sits with core (it only checks the OS)."""
     parts = module.split(".")
     return parts[1] if len(parts) > 1 else "core"
 
@@ -86,9 +86,9 @@ def imports(module: str, path: Path):
         elif isinstance(node, ast.ImportFrom):
             base = package.split(".")[: len(package.split(".")) - node.level + 1] if node.level else []
             target = ".".join(base + ([node.module] if node.module else []))
-            if target == "jarvis":  # `from jarvis import tasks` imports the package tasks
+            if target == "alfred":  # `from alfred import tasks` imports the package tasks
                 for alias in node.names:
-                    yield f"jarvis.{alias.name}", node.lineno
+                    yield f"alfred.{alias.name}", node.lineno
             else:
                 yield target, node.lineno
 
@@ -99,7 +99,7 @@ def layer_breaks() -> set[str]:
     for module, path in modules():
         mine = "apps" if module.endswith(".__main__") else package_of(module)  # `python -m` entry points
         for target, _ in imports(module, path):
-            if target.split(".")[0] != "jarvis":
+            if target.split(".")[0] != "alfred":
                 continue
             theirs = package_of(target)
             if theirs == mine or mine not in LAYER or theirs not in LAYER:
@@ -140,7 +140,7 @@ def test_every_package_has_a_layer():
 def test_no_new_import_breaks_the_layers():
     new = current() - baseline()
     assert not new, ("These imports break the layers (docs/architecture-review.md). Use a contract from "
-                     "jarvis.contracts, or move the code:\n  " + "\n  ".join(sorted(new)))
+                     "alfred.contracts, or move the code:\n  " + "\n  ".join(sorted(new)))
 
 
 def test_the_baseline_only_lists_breaks_that_still_exist():

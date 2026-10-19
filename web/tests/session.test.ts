@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// state/session.ts auto-reconnect (JARVIS restart, network drop, no agent), with Room and /api/token faked.
+// state/session.ts auto-reconnect (Alfred restart, network drop, no agent), with Room and /api/token faked.
 // Run: make test (or npm test in web/)
 import assert from "node:assert/strict";
 import { afterEach, beforeAll, test, vi } from "vitest";
@@ -64,7 +64,7 @@ vi.mock("livekit-client", () => {
     registerTextStreamHandler() {}
     async connect() {  // apply the token's attributes, as the server does
       this.connected = true;
-      this.localParticipant.attributes = { "jarvis.speaker": fake.asked.at(-1)?.speaker ?? "on" };
+      this.localParticipant.attributes = { "alfred.speaker": fake.asked.at(-1)?.speaker ?? "on" };
     }
     async startAudio() {}
     async disconnect() { if (this.ended) return; this.ended = true; this.emit("Disconnected"); }
@@ -114,7 +114,7 @@ async function live({ muted = false } = {}) {
   await tick(30000);  // a steady session
 }
 
-test("when JARVIS restarts, the session comes back by itself, muted as it was", async () => {
+test("when Alfred restarts, the session comes back by itself, muted as it was", async () => {
   await live();
   await S.toggleMute();
   assert.equal(store.muted.peek(), true);
@@ -150,7 +150,7 @@ test("an open mic is opened again, so you can just keep talking", async () => {
   assert.equal(room().mic, true);
 });
 
-test("while JARVIS is down it keeps trying: quickly, then every few seconds", async () => {
+test("while Alfred is down it keeps trying: quickly, then every few seconds", async () => {
   await live();
   fake.token = () => Promise.reject(new TypeError("Failed to fetch"));
   room().disconnect();  // LiveKit gave up on the old connection
@@ -184,7 +184,7 @@ test("back online, or back on screen, it tries at once", async () => {
   assert.ok(store.live.peek());
 });
 
-test("a room no agent joins, made while JARVIS was starting, is swapped for a fresh one", async () => {
+test("a room no agent joins, made while Alfred was starting, is swapped for a fresh one", async () => {
   await S.connect();
   const first = room();
   assert.ok(store.live.peek());
@@ -200,8 +200,8 @@ test("a room no agent joins, made while JARVIS was starting, is swapped for a fr
   assert.ok(!room().ended);
 });
 
-test("a first connect that can't reach JARVIS keeps trying too", async () => {
-  fake.token = () => Promise.reject(new Error("Couldn't reach JARVIS."));
+test("a first connect that can't reach Alfred keeps trying too", async () => {
+  fake.token = () => Promise.reject(new Error("Couldn't reach Alfred."));
   await S.connect();
   assert.ok(reconnecting());
   fake.token = null;
@@ -290,7 +290,7 @@ test("a newer build served on the way back reloads the page, which picks the ses
   room().agentLeaves();
   await tick(500);
   assert.equal(fake.page.reloads, 1);
-  assert.equal(fake.page.store.get("jarvis.resume"), "muted");
+  assert.equal(fake.page.store.get("alfred.resume"), "muted");
 });
 
 test("Mute before connecting starts the session with the mic closed, and the session's mute takes over", async () => {
@@ -327,10 +327,10 @@ test("speaker off: the session starts silent, and the switch reaches the agent d
   assert.equal(store.readout.peek().label, "Replying");
 
   S.toggleSpeaker();
-  assert.deepEqual(room().attrs, [{ "jarvis.speaker": "on" }]);
+  assert.deepEqual(room().attrs, [{ "alfred.speaker": "on" }]);
   assert.equal(player.muted, false);
   S.toggleSpeaker();
-  assert.deepEqual(room().attrs.at(-1), { "jarvis.speaker": "off" });
+  assert.deepEqual(room().attrs.at(-1), { "alfred.speaker": "off" });
   assert.equal(player.muted, true);  // in-progress reply stops at once
 });
 
@@ -339,5 +339,5 @@ test("the speaker switched while it connects is told to the agent once it's in",
   S.toggleSpeaker();
   await going;
   assert.equal(fake.asked.at(-1)!.speaker, "on");  // requested before the toggle
-  assert.deepEqual(room().attrs, [{ "jarvis.speaker": "off" }]);
+  assert.deepEqual(room().attrs, [{ "alfred.speaker": "off" }]);
 });

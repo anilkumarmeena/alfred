@@ -1,5 +1,5 @@
 // Settings: a list of pages, opening beside the list (wide) or in place (narrow).
-// Secrets (MCP server keys, JARVIS's own keys) are entered here write-only so they're never spoken aloud.
+// Secrets (MCP server keys, Alfred's own keys) are entered here write-only so they're never spoken aloud.
 // Adding a connection is by voice with approval (Connections.tsx).
 import type { ComponentChildren } from "preact";
 import { useEffect } from "preact/hooks";
@@ -8,10 +8,12 @@ import { nativePlatform } from "../../lib/native";
 import { recordMic, type Recording } from "../../lib/record";
 import { openAppSettings, refreshAppPush, toggleNotifications } from "../../state/push";
 import { showMicModes } from "../../state/session";
-import { appNotify, connected, micMode, now, pushOn, setPasscode, showLogin } from "../../state/store";
+import {
+  appNotify, assistantName, connected, heardAssistant, micMode, now, PRODUCT, pushOn, setPasscode, showLogin,
+} from "../../state/store";
 import {
   about, access, accounts, act, ago, devices, forgetRule, go, item, load, memory, prefs, quiet, roomy, rules, servers, setHold, skills,
-  system, toast, vocabulary, voiceprints, wide, type Access, type Account, type Device, type JarvisKey, type Login,
+  system, toast, vocabulary, voiceprints, wide, type Access, type Account, type Device, type AlfredKey, type Login,
   type Memory as MemoryData, type MemorySection, type PrefKey, type Prefs, type Rule, type SettingsItem,
   type Vocabulary as VocabularyData, type Voiceprints, type Word,
 } from "../../state/panel";
@@ -35,7 +37,7 @@ export const SETTINGS_TITLES: Record<SettingsItem, string> = {
 
 function skillsSummary(): string {
   const all = skills.value;
-  if (!all) return "How-tos JARVIS follows for your workflows";
+  if (!all) return `How-tos ${assistantName.value} follows for your workflows`;
   const on = all.filter((s) => s.state === "on").length, waiting = all.filter((s) => s.needs_approval).length;
   if (!all.length) return "None yet: write or install one by voice";
   return `${on} on${waiting ? ` · ${waiting} need${waiting === 1 ? "s" : ""} approving` : ""} · ${all.length} in all`;
@@ -64,7 +66,7 @@ function systemSummary(): [string, "ok" | "warn" | null] {
 }
 
 function Row({ to, icon, title, sub, led, sec = "settings" }: {
-  to: SettingsItem; icon: ComponentChildren; title: string; sub: string; led?: "ok" | "warn" | null; sec?: "settings" | "jarvis";
+  to: SettingsItem; icon: ComponentChildren; title: string; sub: string; led?: "ok" | "warn" | null; sec?: "settings" | "alfred";
 }) {
   return (
     <button class={`srow${item.value === to ? " sel" : ""}`} onClick={() => go(sec, to)}>
@@ -74,8 +76,8 @@ function Row({ to, icon, title, sub, led, sec = "settings" }: {
   );
 }
 
-// The JARVIS tab: what it can do and what it knows, most visited first
-export const JARVIS_PAGES: SettingsItem[] = ["skills", "conn", "accounts", "memory", "vocabulary", "about"];
+// The Alfred tab: what it can do and what it knows, most visited first
+export const ALFRED_PAGES: SettingsItem[] = ["skills", "conn", "accounts", "memory", "vocabulary", "about"];
 
 function accountsSummary(acc: Account[] | null): { sub: string; led: "ok" | "warn" | null } {
   if (!acc) return { sub: "Mail, calendar and Chat", led: null };
@@ -85,23 +87,23 @@ function accountsSummary(acc: Account[] | null): { sub: string; led: "ok" | "war
   return { sub: acc.map((a) => a.label + (a.default ? " (default)" : "")).join(" · "), led: "ok" };
 }
 
-export function JarvisList() {
-  const [conn, connLed] = connSummary(), acc = accounts.value;
+export function AlfredList() {
+  const [conn, connLed] = connSummary(), acc = accounts.value, name = assistantName.value;
   return (
     <div class="settings">
       <div class="grp">Can do</div>
-      <Row sec="jarvis" to="skills" icon={<SkillIcon />} title="Skills" sub={skillsSummary()} />
-      <Row sec="jarvis" to="conn" icon={<PlugIcon />} title="Connections" sub={conn} led={connLed} />
-      <Row sec="jarvis" to="accounts" icon={<UserIcon />} title="Google accounts" {...accountsSummary(acc)} />
+      <Row sec="alfred" to="skills" icon={<SkillIcon />} title="Skills" sub={skillsSummary()} />
+      <Row sec="alfred" to="conn" icon={<PlugIcon />} title="Connections" sub={conn} led={connLed} />
+      <Row sec="alfred" to="accounts" icon={<UserIcon />} title="Google accounts" {...accountsSummary(acc)} />
       <div class="grp">Knows</div>
-      <Row sec="jarvis" to="memory" icon={<BrainIcon />} title="Memory" sub="What JARVIS remembers about you" />
-      <Row sec="jarvis" to="vocabulary" icon={<WordsIcon />} title="Vocabulary" sub={vocabularySummary()} />
-      <Row sec="jarvis" to="about" icon={<NoteIcon />} title="About you" sub="Your name, time zone, and what JARVIS should know" />
+      <Row sec="alfred" to="memory" icon={<BrainIcon />} title="Memory" sub={`What ${name} remembers about you`} />
+      <Row sec="alfred" to="vocabulary" icon={<WordsIcon />} title="Vocabulary" sub={vocabularySummary()} />
+      <Row sec="alfred" to="about" icon={<NoteIcon />} title="About you" sub={`Your name, time zone, and what ${name} should know`} />
     </div>
   );
 }
 
-// How JARVIS behaves and stays safe, most visited first; every page one tap away, its row saying how it stands
+// How Alfred behaves and stays safe, most visited first; every page one tap away, its row saying how it stands
 export function SettingsList() {
   const [sys, sysLed] = systemSummary(), [dnd, dndLed] = dndSummary();
   const [keys, keysLed] = accessSummary(), [safe, safeLed] = safetySummary(), [mac, macLed] = machinesSummary();
@@ -149,7 +151,7 @@ function Fact({ line }: { line: string }) {
   );
 }
 
-// Memory sections; JARVIS stays under each limit by merging and shortening facts
+// Memory sections; Alfred stays under each limit by merging and shortening facts
 const SECTIONS: { key: MemorySection; label: string; placeholder: string }[] = [
   { key: "user", label: "User", placeholder: "A fact about you: a preference, habit or goal" },
   { key: "environment", label: "Environment", placeholder: "A fact about your machine, setup, tools or projects" },
@@ -198,7 +200,7 @@ function Memory() {
           </div>
         );
       })}
-      <p class="hint">Each section has a size limit, and no fact may be over {all.limits.fact} characters. When one fills up, JARVIS merges or shortens facts, and asks before dropping any.</p>
+      <p class="hint">Each section has a size limit, and no fact may be over {all.limits.fact} characters. When one fills up, {assistantName} merges or shortens facts, and asks before dropping any.</p>
     </>
   );
 }
@@ -280,8 +282,8 @@ function VocabularyPage() {
         <div class="grp">From your projects</div>
         <ul class="list">{v.projects.map((p) => <li key={p} class="row"><div class="grow">{p}</div></li>)}</ul>
       </>}
-      <p class="hint">Speech recognition is told to expect these{v.prompt ? "" : " (its prompt is off: JARVIS_STT_PROMPT)"}, and what
-        it's misheard them as is put right, whole words only. JARVIS adds words it notices it misheard after each
+      <p class="hint">Speech recognition is told to expect these{v.prompt ? "" : " (its prompt is off: ALFRED_STT_PROMPT)"}, and what
+        it's misheard them as is put right, whole words only. {assistantName} adds words it notices it misheard after each
         conversation, marked learned; when the list is full, the oldest learned word makes room. Changes apply from the
         next conversation.</p>
     </>
@@ -292,18 +294,18 @@ function VocabularyPage() {
 
 function rulesSummary() {
   const all = rules.value;
-  if (!all) return "Commands JARVIS runs without asking";
+  if (!all) return `Commands ${assistantName.value} runs without asking`;
   return all.length ? `${all.length} remembered` : "None: every risky command asks";
 }
 
-const VIA: Record<string, string> = { voice: "by voice", panel: "in the panel", assistant: "by telling JARVIS", cli: "on JARVIS's computer" };
+const via = (name: string): Record<string, string> => ({ voice: "by voice", panel: "in the panel", assistant: `by telling ${name}`, cli: `on ${name}'s computer` });
 
 function RuleRow({ r }: { r: Rule }) {
   return (
     <li class="row">
       <div class="grow">
         <div>{cap(r.covers)} {r.scope === "always" ? <Pill kind="running">always</Pill> : <Pill kind="muted">session</Pill>}</div>
-        <div class="sub">{cap(r.who)} · made {VIA[r.via] ?? r.via} {ago(r.created, now.value)} from <code>{r.example}</code></div>
+        <div class="sub">{cap(r.who)} · made {via(assistantName.value)[r.via] ?? r.via} {ago(r.created, now.value)} from <code>{r.example}</code></div>
         <div class="sub">{r.uses ? `Used ${r.uses} time${r.uses === 1 ? "" : "s"}, last ${ago(r.last_used ?? r.created, now.value)}` : "Not used yet"}</div>
       </div>
       <button class="btn sm" onClick={() => { if (confirm("Withdraw this? Commands it covers will ask again.")) forgetRule(r); }}>Withdraw</button>
@@ -320,21 +322,22 @@ function Approvals() {
       {!all.length && <Empty>Nothing remembered: every risky command asks.</Empty>}
       <p class="hint">Made when you answer a request "for this task" or "always", here or by voice. Some always ask, every
         time: deleting files, git push, sending data off the computer, changing system settings, anything touching secrets.
-        You can also ask JARVIS what it always allows, or to withdraw one.</p>
+        You can also ask {assistantName} what it always allows, or to withdraw one.</p>
     </>
   );
 }
 
 // ── Preferences (Behaviour, Safety check): stored server-side; an .env value wins and is read-only here ──
 
-const AT_RESTART = "Saved. JARVIS uses it once its services restart.";
-const NEXT_CALL = "Saved. JARVIS uses it from the next conversation.";
+const atRestart = () => `Saved. ${assistantName.peek()} uses it once its services restart.`;
+const nextCall = () => `Saved. ${assistantName.peek()} uses it from the next conversation.`;
 const pref = (k: PrefKey) => prefs.value?.preferences[k];
 const shown = (k: PrefKey) => { const p = pref(k); return p ? p.env || p.value || p.default : ""; };
 
 async function savePref(key: PrefKey, value: string, done: string) {
   const r = await act<Prefs>("preference_save", { key, value }, done);
   if (r) prefs.value = r;
+  if (r && key === "assistant") heardAssistant(shown("assistant") || PRODUCT);  // the whole page goes by it now
   return !!r;
 }
 
@@ -357,7 +360,7 @@ function dndSummary(): [string, "warn" | null] {
 }
 
 function safetySummary(): [string, "warn" | null] {
-  if (!pref("injection_check")) return ["Checks what JARVIS reads for hidden instructions", null];
+  if (!pref("injection_check")) return [`Checks what ${assistantName.value} reads for hidden instructions`, null];
   if (shown("injection_check") === "off") return ["Off: nothing is checked", "warn"];
   const by = INJECTION_MODEL.find(([m]) => m === shown("injection_model"))?.[1].split(" ")[0] ?? "a fast model";
   return [`On · checked by ${by}`, null];
@@ -365,18 +368,18 @@ function safetySummary(): [string, "warn" | null] {
 
 const FromEnv = ({ label, value }: { label: string; value: string }) => (
   <><label class="lbl">{label}</label><div class="field locked">{value}</div>
-    <p class="hint">Set in .env on JARVIS's computer, which wins: take it out there to change it here.</p></>
+    <p class="hint">Set in .env on {assistantName}'s computer, which wins: take it out there to change it here.</p></>
 );
 
 // Free-text preference, saved on button press. Empty resets to the default (shown as placeholder).
-function PrefField({ k, label, type = "text", list, done = AT_RESTART }: { k: PrefKey; label: string; type?: string; list?: string; done?: string }) {
+function PrefField({ k, label, type = "text", list, done }: { k: PrefKey; label: string; type?: string; list?: string; done?: string }) {
   const p = pref(k)!, text = useSignal(p.value);
   useEffect(() => { text.value = p.value; }, [p.value]);
   if (p.env) return <FromEnv label={label} value={p.env} />;
   return (
     <>
       <label class="lbl">{label}</label>
-      <form class="inline" onSubmit={(e) => { e.preventDefault(); savePref(k, text.value, done); }}>
+      <form class="inline" onSubmit={(e) => { e.preventDefault(); savePref(k, text.value, done ?? atRestart()); }}>
         <input class="field" type={type} list={list} value={text.value} placeholder={p.default} aria-label={label}
           onInput={(e) => { text.value = e.currentTarget.value; }} />
         <button class="btn primary sm" disabled={text.value.trim() === p.value}>Save</button>
@@ -395,7 +398,7 @@ function PrefChoice({ k, label, options }: { k: PrefKey; label: string; options:
       <div class="radios" role="radiogroup" aria-label={label}>
         {options.map(([value, text]) => (
           <button key={value} type="button" role="radio" aria-checked={value === now} class={value === now ? "on" : ""}
-            onClick={() => { if (value !== now) savePref(k, value === p.default ? "" : value, NEXT_CALL); }}>{text}</button>
+            onClick={() => { if (value !== now) savePref(k, value === p.default ? "" : value, nextCall()); }}>{text}</button>
         ))}
       </div>
     </>
@@ -408,37 +411,41 @@ function About() {
   const text = useSignal<string | null>(null);
   useEffect(() => { if (about.value != null && text.peek() == null) text.value = about.value; }, [about.value]);
   if (about.value == null || text.value == null || !prefs.value) return <Empty>Loading…</Empty>;
-  const dirty = text.value.trim() !== about.value;
+  const dirty = text.value.trim() !== about.value, name = assistantName.value, called = pref("assistant");
   return (
     <>
-      <PrefField k="name" label="What JARVIS calls you" />
+      {called && <>
+        <PrefField k="assistant" label="Your assistant's name" done="Saved. It goes by its new name from your next message." />
+        {!called.env && <p class="hint">What it answers to and calls itself. Left empty: {called.default || PRODUCT}.</p>}
+      </>}
+      <PrefField k="name" label={`What ${name} calls you`} />
       <PrefField k="timezone" label="Time zone" list="zones" />
       <datalist id="zones">{zones().map((z) => <option key={z} value={z} />)}</datalist>
-      <p class="hint">Left empty, taken from JARVIS's computer: {pref("name")!.default} and {pref("timezone")!.default}.</p>
-      <MarkdownEditor label="What JARVIS should know" value={text.value} onInput={(v) => { text.value = v; }}
+      <p class="hint">Left empty, taken from {name}'s computer: {pref("name")!.default} and {pref("timezone")!.default}.</p>
+      <MarkdownEditor label={`What ${name} should know`} value={text.value} onInput={(v) => { text.value = v; }}
         placeholder="Your job, your own projects, what to keep apart. One point per line. Markdown works." />
       <div class="acts end">
         <button class="btn primary sm" disabled={!dirty} onClick={async () => {
-          const r = await act<{ text: string }>("about_save", { text: text.value }, "Saved. JARVIS uses it once its services restart.");
+          const r = await act<{ text: string }>("about_save", { text: text.value }, atRestart());
           if (r) { about.value = r.text; text.value = r.text; }
         }}>Save</button>
       </div>
-      <p class="hint">JARVIS reads this when its services start: make services-restart on JARVIS's computer.</p>
+      <p class="hint">{name} reads this when its services start: make services-restart on {name}'s computer.</p>
     </>
   );
 }
 
-// Choices plus the current value if it isn't one of them (set via .env or on JARVIS's computer)
+// Choices plus the current value if it isn't one of them (set via .env or on Alfred's computer)
 const withShown = (k: PrefKey, options: [string, string][], label = (v: string) => v): [string, string][] =>
   options.some(([v]) => v === shown(k)) ? options : [...options, [shown(k), label(shown(k))]];
 
 const SPEEDS: [string, string][] = ["0.9", "1", "1.05", "1.1", "1.2"].map((s) => [s, `${s}×`]);
 const GATE: [string, string][] = [["enforce", "Drop"], ["shadow", "Only log"], ["off", "Off"]];
-const GATE_HINT: Record<string, string> = {
-  enforce: "Clips with no real speech in them, like Whisper's phantom \"Thank you.\" on silence, never reach JARVIS.",
-  shadow: "Clips it would drop are only logged, and saved as audio on JARVIS's computer, to check what it would catch.",
-  off: "Everything Whisper hears reaches JARVIS.",
-};
+const GATE_HINT = (name: string): Record<string, string> => ({
+  enforce: `Clips with no real speech in them, like Whisper's phantom "Thank you." on silence, never reach ${name}.`,
+  shadow: `Clips it would drop are only logged, and saved as audio on ${name}'s computer, to check what it would catch.`,
+  off: `Everything Whisper hears reaches ${name}.`,
+});
 
 const BROWSER: [string, string][] = [["on", "On"], ["off", "Off"]];
 const BROWSER_WINDOW: [string, string][] = [["headed", "Shown"], ["headless", "Hidden"]];
@@ -449,7 +456,7 @@ const INJECTION_MODEL: [string, string][] = [["claude-haiku-4-5-20251001", "Haik
 function DoNotDisturb() {
   const q = quiet.value, busy = useSignal(false), until = useSignal("");
   if (!q) return <Empty>Loading…</Empty>;
-  const h = q.hold;
+  const h = q.hold, name = assistantName.value;
   const set = async (to: Parameters<typeof setHold>[0]) => { busy.value = true; await setHold(to); busy.value = false; };
   return (
     <>
@@ -467,12 +474,12 @@ function DoNotDisturb() {
           <button class="btn sm" disabled={busy.value || !until.value}>Until then</button>
         </form>
       </div>
-      <p class="hint">While it's on, no reminder, scheduled task, watch or command runs, JARVIS keeps its own notices
+      <p class="hint">While it's on, no reminder, scheduled task, watch or command runs, {name} keeps its own notices
         back and finished tasks don't notify; requests for a yes still come through. Held reminders and jobs run when it ends. The nightly quiet hours
         stay as they are.</p>
       {prefs.value && <>
-        <PrefField k="quiet_hours" label="Nightly quiet hours" done="Saved. JARVIS uses it from now." />
-        <p class="hint">Every night, in your time zone: watches aren't checked and JARVIS keeps its own notices back.
+        <PrefField k="quiet_hours" label="Nightly quiet hours" done={`Saved. ${name} uses it from now.`} />
+        <p class="hint">Every night, in your time zone: watches aren't checked and {name} keeps its own notices back.
           Like 23:00-08:00, or off.</p>
       </>}
     </>
@@ -503,14 +510,14 @@ function MicModeRow() {
 }
 
 function VoicePrefs({ all }: { all: Prefs }) {
-  const v = all.preferences.voice, now = v.value || v.default;
+  const v = all.preferences.voice, now = v.value || v.default, name = assistantName.value, label = `${name}'s voice`;
   const group = (accent: string) => all.voices.filter((x) => x.charAt(0) === accent);
   return (
     <>
-      {v.env ? <FromEnv label="JARVIS's voice" value={v.env} /> : <>
-        <label class="lbl">JARVIS's voice</label>
-        <select class="field" value={now} aria-label="JARVIS's voice"
-          onChange={(e) => { const x = e.currentTarget.value; savePref("voice", x === v.default ? "" : x, NEXT_CALL); }}>
+      {v.env ? <FromEnv label={label} value={v.env} /> : <>
+        <label class="lbl">{label}</label>
+        <select class="field" value={now} aria-label={label}
+          onChange={(e) => { const x = e.currentTarget.value; savePref("voice", x === v.default ? "" : x, nextCall()); }}>
           {Object.entries(ACCENT).reverse().map(([a, name]) => group(a).length ? (
             <optgroup key={a} label={name}>{group(a).map((x) => <option key={x} value={x}>{voiceName(x)}{x === v.default ? " (default)" : ""}</option>)}</optgroup>
           ) : null)}
@@ -518,7 +525,7 @@ function VoicePrefs({ all }: { all: Prefs }) {
       </>}
       <PrefChoice k="voice_speed" label="Speed" options={withShown("voice_speed", SPEEDS, (s) => `${s}×`)} />
       <PrefChoice k="speech_gate" label="Phantom filter" options={GATE} />
-      <p class="hint">{GATE_HINT[shown("speech_gate")] ?? ""} Changes apply from the next conversation.</p>
+      <p class="hint">{GATE_HINT(name)[shown("speech_gate")] ?? ""} Changes apply from the next conversation.</p>
     </>
   );
 }
@@ -537,7 +544,7 @@ function BehaviourPage() {
         <p class="hint">The rest wait their turn. Applies once the task runner restarts.</p>
         <PrefChoice k="browser" label="Web browser" options={BROWSER} />
         <PrefChoice k="browser_window" label="Browser window" options={BROWSER_WINDOW} />
-        <p class="hint">JARVIS's own Chrome, on a profile of its own, for reading pages you're logged in to: log in there yourself.
+        <p class="hint">{assistantName}'s own Chrome, on a profile of its own, for reading pages you're logged in to: log in there yourself.
           It only reads pages for now. Changes apply from the next conversation.</p>
       </>}
     </>
@@ -546,12 +553,13 @@ function BehaviourPage() {
 
 function SafetyPage() {
   if (!prefs.value) return <Empty>Loading…</Empty>;
+  const name = assistantName.value;
   return (
     <>
       <PrefChoice k="injection_check" label="Hidden instruction check" options={BROWSER} />
       <PrefChoice k="injection_model" label="Checked by" options={INJECTION_MODEL} />
-      <p class="hint">Before JARVIS acts on an email, page, document, file or other tool result, a fast model checks it for
-        instructions hidden there for the AI. Those that try to make JARVIS act are held back and you're told; milder ones
+      <p class="hint">Before {name} acts on an email, page, document, file or other tool result, a fast model checks it for
+        instructions hidden there for the AI. Those that try to make {name} act are held back and you're told; milder ones
         come with a warning. Changes apply from the next conversation or task.</p>
     </>
   );
@@ -560,13 +568,13 @@ function SafetyPage() {
 // ── Voice ID: speaker check and voiceprint enrolment ──
 
 const SPEAKER: [string, string][] = [["on", "On"], ["shadow", "Only log"], ["off", "Off"]];
-const SPEAKER_HINT: Record<string, string> = {
-  on: "Speech that isn't your voice, like a TV or people nearby, never reaches JARVIS, and it stays silent.",
-  shadow: "Voices it would ignore are only logged on JARVIS's computer (make voiceprint ARGS=log), to check before it ignores any.",
-  off: "JARVIS answers any voice it hears.",
-};
+const SPEAKER_HINT = (name: string): Record<string, string> => ({
+  on: `Speech that isn't your voice, like a TV or people nearby, never reaches ${name}, and it stays silent.`,
+  shadow: `Voices it would ignore are only logged on ${name}'s computer (make voiceprint ARGS=log), to check before it ignores any.`,
+  off: `${name} answers any voice it hears.`,
+});
 const STRICTNESS: [string, string][] = [["0.25", "Lenient"], ["0.35", "Normal"], ["0.45", "Strict"]];
-const VIA_ENROLL: Record<string, string> = { voice: "by voice", panel: "here", cli: "on JARVIS's computer" };
+const viaEnroll = (name: string): Record<string, string> => ({ voice: "by voice", panel: "here", cli: `on ${name}'s computer` });
 
 function VoiceId() {
   const v = voiceprints.value, rec = useSignal<Recording | null>(null), secs = useSignal(0), lvl = useSignal(0);
@@ -582,7 +590,7 @@ function VoiceId() {
     return () => clearInterval(timer);
   }, [rec.value]);
   if (!v || !prefs.value) return null;
-  const owner = v.owner;
+  const owner = v.owner, name = assistantName.value;
 
   async function start() {
     try {
@@ -598,13 +606,13 @@ function VoiceId() {
     busy.value = true;
     rec.value = null;
     const audio = r.stop();
-    const got = await act<Voiceprints>("voiceprint_enroll", { audio }, "Saved. JARVIS knows your voice from the next conversation.");
+    const got = await act<Voiceprints>("voiceprint_enroll", { audio }, `Saved. ${assistantName.peek()} knows your voice from the next conversation.`);
     if (got) voiceprints.value = got;
     busy.value = false;
   }
   function cancel() { rec.peek()?.cancel(); rec.value = null; }
   async function remove() {
-    if (!confirm("Forget your voiceprint? JARVIS will answer any voice again.")) return;
+    if (!confirm(`Forget your voiceprint? ${assistantName.peek()} will answer any voice again.`)) return;
     const got = await act<Voiceprints>("voiceprint_remove", {}, "Voiceprint forgotten");
     if (got) voiceprints.value = got;
   }
@@ -615,8 +623,8 @@ function VoiceId() {
       <div class="row flat">
         <div class="grow">
           <div>{owner ? "Knows your voice" : "Not set up"} {owner && !owner.current && <Pill kind="waiting">enroll again</Pill>}</div>
-          <div class="sub">{owner ? `Enrolled ${VIA_ENROLL[owner.via] ?? owner.via} ${ago(owner.created, now.value)} from ${Math.round(owner.seconds)} s of speech`
-            : "Without a voiceprint JARVIS answers any voice, as it does now."}</div>
+          <div class="sub">{owner ? `Enrolled ${viaEnroll(name)[owner.via] ?? owner.via} ${ago(owner.created, now.value)} from ${Math.round(owner.seconds)} s of speech`
+            : `Without a voiceprint ${name} answers any voice, as it does now.`}</div>
         </div>
         {owner && !rec.value && <button class="btn sm" onClick={remove}>Forget</button>}
       </div>
@@ -639,16 +647,16 @@ function VoiceId() {
           <button class="btn sm primary" disabled={!v.model} onClick={start}>{owner ? "Enroll again" : "Enroll my voice"}</button>
         </div>
       )}
-      {!v.model && <p class="hint warn">The speaker model isn't on JARVIS's computer yet: run make models there.</p>}
+      {!v.model && <p class="hint warn">The speaker model isn't on {name}'s computer yet: run make models there.</p>}
       <p class="hint">{connected.value && !rec.value ? "Hang up first: the conversation has the mic. " : ""}Read the text that
         appears aloud for {v.seconds} seconds, somewhere quiet. Or, in a conversation, say "learn my voice" and talk for half
-        a minute: that hears you through the very mic and connection JARVIS listens on.</p>
+        a minute: that hears you through the very mic and connection {name} listens on.</p>
       {owner && <>
         <PrefChoice k="speaker_check" label="Other voices" options={SPEAKER} />
-        <p class="hint">{SPEAKER_HINT[shown("speaker_check")] ?? ""}</p>
+        <p class="hint">{SPEAKER_HINT(name)[shown("speaker_check")] ?? ""}</p>
         <PrefChoice k="speaker_threshold" label="How sure it must be" options={withShown("speaker_threshold", STRICTNESS)} />
         <p class="hint">Stricter ignores more of other people, and may miss you when you're far from the mic or your voice is
-          hoarse. Short replies like "yes" need less, more so right after JARVIS has spoken. Changes apply from the next
+          hoarse. Short replies like "yes" need less, more so right after {name} has spoken. Changes apply from the next
           conversation.</p>
       </>}
     </>
@@ -661,7 +669,7 @@ function DeviceRow({ d }: { d: Device }) {
   return (
     <li class="row">
       <div class="grow"><div>{DEVICE_NAMES[d.device] ?? d.device}{d.this && <> <Pill kind="running">this device</Pill></>}</div>
-        <div class="sub">{d.kind === "app" ? "JARVIS app" : "Web app"}{d.added ? ` · added ${ago(d.added, now.value)}` : ""}</div></div>
+        <div class="sub">{d.kind === "app" ? "Alfred app" : "Web app"}{d.added ? ` · added ${ago(d.added, now.value)}` : ""}</div></div>
       <button class="btn sm" onClick={async () => {
         if (!confirm("Stop sending notifications to this device?")) return;
         const r = await act<Device[]>("device_remove", { id: d.id }, "Removed");
@@ -682,7 +690,7 @@ function Notifications() {
       </div>
       {appNotify.value === "denied" && (
         <div class="row flat">
-          <div class="grow"><div>Blocked in iOS Settings</div><div class="sub">Allow notifications for JARVIS there, then come back</div></div>
+          <div class="grow"><div>Blocked in iOS Settings</div><div class="sub">Allow notifications for Alfred there, then come back</div></div>
           <button class="btn sm" onClick={openAppSettings}>Open Settings</button>
         </div>
       )}
@@ -709,16 +717,16 @@ function SystemPage() {
           <div class="grow">Vault<div class="sub">{s.vault.state === "ok" ? `key matches · ${s.vault.secrets} secret${s.vault.secrets === 1 ? "" : "s"} kept` : s.vault.problem}</div></div></li>
       </ul>
       <div class="acts"><button class="btn sm" onClick={() => load("settings", "system")}>Check again</button></div>
-      <p class="hint">A service that isn't running: make services-restart on JARVIS's computer, then make logs to see why.</p>
+      <p class="hint">A service that isn't running: make services-restart on {assistantName}'s computer, then make logs to see why.</p>
     </>
   );
 }
 
-// ── Logins (one passcode each) and JARVIS keys (write-only) ──
+// ── Logins (one passcode each) and Alfred keys (write-only) ──
 
 function accessSummary(): [string, "warn" | null] {
   const a = access.value;
-  if (!a) return ["Who can connect, and JARVIS's own keys", null];
+  if (!a) return [`Who can connect, and ${assistantName.value}'s own keys`, null];
   const missing = a.keys.filter((k) => k.required && !k.source).map((k) => k.label);
   if (missing.length) return [`${missing.join(", ")} not set`, "warn"];
   const n = a.logins.length;
@@ -775,15 +783,15 @@ function LoginRow({ l }: { l: Login }) {
   );
 }
 
-const FROM: Record<string, string> = { vault: "in the vault", ".env": "in .env until JARVIS restarts", file: "in its file until JARVIS restarts" };
+const keptIn = (name: string): Record<string, string> => ({ vault: "in the vault", ".env": `in .env until ${name} restarts`, file: `in its file until ${name} restarts` });
 
-function KeyRow({ k }: { k: JarvisKey }) {
+function KeyRow({ k }: { k: AlfredKey }) {
   const open = useSignal(false), value = useSignal(""), busy = useSignal(false);
   async function save(e: Event) {
     e.preventDefault();
     if (!value.value.trim() || busy.value) return;
     busy.value = true;
-    const r = await act<Access>("key_set", { name: k.name, value: value.value }, AT_RESTART);
+    const r = await act<Access>("key_set", { name: k.name, value: value.value }, atRestart());
     busy.value = false;
     if (r) { access.value = r; value.value = ""; open.value = false; }
   }
@@ -795,7 +803,7 @@ function KeyRow({ k }: { k: JarvisKey }) {
   return (
     <div class="key">
       <span class="var">{k.label}</span>
-      {k.source ? <span class="st"><span class="dots">••••••</span> {FROM[k.source]}</span> : <span class="st warn">not set</span>}
+      {k.source ? <span class="st"><span class="dots">••••••</span> {keptIn(assistantName.value)[k.source]}</span> : <span class="st warn">not set</span>}
       {open.value ? (
         <form class="inline grow" onSubmit={save}>
           <input class="field" type="password" autocomplete="off" placeholder={`Paste the ${k.label}`} aria-label={k.label}
@@ -813,20 +821,20 @@ function KeyRow({ k }: { k: JarvisKey }) {
 }
 
 function AccessPage() {
-  const a = access.value;
+  const a = access.value, name = assistantName.value;
   if (!a) return <Empty>Loading…</Empty>;
   return (
     <>
       <div class="grp">Logins</div>
       <ul class="list">{a.logins.map((l) => <LoginRow key={l.name} l={l} />)}</ul>
-      {!a.logins.length && <Empty>None yet: the passcode in .env lets you in, and becomes your login when JARVIS restarts.</Empty>}
+      {!a.logins.length && <Empty>None yet: the passcode in .env lets you in, and becomes your login when {name} restarts.</Empty>}
       <PasscodeForm />
       <p class="hint">Each person has a passcode of their own, and it's all they enter: it says who's connecting, so no two
-        logins share one. Passcodes are kept only as hashes on JARVIS's computer. Everyone with a login can open this panel.</p>
-      <div class="grp">JARVIS's keys</div>
+        logins share one. Passcodes are kept only as hashes on {name}'s computer. Everyone with a login can open this panel.</p>
+      <div class="grp">{name}'s keys</div>
       {a.keys.map((k) => <KeyRow key={k.name} k={k} />)}
-      <p class="hint">Kept encrypted in the vault, and never shown back: paste them here, never out loud. JARVIS uses a new
-        one once its services restart: make services-restart on JARVIS's computer.</p>
+      <p class="hint">Kept encrypted in the vault, and never shown back: paste them here, never out loud. {name} uses a new
+        one once its services restart: make services-restart on {name}'s computer.</p>
     </>
   );
 }
@@ -877,4 +885,4 @@ function Pages({ List, first }: { List: () => preact.JSX.Element; first: Setting
 }
 
 export const SettingsSection = () => <Pages List={SettingsList} first="prefs" />;
-export const JarvisSection = () => <Pages List={JarvisList} first="skills" />;
+export const AlfredSection = () => <Pages List={AlfredList} first="skills" />;

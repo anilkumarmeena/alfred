@@ -1,4 +1,4 @@
-"""Tests for work that waits for other work (jarvis.tasks.chains): tasks that start by themselves once others finish
+"""Tests for work that waits for other work (alfred.tasks.chains): tasks that start by themselves once others finish
 or are merged, merges that go ahead by themselves, holding what can't start as planned, and surviving a restart."""
 
 import asyncio
@@ -9,10 +9,10 @@ import pytest
 from test_in_place import add_new_file, branches, env  # noqa: F401  (env is a fixture)
 from test_nudges import until
 
-from jarvis.tasks import git_ops, runner
-from jarvis.tasks.store import WAIT_AFTER
-from jarvis.tasks.worker import Outcome
-from jarvis.tools import tasks as task_tools
+from alfred.tasks import git_ops, runner
+from alfred.tasks.store import WAIT_AFTER
+from alfred.tasks.worker import Outcome
+from alfred.tools import tasks as task_tools
 
 
 def gated(monkeypatch, edit=None) -> tuple[dict[str, asyncio.Event], list[str]]:
@@ -539,8 +539,8 @@ def test_what_ended_while_the_runner_was_down_is_settled_at_the_next_start(env, 
 
 
 def test_the_tools_offer_waiting_and_the_prompt_says_to_use_it_instead_of_remembering():
-    from jarvis import tools
-    from jarvis.brain import persona
+    from alfred import tools
+    from alfred.brain import persona
 
     start, merge = tools.get("task_start"), tools.get("task_merge")
     assert {"after", "after_merge"} <= set(start.properties) and {"after", "after_merge"} <= set(merge.properties)

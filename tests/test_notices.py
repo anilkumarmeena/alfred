@@ -1,4 +1,4 @@
-"""Tests for jarvis.tasks.notices: JARVIS's own news said once, pushed, held in quiet hours, and safe when checks fail."""
+"""Tests for alfred.tasks.notices: Alfred's own news said once, pushed, held in quiet hours, and safe when checks fail."""
 
 import asyncio
 import importlib
@@ -8,13 +8,13 @@ from datetime import datetime, time
 
 import pytest
 
+from alfred import config
+from alfred.state import settings
+from alfred.storage import profile
+from alfred.tasks import hold, notices
+from alfred.tasks.hold import in_quiet_hours, parse_quiet_hours
+from alfred.tasks.notices import Notice, Notices
 from conftest import use_profile
-from jarvis import config
-from jarvis.state import settings
-from jarvis.storage import profile
-from jarvis.tasks import hold, notices
-from jarvis.tasks.hold import in_quiet_hours, parse_quiet_hours
-from jarvis.tasks.notices import Notice, Notices
 
 TZ = profile.tz()
 AFTERNOON = datetime(2026, 9, 26, 15, 0, tzinfo=TZ)
@@ -47,7 +47,7 @@ def make(tmp_path, checks, at=AFTERNOON, **kw) -> tuple[Notices, Notifier]:
 
 WAITING = Notice("task:3:waiting:1", "tasks", "Task 3, retry logic, is still waiting for your answer: which DB?",
                  task_id=3)
-LIMIT = Notice("usage:five_hour:1790000000:close", "usage", "JARVIS has used 90% of Claude's five-hour limit.")
+LIMIT = Notice("usage:five_hour:1790000000:close", "usage", "Alfred has used 90% of Claude's five-hour limit.")
 STUCK = Notice("task:7:stalled", "tasks", "Task 7 seems stuck.", task_id=7, ongoing=True)
 
 
@@ -56,11 +56,11 @@ STUCK = Notice("task:7:stalled", "tasks", "Task 7 seems stuck.", task_id=7, ongo
 
 def test_config_defaults_and_overrides(monkeypatch):
     monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)  # the real .env mustn't leak in
-    monkeypatch.delenv("JARVIS_NOTICES", raising=False)
+    monkeypatch.delenv("ALFRED_NOTICES", raising=False)
     try:
         importlib.reload(config)
         assert config.NOTICES_ENABLED is True
-        monkeypatch.setenv("JARVIS_NOTICES", "off")
+        monkeypatch.setenv("ALFRED_NOTICES", "off")
         importlib.reload(config)
         assert config.NOTICES_ENABLED is False
     finally:
@@ -70,13 +70,13 @@ def test_config_defaults_and_overrides(monkeypatch):
 
 def test_quiet_hours_are_the_users_preference_read_when_checked(tmp_path, monkeypatch):
     use_profile(monkeypatch, tmp_path)
-    monkeypatch.delenv("JARVIS_QUIET_HOURS", raising=False)
+    monkeypatch.delenv("ALFRED_QUIET_HOURS", raising=False)
     assert hold.quiet_hours() == (time(23), time(8))  # the default
     settings.set_preference("quiet_hours", "22:30-07:00")
     assert hold.quiet_hours() == (time(22, 30), time(7))
     settings.set_preference("quiet_hours", "Off")
     assert hold.quiet_hours() is None
-    monkeypatch.setenv("JARVIS_QUIET_HOURS", "01:00-05:00")  # .env wins
+    monkeypatch.setenv("ALFRED_QUIET_HOURS", "01:00-05:00")  # .env wins
     assert hold.quiet_hours() == (time(1), time(5))
     assert hold.quiet_hours("") is None and hold.quiet_hours("13:00-14:00") == (time(13), time(14))  # given: as is
 
@@ -115,7 +115,7 @@ def test_a_new_notice_is_notified_and_announced(tmp_path):
     events = []
     n, notify = make(tmp_path, {"usage": check(LIMIT), "tasks": check(WAITING)}, announce=events.append)
     assert asyncio.run(n.check()) == [LIMIT, WAITING]
-    assert notify.sent == [("JARVIS · usage", LIMIT.text), ("JARVIS · tasks", WAITING.text)]
+    assert notify.sent == [("Alfred · usage", LIMIT.text), ("Alfred · tasks", WAITING.text)]
     assert events == [{"type": "alert", "tasks": [3], "text": f"Heads up. {LIMIT.text} {WAITING.text}",
                        "urgency": "soon", "pushed": False}]
 
@@ -129,7 +129,7 @@ def test_the_same_notice_is_never_given_twice_even_across_restarts(tmp_path):
     later = Notice("task:4:waiting:2", "tasks", "Task 4 is still waiting for your answer: which branch?", task_id=4)
     again, notify2 = make(tmp_path, {"tasks": check(WAITING, later)})  # a fresh runner, same state file
     asyncio.run(again.check())
-    assert notify2.sent == [("JARVIS · tasks", later.text)]
+    assert notify2.sent == [("Alfred · tasks", later.text)]
 
 
 def test_an_ongoing_notice_is_given_once_until_it_clears(tmp_path):
@@ -190,9 +190,9 @@ def test_a_failing_check_doesnt_stop_the_round_or_leak_its_message(tmp_path, cap
 
     monkeypatch.setattr(notices, "CHECK_TIMEOUT", 0.05)
     n, notify = make(tmp_path, {"broken": broken, "usage": hangs, "tasks": check(WAITING)})
-    with caplog.at_level(logging.INFO, logger="jarvis.tasks.notices"):
+    with caplog.at_level(logging.INFO, logger="alfred.tasks.notices"):
         asyncio.run(n.check())
-    assert notify.sent == [("JARVIS · tasks", WAITING.text)]
+    assert notify.sent == [("Alfred · tasks", WAITING.text)]
     assert "s3cr3t" not in caplog.text
     assert "broken failed" in caplog.text and "usage failed" in caplog.text
 
@@ -233,7 +233,7 @@ def test_a_failing_push_doesnt_stop_the_round_or_repeat(tmp_path):
     phone = Pusher(fail=True)
     n, notify = make(tmp_path, {"tasks": check(WAITING)}, push=phone)
     assert asyncio.run(n.check()) == [WAITING]
-    assert notify.sent == [("JARVIS · tasks", WAITING.text)]
+    assert notify.sent == [("Alfred · tasks", WAITING.text)]
     asyncio.run(n.check())
     assert len(phone.sent) == 1
 
@@ -253,7 +253,7 @@ def test_parse_quiet_hours():
 
 def test_a_bad_quiet_hours_value_is_warned_about_once(caplog):
     hold.parse_quiet_hours.cache_clear()
-    with caplog.at_level(logging.WARNING, logger="jarvis.tasks.hold"):
+    with caplog.at_level(logging.WARNING, logger="alfred.tasks.hold"):
         for _ in range(3):
             assert hold.quiet_hours("11pm-7am") is None
     assert len(caplog.records) == 1
@@ -280,12 +280,12 @@ def test_quiet_hours_hold_notices_till_morning(tmp_path):
     n.clock = lambda: datetime(2026, 9, 27, 8, 5, tzinfo=TZ)
     asyncio.run(n.check())
     asyncio.run(n.check())
-    assert notify.sent == [("JARVIS · tasks", WAITING.text)] and len(phone.sent) == 1
+    assert notify.sent == [("Alfred · tasks", WAITING.text)] and len(phone.sent) == 1
 
 
 def test_notices_follow_a_change_to_the_users_quiet_hours_at_once(tmp_path, monkeypatch):
     use_profile(monkeypatch, tmp_path)
-    monkeypatch.delenv("JARVIS_QUIET_HOURS", raising=False)
+    monkeypatch.delenv("ALFRED_QUIET_HOURS", raising=False)
     tasks = check(WAITING)
     n, notify = make(tmp_path, {"tasks": tasks}, quiet_hours=None)
     settings.set_preference("quiet_hours", "14:00-16:00")
@@ -318,7 +318,7 @@ def test_task_notices():
                 {"id": 2, "title": "Fresh question", "status": "waiting", "seen": 0, "updated": now - 60,
                  "question": "Now?", "error": None},  # the runner has only just announced it
                 {"id": 3, "title": "Auth", "status": "stopped", "seen": 1, "updated": now - 60, "question": None,
-                 "error": "JARVIS restarted while it was running. Reply to carry on."},
+                 "error": "Alfred restarted while it was running. Reply to carry on."},
                 {"id": 4, "title": "Stopped by you", "status": "stopped", "seen": 1, "updated": now, "question": None,
                  "error": None},
                 {"id": 5, "title": "Done", "status": "done", "seen": 0, "updated": now - 3600, "question": None,
@@ -328,14 +328,14 @@ def test_task_notices():
     found = asyncio.run(notices.task_notices(Store(), minutes=15)(AFTERNOON))
     assert [(n.task_id, n.text) for n in found] == [
         (1, "Task 1, Retry logic, is still waiting for your answer: Which DB?"),
-        (3, "Task 3, Auth, stopped. JARVIS restarted while it was running. Reply to carry on."),
+        (3, "Task 3, Auth, stopped. Alfred restarted while it was running. Reply to carry on."),
     ]
 
 
 def test_usage_warnings_are_said_once_per_window(tmp_path, monkeypatch):
     from claude_agent_sdk import RateLimitInfo
 
-    from jarvis.llm import usage
+    from alfred.llm import usage
 
     use_profile(monkeypatch, tmp_path)
     monkeypatch.setattr(usage, "USAGE_FILE", tmp_path / "usage.json")
@@ -345,12 +345,12 @@ def test_usage_warnings_are_said_once_per_window(tmp_path, monkeypatch):
     n, notify = make(tmp_path, {"usage": notices.usage_notices})
     asyncio.run(n.check())
     asyncio.run(n.check())
-    assert notify.sent == [("JARVIS · usage", "JARVIS has used 90% of Claude's five-hour limit; it resets at 4 PM.")]
+    assert notify.sent == [("Alfred · usage", "Alfred has used 90% of Claude's five-hour limit; it resets at 4 PM.")]
 
 
 def test_a_connection_whose_sign_in_check_fails_is_said_and_checked_again_hourly(tmp_path, monkeypatch):
-    from jarvis.integrations import mcp_servers
-    from jarvis.integrations.mcp_servers import Server, Tool
+    from alfred.integrations import mcp_servers
+    from alfred.integrations.mcp_servers import Server, Tool
 
     notes = Server("notes", "Notes", command="x", check_tool="whoami", tools={"whoami": Tool("read")})
     monkeypatch.setattr(mcp_servers, "for_voice", lambda: [notes, Server("wiki", "Wiki", command="x")])
@@ -374,7 +374,7 @@ def test_a_connection_whose_sign_in_check_fails_is_said_and_checked_again_hourly
     assert asyncio.run(check(AFTERNOON.replace(hour=18, minute=3))) == found
 
 
-def test_the_runner_gets_only_jarvis_s_own_checks():
+def test_the_runner_gets_only_alfred_s_own_checks():
     class Store:
         def recent(self):
             return []

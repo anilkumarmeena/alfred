@@ -1,7 +1,7 @@
 // To-dos (shared with voice): add, tick, edit, delete; done items collapse. Open and done each sit in a card.
-// Ticks and deletes can be undone from the toast; what JARVIS adds elsewhere shows up live, highlighted for a while.
+// Ticks and deletes can be undone from the toast; what Alfred adds elsewhere shows up live, highlighted for a while.
 import { useSignal } from "@preact/signals";
-import { now } from "../../state/store";
+import { assistantName, now } from "../../state/store";
 import { ago, freshTodos, todoAct, todos, toast, unfresh, type Todo } from "../../state/panel";
 import { CheckIcon, ChevronIcon, EditIcon, PlusIcon, TrashIcon } from "../icons";
 import { Empty, InlineForm } from "./bits";
@@ -69,7 +69,7 @@ export function TodosSection() {
       </div>
       <ul class="list todo-open">
         {open.map((t) => <Row key={t.id} t={t} />)}
-        {!open.length && <li class="row none">Nothing open. Add one above, or ask JARVIS to.</li>}
+        {!open.length && <li class="row none">Nothing open. Add one above, or ask {assistantName} to.</li>}
       </ul>
       {done.length > 0 && <>
         <button class="grp fold" aria-expanded={!folded.value} onClick={() => { folded.value = !folded.value; }}>

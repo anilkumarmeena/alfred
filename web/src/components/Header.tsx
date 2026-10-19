@@ -6,7 +6,7 @@ import { activate } from "../state/session";
 import {
   activityOpen, activityUnread, closeSheet, go, paletteOpen, section, setHome, shown, toggleActivity, visible, wide,
 } from "../state/panel";
-import { connected, link, linkText, passcode, pushOn, quality, setPasscode, showLogin } from "../state/store";
+import { assistantName, connected, link, linkText, passcode, pushOn, quality, setPasscode, showLogin } from "../state/store";
 import { BellIcon, HistoryIcon, LockIcon, SearchIcon, SettingsIcon } from "./icons";
 
 // History and Settings toggle like dock buttons: open, or close the sheet (phone) or go back to Home (desktop).
@@ -31,7 +31,7 @@ export function Header() {
   return (
     <header>
       <div class="brand">
-        <span class="word">J.A.R.V.I.S.</span>
+        <span class="word">{assistantName}</span>
         <StatusPill />
       </div>
       <div class="tools">

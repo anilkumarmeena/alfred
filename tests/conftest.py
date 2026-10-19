@@ -1,6 +1,6 @@
-"""Test setup, run before any test imports jarvis.
+"""Test setup, run before any test imports alfred.
 
-Points JARVIS_DATA_DIR at a scratch install and activates PROFILE with fixed Google accounts and "about you", so
+Points ALFRED_DATA_DIR at a scratch install and activates PROFILE with fixed Google accounts and "about you", so
 results never depend on (or touch) this machine's data/, vault, .env or tokens. Model-backed checks are off.
 For an isolated profile, use the `own_profile` fixture or call use_profile().
 """
@@ -14,29 +14,29 @@ from pathlib import Path
 
 import pytest
 
-SCRATCH = Path(tempfile.mkdtemp(prefix="jarvis-tests-"))
+SCRATCH = Path(tempfile.mkdtemp(prefix="alfred-tests-"))
 atexit.register(shutil.rmtree, SCRATCH, True)
-os.environ["JARVIS_DATA_DIR"] = str(SCRATCH / "data")
-os.environ["JARVIS_DB_FILE"] = str(SCRATCH / "data" / "tasks.db")
-# The checkout as JARVIS_HOME (the layout tests assume), never this machine's ~/.jarvis or its config.toml
-os.environ["JARVIS_HOME"] = str(Path(__file__).resolve().parents[1])
+os.environ["ALFRED_DATA_DIR"] = str(SCRATCH / "data")
+os.environ["ALFRED_DB_FILE"] = str(SCRATCH / "data" / "tasks.db")
+# The checkout as ALFRED_HOME (the layout tests assume), never this machine's ~/.alfred or its config.toml
+os.environ["ALFRED_HOME"] = str(Path(__file__).resolve().parents[1])
 (SCRATCH / "config.toml").write_text("")  # only the shipped defaults
-os.environ["JARVIS_CONFIG"] = str(SCRATCH / "config.toml")
-os.environ["JARVIS_GOAL_LOOP"] = "0"  # test_goal enables it with a fake check
-os.environ["JARVIS_CONSENT"] = "0"  # test_consent fakes the model call
-os.environ["JARVIS_ANNOUNCE"] = "0"  # test_announce fakes the model call
-os.environ["JARVIS_INJECTION_CHECK"] = "0"  # test_injection fakes the check
-os.environ["JARVIS_TODO_MATCH"] = "0"  # test_todo fakes the model call
+os.environ["ALFRED_CONFIG"] = str(SCRATCH / "config.toml")
+os.environ["ALFRED_GOAL_LOOP"] = "0"  # test_goal enables it with a fake check
+os.environ["ALFRED_CONSENT"] = "0"  # test_consent fakes the model call
+os.environ["ALFRED_ANNOUNCE"] = "0"  # test_announce fakes the model call
+os.environ["ALFRED_INJECTION_CHECK"] = "0"  # test_injection fakes the check
+os.environ["ALFRED_TODO_MATCH"] = "0"  # test_todo fakes the model call
 
-# Must follow the env setup above: jarvis.config reads JARVIS_DATA_DIR on import
-from jarvis import bootstrap, config  # noqa: E402
-from jarvis.auth import credentials, logins, vault
-from jarvis.integrations import accounts  # noqa: E402
-from jarvis.media import transcribe
-from jarvis.safety import host  # noqa: E402
-from jarvis.state import conversation, settings  # noqa: E402
-from jarvis.storage import profile
-from jarvis.tasks import merge_check  # noqa: E402
+# Must follow the env setup above: alfred.config reads ALFRED_DATA_DIR on import
+from alfred import bootstrap, config  # noqa: E402
+from alfred.auth import credentials, logins, vault
+from alfred.integrations import accounts  # noqa: E402
+from alfred.media import transcribe
+from alfred.safety import host  # noqa: E402
+from alfred.state import conversation, settings  # noqa: E402
+from alfred.storage import profile
+from alfred.tasks import merge_check  # noqa: E402
 
 PROFILE = profile.Profile("test", "Sam", config.mac_timezone() or "UTC", config.DATA_DIR, config.DB_FILE,
                           SCRATCH / "secrets")
@@ -44,7 +44,7 @@ profile.activate(PROFILE)
 transcribe.LOG_FILE = SCRATCH / "transcribe.log"  # keep errors out of the checkout's logs/
 config.CLAUDE_LOGINS_DIR = SCRATCH / "claude-logins"  # never this computer's Claude logins
 host.JOB_POLL = 0.05  # jobs' ends are seen at once, not up to 2 s later
-bootstrap.wire()  # as every process does at start: task sessions and watches get JARVIS's tools
+bootstrap.wire()  # as every process does at start: task sessions and watches get Alfred's tools
 
 
 def use_profile(monkeypatch: pytest.MonkeyPatch, data: Path | None = None, **changes) -> profile.Profile:
@@ -58,7 +58,7 @@ def use_profile(monkeypatch: pytest.MonkeyPatch, data: Path | None = None, **cha
 
 def use_task_cache(monkeypatch: pytest.MonkeyPatch, folder: Path) -> Path:
     """Point TASK_CACHE_DIR at `folder` in every module that reads it."""
-    from jarvis.tasks import briefs, host_tools, worker
+    from alfred.tasks import briefs, host_tools, worker
 
     for module in (worker, host_tools, briefs):
         monkeypatch.setattr(module, "TASK_CACHE_DIR", folder)
@@ -70,7 +70,7 @@ def google_tools_follow_the_shared_accounts(monkeypatch):
     """A test that switches profile can make the Google tools follow its accounts (google.fresh): put the profile
     back first, then follow the shared accounts again."""
     yield
-    from jarvis.tools import google
+    from alfred.tools import google
 
     monkeypatch.undo()
     google.fresh()
@@ -92,8 +92,8 @@ def own_profile(monkeypatch, tmp_path) -> profile.Profile:
 # No master key, .env or tokens from this machine; GitHub and GitLab start disabled
 config.MASTER_KEY = ""
 vault.ENV_FILE = SCRATCH / "dotenv"  # not ".env": sandboxes hide it
-logins.FILE = SCRATCH / "logins.json"  # absent, so JARVIS_PASSCODE is checked
-for _var in ("GITHUB_PERSONAL_ACCESS_TOKEN", "GITLAB_PERSONAL_ACCESS_TOKEN", "JARVIS_GITHUB_MCP", logins.VAR,
+logins.FILE = SCRATCH / "logins.json"  # absent, so ALFRED_PASSCODE is checked
+for _var in ("GITHUB_PERSONAL_ACCESS_TOKEN", "GITLAB_PERSONAL_ACCESS_TOKEN", "ALFRED_GITHUB_MCP", logins.VAR,
              *credentials.VARS):
     os.environ.pop(_var, None)
 config.GOOGLE_CLIENT_SECRET = ""

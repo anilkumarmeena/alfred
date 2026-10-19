@@ -12,18 +12,18 @@ from dataclasses import replace
 import pytest
 from test_in_place import NullReporter, worker_task
 
+from alfred import config, tools
+from alfred.apps import mcp_launch as launcher
+from alfred.auth import vault
+from alfred.brain import cli
+from alfred.gates import shell
+from alfred.integrations import mcp_launch, mcp_relay, mcp_servers
+from alfred.integrations.mcp_servers import Server, Tool
+from alfred.llm import claude
+from alfred.state import settings
+from alfred.storage import database
+from alfred.tasks import worker
 from conftest import use_profile
-from jarvis import config, tools
-from jarvis.apps import mcp_launch as launcher
-from jarvis.auth import vault
-from jarvis.brain import cli
-from jarvis.gates import shell
-from jarvis.integrations import mcp_launch, mcp_relay, mcp_servers
-from jarvis.integrations.mcp_servers import Server, Tool
-from jarvis.llm import claude
-from jarvis.state import settings
-from jarvis.storage import database
-from jarvis.tasks import worker
 
 GH_TOKEN, GL_TOKEN = "ghp_not_a_real_token", "glpat-not-a-real-token"
 GH_VAR, GL_VAR = "GITHUB_PERSONAL_ACCESS_TOKEN", "GITLAB_PERSONAL_ACCESS_TOKEN"
@@ -279,7 +279,7 @@ def test_an_http_server_with_a_key_or_a_sign_in_is_reached_through_the_launcher(
     vault.put("wiki.oauth", json.dumps({"access_token": "a"}))
     got = mcp_servers.session(mcp_servers.for_voice())
     for name in ("notes", "wiki"):
-        assert got.configs[name]["args"] == ["-m", "jarvis.apps.mcp_launch", name]
+        assert got.configs[name]["args"] == ["-m", "alfred.apps.mcp_launch", name]
     assert "k-123" not in json.dumps(got.configs) and mcp_servers.session_env()["NOTES_KEY"] == ""
     assert mcp_servers.remove("wiki") == ["wiki.oauth"] and not vault.has("wiki.oauth")
 
@@ -301,13 +301,13 @@ def test_an_http_servers_headers_keep_their_keys_in_the_vault(change, why):
 @pytest.mark.parametrize("change, why", [
     ({"name": "Bad Name"}, "can't name a server"),
     ({"name": "a__b"}, "can't name a server"),
-    ({"name": "jarvis"}, "JARVIS's own"),
+    ({"name": "alfred"}, "Alfred's own"),
     ({"label": ""}, "label"),
     ({"command": ""}, "needs its program"),
     ({"command": "npx", "args": ["-y", "@acme/mcp"]}, "pin its version"),
     ({"command": "npx", "args": ["-y", "@acme/mcp@latest"]}, "pin its version"),
     ({"env": {"API_TOKEN": "x"}}, "looks like a secret"),
-    ({"env": {"JARVIS_MASTER_KEY": "x"}}, "looks like a secret"),
+    ({"env": {"ALFRED_MASTER_KEY": "x"}}, "looks like a secret"),
     ({"secret_env": {"TOKEN": "Bad Name"}}, "can't name a secret"),
     ({"tools": {"x": Tool("maybe")}}, "access is one of"),
     ({"tools": {"x": Tool("read", "reads {a}")}}, "only write tools"),
@@ -393,7 +393,7 @@ def test_the_mcp_config_names_the_server_never_a_secret(fresh):
     seeded()
     configs = mcp_servers.session(mcp_servers.for_voice()).configs
     for name, c in configs.items():
-        assert c["command"] == sys.executable and c["args"] == ["-m", "jarvis.apps.mcp_launch", name]
+        assert c["command"] == sys.executable and c["args"] == ["-m", "alfred.apps.mcp_launch", name]
     text = json.dumps(configs)
     assert GH_TOKEN not in text and GL_TOKEN not in text and config.MASTER_KEY not in text
 
@@ -431,7 +431,7 @@ def test_every_server_goes_through_the_launcher_and_the_voice_brains_wait_with_i
                             tools={"search": Tool("read")}), new=True)
     seeded(gitlab_on=False)
     got = mcp_servers.session(mcp_servers.for_voice(), wait=20)
-    assert got.configs["docs"]["args"] == ["-m", "jarvis.apps.mcp_launch", "docs", "--wait=20"]
+    assert got.configs["docs"]["args"] == ["-m", "alfred.apps.mcp_launch", "docs", "--wait=20"]
     assert got.configs["github"]["args"][-1] == "--wait=20" and "mcp__docs__search" in got.allowed
     research = mcp_servers.session(mcp_servers.for_research(), ask_own=True)
     assert research.configs["github"]["args"][-1] == "github"  # tasks wait for their calls
@@ -447,7 +447,7 @@ def test_the_voice_brain_loads_connections_tools_on_demand_and_its_own_up_front(
     brain = cli.CliBrain()
     opts = cli._options(brain.shell, brain.jobs)
     assert opts.mcp_servers["github"]["alwaysLoad"] is False and opts.mcp_servers["gitlab"]["alwaysLoad"] is False
-    assert opts.mcp_servers["jarvis"]["alwaysLoad"] is True and opts.mcp_servers["shell"]["alwaysLoad"] is True
+    assert opts.mcp_servers["alfred"]["alwaysLoad"] is True and opts.mcp_servers["shell"]["alwaysLoad"] is True
     assert claude.TOOL_SEARCH_TOOL in opts.tools and claude.TOOL_SEARCH_TOOL in opts.allowed_tools
     assert opts.env["ENABLE_TOOL_SEARCH"] == "true"
     assert "ToolSearch" in opts.system_prompt and "GitHub (mcp__github__…)" in opts.system_prompt
@@ -457,22 +457,22 @@ def test_research_tasks_load_only_their_reporting_tools_up_front(fresh):
     seeded()
     opts = worker._options(worker_task(kind="research", project=None), NullReporter())
     assert opts.mcp_servers["task"]["alwaysLoad"] is True  # report_progress, ask_user: every run's
-    assert all(opts.mcp_servers[s]["alwaysLoad"] is False for s in ("github", "jarvis", "repo"))
+    assert all(opts.mcp_servers[s]["alwaysLoad"] is False for s in ("github", "alfred", "repo"))
     assert "ToolSearch" in opts.tools and "ToolSearch" in opts.allowed_tools
     assert "ToolSearch" in opts.system_prompt
     # Deferred, not taken away: still allowed once loaded
-    assert {"mcp__jarvis__gmail_search", "mcp__jarvis__sheets_write"} <= set(opts.allowed_tools)
+    assert {"mcp__alfred__gmail_search", "mcp__alfred__sheets_write"} <= set(opts.allowed_tools)
 
 
 def test_a_code_task_without_accounts_needs_no_tool_search(fresh):
-    """Its few tools of JARVIS's would save less deferred than ToolSearch's own description costs."""
+    """Its few tools of Alfred's would save less deferred than ToolSearch's own description costs."""
     opts = worker._options(worker_task(worktree=str(fresh)), NullReporter())
     assert all(opts.mcp_servers[s]["alwaysLoad"] is True for s in ("task", "host"))
     assert "ToolSearch" not in opts.tools and "ENABLE_TOOL_SEARCH" not in opts.env
 
 
 def test_tool_search_off_loads_a_tasks_own_tools_up_front(fresh, monkeypatch):
-    monkeypatch.setattr(mcp_servers, "ON_DEMAND", False)  # JARVIS_TOOL_SEARCH=false
+    monkeypatch.setattr(mcp_servers, "ON_DEMAND", False)  # ALFRED_TOOL_SEARCH=false
     seeded()
     for task in (worker_task(kind="research", project=None), worker_task(worktree=str(fresh))):
         opts = worker._options(task, NullReporter())
@@ -502,12 +502,12 @@ def test_gitlab_guidance_is_given_only_with_a_gitlab_connection_on(fresh):
 def test_a_session_without_connections_gets_no_tool_search(fresh):
     opts = cli._options(cli.CliBrain().shell, shell.Jobs())
     assert "ToolSearch" not in opts.tools and "ToolSearch" not in opts.allowed_tools
-    assert "ENABLE_TOOL_SEARCH" not in opts.env and opts.mcp_servers["jarvis"]["alwaysLoad"] is True
+    assert "ENABLE_TOOL_SEARCH" not in opts.env and opts.mcp_servers["alfred"]["alwaysLoad"] is True
     assert "ToolSearch" not in opts.system_prompt
 
 
 def test_tool_search_off_loads_every_tool_up_front_as_before(fresh, monkeypatch):
-    monkeypatch.setattr(mcp_servers, "ON_DEMAND", False)  # JARVIS_TOOL_SEARCH=false
+    monkeypatch.setattr(mcp_servers, "ON_DEMAND", False)  # ALFRED_TOOL_SEARCH=false
     seeded()
     brain = cli.CliBrain()
     opts = cli._options(brain.shell, brain.jobs)
@@ -518,12 +518,12 @@ def test_tool_search_off_loads_every_tool_up_front_as_before(fresh, monkeypatch)
 
 def test_a_threshold_is_passed_to_the_cli_as_it_is(monkeypatch):
     monkeypatch.setattr(claude, "TOOL_SEARCH", "auto:5")
-    own = {"type": "sdk", "name": "jarvis", "instance": object()}
+    own = {"type": "sdk", "name": "alfred", "instance": object()}
     got = claude.on_demand({"tools": ["Bash"], "allowed_tools": ["WebSearch"], "env": {"A": "1"},
-                         "mcp_servers": {"jarvis": own, "acme": {"type": "http", "url": "https://x", "alwaysLoad": False}}})
+                         "mcp_servers": {"alfred": own, "acme": {"type": "http", "url": "https://x", "alwaysLoad": False}}})
     assert got["env"] == {"A": "1", "ENABLE_TOOL_SEARCH": "auto:5"} and got["tools"] == ["Bash", "ToolSearch"]
     assert got["allowed_tools"] == ["WebSearch", "ToolSearch"]
-    assert got["mcp_servers"]["jarvis"]["instance"] is own["instance"] and "alwaysLoad" not in own  # not changed in place
+    assert got["mcp_servers"]["alfred"]["instance"] is own["instance"] and "alwaysLoad" not in own  # not changed in place
 
 
 def test_the_old_github_tools_are_gone():
@@ -546,8 +546,8 @@ def test_the_launcher_decrypts_only_that_servers_secrets_into_its_environment(fr
 
 
 def test_the_launcher_starts_with_every_setting_blank_as_task_sessions_give_it():
-    names = set(re.findall(r'os\.environ\.get\("(\w+)"', (config.ROOT / "jarvis/config/__init__.py").read_text()))
-    said = python("from jarvis.apps import mcp_launch; mcp_launch.main([])", **dict.fromkeys(names, ""))
+    names = set(re.findall(r'os\.environ\.get\("(\w+)"', (config.ROOT / "alfred/config/__init__.py").read_text()))
+    said = python("from alfred.apps import mcp_launch; mcp_launch.main([])", **dict.fromkeys(names, ""))
     assert "Traceback" not in said.stderr and "Starts one MCP server" in said.stderr
 
 

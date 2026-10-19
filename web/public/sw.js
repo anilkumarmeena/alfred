@@ -1,5 +1,5 @@
 // Service worker: shows Web Push notifications and opens the app on the tapped task or alert.
-// No caching: JARVIS is useless offline.
+// No caching: Alfred is useless offline.
 
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
@@ -7,7 +7,7 @@ self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim(
 self.addEventListener("push", (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { data = { body: event.data.text() }; }
-  const title = data.title || "JARVIS", body = data.body || "", url = data.url || "/";
+  const title = data.title || "Alfred", body = data.body || "", url = data.url || "/";
   // Always show a notification: iOS revokes subscriptions of web apps that receive silent pushes.
   event.waitUntil(self.registration.showNotification(title, {
     body,

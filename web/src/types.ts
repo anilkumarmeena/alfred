@@ -12,5 +12,5 @@ export type Paused = "" | "recovering" | "retry" | "resuming";
 export interface Focus { label: string; body: string; talk: string; file?: { src: string; name: string; audio: boolean } }
 
 export type Line =
-  | { kind: "msg"; id: number; who: "you" | "jarvis"; text: Signal<string>; segment?: string }
+  | { kind: "msg"; id: number; who: "you" | "alfred"; text: Signal<string>; segment?: string }
   | { kind: "divider"; id: number; text: string };

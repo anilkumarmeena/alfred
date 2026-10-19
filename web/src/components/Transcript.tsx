@@ -12,7 +12,7 @@ const SETTLE = 150;  // ms of no user input before following resumes
 const EASE = 90;  // ms time constant of the follow glide
 const TASK = /\b([Tt]ask) (\d+)\b/g;
 
-// JARVIS's text with each "task N" as a button. Unlinked lines bind the signal directly, so streamed chunks update
+// Alfred's text with each "task N" as a button. Unlinked lines bind the signal directly, so streamed chunks update
 // one text node without re-rendering.
 function Linked({ text }: { text: Signal<string> }) {
   const linked = useComputed(() => shown.value && /\btask \d+\b/i.test(text.value));
@@ -160,7 +160,7 @@ export function Transcript() {
           {lines.value.map((line) => line.kind === "divider"
             ? <div key={line.id} class="divider">{line.text}</div>
             : <div key={line.id} class={`msg ${line.who}`} data-segment={line.segment}>
-                <p>{line.who === "jarvis" ? <Linked text={line.text} /> : line.text}</p>
+                <p>{line.who === "alfred" ? <Linked text={line.text} /> : line.text}</p>
               </div>)}
         </div>
         <div class="typing" aria-hidden="true"><i /><i /><i /></div>

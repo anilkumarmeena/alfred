@@ -12,9 +12,9 @@ from test_node_offload import World, finished, world  # noqa: F401  (world is a 
 from test_node_projects import registered, there  # noqa: F401  (there is a fixture)
 from test_node_schedules import until_true
 
-from jarvis.node import offload
-from jarvis.tasks import schedules, scheduler
-from jarvis.tasks.worker import Outcome
+from alfred.node import offload
+from alfred.tasks import scheduler, schedules
+from alfred.tasks.worker import Outcome
 
 
 def nightly() -> dict:
@@ -107,12 +107,12 @@ def test_while_this_computer_is_away_the_machine_runs_it_alone_and_it_is_taken_u
 
     made, task, alerts, r = asyncio.run(main())
     assert seen[0]["id"] < 0 and seen[0]["worktree"] == str(there.resolve())  # a stand-in id while it was alone
-    assert (there / "tidy.txt").exists() and git(there, "for-each-ref", "refs/jarvis/")  # own work saved first
+    assert (there / "tidy.txt").exists() and git(there, "for-each-ref", "refs/alfred/")  # own work saved first
     assert task["status"] == "done" and task["node"] and task["job"] == made["id"]
     assert task["worktree"] == str(there.resolve()) and "untracked" in task["changes"]
     logged = {e["kind"]: e["text"] for e in r.store.history(task["id"], 50, steps=True)}
-    assert "while JARVIS was away" in logged["machine"] and logged["progress"] == "tidying the scenes"
-    assert len(alerts) == 1 and alerts[0]["text"].startswith("While JARVIS was away, Studio ran 1 scheduled job:")
+    assert "while Alfred was away" in logged["machine"] and logged["progress"] == "tidying the scenes"
+    assert len(alerts) == 1 and alerts[0]["text"].startswith("While Alfred was away, Studio ran 1 scheduled job:")
     assert len(job_tasks(r, made["id"])) == 1 and json.loads(schedules.get(made["id"])["notepad"])["text"]
 
 

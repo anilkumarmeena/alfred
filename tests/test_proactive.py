@@ -1,15 +1,15 @@
-"""Tests for proactive speech (jarvis.voice.floor): judged timing, urgent cut-ins, phone fallback, follow-ups."""
+"""Tests for proactive speech (alfred.voice.floor): judged timing, urgent cut-ins, phone fallback, follow-ups."""
 
 import asyncio
 from datetime import datetime, timedelta
 
 import pytest
 
-from jarvis.llm import quick
-from jarvis.storage import profile
-from jarvis.tasks import data_edits, learning, schedules
-from jarvis.voice import floor as floor_module
-from jarvis.voice.floor import CUT_IN, HOLD_MINUTES, Announcement, Announcements, Floor, Moment
+from alfred.llm import quick
+from alfred.storage import profile
+from alfred.tasks import data_edits, learning, schedules
+from alfred.voice import floor as floor_module
+from alfred.voice.floor import CUT_IN, HOLD_MINUTES, Announcement, Announcements, Floor, Moment
 
 
 class Clock:
@@ -78,7 +78,7 @@ def test_an_item_held_for_a_better_moment_is_judged_again_after_the_next_exchang
     announcements.add(Announcement("The Chat fix is done."))
     assert turn(announcements, session) is None and session.said == []
     assert turn(announcements, session) is None and len(moment.asked) == 1  # nothing new, so not asked again
-    floor.turn()  # they spoke and JARVIS replied
+    floor.turn()  # they spoke and Alfred replied
     assert turn(announcements, session).text == "The Chat fix is done."
     assert session.said == ["The Chat fix is done."] and not announcements.queue
 
@@ -185,7 +185,7 @@ def test_the_model_sees_the_conversation_and_each_items_urgency_and_time():
     moment = Moment(quick.Quick("test", "prompt", connect=connect))
     assert asyncio.run(moment.decide(items, floor, 10_000.0)) == ["pause", "now"]
     [prompt] = client_asked
-    assert "so the plan for the migration is b" in prompt and "JARVIS: Go on." in prompt
+    assert "so the plan for the migration is b" in prompt and "Alfred: Go on." in prompt
     assert "Last spoke: 12 seconds ago." in prompt
     assert "1. [soon] The Chat fix is done." in prompt and "2. [soon, about 10 minutes from now]" in prompt
 

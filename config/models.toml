@@ -1,6 +1,6 @@
-# Which Claude model JARVIS uses for each job. The code asks for a role ("announce", "task"), never a model id.
+# Which Claude model Alfred uses for each job. The code asks for a role ("announce", "task"), never a model id.
 #
-# Override any of this in ~/.jarvis/config.toml under the same tables with a "models." prefix, e.g.
+# Override any of this in ~/.alfred/config.toml under the same tables with a "models." prefix, e.g.
 #   [models.tiers]
 #   fast = "claude-haiku-5-5"
 # or for one role from the environment (.env), with the variable named beside it below.
@@ -13,25 +13,25 @@ fast = "claude-haiku-4-5-20251001"    # quick checks and lookups
 
 # Role -> a tier, another role, or a literal model id. Empty = no model of its own (see the role).
 [roles]
-voice = "deep"                 # JARVIS_CLI_MODEL: the spoken conversation
-voice_quick = ""               # JARVIS_VOICE_QUICK_MODEL: voice turns judged to need no tools; empty = always voice
-lookup = "fast"                # JARVIS_LOOKUP_MODEL: read-only file lookups during a spoken turn
-side = "balanced"              # JARVIS_SIDE_MODEL: background lookups handed off by the voice brain
-consent = "fast"               # JARVIS_CONSENT_MODEL: reads a spoken yes/no the word lists can't
-injection = "fast"             # JARVIS_INJECTION_MODEL (also a Settings preference): screens tool results
-task = "deep"                  # JARVIS_TASK_MODEL: background tasks
-task_search = "fast"           # JARVIS_TASK_SEARCH_MODEL: a task's read-only code-search subagent
-task_helper = "balanced"       # JARVIS_TASK_HELPER_MODEL: a task's test-runner and web-research subagents
-goal = "task"                  # JARVIS_GOAL_MODEL: checks a finished task against its request
-announce = "fast"              # JARVIS_ANNOUNCE_MODEL: words a task's spoken ending
-placement = "fast"             # JARVIS_PLACEMENT_MODEL: picks which machine runs a job
-schedule = "balanced"          # JARVIS_SCHEDULE_MODEL: routine scheduled runs and watches
-verdict = "fast"               # JARVIS_VERDICT_MODEL: yes/no verdicts on a scheduled run's summary
-command_summary = "fast"       # JARVIS_COMMAND_SUMMARY_MODEL: sums up a command that worked
-command_triage = "balanced"    # JARVIS_COMMAND_TRIAGE_MODEL: says why a command failed and what to do
-learning = "fast"              # JARVIS_LEARNING_MODEL: suggests memory edits after a conversation
-todo_match = "fast"            # JARVIS_TODO_MATCH_MODEL: whether a new to-do repeats one on the list
-skill_review = "balanced"      # JARVIS_SKILL_REVIEW_MODEL: reviews an installed skill's scripts
+voice = "deep"                 # ALFRED_CLI_MODEL: the spoken conversation
+voice_quick = ""               # ALFRED_VOICE_QUICK_MODEL: voice turns judged to need no tools; empty = always voice
+lookup = "fast"                # ALFRED_LOOKUP_MODEL: read-only file lookups during a spoken turn
+side = "balanced"              # ALFRED_SIDE_MODEL: background lookups handed off by the voice brain
+consent = "fast"               # ALFRED_CONSENT_MODEL: reads a spoken yes/no the word lists can't
+injection = "fast"             # ALFRED_INJECTION_MODEL (also a Settings preference): screens tool results
+task = "deep"                  # ALFRED_TASK_MODEL: background tasks
+task_search = "fast"           # ALFRED_TASK_SEARCH_MODEL: a task's read-only code-search subagent
+task_helper = "balanced"       # ALFRED_TASK_HELPER_MODEL: a task's test-runner and web-research subagents
+goal = "task"                  # ALFRED_GOAL_MODEL: checks a finished task against its request
+announce = "fast"              # ALFRED_ANNOUNCE_MODEL: words a task's spoken ending
+placement = "fast"             # ALFRED_PLACEMENT_MODEL: picks which machine runs a job
+schedule = "balanced"          # ALFRED_SCHEDULE_MODEL: routine scheduled runs and watches
+verdict = "fast"               # ALFRED_VERDICT_MODEL: yes/no verdicts on a scheduled run's summary
+command_summary = "fast"       # ALFRED_COMMAND_SUMMARY_MODEL: sums up a command that worked
+command_triage = "balanced"    # ALFRED_COMMAND_TRIAGE_MODEL: says why a command failed and what to do
+learning = "fast"              # ALFRED_LEARNING_MODEL: suggests memory edits after a conversation
+todo_match = "fast"            # ALFRED_TODO_MATCH_MODEL: whether a new to-do repeats one on the list
+skill_review = "balanced"      # ALFRED_SKILL_REVIEW_MODEL: reviews an installed skill's scripts
 sign_in_check = "fast"         # checks a Claude login works (make claude-login)
 moment = "fast"                # when to speak an update unasked (a warm session)
 route = "fast"                 # whether a voice turn can go to voice_quick (a warm session)

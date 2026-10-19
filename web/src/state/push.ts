@@ -5,12 +5,12 @@ import { DEVICE, iOS, standalone } from "../lib/device";
 import { appNotifications, nativeAudio, nativePlatform, type AppNotifications } from "../lib/native";
 import { PUSH_KEY, storage } from "../lib/storage";
 import { openTask, toast, visible, type ToastAction } from "./panel";
-import { appNotify, focus, passcode, pushKey, pushLater, pushSub, setPasscode, showError, showLogin, showNotice } from "./store";
+import { appNotify, assistantName, focus, passcode, pushKey, pushLater, pushSub, setPasscode, showError, showLogin, showNotice } from "./store";
 
 // pushKey: server VAPID public key (base64url); empty when push is off server-side.
 const push = {
   reg: null as ServiceWorkerRegistration | null,
-  why: "Couldn't reach JARVIS.",  // shown when there's no key
+  why: "",  // shown when there's no key; empty: couldn't reach the server
 };
 
 // iOS app: no Web Push in the web view, so the plugin registers with APNs.
@@ -27,9 +27,9 @@ function say(msg: string, action?: ToastAction) {
 
 function pushBlocked(): string {
   // Android app: it asks for permission and registers with FCM itself at session start, so there's nothing to call
-  if (nativeAudio()) return "The app turns JARVIS's notifications on by itself when a session starts. If none arrive, allow notifications for JARVIS in Android's settings.";
-  if (iOS && !standalone) return "To get notifications on iPhone, add JARVIS to your Home Screen first: tap Share, then Add to Home Screen, and open JARVIS from the new icon.";
-  if (!window.isSecureContext) return "Notifications need JARVIS's HTTPS address (Tailscale Serve), not plain http.";
+  if (nativeAudio()) return "The app turns Alfred's notifications on by itself when a session starts. If none arrive, allow notifications for Alfred in Android's settings.";
+  if (iOS && !standalone) return "To get notifications on iPhone, add Alfred to your Home Screen first: tap Share, then Add to Home Screen, and open Alfred from the new icon.";
+  if (!window.isSecureContext) return `Notifications need ${assistantName.peek()}'s HTTPS address (Tailscale Serve), not plain http.`;
   if (!("serviceWorker" in navigator && "PushManager" in window && "Notification" in window)) return "This browser can't show push notifications. On iPhone they need iOS 16.4 or later, in the Home Screen app.";
   return "";
 }
@@ -65,15 +65,15 @@ async function enableAppPush(app: AppNotifications): Promise<void> {
   const before = await app.state();
   appNotify.value = before;
   // iOS prompts only once; after a refusal only Settings can enable them.
-  if (before === "denied") return say("Notifications are blocked for JARVIS. Allow them in iOS Settings, under Notifications.", openSettings);
+  if (before === "denied") return say("Notifications are blocked for Alfred. Allow them in iOS Settings, under Notifications.", openSettings);
   if (!passcode.peek()) return showLogin("Enter your passcode, then turn notifications on again.");
   try {
     const r = await app.request(passcode.peek()!);
     appNotify.value = r.state;
     if (r.state === "denied") return say("Notifications weren't allowed. You can turn them on in iOS Settings any time.", openSettings);
     if (r.state !== "granted") return say("Notifications weren't allowed. Try again when you're ready.");
-    say(r.registered || before === "granted" ? "Notifications are on for this iPhone. Tap one to open JARVIS on that task or alert."
-      : "Notifications are on. This iPhone signs up with JARVIS when your next session starts.");
+    say(r.registered || before === "granted" ? `Notifications are on for this iPhone. Tap one to open ${assistantName.peek()} on that task or alert.`
+      : `Notifications are on. This iPhone signs up with ${assistantName.peek()} when your next session starts.`);
   } catch (e: any) {
     if (e?.code === "UNAUTHORIZED") { setPasscode(null); return showLogin(e.message || "Wrong passcode."); }
     say(e?.message || String(e));
@@ -82,10 +82,10 @@ async function enableAppPush(app: AppNotifications): Promise<void> {
 
 function disableAppPush(): void {
   // Apps can't revoke their own permission.
-  say("iOS keeps the switch for JARVIS's notifications: turn them off in Settings, under Notifications.", openSettings);
+  say("iOS keeps the switch for Alfred's notifications: turn them off in Settings, under Notifications.", openSettings);
 }
 
-/** Open JARVIS's page in iOS Settings (iOS app only). */
+/** Open Alfred's page in iOS Settings (iOS app only). */
 export function openAppSettings() { app?.openSettings(); }
 
 // ── Browser ─────────────────────────────────────────────────────
@@ -94,7 +94,7 @@ export async function enablePush(): Promise<void> {
   if (app) return enableAppPush(app);
   const why = pushBlocked();
   if (why) { putOff(true); return say(why); }
-  if (!pushKey.peek()) return say(push.why);
+  if (!pushKey.peek()) return say(push.why || `Couldn't reach ${assistantName.peek()}.`);
   if (!passcode.peek()) return showLogin("Enter your passcode, then turn notifications on again.");
   showError("");
   try {
@@ -103,7 +103,7 @@ export async function enablePush(): Promise<void> {
     if (permission !== "granted") {
       putOff(true);
       return say(permission === "denied"
-        ? "Notifications are blocked for JARVIS. Allow them in Settings, under Notifications, then try again."
+        ? "Notifications are blocked for Alfred. Allow them in Settings, under Notifications, then try again."
         : "Notifications weren't allowed. Try again when you're ready.");
     }
     const reg = push.reg || (push.reg = await navigator.serviceWorker.register("/sw.js"));
@@ -114,7 +114,7 @@ export async function enablePush(): Promise<void> {
     sub = sub || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
     await savePush(sub);
     pushSub.value = sub; putOff(false);
-    say("Notifications are on. Tap one to open JARVIS on that task or alert.");
+    say(`Notifications are on. Tap one to open ${assistantName.peek()} on that task or alert.`);
   } catch (e) {
     if (e instanceof Unauthorized) { setPasscode(null); return showLogin(e.message); }
     say((e as Error).message || String(e));
@@ -122,7 +122,7 @@ export async function enablePush(): Promise<void> {
 }
 
 async function disablePush(): Promise<void> {
-  if (!confirm("Turn off JARVIS notifications on this device?")) return;
+  if (!confirm("Turn off Alfred notifications on this device?")) return;
   const sub = pushSub.peek()!;
   pushSub.value = null;
   try {
@@ -143,9 +143,9 @@ const AUDIO = /\.(m4a|mp3|wav|aac)$/i;
 function showFocus({ url, title, body }: { url: string; title?: string | null; body?: string | null }) {
   const q = new URL(url, location.origin).searchParams, task = q.get("task"), file = q.get("file");
   if (file && /^[\w-]{32,64}$/.test(file)) {
-    const name = q.get("name") || "file";
+    const name = q.get("name") || "file", who = assistantName.peek();
     focus.value = {
-      label: title || "From JARVIS", body: body || name, talk: "Talk to JARVIS about it",
+      label: title || `From ${who}`, body: body || name, talk: `Talk to ${who} about it`,
       file: { src: `/api/files/${file}`, name, audio: AUDIO.test(name) },
     };
     return;
@@ -155,7 +155,7 @@ function showFocus({ url, title, body }: { url: string; title?: string | null; b
   focus.value = {
     label: task ? `Task ${task}` : title || "Heads up",
     body: body || "",
-    talk: task ? `Talk to JARVIS about task ${task}` : "Talk to JARVIS about it",
+    talk: task ? `Talk to ${assistantName.peek()} about task ${task}` : `Talk to ${assistantName.peek()} about it`,
   };
 }
 

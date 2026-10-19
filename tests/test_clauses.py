@@ -3,8 +3,8 @@
 import asyncio
 import json
 
-from jarvis.voice import clauses, speech
-from jarvis.voice.clauses import ClauseTokenizer
+from alfred.voice import clauses, speech
+from alfred.voice.clauses import ClauseTokenizer
 
 WEATHER = ("Sure, the weather in London today is mild and cloudy, "
            "with highs around eighteen degrees and a light breeze from the west.")

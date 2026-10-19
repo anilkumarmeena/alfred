@@ -1,4 +1,4 @@
-"""Tests for slow tool calls carried on outside the spoken turn (jarvis.brain.kept) and the brain's follow-up turns."""
+"""Tests for slow tool calls carried on outside the spoken turn (alfred.brain.kept) and the brain's follow-up turns."""
 
 import asyncio
 import json
@@ -6,13 +6,13 @@ import json
 import pytest
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
+from alfred import tools
+from alfred.brain import kept as kept_module
+from alfred.brain.kept import Call, Kept, prompt, summary
+from alfred.gates.shell import ShellGate
+from alfred.safety import commands
+from alfred.state import conversation, memory
 from fake_cli import Hold, result, text, tool_call
-from jarvis import tools
-from jarvis.brain import kept as kept_module
-from jarvis.brain.kept import Call, Kept, prompt, summary
-from jarvis.gates.shell import ShellGate
-from jarvis.safety import commands
-from jarvis.state import conversation, memory
 
 MERGE = tools.Tool("task_merge", "", {}, [], lambda: None)
 MERGED = json.dumps({"id": 5, "spoken": "Task 5, the Chat fix, merged into master."})
@@ -183,7 +183,7 @@ def test_a_screened_result_reaches_the_brain_withheld(monkeypatch, run):
     monkeypatch.setattr(kept_module, "injection_check_on", lambda: True)
 
     async def screen(tool, args, response, model, seconds):
-        assert tool == "mcp__jarvis__task_merge"
+        assert tool == "mcp__alfred__task_merge"
         return {"hookSpecificOutput": {"updatedToolOutput": "[withheld]", "additionalContext": "Part was withheld."}}
 
     monkeypatch.setattr(kept_module.injection, "screen", screen)
@@ -262,9 +262,9 @@ def test_the_users_turn_stops_a_follow_up_and_is_answered(voice, announced):
     assert announced == ["The merge"]
 
 
-def test_talking_over_a_reply_while_a_jarvis_tool_runs_keeps_it_for_later(voice, run):
+def test_talking_over_a_reply_while_a_alfred_tool_runs_keeps_it_for_later(voice, run):
     hold = Hold()
-    v = voice([text("Merging."), tool_call("m1", "mcp__jarvis__task_merge", {"id": 5}), hold, result()],
+    v = voice([text("Merging."), tool_call("m1", "mcp__alfred__task_merge", {"id": 5}), hold, result()],
               [text("Sunny."), result()])
 
     async def main():

@@ -15,14 +15,14 @@ import zlib
 import pytest
 from claude_agent_sdk import ResultMessage, StreamEvent
 
+from alfred import server, tools
+from alfred.brain import cli, sdk
+from alfred.core import platform
+from alfred.state import conversation, memory, pictures
+from alfred.storage import profile
+from alfred.tasks import worker
+from alfred.tools import screen
 from conftest import use_profile
-from jarvis import server, tools
-from jarvis.brain import cli, sdk
-from jarvis.core import platform
-from jarvis.state import conversation, memory, pictures
-from jarvis.storage import profile
-from jarvis.tasks import worker
-from jarvis.tools import screen
 
 
 def png(width: int = 1, height: int = 1) -> bytes:
@@ -414,7 +414,7 @@ def test_anything_else_doesnt(said, before):
     assert not screen.asked(said, before)
 
 
-def test_a_yes_to_jarvis_asking_lets_it_look():
+def test_a_yes_to_alfred_asking_lets_it_look():
     assert screen.asked("Yes please.", "Want me to look at your screen?")
     assert screen.asked("yeah go ahead", "I could take a look at your screen, shall I?")
 
@@ -453,7 +453,7 @@ def test_the_sdk_tool_sends_the_screenshot_as_an_image_block(folders, sips):
 def test_the_voice_brain_gets_screen_look_and_the_guidance_but_tasks_dont():
     brain = cli.CliBrain()
     opts = cli._options(brain.shell, brain.jobs)
-    assert "mcp__jarvis__screen_look" in opts.allowed_tools
+    assert "mcp__alfred__screen_look" in opts.allowed_tools
     assert "screen_look" in opts.system_prompt and "Pictures:" in opts.system_prompt
     assert "screen_look" not in worker.READ_ONLY_TOOLS
     assert not tools.get("screen_look").gated and not tools.get("screen_look").changes
@@ -527,7 +527,7 @@ def post(handler, body: dict):
 
 
 def test_the_server_keeps_a_photo_for_the_next_turn(folders, sips, monkeypatch):
-    monkeypatch.setenv("JARVIS_PASSCODE", "123456")  # no login yet: the first-setup passcode
+    monkeypatch.setenv("ALFRED_PASSCODE", "123456")  # no login yet: the first-setup passcode
     server._failures.clear()
     status, body = post(server.picture, {"passcode": "123456", "data": base64.b64encode(png(32, 32)).decode()})
     assert status == 200 and pictures.NAME.fullmatch(body["id"])
@@ -537,7 +537,7 @@ def test_the_server_keeps_a_photo_for_the_next_turn(folders, sips, monkeypatch):
 
 
 def test_the_server_turns_away_a_wrong_passcode_or_what_isnt_a_photo(folders, sips, monkeypatch):
-    monkeypatch.setenv("JARVIS_PASSCODE", "123456")  # no login yet: the first-setup passcode
+    monkeypatch.setenv("ALFRED_PASSCODE", "123456")  # no login yet: the first-setup passcode
     server._failures.clear()
     data = base64.b64encode(png()).decode()
     assert post(server.picture, {"passcode": "wrong", "data": data})[0] == 401

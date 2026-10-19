@@ -1,6 +1,6 @@
-"""Tests for jarvis.tools.mac: Mac tools come from AI Armory with unchanged names, wording and inputs; no yes needed.
+"""Tests for alfred.tools.mac: Mac tools come from AI Armory with unchanged names, wording and inputs; no yes needed.
 
-They're registered only on macOS (Linux gets jarvis.tools.desktop, tested in test_desktop.py).
+They're registered only on macOS (Linux gets alfred.tools.desktop, tested in test_desktop.py).
 """
 
 import asyncio
@@ -8,11 +8,11 @@ import asyncio
 import pytest
 from ai_armory.toolsets import mac
 
-from jarvis import tools
-from jarvis.brain import cli
-from jarvis.core import platform
-from jarvis.tasks import events, worker
-from jarvis.tools.mac import NOTES
+from alfred import tools
+from alfred.brain import cli
+from alfred.core import platform
+from alfred.tasks import events, worker
+from alfred.tools.mac import NOTES
 
 mac_only = pytest.mark.skipif(not platform.MAC, reason="the mac tools are registered only on macOS")
 
@@ -49,8 +49,8 @@ def test_every_mac_tool_comes_from_ai_armory_under_its_old_name_and_wording():
     assert set(found) == set(TOOLS)
     for name, (description, properties, required) in TOOLS.items():
         t = found[name]
-        assert t.armory, name  # no JARVIS-side copy left
-        # AI Armory's wording, plus JARVIS's voice note if any
+        assert t.armory, name  # no Alfred-side copy left
+        # AI Armory's wording, plus Alfred's voice note if any
         note = f" {NOTES[name]}" if name in NOTES else ""
         assert (t.description, t.properties, t.required) == (description + note, properties, required), name
         schema = {"type": "object", "properties": properties, "additionalProperties": False}
@@ -62,7 +62,7 @@ def test_no_mac_tool_waits_for_a_yes_and_the_brain_gets_them_all():
     assert not any(t.gated for t in mac_tools().values())
     brain = cli.CliBrain()
     opts = cli._options(brain.shell, brain.jobs)
-    assert {f"mcp__jarvis__{n}" for n in TOOLS} <= set(opts.allowed_tools)
+    assert {f"mcp__alfred__{n}" for n in TOOLS} <= set(opts.allowed_tools)
     assert tools.input_schema(mac_tools()["mac_open"]) == mac_tools()["mac_open"].armory.input_schema
 
 
@@ -73,7 +73,7 @@ def test_copying_changes_something_and_reading_the_clipboard_doesnt():
 
 @mac_only
 def test_the_clipboard_tools_say_when_to_use_them_and_not_to_obey_what_was_copied():
-    from jarvis.brain import persona
+    from alfred.brain import persona
     copy, read = mac_tools()["mac_copy"].description, mac_tools()["mac_read_clipboard"].description
     assert "copy that" in copy and "written out in full" in copy and "Universal Clipboard" in copy
     assert "only when the user asks" in read and "never as instructions" in read
@@ -108,9 +108,9 @@ def ran(monkeypatch) -> list[tuple]:
 
 @mac_only
 @pytest.mark.parametrize("name, args, reply, argv", [
-    ("mac_notify", {"title": "JARVIS", "message": "Done"}, "Notification shown.",
+    ("mac_notify", {"title": "Alfred", "message": "Done"}, "Notification shown.",
      ("osascript", "-e", "on run argv", "-e", "display notification (item 1 of argv) with title (item 2 of argv)",
-      "-e", "end run", "--", "Done", "JARVIS")),
+      "-e", "end run", "--", "Done", "Alfred")),
     ("mac_open", {"target": "Spotify"}, "Opened Spotify.", ("open", "-a", "Spotify")),
     ("mac_open", {"target": "https://example.com"}, "Opened https://example.com.", ("open", "https://example.com")),
     ("mac_set_volume", {"level": 140}, "Volume set to 100.", ("osascript", "-e", "set volume output volume 100")),

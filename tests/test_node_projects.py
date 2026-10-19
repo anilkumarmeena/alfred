@@ -8,12 +8,12 @@ import pytest
 from test_in_place import env, git, make_repo  # noqa: F401  (env is a fixture)
 from test_node_offload import World, finished, world  # noqa: F401  (world is a fixture)
 
-from jarvis import projects
-from jarvis.node import machines, offload, work
-from jarvis.node.link import Refused
-from jarvis.tasks import command_jobs
-from jarvis.tasks.worker import Outcome
-from jarvis.tools import tasks as task_tools
+from alfred import projects
+from alfred.node import machines, offload, work
+from alfred.node.link import Refused
+from alfred.tasks import command_jobs
+from alfred.tasks.worker import Outcome
+from alfred.tools import tasks as task_tools
 
 
 @pytest.fixture
@@ -87,7 +87,7 @@ def test_an_in_place_task_works_in_the_projects_own_folder_there(there, tmp_path
     assert shown["where"] == "It's running on Studio, where film lives."
     assert seen["folder"] == str(there.resolve()) and (there / "scene.py").exists()
     assert done["status"] == "done" and done["changes"].startswith("uncommitted:") and "untracked" in done["changes"]
-    assert git(there, "for-each-ref", "refs/jarvis/")  # the user's uncommitted work was saved there first
+    assert git(there, "for-each-ref", "refs/alfred/")  # the user's uncommitted work was saved there first
     assert not list((tmp_path / "machine" / "worktrees").glob("node-test-t*"))  # no copy was made
     assert "saved" in [e["kind"] for e in r.store.history(done["id"], 50)]
 
@@ -107,7 +107,7 @@ def test_a_worktree_task_gets_its_branch_there_and_is_merged_there(there, tmp_pa
         return done, merged
 
     done, merged = asyncio.run(main())
-    assert done["status"] == "done" and done["branch"].startswith(f"jarvis/{done['id']}-") and "1 file changed" in done["changes"]
+    assert done["status"] == "done" and done["branch"].startswith(f"alfred/{done['id']}-") and "1 file changed" in done["changes"]
     assert "merged into main" in merged["spoken"] and (there / "edit.py").read_text() == "cut = 2\n"
     assert done["branch"] not in git(there, "branch")
 

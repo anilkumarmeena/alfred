@@ -6,12 +6,12 @@ import json
 import pytest
 from test_node_link import connect, mine, paired, until  # noqa: F401  (mine is a fixture)
 
-from jarvis import panel, server
-from jarvis.auth import logins
-from jarvis.node import hub as hubs, keys, machines
-from jarvis.state import activity
-from jarvis.tasks import client
-from jarvis.tools import machines as machine_tools
+from alfred import panel, server
+from alfred.auth import logins
+from alfred.node import hub as hubs, keys, machines
+from alfred.state import activity
+from alfred.tasks import client
+from alfred.tools import machines as machine_tools
 
 
 class PairRequest:
@@ -134,7 +134,7 @@ def test_the_brain_hears_which_machines_are_online_and_where_jobs_run(runner_hub
         told = await machine_tools.machines_list()
         assert told["machines"][0]["name"] == "Studio" and told["machines"][0]["online"]
         assert told["machines"][0]["runs"] == ["Long commands"]
-        assert told["where_jobs_run"] == {"Long commands": "Studio", "Claude tasks": "let JARVIS choose",
+        assert told["where_jobs_run"] == {"Long commands": "Studio", "Claude tasks": "let Alfred choose",
                                           "Research": "this computer, always"}
         machine.stop()
         await running

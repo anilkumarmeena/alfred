@@ -47,7 +47,7 @@ export function mountReactor(cv: HTMLCanvasElement, read: () => ReactorInput): (
     if (!forced) raf = document.hidden ? 0 : requestAnimationFrame(frame);
     const { state: s, connected, agent, mic, paused, muted: wantsMuted } = read();
     const muted = connected && wantsMuted;
-    // Source: JARVIS while speaking, the mic while listening, else an idle wave.
+    // Source: Alfred while speaking, the mic while listening, else an idle wave.
     const src = s === "speaking" ? agent : connected && !muted && !paused && s === "listening" ? mic : null;
     if (!src && !forced && now - last < IDLE_FRAME - 2) return;  // -2 ms tolerates slightly early 60 Hz frames
 

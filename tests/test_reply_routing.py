@@ -1,4 +1,4 @@
-"""Tests for voice reply routing (JarvisAgent, VoiceSession.reply): LiveKit turns, yes scope, rules, brain questions."""
+"""Tests for voice reply routing (AlfredAgent, VoiceSession.reply): LiveKit turns, yes scope, rules, brain questions."""
 
 import asyncio
 
@@ -6,9 +6,9 @@ from livekit.agents import llm
 from test_consent import model  # noqa: F401  (the fixture)
 from test_voice_session import REQUEST, Brain, Runner, call, quiet, reply  # noqa: F401  (quiet: the fixture)
 
-from jarvis.apps import agent
-from jarvis.safety import consent
-from jarvis.voice import session as voice_session
+from alfred.apps import agent
+from alfred.safety import consent
+from alfred.voice import session as voice_session
 
 RULE = {"program": "npm", "why": "it builds", "words": ["npm", "run", "build"]}
 
@@ -21,17 +21,17 @@ def asked(voice) -> None:
 
 # ── LiveKit's side ──────────────────────────────────────────────
 
-def test_the_turn_is_the_last_thing_the_user_said_not_an_earlier_one_or_jarvis_words():
+def test_the_turn_is_the_last_thing_the_user_said_not_an_earlier_one_or_alfred_words():
     ctx = llm.ChatContext()
     ctx.add_message(role="user", content="What's on today?")
     ctx.add_message(role="assistant", content="Two meetings.")
     ctx.add_message(role="user", content="And tomorrow?")
     ctx.add_message(role="assistant", content="(still thinking)")
     brain = Brain("Nothing yet.")
-    jarvis = agent.JarvisAgent(call(brain))
+    alfred = agent.AlfredAgent(call(brain))
 
     async def main():
-        return "".join([chunk async for chunk in jarvis.llm_node(ctx, [], None)])
+        return "".join([chunk async for chunk in alfred.llm_node(ctx, [], None)])
 
     assert asyncio.run(main()) == "Nothing yet." and brain.asked == ["And tomorrow?"]
 
@@ -39,12 +39,12 @@ def test_the_turn_is_the_last_thing_the_user_said_not_an_earlier_one_or_jarvis_w
 def test_a_turn_with_no_words_gets_no_reply_but_still_answers_the_question_open():
     brain = Brain()
     voice = call(brain)
-    jarvis = agent.JarvisAgent(voice)
+    alfred = agent.AlfredAgent(voice)
 
     async def main():
         voice.floor.said("Shall I go ahead?")
         assert voice.floor.question
-        empty = "".join([chunk async for chunk in jarvis.llm_node(llm.ChatContext(), [], None)])
+        empty = "".join([chunk async for chunk in alfred.llm_node(llm.ChatContext(), [], None)])
         return empty, await reply(voice, "")
 
     assert asyncio.run(main()) == ("", "") and brain.asked == []
@@ -182,11 +182,11 @@ def test_a_request_put_while_the_brain_answered_is_withdrawn_when_its_reply_asks
     assert voice.brain.asked == ["Clear the cache.", "Yes."] and voice.asks.due() is None
 
 
-def test_only_jarvis_s_own_messages_count_as_spoken():
+def test_only_alfred_s_own_messages_count_as_spoken():
     spoke = []
     voice = type("Voice", (), {"spoke": lambda self, text, metrics, interrupted: spoke.append((text, metrics,
                                                                                              interrupted))})()
-    agent._item_added(voice, llm.AgentHandoff(new_agent_id="jarvis"))  # has no role
+    agent._item_added(voice, llm.AgentHandoff(new_agent_id="alfred"))  # has no role
     agent._item_added(voice, llm.FunctionCall(call_id="1", name="todo_list", arguments="{}"))
     agent._item_added(voice, llm.ChatMessage(role="user", content=["hi"], metrics={"stopped_speaking_at": 1.0}))
     agent._item_added(voice, llm.ChatMessage(role="assistant", content=["Hello."], interrupted=True,

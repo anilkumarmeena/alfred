@@ -10,9 +10,9 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from test_in_place import worker_task
 from test_task_host import Asking
 
+from alfred.llm.claude import BUILTIN_AGENTS_DENIED
+from alfred.tasks import project_claude, worker
 from conftest import use_task_cache
-from jarvis.llm.claude import BUILTIN_AGENTS_DENIED
-from jarvis.tasks import project_claude, worker
 
 SCOUT = """---
 name: scout
@@ -107,7 +107,7 @@ def test_a_project_without_a_claude_folder_gets_no_plugin(tmp_path):
 def test_code_tasks_load_the_project_s_agents_skills_and_claude_md(project, kind):
     opts = options(project, kind)
     assert {"scout", "evaluator", "code-searcher"} <= set(opts.agents)
-    assert opts.agents["code-searcher"].description == worker.SEARCHER.description  # JARVIS's helper wins the name
+    assert opts.agents["code-searcher"].description == worker.SEARCHER.description  # Alfred's helper wins the name
     assert opts.skills == ["video-agent:scout-ideas", "video-agent:ship"] and "Skill" in opts.tools and "Agent" in opts.tools
     assert opts.plugins == [{"type": "local", "path": str(worker.DATA_DIR / "tasks" / "9" / "claude-plugin")}]
     assert str(project) in opts.add_dirs and opts.env["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"] == "1"
@@ -178,7 +178,7 @@ def test_code_question_bash_stays_read_only_git_whatever_a_skill_allows(project)
     assert "limited to nothing" in denied(pre(opts, "Write", file_path=str(project / "x.md"), content="x"))
 
 
-def test_project_agents_edit_where_the_task_may_and_jarvis_s_helpers_never(project, tmp_path):
+def test_project_agents_edit_where_the_task_may_and_alfred_s_helpers_never(project, tmp_path):
     opts = options(project)
     inside = str(project / "projects" / "candidates.md")
     assert pre(opts, "Write", agent=("a1", "scout"), file_path=inside, content="x") == {}

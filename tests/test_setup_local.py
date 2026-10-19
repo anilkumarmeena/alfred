@@ -1,4 +1,4 @@
-"""Tests for jarvis.setup_local: launchd plists and systemd units from deploy/, moving to new labels, and where projects
+"""Tests for alfred.setup_local: launchd plists and systemd units from deploy/, moving to new labels, and where projects
 live."""
 
 import os
@@ -7,15 +7,15 @@ from pathlib import Path
 
 import pytest
 
-from jarvis import config, setup_local
-from jarvis.config import HOME_DIR, ROOT
+from alfred import config, setup_local
+from alfred.config import HOME_DIR, ROOT
 
 GUI = f"gui/{os.getuid()}"
 
 
 @pytest.fixture(autouse=True)
 def default_prefix(monkeypatch):
-    monkeypatch.setattr(config, "SERVICE_PREFIX", "com.jarvis")  # regardless of this computer's .env
+    monkeypatch.setattr(config, "SERVICE_PREFIX", "com.alfred")  # regardless of this computer's .env
     monkeypatch.setattr(setup_local, "MANAGER", "launchd")  # launchd tests run anywhere; systemd ones opt in
 
 
@@ -25,7 +25,7 @@ def test_each_plist_gets_its_label_and_this_mac_s_folders(name, monkeypatch):
     monkeypatch.setattr(setup_local.Path, "home", lambda: Path("/Users/alex"))
     text = setup_local.service_plist(name)
     plist = plistlib.loads(text.encode())
-    assert "$" not in text and plist["Label"] == f"com.jarvis.{name}" and plist["WorkingDirectory"] == str(ROOT)
+    assert "$" not in text and plist["Label"] == f"com.alfred.{name}" and plist["WorkingDirectory"] == str(ROOT)
     assert plist["StandardOutPath"] == f"{setup_local.SERVICE_LOGS}/{name}.log"
     assert "/Users/alex/.local/bin:" in plist["EnvironmentVariables"]["PATH"]
     if name in ("tasks", "agent"):  # tasks build with node; the agent runs the GitLab server with npx
@@ -33,14 +33,14 @@ def test_each_plist_gets_its_label_and_this_mac_s_folders(name, monkeypatch):
 
 
 def test_the_label_prefix_is_a_setting(monkeypatch):
-    monkeypatch.setattr(config, "SERVICE_PREFIX", "org.example.jarvis")
-    assert plistlib.loads(setup_local.service_plist("agent").encode())["Label"] == "org.example.jarvis.agent"
-    assert setup_local.installed("web").name == "org.example.jarvis.web.plist"
+    monkeypatch.setattr(config, "SERVICE_PREFIX", "org.example.alfred")
+    assert plistlib.loads(setup_local.service_plist("agent").encode())["Label"] == "org.example.alfred.agent"
+    assert setup_local.installed("web").name == "org.example.alfred.web.plist"
 
 
 def test_a_service_log_moves_out_of_the_checkout_and_is_linked_back(tmp_path, monkeypatch):
     """launchd can't open a log under ~/Desktop, so it writes in ~/Library/Logs and logs/ links there."""
-    root, logs = tmp_path / "jarvis", tmp_path / "Library/Logs/com.jarvis"
+    root, logs = tmp_path / "alfred", tmp_path / "Library/Logs/com.alfred"
     (root / "logs").mkdir(parents=True)
     (root / "logs/agent.log").write_text("history\n")
     monkeypatch.setattr(setup_local, "LOGS_DIR", root / "logs")
@@ -104,10 +104,10 @@ def installed_as(folder: Path, label: str, root: Path = ROOT) -> Path:
 
 def test_services_under_an_old_prefix_are_stale_but_only_this_checkout_s(agents):
     folder, _ = agents
-    old = [installed_as(folder, f"com.someone.jarvis.{name}") for name in setup_local.SERVICES]
-    installed_as(folder, "com.other.jarvis.agent", Path("/Users/alex/other-jarvis"))  # another checkout's
+    old = [installed_as(folder, f"com.someone.alfred.{name}") for name in setup_local.SERVICES]
+    installed_as(folder, "com.other.alfred.agent", Path("/Users/alex/other-alfred"))  # another checkout's
     installed_as(folder, "com.someone.backup", ROOT)  # not named like a service
-    (folder / "com.broken.jarvis.web.plist").write_text("not a plist")
+    (folder / "com.broken.alfred.web.plist").write_text("not a plist")
     for name in setup_local.SERVICES:
         installed_as(folder, config.service_label(name))  # the current ones
     assert setup_local.stale() == sorted(old)
@@ -115,15 +115,15 @@ def test_services_under_an_old_prefix_are_stale_but_only_this_checkout_s(agents)
 
 def test_start_moves_an_install_to_the_new_labels(agents, capsys):
     folder, calls = agents
-    old = [installed_as(folder, f"com.someone.jarvis.{name}") for name in setup_local.SERVICES]
-    other = installed_as(folder, "com.other.jarvis.agent", Path("/Users/alex/other-jarvis"))
+    old = [installed_as(folder, f"com.someone.alfred.{name}") for name in setup_local.SERVICES]
+    other = installed_as(folder, "com.other.alfred.agent", Path("/Users/alex/other-alfred"))
     setup_local.start_services()
     assert calls[:4] == [("bootout", GUI, str(p)) for p in sorted(old)]  # old ones stop before the new ones start
     assert calls[4:] == [("bootstrap", GUI, str(setup_local.installed(name))) for name in setup_local.SERVICES]
     assert not any(p.exists() for p in old) and other.exists()
     for name in setup_local.SERVICES:
-        assert plistlib.loads(setup_local.installed(name).read_bytes())["Label"] == f"com.jarvis.{name}"
-    assert "removed com.someone.jarvis.agent, now com.jarvis.agent" in capsys.readouterr().out
+        assert plistlib.loads(setup_local.installed(name).read_bytes())["Label"] == f"com.alfred.{name}"
+    assert "removed com.someone.alfred.agent, now com.alfred.agent" in capsys.readouterr().out
 
 
 def test_start_leaves_installed_plists_as_they_are(agents):
@@ -137,7 +137,7 @@ def test_start_leaves_installed_plists_as_they_are(agents):
 
 def test_stop_stops_the_old_labels_too_and_keeps_them_for_start(agents):
     folder, calls = agents
-    old = installed_as(folder, "com.someone.jarvis.agent")
+    old = installed_as(folder, "com.someone.alfred.agent")
     setup_local.installed("agent").write_text("current")
     setup_local.stop_services()
     assert calls == [("bootout", GUI, str(setup_local.installed("agent"))), ("bootout", GUI, str(old))]
@@ -146,7 +146,7 @@ def test_stop_stops_the_old_labels_too_and_keeps_them_for_start(agents):
 
 def test_install_retires_old_labels_first(agents):
     folder, calls = agents
-    old = installed_as(folder, "com.someone.jarvis.tasks")
+    old = installed_as(folder, "com.someone.alfred.tasks")
     setup_local.install_services()
     assert calls[0] == ("bootout", GUI, str(old)) and not old.exists()
     assert ("bootstrap", GUI, str(setup_local.installed("tasks"))) in calls
@@ -205,7 +205,7 @@ def test_each_unit_gets_its_label_and_this_machine_s_folders(name, monkeypatch):
     monkeypatch.setattr(setup_local.Path, "home", lambda: Path("/home/alex"))
     text = setup_local.service_unit(name)
     settings = unit(text)
-    assert "$" not in text and f"(com.jarvis.{name})" in settings["Description"][0]
+    assert "$" not in text and f"(com.alfred.{name})" in settings["Description"][0]
     assert settings["WorkingDirectory"] == [str(ROOT)] and settings["Restart"] == ["always"]
     assert settings["StandardOutput"] == [f"append:{HOME_DIR}/logs/{name}.log"] == settings["StandardError"]
     assert settings["WantedBy"] == ["default.target"] and settings["Type"] == ["exec"]
@@ -231,7 +231,7 @@ def test_the_voice_comes_before_background_tasks_on_linux_too():
 def test_the_agent_keeps_the_machine_awake_when_it_may_and_starts_anyway_when_not():
     start = unit(setup_local.service_unit("agent"))["ExecStart"][0]
     assert start.startswith("/bin/sh -c ") and "systemd-inhibit --what=sleep:idle" in start
-    assert start.count("-m jarvis.voice.agent start") == 2  # with the inhibitor, and without
+    assert start.count("-m alfred.voice.agent start") == 2  # with the inhibitor, and without
 
 
 def test_no_unit_names_a_home_folder_or_a_label():
@@ -267,12 +267,12 @@ def systemctl(calls: list[tuple]) -> list[tuple]:
 
 
 def units_of(names=setup_local.SERVICES) -> list[str]:
-    return [f"com.jarvis.{name}.service" for name in names]
+    return [f"com.alfred.{name}.service" for name in names]
 
 
 def test_on_linux_services_are_user_units(units):
     folder, _, _ = units
-    assert setup_local.installed("agent") == folder / "com.jarvis.agent.service"
+    assert setup_local.installed("agent") == folder / "com.alfred.agent.service"
 
 
 def test_install_writes_every_unit_reloads_and_restarts_them(units, capsys):
@@ -283,7 +283,7 @@ def test_install_writes_every_unit_reloads_and_restarts_them(units, capsys):
     assert systemctl(calls) == [("daemon-reload",)] + [
         call for u in units_of() for call in (("enable", u), ("restart", u))]
     out = capsys.readouterr().out
-    assert "started com.jarvis.agent" in out and "sudo loginctl enable-linger alex" in out
+    assert "started com.alfred.agent" in out and "sudo loginctl enable-linger alex" in out
 
 
 def test_install_hands_the_services_the_desktop_session(units, monkeypatch):
@@ -304,10 +304,10 @@ def test_with_lingering_on_there_is_no_hint(units, capsys):
 def test_start_installs_missing_units_and_leaves_the_rest(units):
     folder, calls, _ = units
     folder.mkdir(parents=True)
-    (folder / "com.jarvis.agent.service").write_text("as installed")
+    (folder / "com.alfred.agent.service").write_text("as installed")
     setup_local.start_services()
-    assert (folder / "com.jarvis.agent.service").read_text() == "as installed"
-    assert "Description=JARVIS web app" in (folder / "com.jarvis.web.service").read_text()
+    assert (folder / "com.alfred.agent.service").read_text() == "as installed"
+    assert "Description=Alfred web app" in (folder / "com.alfred.web.service").read_text()
     assert systemctl(calls) == [("daemon-reload",)] + [
         call for u in units_of() for call in (("enable", u), ("start", u))]
 
@@ -315,22 +315,22 @@ def test_start_installs_missing_units_and_leaves_the_rest(units):
 def test_stop_stops_installed_units_only(units):
     folder, calls, _ = units
     folder.mkdir(parents=True)
-    (folder / "com.jarvis.agent.service").write_text("current")
+    (folder / "com.alfred.agent.service").write_text("current")
     setup_local.stop_services()
-    assert systemctl(calls) == [("stop", "com.jarvis.agent.service")]
+    assert systemctl(calls) == [("stop", "com.alfred.agent.service")]
 
 
 def test_units_under_an_old_prefix_are_retired(units, capsys):
     folder, calls, _ = units
     folder.mkdir(parents=True)
-    old = folder / "com.someone.jarvis.tasks.service"
+    old = folder / "com.someone.alfred.tasks.service"
     old.write_text(f"[Service]\nStandardOutput=append:{ROOT}/logs/tasks.log\n")
-    other = folder / "com.other.jarvis.tasks.service"
-    other.write_text("[Service]\nStandardOutput=append:/home/alex/other-jarvis/logs/tasks.log\n")
+    other = folder / "com.other.alfred.tasks.service"
+    other.write_text("[Service]\nStandardOutput=append:/home/alex/other-alfred/logs/tasks.log\n")
     assert setup_local.stale() == [old]
     setup_local.start_services()
     assert systemctl(calls)[0] == ("disable", "--now", old.name) and not old.exists() and other.exists()
-    assert "removed com.someone.jarvis.tasks, now com.jarvis.tasks" in capsys.readouterr().out
+    assert "removed com.someone.alfred.tasks, now com.alfred.tasks" in capsys.readouterr().out
 
 
 def test_without_systemd_it_says_how_to_turn_it_on(units, monkeypatch):
@@ -357,7 +357,7 @@ def test_a_unit_that_wont_start_fails_the_start(units, monkeypatch, capsys):
     with pytest.raises(SystemExit) as exit:
         setup_local.start_services()
     assert exit.value.code == 1
-    assert "couldn't start com.jarvis.agent: Job for agent failed." in capsys.readouterr().err
+    assert "couldn't start com.alfred.agent: Job for agent failed." in capsys.readouterr().err
 
 
 def test_status_reads_systemd(units, monkeypatch):
@@ -370,17 +370,17 @@ def test_status_reads_systemd(units, monkeypatch):
         return setup_local.subprocess.CompletedProcess(cmd, 0 if name in shown else 1, shown.get(name, ""), "")
 
     monkeypatch.setattr(setup_local.subprocess, "run", run)
-    assert setup_local.status() == [("com.jarvis.livekit", "running (pid 42)"),
-                                    ("com.jarvis.agent", "stopped (exit 1)"),
-                                    ("com.jarvis.web", "not loaded"), ("com.jarvis.tasks", "not loaded")]
+    assert setup_local.status() == [("com.alfred.livekit", "running (pid 42)"),
+                                    ("com.alfred.agent", "stopped (exit 1)"),
+                                    ("com.alfred.web", "not loaded"), ("com.alfred.tasks", "not loaded")]
 
 
 def test_status_reads_launchd(monkeypatch):
-    listed = "PID\tStatus\tLabel\n123\t0\tcom.jarvis.agent\n-\t78\tcom.jarvis.web\n-\t0\tcom.apple.Other\n"
+    listed = "PID\tStatus\tLabel\n123\t0\tcom.alfred.agent\n-\t78\tcom.alfred.web\n-\t0\tcom.apple.Other\n"
     monkeypatch.setattr(setup_local.subprocess, "run",
                         lambda cmd, **kw: setup_local.subprocess.CompletedProcess(cmd, 0, listed, ""))
-    assert setup_local.status() == [("com.jarvis.livekit", "not loaded"), ("com.jarvis.agent", "running (pid 123)"),
-                                    ("com.jarvis.web", "stopped (exit 78)"), ("com.jarvis.tasks", "not loaded")]
+    assert setup_local.status() == [("com.alfred.livekit", "not loaded"), ("com.alfred.agent", "running (pid 123)"),
+                                    ("com.alfred.web", "stopped (exit 78)"), ("com.alfred.tasks", "not loaded")]
 
 
 def test_help_prints_usage_without_setting_anything_up(monkeypatch, capsys):
@@ -395,8 +395,8 @@ def test_help_prints_usage_without_setting_anything_up(monkeypatch, capsys):
 
 @pytest.fixture
 def no_folder_env(monkeypatch):
-    monkeypatch.delenv("JARVIS_NEW_PROJECTS_DIR", raising=False)
-    monkeypatch.delenv("JARVIS_TASK_READ_DIRS", raising=False)
+    monkeypatch.delenv("ALFRED_NEW_PROJECTS_DIR", raising=False)
+    monkeypatch.delenv("ALFRED_TASK_READ_DIRS", raising=False)
     monkeypatch.setattr(config, "projects_home", lambda: Path.home() / "code")
 
 
@@ -405,30 +405,30 @@ def test_setup_asks_where_projects_are_once(no_folder_env, monkeypatch):
     asked = []
     text = setup_local.ask_projects_folder("A=1\n", ask=lambda q: asked.append(q) or "~/work")
     assert "[~/code]" in asked[0]
-    assert "JARVIS_NEW_PROJECTS_DIR=~/work\n" in text and "JARVIS_TASK_READ_DIRS=~/work\n" in text
+    assert "ALFRED_NEW_PROJECTS_DIR=~/work\n" in text and "ALFRED_TASK_READ_DIRS=~/work\n" in text
     assert setup_local.ask_projects_folder(text, ask=lambda q: pytest.fail("asked again")) == text
 
 
 def test_without_a_terminal_setup_takes_the_default(no_folder_env, monkeypatch):
     monkeypatch.setattr(setup_local.sys.stdin, "isatty", lambda: False, raising=False)
-    text = setup_local.ask_projects_folder("JARVIS_TASK_READ_DIRS=~/a,~/b\n", ask=lambda q: pytest.fail("asked"))
-    assert "JARVIS_NEW_PROJECTS_DIR=~/code\n" in text and "JARVIS_TASK_READ_DIRS=~/a,~/b\n" in text
+    text = setup_local.ask_projects_folder("ALFRED_TASK_READ_DIRS=~/a,~/b\n", ask=lambda q: pytest.fail("asked"))
+    assert "ALFRED_NEW_PROJECTS_DIR=~/code\n" in text and "ALFRED_TASK_READ_DIRS=~/a,~/b\n" in text
 
 
 def test_a_folder_already_set_is_kept(monkeypatch):
-    monkeypatch.setenv("JARVIS_NEW_PROJECTS_DIR", "/srv/projects")
+    monkeypatch.setenv("ALFRED_NEW_PROJECTS_DIR", "/srv/projects")
     assert setup_local.ask_projects_folder("A=1\n", ask=lambda q: pytest.fail("asked")) == "A=1\n"
 
 
-def test_projects_default_to_the_folder_jarvis_is_in(monkeypatch, tmp_path):
-    monkeypatch.setattr(config, "ROOT", tmp_path / "code" / "jarvis")
+def test_projects_default_to_the_folder_alfred_is_in(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "ROOT", tmp_path / "code" / "alfred")
     assert config.projects_home() == tmp_path / "code"
-    tree = tmp_path / "home" / "data" / "worktrees" / "jarvis-7"  # JARVIS_HOME may be outside the checkout
+    tree = tmp_path / "home" / "data" / "worktrees" / "alfred-7"  # ALFRED_HOME may be outside the checkout
     tree.mkdir(parents=True)
-    (tree / ".git").write_text(f"gitdir: {tmp_path}/code/jarvis/.git/worktrees/jarvis-7\n")
+    (tree / ".git").write_text(f"gitdir: {tmp_path}/code/alfred/.git/worktrees/alfred-7\n")
     monkeypatch.setattr(config, "ROOT", tree)
     assert config.projects_home() == tmp_path / "code"  # a task's worktree goes by its main checkout
-    monkeypatch.setattr(config, "ROOT", Path.home() / "jarvis")
+    monkeypatch.setattr(config, "ROOT", Path.home() / "alfred")
     assert config.projects_home() == Path.home() / "Projects"  # never the whole home folder
 
 
@@ -438,18 +438,18 @@ def test_uninstall_removes_every_service_and_keeps_none_for_login(tmp_path, monk
     agents.mkdir()
     monkeypatch.setattr(setup_local, "LAUNCH_AGENTS", agents)
     monkeypatch.setattr(setup_local, "MANAGER", "launchd")
-    monkeypatch.setattr(setup_local, "SERVICE_LOGS", tmp_path / "Library/Logs/com.jarvis")
+    monkeypatch.setattr(setup_local, "SERVICE_LOGS", tmp_path / "Library/Logs/com.alfred")
     monkeypatch.setattr(setup_local, "LOGS_DIR", tmp_path / "logs")  # never this computer's own logs
     monkeypatch.setattr(setup_local, "_launchctl", lambda action, plist: stopped.append((action, plist.stem)) or "")
     for name in ("agent", "web", "node"):
         setup_local.installed(name).write_text("<plist/>")
     removed = setup_local.uninstall_services()
-    assert removed == ["com.jarvis.agent", "com.jarvis.web", "com.jarvis.node"]
+    assert removed == ["com.alfred.agent", "com.alfred.web", "com.alfred.node"]
     assert stopped == [("bootout", label) for label in removed] and not list(agents.iterdir())
 
 
 def test_uninstall_puts_the_service_logs_back_in_logs(tmp_path):
-    logs, service_logs = tmp_path / "home/logs", tmp_path / "Library/Logs/com.jarvis"
+    logs, service_logs = tmp_path / "home/logs", tmp_path / "Library/Logs/com.alfred"
     logs.mkdir(parents=True)
     service_logs.mkdir(parents=True)
     (service_logs / "agent.log").write_text("history\n")
@@ -461,21 +461,21 @@ def test_uninstall_puts_the_service_logs_back_in_logs(tmp_path):
 
 
 def test_uninstall_all_deletes_the_install_never_the_code_or_home(tmp_path, monkeypatch):
-    user, root = tmp_path / "user", tmp_path / "user/code/jarvis"
-    home = user / "jarvis-home"
-    for folder in (root / "jarvis", root / ".venv", root / "web/node_modules", home / "data", home / "secrets"):
+    user, root = tmp_path / "user", tmp_path / "user/code/alfred"
+    home = user / "alfred-home"
+    for folder in (root / "alfred", root / ".venv", root / "web/node_modules", home / "data", home / "secrets"):
         folder.mkdir(parents=True)
-    (home / ".env").write_text("JARVIS_MASTER_KEY=x\n")
+    (home / ".env").write_text("ALFRED_MASTER_KEY=x\n")
     (root / "data").symlink_to(home / "data")
-    (user / ".jarvis").symlink_to(home)
+    (user / ".alfred").symlink_to(home)
     monkeypatch.setattr(setup_local.config, "DATA_DIR", home / "data")
     monkeypatch.setattr(setup_local.config, "SECRETS_DIR", home / "secrets")
     monkeypatch.setattr(setup_local, "OWN_LIVEKIT", tmp_path / "bin/livekit-server")
     found = setup_local.install_files(root, home, user)
     assert set(found) == {home / ".env", home / "data", home / "secrets", root / "data", root / ".venv",
-                          root / "web/node_modules", user / ".jarvis"}
+                          root / "web/node_modules", user / ".alfred"}
     setup_local.delete(found, home)
-    assert (root / "jarvis").is_dir() and not home.exists() and not (user / ".jarvis").is_symlink()
+    assert (root / "alfred").is_dir() and not home.exists() and not (user / ".alfred").is_symlink()
     # A home that is the user's own folder, or holds the code, is never deleted whole
     monkeypatch.setattr(setup_local.config, "DATA_DIR", user)
     assert user not in setup_local.install_files(root, user, user)
@@ -495,7 +495,7 @@ def test_uninstall_all_deletes_nothing_without_a_yes(tmp_path, monkeypatch):
 
 
 def test_clean_empties_the_logs_and_drops_the_caches_never_the_data(tmp_path):
-    logs, service_logs, data = tmp_path / "logs", tmp_path / "Library/Logs/com.jarvis", tmp_path / "data"
+    logs, service_logs, data = tmp_path / "logs", tmp_path / "Library/Logs/com.alfred", tmp_path / "data"
     for folder in (logs / "speech-gate-audio", service_logs, data / "task-cache/uv/wheels", data / "node/spool"):
         folder.mkdir(parents=True)
     (service_logs / "agent.log").write_text("x" * 100)

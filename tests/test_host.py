@@ -14,12 +14,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from jarvis.apps import host_check
-from jarvis.config import DATA_DIR, ROOT, TASK_CACHE_DIR, WORKTREES_DIR
-from jarvis.core import platform
-from jarvis.llm import claude_logins
-from jarvis.safety import host
-from jarvis.safety.commands import HOME_SECRETS, SECRET_DIRS
+from alfred.apps import host_check
+from alfred.config import DATA_DIR, ROOT, TASK_CACHE_DIR, WORKTREES_DIR
+from alfred.core import platform
+from alfred.llm import claude_logins
+from alfred.safety import host
+from alfred.safety.commands import HOME_SECRETS, SECRET_DIRS
 
 MAC = SimpleNamespace(MAC=True, LINUX=False)
 LINUX = SimpleNamespace(MAC=False, LINUX=True)
@@ -69,7 +69,7 @@ def test_pem_certificate_bundles_stay_readable_for_tls():
     assert r"\.pem$" in reads and "site-packages" in reads and "cacert" in reads
 
 
-def test_jarvis_own_files_and_start_up_files_cant_be_written():
+def test_alfred_own_files_and_start_up_files_cant_be_written():
     writes = rules("file-write*")
     root = os.path.realpath(ROOT)
     assert f'(require-all (subpath "{root}") (require-not (require-any' in writes
@@ -202,7 +202,7 @@ def test_bwrap_mounts_everything_then_hides_and_locks_what_seatbelt_denies(linux
     assert ("--ro-bind", f"{home}/dotfiles/zshrc", f"{home}/dotfiles/zshrc") in ops  # a linked dotfile's target too
     assert where(ops, f"{home}/.config") == [("--tmpfs", f"{home}/.config"), ("--remount-ro", f"{home}/.config")]
     assert ("--bind", f"{home}/.config/app", f"{home}/.config/app") in ops
-    assert ("--ro-bind", f"{home}/.config/systemd", f"{home}/.config/systemd") in ops  # JARVIS's services are there
+    assert ("--ro-bind", f"{home}/.config/systemd", f"{home}/.config/systemd") in ops  # Alfred's services are there
     # Secrets: hidden, keys included, but ssh can check hosts and sign through the agent
     assert where(ops, f"{home}/.ssh") == [("--tmpfs", f"{home}/.ssh"), ("--remount-ro", f"{home}/.ssh")]
     for shown in ("known_hosts", "config", "agent.sock"):
@@ -219,7 +219,7 @@ def test_bwrap_mounts_everything_then_hides_and_locks_what_seatbelt_denies(linux
     assert where(ops, bus) == [("--ro-bind", "/dev/null", bus)]
 
 
-def test_bwrap_keeps_jarvis_own_files_read_only_and_the_runner_socket_out(linux_home):
+def test_bwrap_keeps_alfred_own_files_read_only_and_the_runner_socket_out(linux_home):
     home, _, _ = linux_home
     ops = mounts(host.bwrap_args(home))
     root, data = os.path.realpath(ROOT), os.path.realpath(DATA_DIR)
@@ -268,7 +268,7 @@ def test_the_secret_walk_is_bounded_and_says_so(tmp_path, monkeypatch, caplog):
     (tmp_path / "node_modules/x/.env").write_text("")
     assert len(host._walk([str(tmp_path)], set())) == 10  # node_modules isn't looked into
     monkeypatch.setattr(host, "_WALK_ENTRIES", 5)
-    with caplog.at_level(logging.WARNING, "jarvis.safety.host"):
+    with caplog.at_level(logging.WARNING, "alfred.safety.host"):
         assert len(host._walk([str(tmp_path)], set())) < 10
     assert "secret walk stopped" in caplog.text
 
@@ -289,7 +289,7 @@ def test_linux_host_commands_lose_the_session_bus_address(monkeypatch):
 
 def test_linux_checks_cover_what_the_mac_ones_do():
     linux = {what for what, _, _ in host_check._linux_checks()}
-    assert {"reads JARVIS's .env", "reads an SSH key file", "reaches the SSH agent", "writes tasks.db",
+    assert {"reads Alfred's .env", "reads an SSH key file", "reaches the SSH agent", "writes tasks.db",
             "reaches the runner's socket", "reads the voice session logs", "writes the task cache"} <= linux
     assert any("environments" in what for what in linux) and any("session bus" in what for what in linux)
 
@@ -302,7 +302,7 @@ def test_ssh_remotes_name_where_they_sign_in_and_other_remotes_nothing():
 
 
 def test_the_ssh_check_signs_in_to_the_users_own_git_hosts_or_is_left_out(monkeypatch, tmp_path):
-    from jarvis import projects
+    from alfred import projects
 
     repo = tmp_path / "app"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
@@ -321,16 +321,16 @@ def test_the_ssh_check_signs_in_to_the_users_own_git_hosts_or_is_left_out(monkey
 # ── The environment ─────────────────────────────────────────────
 
 
-def test_host_commands_get_none_of_jarvis_keys(monkeypatch):
-    monkeypatch.setattr(host, "dotenv_values", lambda path: {"JARVIS_PASSCODE": "x", "LIVEKIT_API_SECRET": "y"})
-    for name, value in {"JARVIS_PASSCODE": "hunter2", "LIVEKIT_API_SECRET": "s", "GITHUB_TOKEN": "t",
+def test_host_commands_get_none_of_alfred_keys(monkeypatch):
+    monkeypatch.setattr(host, "dotenv_values", lambda path: {"ALFRED_PASSCODE": "x", "LIVEKIT_API_SECRET": "y"})
+    for name, value in {"ALFRED_PASSCODE": "hunter2", "LIVEKIT_API_SECRET": "s", "GITHUB_TOKEN": "t",
                         "SOME_PASSWORD": "p", "SSH_AUTH_SOCK": "/tmp/agent", "OPENAI_API_KEY": "k", "HOME_MADE": "ok"}.items():
         monkeypatch.setenv(name, value)
     env = host.task_env()
     assert env["HOME_MADE"] == "ok" and "PATH" in env
-    for gone in ("JARVIS_PASSCODE", "LIVEKIT_API_SECRET", "GITHUB_TOKEN", "SOME_PASSWORD", "OPENAI_API_KEY"):
+    for gone in ("ALFRED_PASSCODE", "LIVEKIT_API_SECRET", "GITHUB_TOKEN", "SOME_PASSWORD", "OPENAI_API_KEY"):
         assert gone not in env, gone
-    assert "SSH_AUTH_SOCK" in host.scrubbed_env() and "JARVIS_PASSCODE" not in host.scrubbed_env()  # the voice side keeps SSH_AUTH_SOCK, not secrets
+    assert "SSH_AUTH_SOCK" in host.scrubbed_env() and "ALFRED_PASSCODE" not in host.scrubbed_env()  # the voice side keeps SSH_AUTH_SOCK, not secrets
 
 
 def test_host_commands_keep_the_ssh_agent(monkeypatch):
@@ -350,9 +350,9 @@ def run(command: str, cwd, timeout: float = 10):
 
 
 def test_a_command_runs_in_its_folder_and_reports_its_exit_code(tmp_path, monkeypatch):
-    monkeypatch.setattr(host, "dotenv_values", lambda path: {"JARVIS_TEST_SECRET": "x"})
-    monkeypatch.setenv("JARVIS_TEST_SECRET", "hunter2")
-    ran = run('pwd; echo "secret=$JARVIS_TEST_SECRET"; echo oops >&2; exit 3', tmp_path)
+    monkeypatch.setattr(host, "dotenv_values", lambda path: {"ALFRED_TEST_SECRET": "x"})
+    monkeypatch.setenv("ALFRED_TEST_SECRET", "hunter2")
+    ran = run('pwd; echo "secret=$ALFRED_TEST_SECRET"; echo oops >&2; exit 3', tmp_path)
     assert ran.code == 3 and str(tmp_path.resolve()) in ran.output and "oops" in ran.output
     assert "hunter2" not in ran.output
     assert ran.text().startswith("[exit code 3,")
