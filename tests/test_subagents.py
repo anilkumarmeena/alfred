@@ -19,6 +19,7 @@ from claude_agent_sdk import (
 from test_in_place import NullReporter, env, worker_task  # noqa: F401  (env is a fixture)
 from test_nudges import FakeClient, Pending, result, said, worker_run
 
+from alfred import config
 from alfred.brain import cli
 from alfred.gates import mcp_gate, shell
 from alfred.llm import roles
@@ -272,6 +273,36 @@ def test_a_session_ending_under_its_subagents_fails_saying_so(monkeypatch, quick
     outcome = worker_run(monkeypatch, client, Recorder())
     assert outcome.error == "the session ended while its subagents (test runner) were still running"
     assert outcome.cost == 0.1
+
+
+
+# ── What a run cost ─────────────────────────────────────────────
+
+OPUS, HAIKU = "claude-opus-5-5", "claude-haiku-5-5"
+MAIN_USE = {"input_tokens": 10, "output_tokens": 300, "cache_read_input_tokens": 50_000}
+SUB_USE = {"input_tokens": 5, "output_tokens": 80, "cache_creation_input_tokens": 9_000}
+
+
+def call(id: str, model: str, usage: dict, parent: str | None = None) -> AssistantMessage:
+    return AssistantMessage([ToolUseBlock(id=f"t-{id}", name="Read", input={"file_path": "/repo/x.py"})], model=model,
+                            parent_tool_use_id=parent, usage=usage, message_id=id)
+
+
+def test_a_runs_cost_adds_up_its_calls_once_each_not_the_clis_running_total(monkeypatch):
+    """Resumed, the CLI's total starts from the session's earlier runs; one call can come as several messages."""
+    client = FakeClient([call("m1", OPUS, MAIN_USE), call("m1", OPUS, MAIN_USE), call("m2", HAIKU, SUB_USE, parent="a1"),
+                         result("Done.", 9.0)])
+    outcome = worker_run(monkeypatch, client, Recorder())
+    assert outcome.cost == pytest.approx(config.MODELS.cost(OPUS, MAIN_USE) + config.MODELS.cost(HAIKU, SUB_USE))
+    assert 0 < outcome.cost < 0.05
+
+
+def test_a_model_with_no_price_leaves_the_run_at_the_clis_figure(monkeypatch):
+    client = FakeClient([call("m1", OPUS, MAIN_USE), call("m2", "some-new-model", MAIN_USE), result("Done.", 0.7)])
+    assert worker_run(monkeypatch, client, Recorder()).cost == 0.7
+    # a message with no tokens (the CLI's own) needs no price
+    client = FakeClient([call("m1", OPUS, MAIN_USE), call("m2", "<synthetic>", {"input_tokens": 0}), result("Done.", 0.7)])
+    assert worker_run(monkeypatch, client, Recorder()).cost == pytest.approx(config.MODELS.cost(OPUS, MAIN_USE))
 
 
 def test_a_session_ending_without_any_result_fails(monkeypatch):

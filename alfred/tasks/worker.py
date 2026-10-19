@@ -37,7 +37,7 @@ from alfred.config import (
 from alfred.core import platform
 from alfred.integrations import mcp_servers
 from alfred.llm import claude_logins, retry, usage
-from alfred.llm.claude import BUILTIN_AGENTS_DENIED, LimitWatch
+from alfred.llm.claude import BUILTIN_AGENTS_DENIED, LimitWatch, Spend
 from alfred.llm.roles import Role
 from alfred.llm.sdk import (
     AssistantMessage,
@@ -399,6 +399,7 @@ async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
     turn_began = False  # a new turn has started
     api_error: str | None = None  # AssistantMessage.error on the latest main-session message
     limits = LimitWatch(f"task {task['id']}")
+    spend = Spend()
     helpers = Subagents(task["id"], reporter)
 
     def handle(msg) -> ResultMessage | None:
@@ -414,6 +415,7 @@ async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
             reporter.session(task["id"], msg.data["session_id"])
         elif isinstance(msg, AssistantMessage):
             turn_began = True
+            spend.saw(msg)
             if msg.parent_tool_use_id is None:
                 api_error = msg.error
             for block in msg.content:
@@ -502,7 +504,7 @@ async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
                     await prompt_again(REPORT_MISSING)  # once; a second silence fails the run
                 else:
                     break
-                result = await read()  # its total_cost_usd covers the whole run
+                result = await read()
         except _Ended as e:
             if waiting := helpers.waiting:
                 who = ", ".join(waiting)
@@ -511,8 +513,8 @@ async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
             else:
                 why = "the session ended before its final report"
             kind = retry.ERROR if waiting else retry.PASSING  # e.g. CLI died mid-run: transient
-            return Outcome((result.result or "") if result else "", why, (result.total_cost_usd or 0) if result else 0,
-                           kind)
+            reported = (result.total_cost_usd or 0) if result else 0
+            return Outcome((result.result or "") if result else "", why, spend.total(reported), kind)
         finally:
             reader.cancel()
             watching.cancel()
@@ -525,4 +527,4 @@ async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
     if not error and not asked and not (result.result or "").strip():
         error, kind = "it ended without a final report", retry.ERROR
     resets = limits.rejected.resets_at if kind == retry.LIMIT and limits.rejected else None
-    return Outcome(result.result or "", error, result.total_cost_usd or 0, kind, resets)
+    return Outcome(result.result or "", error, spend.total(result.total_cost_usd or 0), kind, resets)

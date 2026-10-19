@@ -23,6 +23,18 @@ ENV = {
 }  # injection's override is the injection_model preference (alfred.state.preferences)
 
 
+WEB_SEARCH = 0.01  # dollars per web search ($10 per 1,000), on top of tokens
+WRITE_5M, WRITE_1H = 1.25, 2.0  # a cache write, as a multiple of the input price: five-minute and one-hour cache
+
+
+@dataclass(frozen=True)
+class Price:
+    """Dollars per million tokens."""
+    input: float
+    output: float
+    cache_read: float
+
+
 @dataclass(frozen=True)
 class Family:
     name: str  # "opus"
@@ -47,6 +59,10 @@ class Models:
         self.families = tuple(
             Family(name, f.get("match", name), f.get("window", ""), self.resolve(f.get("lighter", "")))
             for name, f in table.get("families", {}).items())
+        try:
+            self.prices = {match.lower(): Price(**p) for match, p in table.get("prices", {}).items()}
+        except TypeError:
+            raise ConfigError("models.toml prices need input, output and cache_read, and nothing else") from None
 
     def tier(self, name: str) -> str:
         if name not in self.tiers:
@@ -77,3 +93,20 @@ class Models:
 
     def family(self, model: str) -> Family | None:
         return next((f for f in self.families if f.match in model.lower()), None)
+
+    def price(self, model: str) -> Price | None:
+        """The price whose name `model` holds, the longest name first ("opus-5-5" before "opus"); None if none does."""
+        found = [match for match in self.prices if match in model.lower()]
+        return self.prices[max(found, key=len)] if found else None
+
+    def cost(self, model: str, usage: Mapping[str, Any]) -> float | None:
+        """Dollars for one model call's `usage` (the API's usage object), or None if `model` has no price."""
+        if (price := self.price(model)) is None:
+            return None
+        written = usage.get("cache_creation_input_tokens") or 0
+        hour = (usage.get("cache_creation") or {}).get("ephemeral_1h_input_tokens") or 0
+        tokens = ((usage.get("input_tokens") or 0) * price.input + (usage.get("output_tokens") or 0) * price.output
+                  + (usage.get("cache_read_input_tokens") or 0) * price.cache_read
+                  + ((written - hour) * WRITE_5M + hour * WRITE_1H) * price.input)
+        searches = (usage.get("server_tool_use") or {}).get("web_search_requests") or 0
+        return tokens / 1e6 + searches * WEB_SEARCH

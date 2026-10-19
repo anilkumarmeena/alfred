@@ -49,6 +49,34 @@ def test_a_missing_tier_or_role_or_a_loop_is_a_clear_error():
         models.role("nobody")
 
 
+PRICES = {"prices": {"deep": {"input": 4.0, "output": 20.0, "cache_read": 0.2},
+                     "deep-cheap": {"input": 1.0, "output": 5.0, "cache_read": 0.1}}}
+
+
+def test_a_calls_cost_prices_each_kind_of_token_and_its_web_searches():
+    models = Models(TABLE | PRICES, env={})
+    usage = {"input_tokens": 1_000, "output_tokens": 2_000, "cache_read_input_tokens": 100_000,
+             "cache_creation_input_tokens": 30_000, "cache_creation": {"ephemeral_1h_input_tokens": 10_000},
+             "server_tool_use": {"web_search_requests": 3}}
+    # input 1K x 4, output 2K x 20, read 100K x 0.2, writes 20K x 4 x 1.25 + 10K x 4 x 2, then three searches
+    assert models.cost("model-deep", usage) == pytest.approx((4_000 + 40_000 + 20_000 + 100_000 + 80_000) / 1e6 + 0.03)
+    # no breakdown: every write is a five-minute one
+    assert models.cost("model-deep", {"cache_creation_input_tokens": 1_000_000}) == pytest.approx(5.0)
+
+
+def test_the_longest_price_name_a_model_holds_wins_and_a_model_with_none_has_no_cost():
+    models = Models(TABLE | PRICES, env={})
+    assert models.price("claude-deep-cheap-2").input == 1.0 and models.price("Model-Deep").input == 4.0
+    assert models.price("model-fast") is None and models.cost("model-fast", {"input_tokens": 5}) is None
+    with pytest.raises(ConfigError, match="cache_read"):
+        Models(TABLE | {"prices": {"deep": {"input": 4.0, "output": 20.0}}}, env={})
+
+
+def test_every_shipped_tier_has_a_price():
+    for tier in ("deep", "balanced", "fast"):
+        assert config.MODELS.price(config.MODELS.tier(tier)), tier
+
+
 def test_the_shipped_defaults_give_every_role_the_code_asks_for():
     for role in ("voice", "lookup", "side", "consent", "injection", "task", "task_search", "task_helper", "goal",
                  "announce", "placement", "schedule", "verdict", "command_summary", "command_triage", "learning",

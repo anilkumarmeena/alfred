@@ -9,7 +9,7 @@
 [tiers]
 deep = "claude-opus-5-5"              # the voice brain and code tasks
 balanced = "claude-sonnet-5"          # judgment: test runs, web research, triage, scheduled runs
-fast = "claude-haiku-4-5-20251001"    # quick checks and lookups
+fast = "claude-haiku-5-5"             # quick checks and lookups
 
 # Role -> a tier, another role, or a literal model id. Empty = no model of its own (see the role).
 [roles]
@@ -54,3 +54,13 @@ lighter = "fast"
 
 [families.haiku]
 match = "haiku"
+
+# Dollars per million tokens, matched by name in a model id (the longest name first). A task's cost is added up from
+# each call's usage at these prices: the CLI's own total counts a resumed session's earlier runs again. A cache write
+# costs 1.25x input (five-minute cache) or 2x (one-hour). A model with none falls back to the CLI's figure.
+[prices]
+"opus-5-5" = { input = 4.0, output = 20.0, cache_read = 0.20 }
+"opus" = { input = 5.0, output = 25.0, cache_read = 0.50 }
+"sonnet" = { input = 2.0, output = 10.0, cache_read = 0.20 }
+"haiku-5-5" = { input = 0.10, output = 0.50, cache_read = 0.01 }
+"haiku" = { input = 1.0, output = 5.0, cache_read = 0.10 }

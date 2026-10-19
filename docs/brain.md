@@ -231,7 +231,7 @@ The system prompt is built **once per session** and then **frozen** so the promp
 | Lookup subagent | `ALFRED_LOOKUP_MODEL` | `FAST_MODEL` (Haiku) | `cli.py` |
 | Side jobs | `ALFRED_SIDE_MODEL` | `HELPER_MODEL` (`claude-sonnet-5`) | `side.py` |
 | Quick routing (light turns) | `ALFRED_VOICE_QUICK_MODEL` | **off** | `route.py` |
-| Router / timing judges | — | `FAST_MODEL` (`claude-haiku-4-5-20251001`) | `quick.py` |
+| Router / timing judges | — | `FAST_MODEL` (`claude-haiku-5-5`) | `quick.py` |
 | Consent (unclear yes/no) | `ALFRED_CONSENT_MODEL` | `FAST_MODEL` | `safety/consent.py` |
 
 **Automatic step-down** (`usage.available`): when a family's **weekly** window is used up, the brain drops a tier for new sessions and turns.
@@ -424,7 +424,7 @@ Things I noticed reading the code. **None of them is a confirmed bug.** They're 
 |:-:|---|---|
 | 1 | 🔁 **Context after a CLI restart** | A failed interrupt or `ClaudeSDKError` calls `close()`; the next turn opens a **fresh session** whose only memory of this call is `recent.md` (6,000 chars). Long calls can lose earlier context. |
 | 2 | 🧊 **Frozen prompt** | Memory written mid-session (`remember`) isn't in the system prompt until the next session. The model knows because it made the call, but a restart (item 1) brings back only what's on disk. |
-| 3 | 🤖 **Fast model is a generation behind** | `FAST_MODEL = claude-haiku-4-5-20251001` while main is Opus 5.5. Router, lookups and consent all run on it. Worth checking whether Haiku 5.5 is faster or better here. |
+| 3 | 🤖 **Fast model was a generation behind** | Settled: the fast tier is now `claude-haiku-5-5`. On the yes/no and hidden-instruction checks it gave the same verdicts as Haiku 4.5, about three times faster (median 1.4 s against 4.9 s), at a tenth of the price. |
 | 4 | ⚡ **Routing is off by default** | The doc says the gain depends on warm prompt caches. There's a `model` field in the timing log to measure it, but no default decision yet. |
 | 5 | 🧩 **One implementation** | `VoiceBrain` is a protocol with one implementation, and `make_brain()` hardcodes `CliBrain`. Fine today; it matters if a second channel (chat, Telegram) or a non-CLI brain is planned. |
 | 6 | 🧠 **Memory caps** | 2,000 + 3,000 chars is small and keeps the prompt cheap, but there's **no retrieval** beyond `conversation_search` over day logs. Topic memory or embeddings would be a bigger design step. |

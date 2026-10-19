@@ -29,7 +29,7 @@
 > - **Apply a change** with `make services-restart`.
 
 > [!TIP]
-> **Models are picked by role, not by name.** `config/models.toml` maps each job (the voice, a task, an announcement…) to a tier, and each tier to a model: **deep** `claude-opus-5-5`, **balanced** `claude-sonnet-5`, **fast** `claude-haiku-4-5-20251001`, written below as **Opus**, **Sonnet** and **Haiku**. Change a tier for every job that uses it in your `config.toml` (`[models.tiers]` `fast = "…"`), or one job with its variable below.
+> **Models are picked by role, not by name.** `config/models.toml` maps each job (the voice, a task, an announcement…) to a tier, and each tier to a model: **deep** `claude-opus-5-5`, **balanced** `claude-sonnet-5`, **fast** `claude-haiku-5-5`, written below as **Opus**, **Sonnet** and **Haiku**. Change a tier for every job that uses it in your `config.toml` (`[models.tiers]` `fast = "…"`), or one job with its variable below.
 
 ### 📂 ALFRED_HOME
 

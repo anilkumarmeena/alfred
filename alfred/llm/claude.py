@@ -1,6 +1,7 @@
 """Talking to Claude through the Agent SDK: the options every session starts from, one-shot calls (ask, ask_json,
-ask_flag), PreToolUse hook helpers, and reading rate-limit and sign-in trouble out of a session. The only module
-besides alfred.llm's others that knows the SDK's message types; a call names a Role (alfred.llm.roles), or a model id.
+ask_flag), PreToolUse hook helpers, and reading rate-limit and sign-in trouble, and what a run cost, out of a session.
+The only module besides alfred.llm's others that knows the SDK's message types; a call names a Role
+(alfred.llm.roles), or a model id.
 """
 
 import asyncio
@@ -20,7 +21,7 @@ from claude_agent_sdk import (
     ToolAnnotations,
 )
 
-from alfred.config import ASSISTANT_NAME, CLAUDE_CLI, DATA_DIR, TOOL_SEARCH
+from alfred.config import ASSISTANT_NAME, CLAUDE_CLI, DATA_DIR, MODELS, TOOL_SEARCH
 from alfred.core import gpu
 from alfred.llm import claude_logins, retry, usage
 from alfred.llm.roles import Role, model as model_for
@@ -214,3 +215,29 @@ class LimitWatch:
         if not (self.rejected and self.rejected.resets_at):
             return "the Claude usage limit"
         return f"the Claude usage limit, which resets {usage.when(self.rejected.resets_at)}"
+
+
+class Spend:
+    """What a run cost, added up from the usage each of its model calls reports (subagents' included), at the prices in
+    models.toml. The CLI's own total_cost_usd is a running total over the session, which on --resume starts from the
+    session's earlier runs, so adding it per run counts those again."""
+
+    def __init__(self) -> None:
+        self.calls: dict[str, float | None] = {}  # message id -> dollars, None if its model has no price
+
+    def saw(self, message: AssistantMessage) -> None:
+        """Count a call once: the CLI sends one message per content block, each with the whole call's usage."""
+        if not message.usage or not message.message_id or message.message_id in self.calls:
+            return
+        cost = MODELS.cost(message.model, message.usage)
+        if cost is None and not any(isinstance(v, int) and v for v in message.usage.values()):
+            cost = 0.0  # no tokens (the CLI's own synthetic messages): nothing to price
+        elif cost is None and None not in self.calls.values():  # once a run
+            log.warning("no price for %s in models.toml, so this run's cost is the CLI's figure", message.model)
+        self.calls[message.message_id] = cost
+
+    def total(self, reported: float) -> float:
+        """The run's cost; `reported`, the CLI's figure, if no call reported usage or one had no price."""
+        if not self.calls or None in self.calls.values():
+            return reported
+        return sum(self.calls.values())
