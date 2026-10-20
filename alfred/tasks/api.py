@@ -9,6 +9,7 @@ from aiohttp import web
 from alfred import projects
 from alfred.contracts.remote import MAX_MESSAGE
 from alfred.safety import remembered
+from alfred.tasks import tokens
 from alfred.tasks.approvals import NotAllowed
 from alfred.tasks.runner_base import SHUTTING_DOWN
 
@@ -35,12 +36,16 @@ def routes(r: "Runner") -> list[web.RouteDef]:
             return web.json_response([r.view(t) for t in r.store.runs(int(job))])
         return web.json_response([r.view(t) for t in (r.store.unseen() if req.query.get("unseen") else r.store.recent())])
 
+    def full(task_id: int) -> dict:
+        """One task as its details show it: the list view plus its token use."""
+        return r.view(r._get(task_id)) | {"tokens": tokens.summary(r.store.tokens(task_id))}
+
     async def show(req: web.Request) -> web.Response:
-        task = r.view(r._get(int(req.match_info["id"])))
+        task = full(int(req.match_info["id"]))
         return web.json_response(task | {"log": r.store.history(task["id"])})
 
     async def tail(req: web.Request) -> web.Response:
-        task = r.view(r._get(int(req.match_info["id"])))
+        task = full(int(req.match_info["id"]))
         lines = min(max(int(req.query.get("lines", LOG_LINES)), 1), MAX_LOG_LINES)
         return web.json_response(task | {"log": r.store.history(task["id"], lines, steps=True)})
 

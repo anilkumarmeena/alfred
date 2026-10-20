@@ -217,7 +217,7 @@ Alfred's own tools, by the module that declares them. Google and Mac tools come 
 | `project_register` |  | Add a project that code tasks can work on, to start a new project or add a folder as one: makes its folder if it doesn't exist and adds it to the project list. |
 | `projects_list` | 👁️ | The user's projects that code tasks can work on, with their folders, aliases and what each one is. |
 | `task_approve` |  | Pass on the user's own answer to a task's request waiting for their go-ahead (waiting_for_approval): a risky command, or a change through a connection. |
-| `task_detail` | 👁️ | One task in full: its summary, question, changes, branch (or in_place note), requests waiting for approval, whether it seems stuck (stalled), what it or its merge still waits for (waits_for, merge_waits_for), and… |
+| `task_detail` | 👁️ | One task in full: its summary, question, changes, branch (or in_place note), requests waiting for approval, whether it seems stuck (stalled), what it or its merge still waits for (waits_for, merge_waits_for), progress… |
 | `task_discard` |  | Throw away a finished, failed or stopped task's work without merging it, and mark it discarded. |
 | `task_edits` |  | Apply or dismiss edits to Alfred's own data (the project list, the to-do list, long-term memory) that a task suggested, by their numbers in suggested_edits (task_list, task_detail). |
 | `task_list` | 👁️ | Background tasks: every active one, plus any that changed in the last day, newest first. |

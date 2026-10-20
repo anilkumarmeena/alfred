@@ -1,4 +1,4 @@
-"""The task store: tasks, their log and their approval requests, in the profile's database (alfred.storage.database
+"""The task store: tasks, their log, their approval requests and their runs' token use, in the profile's database (alfred.storage.database
 opens it), plus the task kinds, statuses and helpers for reading a task row."""
 
 import json
@@ -92,6 +92,21 @@ create table approvals (
     via text,                   -- push, web, panel, voice, cli, assistant, rule, order
     used text                   -- JSON list of indexes of commands already run
 )"""
+_TOKENS = (
+    """
+create table task_tokens (
+    task integer not null,
+    at real not null,           -- when the run ended; one run's rows share it
+    ended text not null,        -- finished, failed or stopped (alfred.tasks.tokens)
+    agent text not null,        -- '' for the task's own session, else its subagent ("code searcher")
+    model text not null,
+    input integer not null,     -- uncached input tokens
+    output integer not null,
+    cache_read integer not null,
+    cache_write integer not null
+)""",
+    "create index task_tokens_task on task_tokens(task)",
+)
 PENDING, APPROVED, DENIED, EXPIRED, CANCELLED, SPENT = "pending", "approved", "denied", "expired", "cancelled", "spent"
 _SHOWN = "not hidden"
 
@@ -130,6 +145,7 @@ class Store:
         database.migrate(self._db, "tasks", [_TASKS], migrations=_TASKS_MIGRATIONS)
         database.migrate(self._db, "log", [_LOG], migrations=_LOG_MIGRATIONS)
         database.migrate(self._db, "approvals", [_APPROVALS])
+        database.migrate(self._db, "task_tokens", _TOKENS)
         # Buffered tool calls (task, at, activity, logged) for write_steps(). Deque: filled on the event loop, drained
         # on another thread.
         self._steps: deque[tuple[int, float, str, bool]] = deque()
@@ -262,6 +278,7 @@ class Store:
             marks = ", ".join("?" * len(ids))
             self.db.execute("begin")
             self.db.execute(f"delete from log where task in ({marks})", ids)
+            self.db.execute(f"delete from task_tokens where task in ({marks})", ids)
             self.db.execute(f"delete from tasks where id in ({marks})", ids)
             self.db.execute("commit")
         return ids
@@ -282,6 +299,17 @@ class Store:
 
     def log(self, task_id: int, kind: str, text: str) -> None:
         self.db.execute("insert into log values (?, ?, ?, ?)", (task_id, time.time(), kind, text))
+
+    def add_tokens(self, task_id: int, rows: list[dict], ended: str) -> None:
+        """Record one run's token use: rows of {agent, model, input, output, cache_read, cache_write}."""
+        at = time.time()
+        self.db.executemany("insert into task_tokens values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            [(task_id, at, ended, r["agent"], r["model"], r["input"], r["output"], r["cache_read"],
+                              r["cache_write"]) for r in rows])
+
+    def tokens(self, task_id: int) -> list[dict]:
+        """The task's token use, one row per run, agent and model, oldest run first."""
+        return self._rows("select * from task_tokens where task = ? order by at, agent, model", (task_id,))
 
     def last_logged(self, task_id: int) -> float:
         """Time of the task's latest log line; 0 if none."""

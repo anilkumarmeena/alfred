@@ -100,6 +100,9 @@ class NetReporter:
     def flag(self, task_id: int, text: str) -> None:
         self._note("flag", text=text)
 
+    def tokens(self, task_id: int, rows: list[dict], ended: str) -> None:
+        self._note("tokens", rows=rows, ended=ended)
+
     async def _ask_main(self, kind: str, body: dict, timeout: float = 30) -> dict | None:
         """The main computer's answer, or None if it can't be reached (the journal is sent first, to keep order)."""
         up = self.work.agent.link

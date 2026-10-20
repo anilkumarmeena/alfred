@@ -38,7 +38,7 @@ from alfred.safety import commands, remembered
 from alfred.skills import home as skills
 from alfred.state import activity as bell
 from alfred.storage import profile
-from alfred.tasks import command_jobs, hold, scheduler, schedules
+from alfred.tasks import command_jobs, hold, scheduler, schedules, tokens
 from alfred.tasks.host_tools import HOST_COMMANDS
 from alfred.tasks.store import ACTIVE, COMMAND
 from alfred.tasks.worker import Outcome
@@ -737,6 +737,9 @@ class Offload:
         elif kind == "access":
             with contextlib.suppress(ValueError):
                 r.request_access(task_id, list(data.get("names") or []), str(data.get("reason") or ""))
+        elif kind == "tokens":
+            if (rows := tokens.checked(data.get("rows"))) and (ended := data.get("ended")) in tokens.ENDINGS:
+                r.tokens(task_id, rows, ended)
         elif kind == "ended":
             self._ended(task_id, str(body["run"]), data.get("outcome"))
         self.seen[node] = seq

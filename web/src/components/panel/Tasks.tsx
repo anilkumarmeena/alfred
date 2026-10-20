@@ -7,7 +7,7 @@ import { assistantName, now } from "../../state/store";
 import {
   ACTIVE, act, ago, approvals, changeSchedule, detail, elapsed, flash, hhmm, item, jobDetail, lapses, loadSchedule,
   loadTask, loadTasks, needYou, openSchedule, openTask, questions, quiet, roomy, runnerDown, schedules, tasks, when, type Approval,
-  type Task, type TaskDetail,
+  type Task, type TaskDetail, type TaskTokens, type TokenCounts,
 } from "../../state/panel";
 import { BellIcon, ChevronIcon, EyeIcon, PauseIcon, PlayIcon, RepeatIcon, RetryIcon, StopIcon, TerminalIcon, TodosIcon, TrashIcon } from "../icons";
 import { Answer } from "./Answer";
@@ -278,6 +278,21 @@ function CommandFacts({ t }: { t: TaskDetail }) {
   );
 }
 
+const count = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : `${n}`;
+const shares = (found: Record<string, TokenCounts>) =>
+  Object.entries(found).map(([name, used]) => `${name} ${count(used.total)}`).join(", ");
+
+// Token use over all its runs, then where it went
+function Tokens({ u }: { u: TaskTokens }) {
+  return (
+    <>
+      {count(u.total)}: {count(u.input)} in, {count(u.output)} out, {count(u.cache_read)} cache read, {count(u.cache_write)} cache write
+      <div class="sub">{shares(u.by_model)}</div>
+      {Object.keys(u.by_agent).length > 1 && <div class="sub">{shares(u.by_agent)}</div>}
+    </>
+  );
+}
+
 function Log({ lines }: { lines: TaskDetail["log"] }) {
   const box = useRef<HTMLPreElement>(null);
   useEffect(() => { if (box.current) box.current.scrollTop = box.current.scrollHeight; }, [lines.length]);
@@ -359,6 +374,7 @@ export function TaskView({ id }: { id: number }) {
         <dt>Status</dt><dd><StatusPill status={t.status} requestsOnly={t.requests_only} />{t.stalled && <> <Pill kind="waiting">seems stuck</Pill></>}</dd>
         <dt>Project</dt><dd>{where(t) || "research"}{branchy ? `, branch ${t.branch}` : ""}</dd>
         <dt>Started</dt><dd>{hhmm(t.created)} · {ACTIVE.includes(t.status) ? elapsed(t.created, now.value) : `took ${elapsed(t.created, t.updated * 1000)}`}{t.cost ? ` · $${t.cost.toFixed(2)}` : ""}</dd>
+        {t.tokens && <><dt>Tokens</dt><dd><Tokens u={t.tokens} /></dd></>}
         {t.changes && <><dt>Changes</dt><dd>{t.changes}</dd></>}
         {t.job != null && <><dt>Scheduled</dt><dd><button class="linkish" onClick={() => openSchedule(t.job!)}>
           {t.job_title ?? `job ${t.job}`}</button></dd></>}

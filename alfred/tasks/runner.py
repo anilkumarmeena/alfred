@@ -276,6 +276,9 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
         bell.add(f"Task {task_id}: {text}", "warn", task_id)
         self._background(self._notify(f"Alfred · task {task_id}", text[:200]))
 
+    def tokens(self, task_id: int, rows: list[dict], ended: str) -> None:
+        self.store.add_tokens(task_id, rows, ended)
+
     def take_nudges(self, task_id: int) -> list[str]:
         messages = self.store.take_nudges(task_id)
         for text in messages:

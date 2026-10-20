@@ -127,6 +127,10 @@ class Subagents:
         how = " in the background" if block.id in self.background else ""
         self.reporter.subagent(self.task_id, f"{who} started{how}: {args.get('description') or 'no description'}")
 
+    def who(self, parent_id: str | None) -> str:
+        """The subagent a message with `parent_id` came from; "" for the task's own session."""
+        return self.running.get(parent_id, "subagent") if parent_id else ""
+
     def label(self, parent_id: str | None, what: str) -> str:
         """Prefix `what` with the subagent's label if `parent_id` is one."""
         who = self.running.get(parent_id or "")

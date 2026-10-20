@@ -34,7 +34,14 @@ export interface CommandRun {
 export interface Stalled { minutes: number; since: number }
 export interface LogLine { at: number; kind: string; text: string }
 export interface Edit { n: number; status: string; what: string; reason: string; needs_yes: string; result: string }
-export interface TaskDetail extends Task { instruction: string; summary: string | null; log: LogLine[]; edits: Edit[] }
+export interface TokenCounts { input: number; output: number; cache_read: number; cache_write: number; total: number }
+// A task's token use over all its runs; by_agent's "main session" is the task itself, the rest its subagents
+export interface TaskTokens extends TokenCounts {
+  runs: number; by_model: Record<string, TokenCounts>; by_agent: Record<string, TokenCounts>;
+}
+export interface TaskDetail extends Task {
+  instruction: string; summary: string | null; log: LogLine[]; edits: Edit[]; tokens?: TaskTokens | null;
+}
 export interface Command { tool: string; command: string; folder: string; why: string }
 // What remembering an approval would cover: `never` = why it can't be; per-breadth rule text ("exact" empty if
 // the command can't be pinned down)

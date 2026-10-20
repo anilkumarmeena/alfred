@@ -238,6 +238,28 @@ def test_an_in_place_task_runs_in_a_copy_there_and_its_edits_come_back(world, tm
     assert "uncommitted" in done["changes"]
 
 
+def test_a_task_run_there_has_its_token_use_recorded_here(world, tmp_path):
+    used = [{"agent": "", "model": "claude-main", "input": 10, "output": 100, "cache_read": 1000, "cache_write": 50}]
+
+    async def run(task, prompt, reporter) -> Outcome:
+        reporter.tokens(task["id"], used, "finished")
+        return Outcome("Changed it.", "", 0.02)
+
+    async def main():
+        w = await World(tmp_path, run).up()
+        machines.set_placement("tasks", str(w.node))
+        task = w.r.start("code_change", "change the app", "Change app.py", "video-agent")
+        done = await finished(w.r, task["id"])
+        # A report that isn't well formed is dropped
+        await w.r.offload._report(w.node, {"seq": 10_000, "kind": "tokens", "task": task["id"], "run": "x",
+                                           "body": {"rows": used, "ended": "exploded"}})
+        await w.down()
+        return w.r.store.tokens(done["id"])
+
+    kept = asyncio.run(main())
+    assert [{k: r[k] for k in used[0]} | {"ended": r["ended"]} for r in kept] == [used[0] | {"ended": "finished"}]
+
+
 def test_a_worktree_tasks_changes_are_committed_to_its_branch_here(world, tmp_path):
     async def run(task, prompt, reporter) -> Outcome:
         (Path(task["worktree"]) / "feature.py").write_text("y = 2\n")

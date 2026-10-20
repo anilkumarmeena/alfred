@@ -169,7 +169,7 @@ Everything an install keeps lives in **ALFRED_HOME** ([Configuration](configurat
 | 🔑 | **Secrets** | `secrets/` | `livekit.yaml`, `logins.json` (scrypt hashes), `google-<label>.json`, `claude/` (CLI login), `vapid_private.pem`, `apns_key.p8`, `fcm_service_account.json` |
 | 📄 | **Settings** | `.env`, `config.toml` | Overrides of the shipped `config/*.toml`, and `ALFRED_MASTER_KEY` |
 
-- **`data/tasks.db` holds:** tasks, approvals, approval rules, projects, to-dos, Google accounts, settings, MCP servers and tools, vault secrets, voiceprints, skills, schedules, activity and the injection-check cache.
+- **`data/tasks.db` holds:** tasks, their runs' token use (`task_tokens`), approvals, approval rules, projects, to-dos, Google accounts, settings, MCP servers and tools, vault secrets, voiceprints, skills, schedules, activity and the injection-check cache.
 
 #### Database invariants
 

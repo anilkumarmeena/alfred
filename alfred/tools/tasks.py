@@ -198,8 +198,10 @@ async def task_list() -> list[dict]:
 @tool(
     "task_detail",
     "One task in full: its summary, question, changes, branch (or in_place note), requests waiting for approval, "
-    "whether it seems stuck (stalled), what it or its merge still waits for (waits_for, merge_waits_for), and "
-    "progress log. task_log has its every step.",
+    "whether it seems stuck (stalled), what it or its merge still waits for (waits_for, merge_waits_for), "
+    "progress log, and what its runs used: cost_usd, and tokens (input, output, cache_read, cache_write and total "
+    "over all its runs, by_model and by_agent: its main session and each subagent). For \"how many tokens did it "
+    "use?\" say the total, rounded, then where most went. task_log has its every step.",
     {"id": {"type": "integer"}},
     ["id"],
     reads=True,
@@ -212,6 +214,10 @@ async def task_detail(id: int) -> dict:
                        "log": [f"{e['kind']}: {e['text']}" for e in t["log"]]}
     if every := edits(t):
         out["suggested_edits"] = [_edit(e) for e in every]  # includes applied and dismissed
+    if t.get("cost"):
+        out["cost_usd"] = round(t["cost"], 2)
+    if t.get("tokens"):
+        out["tokens"] = t["tokens"]
     return out
 
 

@@ -13,6 +13,7 @@ also get repo_files, which fetches whole files and projects with the connection'
 Tasks never write Alfred's data files; they propose edits. Extra access (alfred.tasks.access) shapes `_options`.
 Code tasks load the project's Claude setup (project_claude); Alfred's enabled skills load as a plugin. Alfred's
 helper subagents win name clashes. A run doesn't end while background subagents run, nor without a final report.
+Its token use, per model and subagent, is reported however it ends (alfred.tasks.tokens).
 """
 
 import asyncio
@@ -56,7 +57,7 @@ from alfred.llm.sdk import (
 )
 from alfred.safety import host
 from alfred.skills import home as skills
-from alfred.tasks import access, project_claude, repo_files
+from alfred.tasks import access, project_claude, repo_files, tokens
 from alfred.tasks.briefs import _system_prompt
 from alfred.tasks.connection_calls import ConnectionGate
 from alfred.tasks.connection_watch import Watch
@@ -400,8 +401,27 @@ class _Ended(Exception):
 async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
     """Send `prompt` to the task's session (resuming if any) and wait for its final report.
 
-    Finishes only once all subagents have ended and a report exists (unless it asked a question or failed).
+    Finishes only once all subagents have ended and a report exists (unless it asked a question or failed). Its
+    token use is reported however it ends, stopped included.
     """
+    tally = tokens.Tally()
+    ended = tokens.STOPPED  # unless it returns or raises
+    try:
+        outcome = await _run(task, prompt, reporter, tally)
+        ended = tokens.FAILED if outcome.error else tokens.FINISHED
+        return outcome
+    except Exception:
+        ended = tokens.FAILED
+        raise
+    finally:
+        if rows := tally.rows():
+            try:
+                reporter.tokens(task["id"], rows, ended)
+            except Exception as e:  # never in the way of the run's own ending
+                log.warning("task %s: couldn't record its token use: %s", task["id"], e)
+
+
+async def _run(task: dict, prompt: str, reporter: Reporter, tally: tokens.Tally) -> Outcome:
     asked = False
     turn_began = False  # a new turn has started
     api_error: str | None = None  # AssistantMessage.error on the latest main-session message
@@ -423,6 +443,7 @@ async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
         elif isinstance(msg, AssistantMessage):
             turn_began = True
             spend.saw(msg)
+            tally.saw(msg, helpers.who(msg.parent_tool_use_id))
             if msg.parent_tool_use_id is None:
                 api_error = msg.error
             for block in msg.content:
@@ -441,6 +462,7 @@ async def run(task: dict, prompt: str, reporter: Reporter) -> Outcome:
         elif isinstance(msg, RateLimitEvent):
             limits.saw(msg)
         elif isinstance(msg, ResultMessage):
+            tally.result(msg)
             return msg
         return None
 
