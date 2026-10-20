@@ -1,7 +1,7 @@
 [project]
 name = "alfred"
 version = "0.1.0"
-description = "Personal voice assistant"
+description = "Your own voice assistant that runs on your computer: on-device speech, Claude for thinking, a phone app and background tasks"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"

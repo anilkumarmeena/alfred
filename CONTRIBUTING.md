@@ -62,7 +62,7 @@ A good pull request is easy to review and easy to trust:
 | 🎯 | **One change** | With a title that says what it does |
 | 📝 | **A clear description** | What changed and why, how you tested it, anything you couldn't test (say, on a phone) |
 | 📚 | **Docs updated** | The pages that describe the behaviour you changed |
-| 🧹 | **Focused commits** | Rebased on `main` before asking for review |
+| 🧹 | **Focused commits** | Rebased on `master` before asking for review |
 
 ## 🐛 Reporting bugs
 

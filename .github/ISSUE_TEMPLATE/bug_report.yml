@@ -1,0 +1,56 @@
+name: 🐛 Bug report
+description: Something Alfred did wrong, or didn't do
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! **Found a security problem?** Please use [private reporting](https://github.com/anilkumarmeena/alfred/security/advisories/new) instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did or said, what you expected, and what Alfred did instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. make console
+        2. Say "…"
+        3. …
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS (Apple silicon)
+        - Linux
+        - Windows (WSL2)
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where
+      multiple: true
+      options:
+        - Terminal (make console)
+        - Browser
+        - iOS app
+        - Android app
+        - Background task
+        - Services / install
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: Output of `git rev-parse --short HEAD`
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The relevant lines from `logs/`, with personal details (names, mail, keys) removed.
+      render: text

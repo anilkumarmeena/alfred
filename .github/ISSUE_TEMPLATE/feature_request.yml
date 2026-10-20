@@ -1,0 +1,21 @@
+name: ✨ Feature request
+description: Something you'd like Alfred to do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: want
+    attributes:
+      label: What you'd like
+      description: What you'd say to Alfred, or do in the app, and what should happen.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: The problem it solves for you, and what you do today instead.
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: Services it should work with, safety concerns (should it ask first?), ideas for how it could work.
