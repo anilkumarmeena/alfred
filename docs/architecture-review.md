@@ -124,7 +124,7 @@ flowchart LR
 [tiers]
 deep = "claude-opus-5-5"
 balanced = "claude-sonnet-5"
-fast = "claude-haiku-4-5-20251001"
+fast = "claude-haiku-5-5"
 
 [roles]          # a tier, another role, or a model id
 voice = "deep"

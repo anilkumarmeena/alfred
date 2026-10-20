@@ -449,7 +449,7 @@ const GATE_HINT = (name: string): Record<string, string> => ({
 
 const BROWSER: [string, string][] = [["on", "On"], ["off", "Off"]];
 const BROWSER_WINDOW: [string, string][] = [["headed", "Shown"], ["headless", "Hidden"]];
-const INJECTION_MODEL: [string, string][] = [["claude-haiku-4-5-20251001", "Haiku (fastest)"], ["claude-sonnet-5", "Sonnet (more careful)"]];
+const INJECTION_MODEL: [string, string][] = [["claude-haiku-5-5", "Haiku (fastest)"], ["claude-sonnet-5", "Sonnet (more careful)"]];
 
 // Do not disturb (same hold as "pause everything" by voice). Switch: until turned off. Buttons: for an hour or
 // until a time; they also change the end while on.
