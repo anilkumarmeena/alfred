@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Alfred · Open-source voice assistant that runs on your computer</title>
+    <meta name="description" content="Alfred is an open-source, self-hosted voice assistant for macOS, Linux and WSL2. Speech stays on-device, Claude does the thinking, and it handles mail, calendar, coding and research tasks while you talk to it from your phone." />
+    <link rel="canonical" href="https://anilkumarmeena.github.io/alfred/" />
+    <meta name="theme-color" content="#07090d" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://anilkumarmeena.github.io/alfred/" />
+    <meta property="og:site_name" content="Alfred" />
+    <meta property="og:title" content="Alfred · Your own voice assistant, on your computer" />
+    <meta property="og:description" content="Open source. On-device speech, Claude for thinking, background tasks and an iOS and Android app." />
+    <meta property="og:image" content="https://anilkumarmeena.github.io/alfred/og.png" />
+    <meta property="og:image:width" content="1280" />
+    <meta property="og:image:height" content="640" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Alfred · Your own voice assistant, on your computer" />
+    <meta name="twitter:description" content="Open source. On-device speech, Claude for thinking, background tasks and an iOS and Android app." />
+    <meta name="twitter:image" content="https://anilkumarmeena.github.io/alfred/og.png" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Alfred",
+        "description": "Open-source, self-hosted voice assistant. On-device speech recognition and synthesis, Claude for reasoning, background tasks, and iOS and Android apps.",
+        "url": "https://anilkumarmeena.github.io/alfred/",
+        "downloadUrl": "https://github.com/anilkumarmeena/alfred",
+        "codeRepository": "https://github.com/anilkumarmeena/alfred",
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "macOS, Linux, Windows (WSL2)",
+        "license": "https://opensource.org/licenses/MIT",
+        "isAccessibleForFree": true,
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "author": { "@type": "Person", "name": "Anil Kumar Meena", "url": "https://anilkumarmeena.github.io/" }
+      }
+    </script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+    <script>document.documentElement.classList.add("js");</script>
+  </head>
+
+  <body>
+    <!-- Icon sprite (Lucide shapes) -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></symbol>
+        <symbol id="i-mail" viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></symbol>
+        <symbol id="i-cog" viewBox="0 0 24 24"><path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z"/><path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z"/><path d="M12 2v2M12 22v-2M17 20.66l-1-1.73M11 10.27 7 3.34M20.66 17l-1.73-1M3.34 7l1.73 1M14 12h8M2 12h2M20.66 7l-1.73 1M3.34 17l1.73-1M17 3.34l-1 1.73M11 13.73l-4 6.93"/></symbol>
+        <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></symbol>
+        <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5"/><path d="M9 8V2M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></symbol>
+        <symbol id="i-phone" viewBox="0 0 24 24"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></symbol>
+        <symbol id="i-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+        <symbol id="i-brain" viewBox="0 0 24 24"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/></symbol>
+        <symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+        <symbol id="i-hand" viewBox="0 0 24 24"><path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v2M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></symbol>
+        <symbol id="i-box" viewBox="0 0 24 24"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></symbol>
+        <symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></symbol>
+        <symbol id="i-home" viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></symbol>
+        <symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/></symbol>
+        <symbol id="i-chat" viewBox="0 0 24 24"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></symbol>
+        <symbol id="i-puzzle" viewBox="0 0 24 24"><path d="M19.44 7.85c-.47.47-1.09.7-1.7.7a2.4 2.4 0 0 1-1.71-.71L14.47 6.3a.98.98 0 0 0-1.66.5l-.03.3v.17c.01.61.24 1.23.71 1.7.47.47.7 1.09.7 1.7a2.4 2.4 0 0 1-4.12 1.71c-.47-.47-.7-1.08-.71-1.7v-.17a.98.98 0 0 0-1.69-.69L6.3 11.53a2.4 2.4 0 0 0 0 3.4l1.57 1.57c.47.47.7 1.09.7 1.7a2.4 2.4 0 0 1-4.1 1.7"/><path d="M14 2h6a2 2 0 0 1 2 2v6"/></symbol>
+        <symbol id="i-play" viewBox="0 0 24 24"><path d="m7 4 13 8-13 8Z"/></symbol>
+        <symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+        <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+        <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></symbol>
+        <symbol id="i-star" viewBox="0 0 24 24"><path d="M11.5 2.3a.53.53 0 0 1 .95 0l2.31 4.68a2.12 2.12 0 0 0 1.6 1.16l5.16.76a.53.53 0 0 1 .3.9l-3.74 3.64a2.12 2.12 0 0 0-.61 1.88l.88 5.14a.53.53 0 0 1-.77.56l-4.62-2.43a2.12 2.12 0 0 0-1.97 0L6.4 21.01a.53.53 0 0 1-.77-.56l.88-5.13a2.12 2.12 0 0 0-.61-1.88L2.16 9.8a.53.53 0 0 1 .29-.9l5.17-.76a2.12 2.12 0 0 0 1.6-1.16z"/></symbol>
+        <symbol id="i-github" viewBox="0 0 24 24"><path stroke="none" fill="currentColor" d="M12 .5C5.73.5.5 5.74.5 12.02c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56l-.02-1.96c-3.2.7-3.87-1.54-3.87-1.54-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.69 1.25 3.35.96.1-.74.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.79 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14l-.01 3.18c0 .31.21.68.8.56A11.53 11.53 0 0 0 23.5 12.02C23.5 5.74 18.27.5 12 .5Z"/></symbol>
+      </defs>
+    </svg>
+
+    <a class="skip" href="#main">Skip to content</a>
+    <div class="bg" aria-hidden="true"></div>
+
+    <header class="top">
+      <div class="wrap top-row">
+        <a class="brand" href="#top">
+          <svg class="logo" viewBox="0 0 180 180" aria-hidden="true"><circle cx="90" cy="90" r="62" fill="none" stroke="#4fd1ff" stroke-opacity=".7" stroke-width="10"/><circle cx="90" cy="90" r="46" fill="none" stroke="#4fd1ff" stroke-opacity=".4" stroke-width="5" stroke-dasharray="10 10"/><circle cx="90" cy="90" r="24" fill="#4fd1ff" fill-opacity=".25" stroke="#4fd1ff" stroke-width="5"/><circle cx="90" cy="90" r="10" fill="#e9fbff"/></svg>
+          <span>Alfred</span>
+        </a>
+        <nav aria-label="Sections">
+          <a href="#features">Features</a>
+          <a href="#how">How it works</a>
+          <a href="#safety">Safety</a>
+          <a href="#install">Install</a>
+          <a class="nav-cta" href="https://github.com/anilkumarmeena/alfred"><svg class="ic"><use href="#i-github"/></svg>GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <!-- Hero -->
+      <section class="hero wrap" id="top">
+        <div class="hero-text">
+          <p class="pill"><span class="dot"></span>Open source · MIT · macOS, Linux, WSL2</p>
+          <h1>Your own voice assistant, <em>on your computer</em></h1>
+          <p class="tagline">
+            Alfred listens, thinks and speaks on your machine. Speech stays <b>on-device</b>, <b>Claude</b> does the
+            thinking, and it gets real work done <b>while you talk</b>, from your terminal, browser or phone.
+          </p>
+          <div class="ctas">
+            <a class="btn btn-primary" href="#install">Get started</a>
+            <a class="btn btn-ghost" href="https://github.com/anilkumarmeena/alfred"><svg class="ic"><use href="#i-star"/></svg>Star on GitHub</a>
+          </div>
+          <ul class="platforms">
+            <li>macOS</li><li>Linux</li><li>Windows · WSL2</li><li>iOS</li><li>Android</li>
+          </ul>
+        </div>
+
+        <!-- Hero art: the phone app mid-conversation, with work happening around it -->
+        <div class="stage-wrap" aria-hidden="true">
+          <div class="stage">
+            <div class="phone float-a">
+              <div class="notch"></div>
+              <div class="ph-top"><span class="ph-name">Alfred</span><span class="ph-state"><i></i>listening</span></div>
+              <div class="orb">
+                <span class="r1"></span><span class="r2"></span><span class="r3"></span><span class="core"></span>
+              </div>
+              <div class="bubbles">
+                <p class="me">What’s on my calendar tomorrow?</p>
+                <p class="it">Two meetings: design review at 11 and a call at 4. Want me to block an hour to prep?</p>
+                <p class="me">Yes, and fix that flaky test.</p>
+              </div>
+              <div class="ph-bar">
+                <span class="eq"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+                <span class="mic"><svg><use href="#i-mic"/></svg></span>
+              </div>
+            </div>
+
+            <div class="glass task float-b">
+              <p class="card-head"><span class="badge c1"><svg><use href="#i-cog"/></svg></span>Background task<em class="run">running</em></p>
+              <p class="task-title">Fix the flaky test</p>
+              <div class="progress"><i></i></div>
+              <p class="task-meta">Sandboxed · checked against its goal</p>
+            </div>
+
+            <div class="glass yes float-c">
+              <p class="card-head"><span class="badge c3"><svg><use href="#i-hand"/></svg></span>Waiting for your yes</p>
+              <p class="quote">“Send the invite for Thursday?”</p>
+              <div class="yes-row"><span class="say">Say “yes”</span><span class="no">or “no”</span></div>
+            </div>
+
+            <div class="glass cal float-a">
+              <span class="badge c2"><svg><use href="#i-bell"/></svg></span>
+              <span><b>Heads-up</b><br />Prep block added, 10:00</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Demo -->
+      <section class="wrap section demo-sec" id="demo">
+        <header class="head center reveal">
+          <p class="eyebrow">Demo</p>
+          <h2>See it <em>in action</em></h2>
+        </header>
+        <!-- Put the YouTube video id in data-yt to switch the poster to the real video -->
+        <div class="video reveal" data-yt="">
+          <div class="poster">
+            <div class="poster-orb"><span></span><span></span><span></span></div>
+            <button class="play" type="button" aria-label="Play the demo"><svg><use href="#i-play"/></svg></button>
+            <p class="soon">Demo video coming soon</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Pillars -->
+      <section class="wrap section">
+        <div class="pillars">
+          <div class="pillar reveal"><span class="icon c1"><svg><use href="#i-lock"/></svg></span><h3>Private by default</h3><p>Speech, noise filter and your voiceprint run locally. Your data stays on your computer.</p></div>
+          <div class="pillar reveal"><span class="icon c2"><svg><use href="#i-brain"/></svg></span><h3>A real brain</h3><p>Claude with Alfred’s own tools, web search, a sandboxed shell and your services.</p></div>
+          <div class="pillar reveal"><span class="icon c3"><svg><use href="#i-cog"/></svg></span><h3>Works while you talk</h3><p>Tasks, schedules and monitors keep going after you hang up.</p></div>
+        </div>
+      </section>
+
+      <!-- Features -->
+      <section class="wrap section" id="features">
+        <header class="head reveal">
+          <p class="eyebrow">Features</p>
+          <h2>Everything an assistant <em>should do</em></h2>
+        </header>
+        <div class="features">
+          <article class="feat reveal"><svg class="f-ic"><use href="#i-mic"/></svg><h3>Natural voice</h3><p>Whisper in, Kokoro out. Answers only you.</p></article>
+          <article class="feat reveal"><svg class="f-ic"><use href="#i-mail"/></svg><h3>Mail &amp; calendar</h3><p>Gmail, Calendar, Docs, Sheets, Drive and Chat.</p></article>
+          <article class="feat reveal"><svg class="f-ic"><use href="#i-cog"/></svg><h3>Background tasks</h3><p>Code, research and long jobs, in parallel.</p></article>
+          <article class="feat reveal"><svg class="f-ic"><use href="#i-bell"/></svg><h3>Proactive</h3><p>Reminders, watches and monitors you choose.</p></article>
+          <article class="feat reveal"><svg class="f-ic"><use href="#i-plug"/></svg><h3>Connections</h3><p>MCP servers from the official registry.</p></article>
+          <article class="feat reveal"><svg class="f-ic"><use href="#i-phone"/></svg><h3>Phone app</h3><p>iOS and Android, even with the screen locked.</p></article>
+          <article class="feat reveal"><svg class="f-ic"><use href="#i-monitor"/></svg><h3>Desktop control</h3><p>Apps, notifications, files, screenshots, browser.</p></article>
+          <article class="feat reveal"><svg class="f-ic"><use href="#i-puzzle"/></svg><h3>Skills &amp; memory</h3><p>Learns your way of working and remembers it.</p></article>
+        </div>
+      </section>
+
+      <!-- How it works -->
+      <section class="wrap section" id="how">
+        <header class="head reveal">
+          <p class="eyebrow">How it works</p>
+          <h2>Runs on <em>your machine</em></h2>
+        </header>
+        <div class="flow reveal">
+          <div class="node you">
+            <p class="node-label">You</p>
+            <div class="chips"><span>📱 Phone</span><span>💻 Browser</span><span>⌨️ Terminal</span></div>
+          </div>
+          <div class="link"><span>WebRTC · HTTPS</span></div>
+          <div class="node host">
+            <p class="node-label">Your computer</p>
+            <div class="svc">
+              <div><b>LiveKit</b><span>real-time audio</span></div>
+              <div><b>Voice agent</b><span>hear → think → speak</span></div>
+              <div><b>Task runner</b><span>tasks · schedules · notices</span></div>
+              <div><b>Web app</b><span>control panel</span></div>
+            </div>
+          </div>
+          <div class="link"><span>only the thinking</span></div>
+          <div class="node cloud">
+            <p class="node-label">Out there</p>
+            <div class="chips"><span>🧠 Claude</span><span>📬 Google</span><span>🔌 MCP</span><span>🌐 Web</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Safety -->
+      <section class="wrap section" id="safety">
+        <header class="head reveal">
+          <p class="eyebrow">Safety</p>
+          <h2>Guards <em>in code</em>, not in the prompt</h2>
+        </header>
+        <div class="guards">
+          <div class="guard reveal"><svg><use href="#i-chat"/></svg><div><b>Spoken yes</b><span>Mail, invites and deletions wait for a clear yes</span></div></div>
+          <div class="guard reveal"><svg><use href="#i-hand"/></svg><div><b>Approvals</b><span>Installs, pushes and data leaving the computer wait for you</span></div></div>
+          <div class="guard reveal"><svg><use href="#i-box"/></svg><div><b>Sandboxes</b><span>Tasks run walled in, secrets hidden</span></div></div>
+          <div class="guard reveal"><svg><use href="#i-key"/></svg><div><b>Encrypted vault</b><span>Keys are encrypted and never spoken</span></div></div>
+          <div class="guard reveal"><svg><use href="#i-shield"/></svg><div><b>Injection checks</b><span>Mail, pages and tool results screened</span></div></div>
+          <div class="guard reveal"><svg><use href="#i-home"/></svg><div><b>Local only</b><span>Your phone reaches it privately over Tailscale</span></div></div>
+        </div>
+      </section>
+
+      <!-- Install -->
+      <section class="wrap section" id="install">
+        <header class="head reveal">
+          <p class="eyebrow">Install</p>
+          <h2>Talking in <em>three steps</em></h2>
+        </header>
+        <div class="steps-grid">
+          <div class="stepc reveal">
+            <span class="num">1</span>
+            <h3>Install</h3>
+            <pre><code>git clone https://github.com/anilkumarmeena/alfred.git
+cd alfred && make install</code></pre>
+            <button class="copy" type="button" aria-label="Copy"><svg><use href="#i-copy"/></svg></button>
+          </div>
+          <div class="stepc reveal">
+            <span class="num">2</span>
+            <h3>Set up</h3>
+            <pre><code>make claude-status
+make setup</code></pre>
+            <button class="copy" type="button" aria-label="Copy"><svg><use href="#i-copy"/></svg></button>
+          </div>
+          <div class="stepc reveal">
+            <span class="num">3</span>
+            <h3>Talk</h3>
+            <pre><code>make console</code></pre>
+            <button class="copy" type="button" aria-label="Copy"><svg><use href="#i-copy"/></svg></button>
+          </div>
+        </div>
+        <p class="needs reveal">
+          You need <b>uv</b>, <b>Node.js 22+</b> and the <b>Claude Code CLI</b> with a Claude account.
+          <a href="https://github.com/anilkumarmeena/alfred/blob/master/docs/setup.md">Full setup guide <svg class="ic"><use href="#i-arrow"/></svg></a>
+        </p>
+      </section>
+
+      <!-- Phone -->
+      <section class="wrap section">
+        <div class="phone-band reveal">
+          <div>
+            <p class="eyebrow warm">Phone app</p>
+            <h2>Talk to it <em>from anywhere</em></h2>
+            <ul class="pchips">
+              <li>Keeps listening when locked</li><li>Push notifications</li><li>Earphone controls</li><li>Type instead of talk</li>
+            </ul>
+            <div class="ctas">
+              <a class="btn btn-ghost" href="https://github.com/anilkumarmeena/alfred-app">iOS &amp; Android app <svg class="ic"><use href="#i-arrow"/></svg></a>
+            </div>
+          </div>
+          <div class="os">
+            <span><b>iOS</b>17+</span>
+            <span><b>Android</b>8+</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Built with -->
+      <section class="wrap section built reveal">
+        <p class="eyebrow center">Built with</p>
+        <p class="names">Claude Code · LiveKit Agents · Whisper · Kokoro · Silero VAD · DeepFilterNet · WeSpeaker · Playwright · Preact</p>
+      </section>
+
+      <!-- CTA -->
+      <section class="wrap section">
+        <div class="cta reveal">
+          <h2>Give your computer a <em>voice</em></h2>
+          <p>Free and open source under the MIT license.</p>
+          <div class="ctas center">
+            <a class="btn btn-primary" href="https://github.com/anilkumarmeena/alfred"><svg class="ic"><use href="#i-github"/></svg>Get Alfred on GitHub</a>
+            <a class="btn btn-ghost" href="https://github.com/anilkumarmeena/alfred/discussions">Ask a question</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="wrap foot">
+      <span>Alfred · MIT license</span>
+      <span>Made by <a href="https://anilkumarmeena.github.io/">Anil Kumar Meena</a></span>
+    </footer>
+
+    <script>
+      // Fade sections in as they scroll into view; everything stays visible without JS.
+      const io = new IntersectionObserver(
+        (entries) => entries.forEach((e) => e.isIntersecting && (e.target.classList.add("in"), io.unobserve(e.target))),
+        { rootMargin: "0px 0px -8% 0px" }
+      );
+      document.querySelectorAll(".reveal").forEach((el) => io.observe(el));
+
+      // The hero stage is drawn at 560×560 and scaled to fit its column.
+      const wrap = document.querySelector(".stage-wrap");
+      const fit = () => wrap.style.setProperty("--s", Math.min(1, wrap.clientWidth / 560));
+      new ResizeObserver(fit).observe(wrap);
+      fit();
+
+      // Demo: show the YouTube thumbnail once an id is set, and load the player only on click.
+      const video = document.querySelector(".video");
+      const id = video.dataset.yt;
+      if (id) {
+        video.classList.add("ready");
+        video.querySelector(".poster").style.backgroundImage = `url(https://i.ytimg.com/vi/${id}/maxresdefault.jpg)`;
+        video.querySelector(".play").addEventListener("click", () => {
+          video.innerHTML = `<iframe src="https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0" title="Alfred demo" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
+        });
+      }
+
+      // Copy buttons on the install steps.
+      document.querySelectorAll(".copy").forEach((b) =>
+        b.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(b.previousElementSibling.innerText);
+            b.classList.add("done");
+            setTimeout(() => b.classList.remove("done"), 1400);
+          } catch {}
+        })
+      );
+    </script>
+  </body>
+</html>

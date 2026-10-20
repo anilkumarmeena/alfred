@@ -12,7 +12,7 @@
 [![Claude](https://img.shields.io/badge/brain-Claude-d97757?style=flat-square&logo=anthropic&logoColor=white)](docs/architecture.md)
 [![LiveKit](https://img.shields.io/badge/voice-LiveKit-1f2937?style=flat-square)](docs/voice.md)
 
-**[Setup](docs/setup.md)** &nbsp;·&nbsp; **[Configuration](docs/configuration.md)** &nbsp;·&nbsp; **[Architecture](docs/architecture.md)** &nbsp;·&nbsp; **[Contributing](CONTRIBUTING.md)**
+**[Website](https://anilkumarmeena.github.io/alfred/)** &nbsp;·&nbsp; **[Setup](docs/setup.md)** &nbsp;·&nbsp; **[Configuration](docs/configuration.md)** &nbsp;·&nbsp; **[Architecture](docs/architecture.md)** &nbsp;·&nbsp; **[Contributing](CONTRIBUTING.md)**
 
 </div>
 
