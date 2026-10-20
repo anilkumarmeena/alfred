@@ -214,20 +214,11 @@ class Chains(RunnerBase):
             self._call_off(task, bad)
 
     async def _merge_now(self, task_id: int) -> None:
-        """Run a waiting merge whose waits are met, and say how it went. While a task works in the project's folder,
-        or one begun before it changes the same files (_same_files), it's put off, not called off: settle_all tries it
-        again when a task ends or a merge does."""
-        if busy := self._jobs_on(self.store.get(task_id)["project"], in_place=True):
-            self.merging.discard(task_id)
-            self.store.log(task_id, "merge waits", f"put off while task {joined([str(i) for i in busy])} works in "
-                                                   "the project's folder")
-            return
+        """Run a waiting merge whose waits are met, and say how it went, unless it's put off (_put_off): settle_all
+        tries it again when a task ends or a merge does."""
         try:
-            if ahead := await self._same_files(self.store.get(task_id)):
+            if said := await self._put_off(self.store.get(task_id)):
                 self.merging.discard(task_id)
-                said = (f"put off while task {joined([str(i) for i in ahead])}, begun before it, changes "
-                        f"{few(sorted(set().union(*ahead.values())))} too: it merges once that has finished and any "
-                        "merge of it is done, rebased onto what that left")
                 if [e["text"] for e in self.store.history(task_id, 1)] != [said]:  # once, however often it's tried
                     self.store.log(task_id, "merge waits", said)
                 return
@@ -246,7 +237,18 @@ class Chains(RunnerBase):
         self.store.set(task_id, merge_waits_on=None)
         self._tell(task_id, said, title)
 
-    async def _same_files(self, task: dict) -> dict[int, list[str]]:
+    async def _put_off(self, task: dict) -> str:
+        """Why a waiting merge waits a while longer, or "": a task works in the project's folder, or one begun before
+        it changes the same files (_same_files). Put off, not called off."""
+        if busy := self._jobs_on(task["project"], in_place=True):
+            return f"put off while task {joined([str(i) for i in busy])} works in the project's folder"
+        if ahead := await self._same_files(task):
+            return (f"put off while task {joined([str(i) for i in ahead])}, begun before it, changes "
+                    f"{few(sorted(set().union(*ahead.values())))} too: it merges once that has finished and any merge "
+                    "of it is done, rebased onto what that left")
+        return ""
+
+    async def _same_files(self, task: dict) -> dict[int, set[str]]:
         """Worktree tasks on the task's project, begun before it, that are still running (not just waiting for a usage
         limit's reset) or being merged, and have changed files its branch changes too: {id: those files}."""
         ahead = [t for i in sorted({*self.jobs, *self.merges} - set(self.limit_waits))
@@ -254,7 +256,8 @@ class Chains(RunnerBase):
                  and t["kind"] == "code_change" and not t["in_place"] and t["branch"]]
         if not ahead or not (mine := await self._touched(task)):
             return {}
-        return {t["id"]: sorted(shared) for t in ahead if (shared := mine & await self._touched(t))}
+        theirs = await asyncio.gather(*(self._touched(t) for t in ahead))
+        return {t["id"]: shared for t, found in zip(ahead, theirs) if (shared := mine & found)}
 
     def _call_off(self, task: dict, why: str) -> None:
         """Drop a waiting merge that can't happen as planned, and hold what waits for it in turn."""

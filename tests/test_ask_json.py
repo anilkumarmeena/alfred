@@ -113,6 +113,7 @@ def test_a_short_call_is_on_the_five_minute_cache_and_keeps_its_own_env():
     options = claude.short_options("Judge it.", "claude-haiku-5-5", env={"X": "1"})
     assert options.env["FORCE_PROMPT_CACHING_5M"] == "1" and options.env["X"] == "1"
     assert options.tools == [] and options.max_turns == 1
+    assert options.extra_args == {"no-session-persistence": None}  # nothing resumes it: no transcript
 
 
 def test_warmed_check_sessions_start_at_low_effort(monkeypatch):

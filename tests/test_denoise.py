@@ -68,7 +68,8 @@ def test_the_modes_put_the_filter_where_they_say():
     silero = Recorder()
     on, vad_only = denoise.room_options(Silent(), "on").audio_input, denoise.room_options(Silent(), "vad").audio_input
     assert isinstance(on.noise_cancellation(None), denoise.DeepFilterNet) and on.auto_gain_control is True
-    assert vad_only.noise_cancellation is None and vad_only.auto_gain_control is True
+    tagger = vad_only.noise_cancellation(None)  # vad mode: the mic's one filter tags frames for the VAD
+    assert isinstance(tagger, denoise.DeepFilterNet) and tagger._tag and vad_only.auto_gain_control is True
     assert denoise.room_options(None, "on").audio_input.noise_cancellation is None  # the model didn't load
     assert isinstance(denoise.session_vad(silero, Silent(), "vad"), denoise.FilteredVAD)
     assert denoise.session_vad(silero, Silent(), "on") is silero
@@ -268,3 +269,46 @@ def test_the_frame_processor_keeps_up_in_real_time():
         took.append(time.perf_counter() - start)
         assert (out.sample_rate, out.samples_per_channel, out.num_channels) == (24000, 1200, 1)
     assert np.mean(took[5:]) < 0.025  # at most half of each 50 ms frame; about 7 ms on an M-series Mac
+
+
+class Counting(Silent):
+    """Silent model that counts its runs."""
+
+    def __init__(self) -> None:
+        self.runs = 0
+
+    def run(self, outputs, feed):
+        self.runs += 1
+        return super().run(outputs, feed)
+
+
+def test_vad_mode_filters_once_at_the_mic_for_both_vad_streams():
+    rate, n = 48000, 2400
+    x = (np.arange(n * 6) % 20000 + 1).astype(np.int16)
+    mic, streams = Counting(), Counting()
+    tagger = denoise.DeepFilterNet(mic, atten_db=0, tag=True)  # as room_options makes it in vad mode
+    tagged = []
+    for f in frames(x, n):
+        frame = rtc.AudioFrame(f.tobytes(), rate, 1, n)
+        assert tagger._process(frame) is frame  # the original goes on, to Whisper
+        tagged.append(frame)
+
+    async def main():
+        inner = Recorder()
+        vad_ = denoise.FilteredVAD(inner, streams, atten_db=0)
+        turns, clips = vad_.stream(), vad_.stream()  # turn-taking's and the STT adapter's
+        for frame in tagged:
+            turns.push_frame(frame)
+            clips.push_frame(frame)
+        clips.push_frame(rtc.AudioFrame(bytes(2 * n), rate, 1, n))  # LiveKit's silent stand-in: untagged
+        for s in (turns, clips):
+            s.end_input()
+        return inner, [ev async for ev in turns], [ev async for ev in clips]
+
+    inner, turns, clips = asyncio.run(main())
+    assert mic.runs > 0 and streams.runs == 0  # filtered once, at the mic
+    assert not np.concatenate(inner.heard).any()  # both heard the filter's output (silence here), stand-in too
+    original = np.concatenate([np.zeros(denoise.MODEL_DELAY, np.int16), x])
+    for events in (turns, clips):
+        ends = [ev for ev in events if ev.type == vad.VADEventType.END_OF_SPEECH]
+        assert np.array_equal(np.frombuffer(ends[0].frames[0].data, np.int16), original[:3 * n])  # still aligned

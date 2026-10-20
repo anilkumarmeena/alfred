@@ -156,10 +156,10 @@ async def evidence(task: dict, changes: str) -> str:
 
 
 def suite_run(record: dict) -> str:
-    """A run of the test suite on exactly the final code (merge_check's record), in words."""
+    """A test run on exactly the final code (merge_check's record: the whole suite, or a part), in words."""
     failed = sorted(set(record["failed"]) - merge_check.ENV_ONLY)
     ran = len(record["ran"])
-    said = (f"Test suite, as recorded by the test run itself on exactly this final code: {ran} test{'s' * (ran != 1)} "
+    said = (f"Tests, as recorded by the test run itself on exactly this final code: {ran} test{'s' * (ran != 1)} "
             "passed or were skipped")
     if expected := len(set(record["failed"]) & merge_check.ENV_ONLY):
         said += f", {expected} failed only for want of local files a task doesn't have, as expected"

@@ -384,7 +384,7 @@ def counted(tmp_path):
     answered: session(*sent, tools=..., argv=..., told=0) -> (said, starts)."""
     script, starts = tmp_path / "server.py", tmp_path / "starts"
     script.write_text(COUNTED_SERVER)
-    mcp_servers.keep_listing(SERVER.name, "", {})
+    mcp_servers.forget_listing(SERVER.name)
 
     def session(*sent: dict, tools: str = "find", argv: list[str] | None = None, told: int = 0):
         how = (argv or [sys.executable, str(script), str(starts)], os.environ | {"TOOLS": tools})
@@ -407,7 +407,7 @@ def counted(tmp_path):
         return said, len(starts.read_text().splitlines()) if starts.exists() else 0
 
     yield session
-    mcp_servers.keep_listing(SERVER.name, "", {})
+    mcp_servers.forget_listing(SERVER.name)
 
 
 def test_a_server_starts_only_at_its_first_call_its_tools_listed_from_its_last_start(counted):

@@ -107,7 +107,7 @@ Run `ALFRED_DENOISE=ab` for a week, then `make voice-timing HOURS=168`. Its **By
 | `clips, N the gate dropped` | `verdict`, `reasons` | Clips dropped as noise or phantoms, by reason; words a kept clip |
 
 - Every turn and clip carries `denoise` (the call's mode) whatever the setting, so a week of `on` also compares with a week of `vad`.
-- **In `vad` mode each VAD stream filters on its own**, and a call has two (turn-taking's and the one that cuts Whisper's clips), so expect about **twice** `on`'s CPU there; the A/B measures it.
+- **Both modes filter once per frame, at the mic.** In `vad` mode the filter passes the original on and tags each frame with its output, which both of a call's VAD streams (turn-taking's and the one that cuts Whisper's clips) read. So the filter's CPU should match between the modes, and the A/B is about recognition. A stream that gets no tags filters on its own, as a fallback.
 - Nothing new of what you said is logged: clip words are counted from the transcript the speech gate already keeps.
 
 ## ⌛ When you've finished

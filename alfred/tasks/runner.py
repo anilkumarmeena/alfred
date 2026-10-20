@@ -716,7 +716,6 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
             self._waited(task_id)
         if self.closing:  # left for _after_restart
             return
-        announce.warm()  # starts while the commit and goal check run
 
         task = self.store.get(task_id)
         fields: dict = {}
@@ -820,6 +819,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
         task_id = task["id"]
         if goal.skipped(task, nothing_new):
             return None, None
+        announce.warm()  # the wording's session starts while the check runs
         entries = self.store.history(task_id, goal.LOG_ENTRIES, steps=True)
         self.store.set(task_id, activity="checking its result against what it was asked")
         self.jobs[task_id] = asyncio.current_task()  # stop() cancels the check

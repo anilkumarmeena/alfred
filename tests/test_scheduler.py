@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
@@ -926,22 +925,6 @@ def test_tidying_removes_ended_tasks_temp_folders_after_a_week(db, tmp_path, mon
     asyncio.run(Scheduler(type("R", (), {"store": store})(), None).prune())
     assert not folders["ended"].exists() and not folders["gone"].exists()
     assert folders["running"].exists() and folders["recent"].exists() and (temp / "task-notes").exists()
-
-
-def test_tidying_removes_one_shot_calls_transcripts_after_a_day(db, tmp_path, monkeypatch):
-    monkeypatch.setattr(scheduler, "DATA_DIR", data := tmp_path / "data")
-    monkeypatch.setattr(config, "CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))  # the default login's folder
-    calls = tmp_path / "claude" / "projects" / str(data).replace("/", "-").replace("_", "-").replace(".", "-")
-    task = calls.with_name(calls.name + "-tasks-7")  # a task's session, resumed by a follow-up
-    for d in (calls, task):
-        d.mkdir(parents=True)
-    old, new, kept = calls / "old.jsonl", calls / "new.jsonl", task / "old.jsonl"
-    for f in (old, new, kept):
-        f.write_text("{}")
-    for f in (old, kept):
-        os.utime(f, (0, 0))
-    asyncio.run(Scheduler(type("R", (), {"store": Store()})(), None).prune())
-    assert not old.exists() and new.exists() and kept.exists()
 
 
 def test_the_task_caches_uv_packages_are_pruned_weekly_while_no_task_runs(db, tmp_path, monkeypatch):

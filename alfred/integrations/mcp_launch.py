@@ -31,9 +31,9 @@ def direct(args: list[str]) -> tuple[list[str], Path] | None:
     name, _, version = (rest[0] if rest else "").rpartition("@")
     if not name or name.startswith("-") or not version or not (node := which("node")):
         return None
-    cache = _npx_cache()
-    found = sorted(cache.glob(f"*/node_modules/{name}/package.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    for manifest in found:  # newest install first
+    found = [(manifest, modules) for modules in _npx_cache().glob("*/node_modules")
+             if (manifest := modules / name / "package.json").is_file()]
+    for manifest, modules in sorted(found, key=lambda f: f[0].stat().st_mtime, reverse=True):  # newest install first
         try:
             package = json.loads(manifest.read_text())
         except (OSError, ValueError):
@@ -53,7 +53,7 @@ def direct(args: list[str]) -> tuple[list[str], Path] | None:
             return None
         if not entry.is_relative_to(manifest.parent.resolve()) or first.startswith(b"#!") and b"node" not in first:
             return None
-        return [node, str(entry), *rest[1:]], cache / manifest.relative_to(cache).parts[0] / "node_modules" / ".bin"
+        return [node, str(entry), *rest[1:]], modules / ".bin"
     return None
 
 

@@ -8,8 +8,8 @@ Judge whether the result meets the request:
 - Every part of the request is addressed: nothing asked for is skipped, half-done, or only planned or promised.
 - For code changes: the diff actually makes the change, and the work was checked where the project can check it (its
   build, tests or type checks run and passing, by the summary and the log). A summary that claims tests pass with no
-  sign of them running is unverified. A test suite record in the evidence was written by the test run itself on exactly
-  the final code: trust it over the summary and the log, either way.
+  sign of them running is unverified. A test record in the evidence was written by the test run itself on exactly the
+  final code: trust it over the summary and the log, either way, for the tests it counts.
 - For questions and research: every question is answered specifically, and claims are supported (sources, files, data).
 - A clear, honest "this can't be done because ..." counts as an answer, not as missing work.
 

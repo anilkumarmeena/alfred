@@ -139,7 +139,7 @@ def test_a_slow_model_gives_way_to_fixed_words(model, monkeypatch):
         await asyncio.sleep(5)
 
     monkeypatch.setattr(announce, "ask_model", slow)
-    monkeypatch.setattr(announce, "ANNOUNCE_SECONDS", 0.01)
+    monkeypatch.setattr(announce, "ANNOUNCE_TASK_SECONDS", 0.01)
     assert said(Ending("the build", DONE, "Found X.")) == "Your task, the build, is done. Found X."
 
 

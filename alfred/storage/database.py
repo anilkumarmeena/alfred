@@ -35,12 +35,26 @@ def connect(at: Path | None = None, **kwargs) -> sqlite3.Connection:
     db = sqlite3.connect(at or profile.current().db, timeout=BUSY_SECONDS, isolation_level=None, **kwargs)
     try:
         db.row_factory = sqlite3.Row
-        db.execute("pragma journal_mode = wal")  # persistent; no-op after the first
+        _wal(db)
         db.execute("pragma synchronous = normal")
     except sqlite3.Error:
         db.close()
         raise
     return db
+
+
+def _wal(db: sqlite3.Connection) -> None:
+    """Switch to WAL: persistent, so a no-op after a file's first. The switch needs the file to itself and SQLite's busy
+    timeout doesn't wait for that, so a new file several connections open at once retries for up to BUSY_SECONDS."""
+    deadline = time.monotonic() + BUSY_SECONDS
+    while True:
+        try:
+            db.execute("pragma journal_mode = wal")
+            return
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e) or time.monotonic() > deadline:
+                raise
+            time.sleep(0.01)
 
 
 def _has(db: sqlite3.Connection, name: str) -> bool:

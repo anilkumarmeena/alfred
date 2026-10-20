@@ -95,45 +95,43 @@ def _records(folder: Path) -> Path | None:
     return Path(done.stdout.strip()) / RECORDS if done.returncode == 0 and done.stdout.strip() else None
 
 
-def record(folder: Path, tree: str, ran: Collection[str], failed: Collection[str]) -> None:
-    """Note that a run of tests on code `tree` in `folder` ran `ran` (node ids, passed or skipped) and `failed`, unless
-    an earlier run on that code ran some test this one didn't; and drop records older than RECORD_DAYS."""
-    if not (ran or failed) or not (records := _records(folder)):
-        return
-    records.mkdir(exist_ok=True)
-    file = records / f"{tree}.json"
-    try:
-        before = json.loads(file.read_text())
-        if not {*before["ran"], *before["failed"]} <= {*ran, *failed}:
-            return  # a part of the suite run after the whole of it
-    except (OSError, ValueError):
-        pass
-    old = time.time() - RECORD_DAYS * 86400
-    for stale in records.glob("*.json"):
-        if stale.stat().st_mtime < old:
-            stale.unlink(missing_ok=True)
-    write_atomic(file, json.dumps({"ran": sorted(ran), "failed": sorted(failed)}))
-
-
-def tested(folder: Path) -> dict | None:
-    """The record of a run of the suite on `folder`'s code as it is now ({"ran": [...], "failed": [...]}), or None."""
-    if not (tree := code_tree(folder)) or not (records := _records(folder)):
-        return None
+def _found(records: Path, tree: str) -> dict | None:
+    """The record of a run on code `tree` ({"ran": [...], "failed": [...]}), or None."""
     try:
         return json.loads((records / f"{tree}.json").read_text())
     except (OSError, ValueError):
         return None
 
 
+def record(folder: Path, tree: str, ran: Collection[str], failed: Collection[str]) -> None:
+    """Note that a run of tests on code `tree` in `folder` ran `ran` (node ids, passed or skipped) and `failed`, unless
+    an earlier run on that code ran some test this one didn't; and drop records older than RECORD_DAYS."""
+    if not (ran or failed) or not (records := _records(folder)):
+        return
+    records.mkdir(exist_ok=True)
+    if (before := _found(records, tree)) and not {*before["ran"], *before["failed"]} <= {*ran, *failed}:
+        return  # a part of the suite run after the whole of it
+    old = time.time() - RECORD_DAYS * 86400
+    for stale in records.glob("*.json"):
+        if stale.stat().st_mtime < old:
+            stale.unlink(missing_ok=True)
+    write_atomic(records / f"{tree}.json", json.dumps({"ran": sorted(ran), "failed": sorted(failed)}))
+
+
+def tested(folder: Path) -> dict | None:
+    """The record of a test run on `folder`'s code as it is now, or None. Only repos whose suite keeps records (see
+    tests/conftest.py) have the folder, so the others cost no `code_tree`."""
+    if not (records := _records(folder)) or not records.is_dir() or not (tree := code_tree(folder)):
+        return None
+    return _found(records, tree)
+
+
 async def passed(folder: Path, venv: Path, branch: str) -> bool:
     """Whether every test `branch` (checked out in `folder`) collects has already been run on exactly its code, with
     no failures but ENV_ONLY's. Costs a collection (seconds), not a run of the suite."""
     code, tree = await proc.run_try("git", "-C", str(folder), "rev-parse", "-q", "--verify", f"{branch}^{{tree}}")
-    try:
-        records = await asyncio.to_thread(_records, folder)
-        found = json.loads((records / f"{tree.strip()}.json").read_text()) if records and not code else None
-    except (OSError, ValueError):
-        found = None
+    records = await asyncio.to_thread(_records, folder)
+    found = _found(records, tree.strip()) if records and not code else None
     if not found or set(found["failed"]) - ENV_ONLY:
         return False
     code, out = await _pytest(folder, venv, "--collect-only")

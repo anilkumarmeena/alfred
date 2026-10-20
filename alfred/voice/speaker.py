@@ -47,6 +47,7 @@ from alfred.config import (
     SPEAKER_SHORT_MARGIN,
     SPEAKER_SHORT_SECONDS,
 )
+from alfred.core.files import read_jsonl
 from alfred.state import preferences, voiceprints
 from alfred.state.voiceprints import OWNER, Voiceprint
 from alfred.storage import profile
@@ -397,16 +398,22 @@ class SpeakerCheck:
 
     def likely(self, audio: np.ndarray, speech_probs: Callable[[np.ndarray], np.ndarray] | None = None) -> bool:
         """Whether judge() would keep this clip, remembering nothing; True if off or on error. For hearing an
-        utterance early (WhisperSTT.speculate), on `speech_probs` of its own. Runs in a thread."""
+        utterance early (WhisperSTT._guess), on `speech_probs` of its own. Runs in a thread."""
         if not self.on:
             return True
         try:
             speech_seconds, needed, engaged, _, _, score = self._score(audio, speech_probs)
         except (OSError, RuntimeError, ValueError):  # judge() lets such a clip through too
             return True
+        return self._keeps(speech_seconds, needed, engaged, score)[0]
+
+    def _keeps(self, speech_seconds: float, needed: float, engaged: bool, score: float | None) -> tuple[bool, str]:
+        """(keep the clip, why not or why kept unverified)."""
         if engaged and speech_seconds < self.thresholds.min_seconds:
-            return True
-        return score is not None and score >= needed
+            return True, "too short to tell, in a conversation"
+        if score is None:
+            return False, "too little speech to tell"
+        return (True, "") if score >= needed else (False, "not the user's voice")
 
     def _score(self, audio: np.ndarray, speech_probs: Callable[[np.ndarray], np.ndarray] | None = None):
         """(speech seconds, needed score, engaged, embedding, best reference, its score); nothing remembered."""
@@ -428,14 +435,7 @@ class SpeakerCheck:
     def _judge(self, audio: np.ndarray) -> Judgement:
         t = self.thresholds
         speech_seconds, needed, engaged, embedding, reference, score = self._score(audio)
-        why = ""
-        if engaged and speech_seconds < t.min_seconds:
-            ok, why = True, "too short to tell, in a conversation"
-        elif score is None:
-            ok, why = False, "too little speech to tell"
-        else:
-            ok = score >= needed
-            why = "" if ok else "not the user's voice"
+        ok, why = self._keeps(speech_seconds, needed, engaged, score)
         now = self._clock()
         if ok and not why and speech_seconds >= t.min_seconds:  # verified by score, not by shortness
             self._user_at = now
@@ -597,17 +597,8 @@ class SpeakerCheck:
 
 def summary(path: Path = SPEAKER_LOG, since: float = 0.0) -> str:
     """Clip counts, scores and non-user clips since `since`, then barge-in stats and ignored barge-ins."""
-    try:
-        lines = path.read_text().splitlines()
-    except FileNotFoundError:
+    if (records := read_jsonl(path, since)) is None:
         return f"No clips yet: {path} doesn't exist."
-    records = []
-    for line in lines:
-        try:
-            records.append(json.loads(line))
-        except ValueError:
-            continue
-    records = [r for r in records if r.get("time", 0) >= since]
     barge_ins = [r for r in records if r.get("kind") == "barge-in"]
     records = [r for r in records if r.get("kind") != "barge-in"]
     other = [r for r in records if r["verdict"] != "kept"]

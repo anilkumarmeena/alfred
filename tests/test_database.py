@@ -113,6 +113,17 @@ def test_a_dropped_table_is_made_afresh(db):
         conn.execute("insert into notes (text, tag) values ('a', 'b')")
 
 
+def test_a_new_file_waits_its_turn_to_switch_to_wal(tmp_path):
+    fresh = tmp_path / "new.db"
+    holder = sqlite3.connect(fresh, isolation_level=None, check_same_thread=False)  # another process, writing it
+    holder.execute("begin immediate")
+    holder.execute("create table t (x)")
+    threading.Timer(0.2, lambda: holder.execute("commit")).start()
+    started = time.monotonic()
+    db = database.connect(fresh)  # SQLite's busy timeout doesn't cover the switch
+    assert db.execute("pragma journal_mode").fetchone()[0] == "wal" and time.monotonic() - started >= 0.15
+
+
 def test_processes_opening_it_at_once_migrate_it_once(db):
     ran, start = [], threading.Barrier(4)
 

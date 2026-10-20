@@ -59,6 +59,7 @@ daily_checks = 100             # ALFRED_GOAL_DAILY_CHECKS: cap per 24 hours, all
 [announce]
 enabled = true                 # ALFRED_ANNOUNCE: model-worded task endings; off = fixed wording
 seconds = 30.0                 # ALFRED_ANNOUNCE_SECONDS (5-120)
+task_seconds = 8.0             # ALFRED_ANNOUNCE_TASK_SECONDS (1-120): a task's end, on a session warmed during its goal check
 
 [node]
 lost_minutes = 30.0            # ALFRED_NODE_LOST_MINUTES: a machine unreachable this long with work is reported

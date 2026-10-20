@@ -12,7 +12,6 @@ cache is capped (ALFRED_MLX_CACHE_MB) and Kokoro's ORT arena is off by default.
 """
 
 import asyncio
-import ctypes
 import json
 import logging
 import os
@@ -161,14 +160,9 @@ def kokoro_model(chosen: Path = TTS_MODEL, fallbacks: tuple[Path, ...] = TTS_MOD
 
 def performance_cores() -> int:
     """Performance-core count (physical cores on Intel), else cpu_count."""
-    try:
-        libc = ctypes.CDLL(None)
-        for name in (b"hw.perflevel0.physicalcpu", b"hw.physicalcpu"):
-            value, size = ctypes.c_int(0), ctypes.c_size_t(ctypes.sizeof(ctypes.c_int))
-            if libc.sysctlbyname(name, ctypes.byref(value), ctypes.byref(size), None, 0) == 0 and value.value > 0:
-                return value.value
-    except (OSError, AttributeError):  # not macOS
-        pass
+    for name in ("hw.perflevel0.physicalcpu", "hw.physicalcpu"):
+        if (found := platform.sysctl(name)) and found > 0:
+            return found
     return os.cpu_count() or 4
 
 

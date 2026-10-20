@@ -31,6 +31,7 @@ from contextvars import ContextVar
 from pathlib import Path
 
 from alfred.config import SPEECH_GATE_LOG, VOICE_TURNS_LOG
+from alfred.core.files import read_jsonl
 
 log = logging.getLogger("alfred.brain.timing")
 
@@ -188,21 +189,6 @@ def _spread(values: list[float]) -> str:
     return f"median {statistics.median(values):5.2f} s   p90 {p90:5.2f} s   max {values[-1]:5.2f} s   ({len(values)})"
 
 
-def _read(path: Path, since: float) -> list[dict] | None:
-    """JSONL records since `since`; None if the file doesn't exist."""
-    try:
-        lines = path.read_text().splitlines()
-    except FileNotFoundError:
-        return None
-    records = []
-    for line in lines:
-        try:
-            records.append(json.loads(line))
-        except ValueError:  # truncated by a crash
-            continue
-    return [r for r in records if r.get("time", 0) >= since]
-
-
 def by_filter(records: list[dict], clips: list[dict]) -> list[str]:
     """Turns and the speech gate's clips by the call's noise filter mode: calls, the filter's share of a core,
     Whisper's wait, words, and clips dropped as noise or phantoms. Empty if none carry a mode."""
@@ -240,7 +226,7 @@ def by_filter(records: list[dict], clips: list[dict]) -> list[str]:
 def summary(path: Path = VOICE_TURNS_LOG, since: float = 0.0, slowest: int = 5, clips: Path = SPEECH_GATE_LOG) -> str:
     """Report on turns since `since`: outcomes, per-stage and per-gap spread, by noise filter mode (with the speech
     gate's `clips`), slowest turns."""
-    records = _read(path, since)
+    records = read_jsonl(path, since)
     if records is None:
         return f"No turns yet: {path} doesn't exist."
     if not records:
@@ -270,7 +256,7 @@ def summary(path: Path = VOICE_TURNS_LOG, since: float = 0.0, slowest: int = 5, 
             out.append(f"  {'first tool call to done':28} {_spread(work)}")
         handed = sum("background_lookup" in r.get("tool_names", ()) for r in acks)
         out.append(f"{handed} handed slow reading to a background lookup.")
-    out += by_filter(records, _read(clips, since) or [])
+    out += by_filter(records, read_jsonl(clips, since) or [])
     if timed := sorted((r for r in records if "first_audio" in r), key=lambda r: r["first_audio"], reverse=True):
         out += ["", "Slowest to first audio:"]
         out += [f"  {time.strftime('%m-%d %H:%M:%S', time.localtime(r['time']))}  {describe(r)}"

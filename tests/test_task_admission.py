@@ -45,7 +45,7 @@ def test_while_memory_is_short_only_the_first_task_starts(env, monkeypatch, then
 def test_memory_is_short_at_macos_warning_level_or_with_little_available_on_linux(monkeypatch):
     monkeypatch.setattr(platform, "MAC", True)
     for level, short in ((1, False), (2, True), (4, True), (None, False)):
-        monkeypatch.setattr(memory, "_mac_level", lambda level=level: level)
+        monkeypatch.setattr(platform, "sysctl", lambda name, level=level: level)
         assert memory.short() is short
     monkeypatch.setattr(platform, "MAC", False)
     for available, short in ((8, False), (0.5, True)):
@@ -56,4 +56,4 @@ def test_memory_is_short_at_macos_warning_level_or_with_little_available_on_linu
 def test_this_computers_memory_reads_without_failing():
     assert memory.short() in (True, False)
     if platform.MAC:
-        assert memory._mac_level() in (1, 2, 4)
+        assert platform.sysctl("kern.memorystatus_vm_pressure_level") in (1, 2, 4)

@@ -310,7 +310,7 @@ Answers only your enrolled voice. What each case means is in **[🗣️ Voice](v
 | `ALFRED_GOAL_MODEL`<br>`ALFRED_GOAL_ROUNDS` | Balanced tier (Sonnet)<br>`2` | The check's model, and send-backs per request (0–5) |
 | `ALFRED_GOAL_MAX_COST` | `0` (no limit) | Stop sending back past this many CLI-reported dollars |
 | `ALFRED_GOAL_DAILY_CHECKS` | `100` | Most goal checks per 24 hours |
-| `ALFRED_ANNOUNCE`<br>`ALFRED_ANNOUNCE_MODEL`<br>`ALFRED_ANNOUNCE_SECONDS` | `on`<br>Haiku<br>`30` | Word a task's end, and a background lookup's answer that isn't already short plain speech, with a short model call; else fixed wording, or the answer trimmed to plain sentences. A task's end waits at most 8 s, on a session started as its run ends |
+| `ALFRED_ANNOUNCE`<br>`ALFRED_ANNOUNCE_MODEL`<br>`ALFRED_ANNOUNCE_SECONDS` | `on`<br>Haiku<br>`30` | Word a task's end, and a background lookup's answer that isn't already short plain speech, with a short model call; else fixed wording, or the answer trimmed to plain sentences. `ALFRED_ANNOUNCE_TASK_SECONDS` (`8`) caps a task's end instead, worded on a session started as its goal check begins |
 
 - **Projects folder:** if this checkout sits directly in your home folder, the default is `~/Projects`.
 - **Read-only folders:** secrets inside stay hidden; set but empty means none.

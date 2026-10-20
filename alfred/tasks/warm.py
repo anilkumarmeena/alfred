@@ -16,6 +16,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from alfred import projects
 from alfred.core import platform
 
 log = logging.getLogger("alfred.tasks.runner")
@@ -61,8 +62,7 @@ def _ignored(worktree: Path, found: list[str]) -> set[str]:
     if not found:
         return set()
     try:
-        done = subprocess.run(["git", "-C", str(worktree), "check-ignore", "--", *(f"{rel}/" for rel in found)],
-                              capture_output=True, text=True, timeout=30, check=False)
+        done = projects._git(worktree, "check-ignore", "--", *(f"{rel}/" for rel in found))
     except (OSError, subprocess.SubprocessError):
         return set()
     return {line.rstrip("/") for line in done.stdout.splitlines()}

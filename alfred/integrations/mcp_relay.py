@@ -476,8 +476,10 @@ class Lazy:
         await self.deliver(message)
 
     def _keep(self, asked: str, result: dict) -> None:
-        self.kept.setdefault("answers", {})[asked] = _copy(result)
-        mcp_servers.keep_listing(self.server.name, self.key, self.kept)
+        answers = self.kept.setdefault("answers", {})
+        if answers.get(asked) != (result := _copy(result)):  # most starts answer as the last did: no write
+            answers[asked] = result
+            mcp_servers.keep_listing(self.server.name, self.key, self.kept)
 
     async def close(self) -> None:
         if self.checking:

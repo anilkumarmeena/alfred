@@ -52,8 +52,7 @@ def _secret(path: Path) -> bool:
     if path.is_relative_to(claude_logins.voice_logs().resolve()):
         return False
     if path.is_relative_to(TASK_CACHE_DIR.resolve()):
-        return any(path.is_relative_to(Path(d).expanduser().resolve())
-                   for d in (*commands.ALFRED_SECRETS, *commands.HOME_SECRETS))
+        return commands.secret_place(path)
     return commands.secret_path(path)
 
 

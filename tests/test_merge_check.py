@@ -214,7 +214,7 @@ def test_the_goal_check_reads_the_suites_record_of_the_final_code(alfred, monkey
 
     _, task = run_worktree_task(monkeypatch, add_new_file, project="alfred")
     worktree = Path(task["worktree"])
-    assert "Test suite" not in asyncio.run(goal.evidence(task, "added new.py"))  # never run on this code
+    assert "Tests, as recorded" not in asyncio.run(goal.evidence(task, "added new.py"))  # never run on this code
     merge_check.record(worktree, merge_check.code_tree(worktree), {NEW, OLD}, {ENV_ONLY})
     assert ("on exactly this final code: 2 tests passed or were skipped, 1 failed only for want of local files a task "
             "doesn't have, as expected, and none failed.") in asyncio.run(goal.evidence(task, "added new.py"))

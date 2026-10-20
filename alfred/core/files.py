@@ -5,6 +5,7 @@ steps) also stops two processes that each read, change and rewrite the same file
 """
 
 import fcntl
+import json
 import os
 import tempfile
 from collections.abc import Callable
@@ -48,3 +49,18 @@ def update(file: Path, change: Callable[[str], str], mode: int | None = None) ->
         if (new := change(old)) != old:
             write_atomic(file, new, mode)
         return new
+
+
+def read_jsonl(path: Path, since: float = 0.0) -> list[dict] | None:
+    """A JSONL log's records whose "time" is `since` or later, skipping lines a crash cut short; None if no file."""
+    try:
+        lines = path.read_text().splitlines()
+    except FileNotFoundError:
+        return None
+    records = []
+    for line in lines:
+        try:
+            records.append(json.loads(line))
+        except ValueError:  # truncated by a crash
+            continue
+    return [r for r in records if r.get("time", 0) >= since]

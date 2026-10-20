@@ -50,6 +50,7 @@ from alfred.config import (
     SPEECH_GATE_UNSURE_SPEECH_SECONDS,
     SPEECH_GATE_WEAK_SPEECH_SECONDS,
 )
+from alfred.core.files import read_jsonl
 from alfred.state import preferences
 
 log = logging.getLogger("alfred.voice.speech_gate")
@@ -323,17 +324,8 @@ class SpeechGate:
 
 def summary(path: Path = SPEECH_GATE_LOG, since: float = 0.0) -> str:
     """Counts since `since`, then each flagged clip."""
-    try:
-        lines = path.read_text().splitlines()
-    except FileNotFoundError:
+    if (records := read_jsonl(path, since)) is None:
         return f"No clips yet: {path} doesn't exist."
-    records = []
-    for line in lines:
-        try:
-            records.append(json.loads(line))
-        except ValueError:  # truncated by a crash
-            continue
-    records = [r for r in records if r.get("time", 0) >= since]
     flagged = [r for r in records if r["verdict"] != "kept"]
     lines = [f"{len(records)} clips, {len(flagged)} the gate would drop or dropped."]
     if counts := Counter(why for r in flagged for why in r["reasons"]):

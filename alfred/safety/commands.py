@@ -137,11 +137,15 @@ def reads_environment(command: str) -> bool:
     return False
 
 
+def secret_place(path: Path) -> bool:
+    """Whether a resolved path is in one of Alfred's secrets or the home folder's logins (ALFRED_SECRETS, HOME_SECRETS)."""
+    return any(path.is_relative_to(Path(d).expanduser().resolve()) for d in (*ALFRED_SECRETS, *HOME_SECRETS))
+
+
 def secret_path(path: Path) -> bool:
     """Whether a resolved path is a secret: in a secrets/login folder, a .env file, key or credential."""
-    if any(path.is_relative_to(Path(d).expanduser().resolve()) for d in (*ALFRED_SECRETS, *HOME_SECRETS)):
-        return True
-    return bool(SECRET_DIRS.intersection(path.parts)) or bool(SECRET_FILES.fullmatch(path.name))
+    return (secret_place(path) or bool(SECRET_DIRS.intersection(path.parts))
+            or bool(SECRET_FILES.fullmatch(path.name)))
 
 
 # ── What counts as a yes, or a no ───────────────────────────────
@@ -2151,15 +2155,15 @@ class _Mine:
                 return False
         except OSError:
             return True  # nothing there to change
-        seen = 0
-        for top, _, names in os.walk(path) if deep else ():
-            for name in names:
-                seen += 1
-                try:
-                    if seen > _SHARED_MOST or os.lstat(os.path.join(top, name)).st_nlink > 1:
-                        return False
-                except OSError:
-                    continue
+        if not deep:
+            return True
+        files = (os.path.join(top, name) for top, _, names in os.walk(path) for name in names)
+        for seen, file in enumerate(files, 1):
+            try:
+                if seen > _SHARED_MOST or os.lstat(file).st_nlink > 1:
+                    return False
+            except OSError:
+                continue
         return True
 
     def _owned_chmod(self, args: list[str]) -> bool:

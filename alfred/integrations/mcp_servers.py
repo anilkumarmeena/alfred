@@ -390,7 +390,7 @@ def remove(name: str) -> list[str]:
     with _db() as db:
         db.execute("delete from mcp_tools where server = ?", (name,))
         db.execute("delete from mcp_servers where name = ?", (name,))
-    keep_listing(name, "", {})
+    forget_listing(name)
     return [s for s in dict.fromkeys([*server.secrets, server.oauth_secret]) if s not in others and vault.remove(s)]
 
 
@@ -453,14 +453,18 @@ def listing(name: str, key: str) -> dict:
 
 
 def keep_listing(name: str, key: str, kept: dict) -> None:
-    """Keep what the server answered under `key` for its next start; {} forgets it."""
+    """Keep what the server answered under `key` for its next start."""
+    _listings(name, "insert or replace into mcp_listings values (?, ?, ?, ?)", name, key, json.dumps(kept), time.time())
+
+
+def forget_listing(name: str) -> None:
+    _listings(name, "delete from mcp_listings where server = ?", name)
+
+
+def _listings(name: str, sql: str, *args) -> None:
     try:
         with database.table("mcp_listings", _LISTINGS) as db:
-            if kept:
-                db.execute("insert or replace into mcp_listings values (?, ?, ?, ?)",
-                           (name, key, json.dumps(kept), time.time()))
-            else:
-                db.execute("delete from mcp_listings where server = ?", (name,))
+            db.execute(sql, args)
     except sqlite3.Error as e:
         log.warning("can't keep %s's tool list: %s", name, e)
 

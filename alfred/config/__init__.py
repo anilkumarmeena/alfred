@@ -261,6 +261,8 @@ GOAL_DAILY_CHECKS = whole("goal.daily_checks", "ALFRED_GOAL_DAILY_CHECKS", 1, 10
 # Task-end announcement (alfred.tasks.announce), worded by the announce role; fixed wording on timeout or when off
 ANNOUNCE_ENABLED = flag("announce.enabled", "ALFRED_ANNOUNCE")
 ANNOUNCE_SECONDS = number("announce.seconds", "ALFRED_ANNOUNCE_SECONDS", 5.0, 120.0)
+# A task's end, on a session warmed during its goal check, waits less
+ANNOUNCE_TASK_SECONDS = number("announce.task_seconds", "ALFRED_ANNOUNCE_TASK_SECONDS", 1.0, 120.0)
 
 # Other machines (alfred.node). Where jobs run is a per-user setting (Settings › Machines); when it lets Alfred choose,
 # the placement role picks among the machines online. A machine unreachable for NODE_LOST_MINUTES while it has work is

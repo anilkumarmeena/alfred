@@ -2,8 +2,8 @@
 
 Input is an `Ending`: outcome and report, what the goal check found missing, what Alfred already did, and pending
 suggested edits. `lead` (words already fit to say) is kept verbatim and the rest appended. Falls back to `plain`
-fixed wording when ALFRED_ANNOUNCE=off, on error, past SECONDS (or ANNOUNCE_SECONDS if lower), or at the usage limit.
-The call runs on a single-use session the runner `warm`s as a run ends, so CLI startup overlaps the goal check.
+fixed wording when ALFRED_ANNOUNCE=off, on error, past ANNOUNCE_TASK_SECONDS, or at the usage limit. The call runs
+on a single-use session the runner `warm`s as the goal check starts, so CLI startup overlaps it.
 
 Only the spoken text is produced here; structured facts stay on the task. `context` gives the voice brain the task
 number and pending edits, unspoken. `first` and `brief` pick and shorten the update a greeting leads with.
@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 
 from alfred import prompts
-from alfred.config import ANNOUNCE_ENABLED, ANNOUNCE_SECONDS
+from alfred.config import ANNOUNCE_ENABLED, ANNOUNCE_TASK_SECONDS
 from alfred.llm import usage
 from alfred.llm.roles import Role
 from alfred.llm.standby import Standby
@@ -27,7 +27,6 @@ log = logging.getLogger("alfred.tasks.announce")
 
 def system() -> str:
     return prompts.load("task_announcement", user_name=profile.name())
-SECONDS = 8.0  # wait for the wording at most this long: a warmed session answers in seconds
 IDLE_SECONDS = 300  # close an unused warmed session after this (the goal check runs in between)
 REPORT_MOST = 4000  # chars of the report the model reads
 SAID_MOST = 600  # max chars spoken
@@ -135,7 +134,7 @@ async def spoken(e: Ending) -> str:
     if not ANNOUNCE_ENABLED or usage.out():
         return plain(e)
     try:
-        worded = " ".join((await asyncio.wait_for(ask_model(facts(e)), min(SECONDS, ANNOUNCE_SECONDS))).split())
+        worded = " ".join((await asyncio.wait_for(ask_model(facts(e)), ANNOUNCE_TASK_SECONDS)).split())
     except Exception as ex:  # log the type only: no task content
         log.warning("announcement wording failed: %s", type(ex).__name__)
         return plain(e)

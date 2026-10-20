@@ -291,7 +291,7 @@ def test_a_reply_after_a_stop_lets_the_same_limit_be_waited_for_again(env, monke
 
 def test_a_limit_on_its_model_alone_carries_on_with_a_lighter_one(env, monkeypatch):
     monkeypatch.setattr(runner, "LIMIT_SLACK", 0.0)
-    monkeypatch.setattr(usage, "available", lambda model, now=None: "claude-haiku-5-5")  # lighter than any task role
+    monkeypatch.setattr(usage, "available", lambda model, now=None: f"{model}-lighter")
     prompts = fake_run(monkeypatch, limited(after=7 * 86400), finishes())
     _, task, said = asyncio.run(run_one())
     assert prompts[1] == runner.LIMIT_RESUMED and task["status"] == "done"

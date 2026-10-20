@@ -2,7 +2,8 @@
 
 ALFRED_DENOISE modes:
   on    filter the room mic input (VAD, barge-in and Whisper all hear it)
-  vad   only the VAD hears filtered audio; Whisper gets the original, to compare recognition
+  vad   only the VAD hears filtered audio; Whisper gets the original, to compare recognition. The mic's one filter
+        tags each frame with its output (CLEAN) for the call's two VAD streams, so it costs what "on" does
   off   original audio everywhere
   ab    each call on or vad at random, for comparing: its turns (make voice-timing) and the speech gate's clips carry
         the call's mode, with the filter's CPU and Whisper's time
@@ -36,6 +37,7 @@ MODEL_DELAY = 1440  # output lag in samples: STFT 480 + two lookahead frames
 _FULL = np.array(0, np.float32)
 HISTORY_SECONDS = 75  # vad mode history: Silero's 60 s buffer + padding + slack
 ARMS = ("on", "vad")  # ab mode's choices
+CLEAN = "alfred.clean"  # vad mode: a mic frame's userdata key for (its filtered samples, the filter's delay then)
 
 
 def load(path: Path = DENOISE_MODEL, mode: str = DENOISE):
@@ -177,12 +179,15 @@ def _pcm(frames: list[rtc.AudioFrame]) -> np.ndarray:
 
 
 class DeepFilterNet(rtc.FrameProcessor[rtc.AudioFrame]):
-    """LiveKit frame processor on the room mic input, before VAD and Whisper.
+    """LiveKit frame processor on the room mic input, before VAD and Whisper. With `tag` (vad mode) it passes the
+    original on, its filtered samples in the frame's userdata (CLEAN) for the VAD streams.
 
     Runs on the event loop, so must stay real-time: ~8 ms CPU per 50 ms frame on an M-series Mac."""
 
-    def __init__(self, session, atten_db: float = DENOISE_ATTEN_DB, meter: Meter | None = None) -> None:
+    def __init__(self, session, atten_db: float = DENOISE_ATTEN_DB, meter: Meter | None = None,
+                 tag: bool = False) -> None:
         self._denoiser = Denoiser(session, atten_db, meter)
+        self._tag = tag
         self._enabled = True
         self._frames, self._busy, self._worst, self._audio = 0, 0.0, 0.0, 0.0
         self._slow_warned = 0.0
@@ -214,6 +219,9 @@ class DeepFilterNet(rtc.FrameProcessor[rtc.AudioFrame]):
             self._slow_warned = start
             log.warning("noise filter slower than real time: %.1f ms for a %.0f ms frame",
                         took * 1000, frame.duration * 1000)
+        if self._tag:
+            frame.userdata[CLEAN] = (pcm, self._denoiser.delay)
+            return frame
         return _frame(pcm, frame.sample_rate)
 
     def _close(self) -> None:
@@ -223,10 +231,12 @@ class DeepFilterNet(rtc.FrameProcessor[rtc.AudioFrame]):
 
 
 def room_options(session, mode: str = DENOISE, meter: Meter | None = None) -> room_io.RoomOptions:
-    """Room options: mic through DeepFilterNet in "on" mode. AGC stays on in all modes so only the filter differs."""
+    """Room options: mic through DeepFilterNet in "on" mode; in "vad" mode it only tags each frame with its output.
+    AGC stays on in all modes so only the filter differs."""
     audio = room_io.AudioInputOptions(auto_gain_control=True)
-    if session is not None and mode == "on":
-        audio.noise_cancellation = lambda _params: DeepFilterNet(session, meter=meter)  # one per mic track, own state
+    if session is not None and mode in ("on", "vad"):
+        # One per mic track, own state
+        audio.noise_cancellation = lambda _params: DeepFilterNet(session, meter=meter, tag=mode == "vad")
     return room_io.RoomOptions(audio_input=audio)
 
 
@@ -237,7 +247,8 @@ def session_vad(silero: vad.VAD, session, mode: str = DENOISE, meter: Meter | No
 
 class FilteredVAD(vad.VAD):
     """Silero decides on denoised audio; events carry the original audio (which the STT adapter cuts for Whisper).
-    Each stream filters on its own, and a call has two: turn-taking's and the STT adapter's."""
+    A call has two streams, turn-taking's and the STT adapter's: both read the mic filter's tags (CLEAN), and filter
+    on their own only while none come."""
 
     def __init__(self, inner: vad.VAD, session, atten_db: float = DENOISE_ATTEN_DB, meter: Meter | None = None) -> None:
         super().__init__(capabilities=inner.capabilities)
@@ -291,6 +302,8 @@ class FilteredVADStream(vad.VADStream):
         self._history: _History | None = None  # sized from the first frame's rate
         self._rate = 0
         self._failed = False
+        self._tagged = False  # the mic filter's tags have come: this stream filters nothing itself
+        self._delay = 0  # samples the filtered audio Silero hears lags the original
         super().__init__(vad_)  # starts _main_task
 
     async def _main_task(self) -> None:
@@ -312,13 +325,7 @@ class FilteredVADStream(vad.VADStream):
                 if self._history is None:
                     self._rate = item.sample_rate
                     self._history = _History(HISTORY_SECONDS * self._rate)
-                clean = pcm
-                if not self._failed:
-                    try:
-                        clean = await asyncio.to_thread(self._denoiser.process, pcm, item.sample_rate)
-                    except Exception:
-                        log.exception("noise filter failed; the VAD hears the original mic audio from here on")
-                        self._failed, self._denoiser.delay = True, 0
+                clean = await self._clean(item, pcm)
                 self._history.add(pcm)
                 segment.stream.push_frame(_frame(clean, item.sample_rate))
             segment.stream.end_input()
@@ -329,6 +336,25 @@ class FilteredVADStream(vad.VADStream):
             for s in opened:
                 await s.stream.aclose()
 
+    async def _clean(self, item: rtc.AudioFrame, pcm: np.ndarray) -> np.ndarray:
+        """What Silero hears of a frame: the mic filter's tag; once tags have come, an untagged frame as it is (LiveKit's
+        silent stand-in while it mutes the STT, or the mic filter has failed); else this stream's own filter, or the
+        original once that failed."""
+        tag = item.userdata.get(CLEAN)
+        if tag is not None and len(tag[0]) == len(pcm):
+            (clean, self._delay), self._tagged = tag, True
+            return clean
+        if self._tagged or self._failed:
+            return pcm
+        try:
+            clean = await asyncio.to_thread(self._denoiser.process, pcm, item.sample_rate)
+        except Exception:
+            log.exception("noise filter failed; the VAD hears the original mic audio from here on")
+            self._failed, self._delay = True, 0
+            return pcm
+        self._delay = self._denoiser.delay
+        return clean
+
     async def _forward(self, segments: "asyncio.Queue[_Segment | None]") -> None:
         """Forward inner events in order, with frames replaced by original audio."""
         while (segment := await segments.get()) is not None:
@@ -337,6 +363,6 @@ class FilteredVADStream(vad.VADStream):
                 if ev.type == vad.VADEventType.INFERENCE_DONE:
                     segment.consumed += n
                 # Frames end at Silero's read position; the matching original is `delay` earlier
-                end = segment.origin + segment.consumed - self._denoiser.delay
+                end = segment.origin + segment.consumed - self._delay
                 frames = [_frame(self._history.span(end - n, end), self._rate)] if n else []
                 self._event_ch.send_nowait(dataclasses.replace(ev, frames=frames))

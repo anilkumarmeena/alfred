@@ -123,9 +123,10 @@ def sdk_options(env: dict[str, str] | None = None, login: str | None = None, **o
 def short_options(system_prompt: str, model: Role | str, env: dict[str, str] | None = None,
                   **options) -> ClaudeAgentOptions:
     """Options for one short tool-less call, on the five-minute cache; falls back to a lighter model while the limit
-    is used up."""
+    is used up. Nothing resumes such a call, so it leaves no transcript to pile up."""
     return sdk_options(FIVE_MINUTE_CACHE | (env or {}), model=usage.available(model_for(model)),
                        system_prompt=system_prompt, tools=[], allowed_tools=[], max_turns=1, cwd=str(DATA_DIR),
+                       extra_args={"no-session-persistence": None},
                        **options)
 
 
