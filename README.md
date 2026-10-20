@@ -4,6 +4,7 @@
 
 <br>
 
+[![CI](https://img.shields.io/github/actions/workflow/status/anilkumarmeena/alfred/ci.yml?branch=master&style=flat-square&label=tests)](https://github.com/anilkumarmeena/alfred/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-4fd1ff?style=flat-square)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776ab?style=flat-square&logo=python&logoColor=white)](pyproject.toml)
 [![Platforms: macOS · Linux · WSL2](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20WSL2-111?style=flat-square)](docs/setup.md#-pick-your-platform)
