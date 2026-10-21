@@ -287,7 +287,7 @@ What a lower layer names so a higher one can fill it in (`alfred/contracts/`), w
 | Area | Target | What it does |
 |---|---|---|
 |  | `make help` | Show this list |
-| First-time setup | `make install` | Install tools, dependencies and models |
+| First-time setup | `make install` | Install tools, dependencies, models and the web app, then make setup and check the Claude login |
 | First-time setup | `make uv-bin` | Install the pinned uv into ~/.local/bin if no working one is found (no sudo) |
 | First-time setup | `make livekit-bin` | Install livekit-server into ~/.local/bin (built from source on macOS, about a minute) |
 | First-time setup | `make models` | Download speech, VAD, noise and speaker models (into ALFRED_HOME/models) |
@@ -300,7 +300,7 @@ What a lower layer names so a higher one can fill it in (`alfred/contracts/`), w
 | First-time setup | `make accounts` | Google accounts (ARGS="add home ...") |
 | First-time setup | `make about` | Show "about you" text (ARGS="--from me.txt") |
 | First-time setup | `make servers` | MCP servers (ARGS="set-secret notion") |
-| First-time setup | `make passcode` | Show the logins' passcodes (this computer only; never over the web) |
+| First-time setup | `make passcode` | Show the logins' passcodes (this computer only; never over the web); ARGS=set changes yours |
 | First-time setup | `make vault` | Vault status (ARGS=init\|rotate\|reencrypt\|"reset --yes") |
 | First-time setup | `make chat-check` | Check Google Chat access (LABEL=...) |
 | First-time setup | `make tailscale-serve` | Serve web app and LiveKit on the tailnet |
@@ -310,7 +310,7 @@ What a lower layer names so a higher one can fill it in (`alfred/contracts/`), w
 | Run in the foreground | `make web-dev` | Web app with hot reload (:5173, API via make web; API=https://host for another Alfred) |
 | Run in the foreground | `make agent` | Run voice agent with reload |
 | Run in the foreground | `make runner` | Run task runner |
-| Run in the foreground | `make dev` | Run LiveKit, web, agent and runner together |
+| Run in the foreground | `make dev` | Run LiveKit, web, agent and runner together, and open the dashboard (OPEN=0: don't) |
 | Run in the foreground | `make dev-hot` | Like dev, but live: UI on :5173 updates as you save; web server and agent restart on Python changes |
 | Run in the foreground | `make web-api` | Web server only, restarted when alfred/ changes (the UI comes from make web-dev) |
 | 24/7 services (launchd on macOS, systemd on Linux) | `make services-install` | Install and start the services |

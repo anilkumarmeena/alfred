@@ -99,7 +99,7 @@ NPM       := npm --prefix web
 # web-install reruns only when the manifests change
 WEB_STAMP := web/node_modules/.install-stamp
 
-.PHONY: help install uv-bin livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks speech-gate voice-timing voiceprint test host-check artifact-check features \
+.PHONY: help install ready claude-signed-in uv-bin livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks speech-gate voice-timing voiceprint test host-check artifact-check features \
         services-install services-start services-stop services-restart status logs awake sleep-normal \
         claude-login claude-status accounts about servers passcode vault chat-check tailscale-serve check clean \
         node-setup node-login node-pair node-install node-stop node-check node-status uninstall uninstall-all
@@ -109,15 +109,45 @@ help: ## Show this list
 
 ## ── First-time setup ───────────────────────────────────────────
 
-install: uv-bin ## Install tools, dependencies and models
+# Numbered steps (deploy/stage.sh): each one's output goes to the log, the terminal gets one line a step
+STAGE       := "$(CURDIR)/deploy/stage.sh"
+INSTALL_LOG  = $(LOGS_DIR)/install.log
+HAS_LIVEKIT := command -v livekit-server >/dev/null || [ -x $(LOCAL_BIN)/livekit-server ]
 ifeq ($(UNAME),Darwin)
-	@command -v livekit-server >/dev/null || [ -x $(LOCAL_BIN)/livekit-server ] || \
-		if command -v brew >/dev/null; then brew install livekit; else $(MAKE) --no-print-directory livekit-bin; fi
+GET_LIVEKIT := if command -v brew >/dev/null; then brew install livekit; else $(MAKE) --no-print-directory livekit-bin; fi
 else
-	@command -v livekit-server >/dev/null || [ -x $(LOCAL_BIN)/livekit-server ] || $(MAKE) --no-print-directory livekit-bin
+GET_LIVEKIT := $(MAKE) --no-print-directory livekit-bin
 endif
-	$(uv) sync
-	$(MAKE) models web-build
+
+install: ## Install tools, dependencies, models and the web app, then make setup and check the Claude login
+	@$(STAGE) begin "$(INSTALL_LOG)" "Installing Alfred"
+	@$(STAGE) run "$(INSTALL_LOG)" 1/7 "uv" --note -- '$(MAKE) --no-print-directory uv-bin && uv --version | cut -d" " -f1-2'
+	@$(STAGE) run "$(INSTALL_LOG)" 2/7 "LiveKit server" --note -- \
+		'{ $(HAS_LIVEKIT) || $(GET_LIVEKIT); } && "$$(command -v livekit-server || echo $(LOCAL_BIN)/livekit-server)" --version'
+	@$(STAGE) run "$(INSTALL_LOG)" 3/7 "Python packages" --note -- '$(uv) sync'
+	@$(STAGE) run "$(INSTALL_LOG)" 4/7 "Speech models" --hint "about 1 GB the first time" -- '$(MAKE) --no-print-directory models'
+	@$(STAGE) run "$(INSTALL_LOG)" 5/7 "Web app" --note -- '$(MAKE) --no-print-directory web-build'
+	@$(STAGE) run "$(INSTALL_LOG)" 6/7 "Keys and passcode" --live -- '$(UV) python -m alfred.setup_local'
+	@$(STAGE) run "$(INSTALL_LOG)" 7/7 "Claude login" --note --soft -- '$(MAKE) --no-print-directory claude-signed-in'
+	@$(STAGE) end "$(INSTALL_LOG)" "Alfred is installed" \
+		"make dev" "run it all and open the dashboard" \
+		"make services-install" "or run it 24/7 in the background"
+
+# Run targets first do whichever of make install and make setup was skipped (install includes setup)
+INSTALLED = [ -d "$(MAIN_DIR)/.venv" ] && [ -f "$(TTS)" ] && [ -f "$(VOICES)" ] && [ -f "$(DFN)" ] && [ -f "$(SPK)" ] && \
+            { $(HAS_LIVEKIT); }
+SET_UP    = [ -f "$(ALFRED_HOME_DIR)/.env" ] && [ -f "$(ALFRED_HOME_DIR)/secrets/livekit.yaml" ]
+
+ready:
+	@$(INSTALLED) || { $(STAGE) say "Alfred isn't installed yet, so make install runs first"; \
+		$(MAKE) --no-print-directory install; }
+	@$(SET_UP) || { $(STAGE) say "Alfred isn't set up yet, so make setup runs first"; $(MAKE) --no-print-directory setup; }
+
+claude-signed-in:
+	@command -v claude >/dev/null || { echo "no Claude Code CLI yet: install it, then sign in from the dashboard"; exit 1; }
+	@s=$$($(if $(CLAUDE_PATH),CLAUDE_CONFIG_DIR="$(CLAUDE_PATH)" )claude auth status 2>/dev/null); \
+		echo "$$s" | grep -q '"loggedIn": *true' || { echo "not signed in yet: sign in from the dashboard, Settings › Claude logins"; exit 1; }; \
+		echo "$$s" | sed -nE 's/.*"email": *"([^"]*)".*/signed in as \1/p'
 
 uv-bin: ## Install the pinned uv into ~/.local/bin if no working one is found (no sudo)
 	@uv --version >/dev/null 2>&1 || { set -o pipefail; curl -LsSf https://astral.sh/uv/$(UV_VERSION)/install.sh | UV_INSTALL_DIR=$(HOME)/.local/bin sh; }
@@ -127,12 +157,12 @@ ifeq ($(UNAME),Darwin)
 	@case $$(uname -m) in x86_64) arch=amd64 sha=$(GO_SHA_amd64);; arm64) arch=arm64 sha=$(GO_SHA_arm64);; \
 		*) echo "no Go $(GO_VERSION) build for $$(uname -m)"; exit 1;; esac; \
 	tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
-	curl -fSL -o $$tmp/go.tar.gz https://go.dev/dl/go$(GO_VERSION).darwin-$$arch.tar.gz && \
+	echo "Downloading Go $(GO_VERSION)" && curl -fSL --progress-bar -o $$tmp/go.tar.gz https://go.dev/dl/go$(GO_VERSION).darwin-$$arch.tar.gz && \
 	echo "$$sha  $$tmp/go.tar.gz" | $(SHA256) -c --quiet - && \
-	curl -fSL -o $$tmp/livekit.tar.gz https://github.com/livekit/livekit/archive/refs/tags/v$(LIVEKIT_VERSION).tar.gz && \
+	echo "Downloading LiveKit $(LIVEKIT_VERSION) source" && curl -fSL --progress-bar -o $$tmp/livekit.tar.gz https://github.com/livekit/livekit/archive/refs/tags/v$(LIVEKIT_VERSION).tar.gz && \
 	echo "$(LIVEKIT_SRC_SHA)  $$tmp/livekit.tar.gz" | $(SHA256) -c --quiet - && \
 	tar -xzf $$tmp/go.tar.gz -C $$tmp && tar -xzf $$tmp/livekit.tar.gz -C $$tmp && \
-	echo "building livekit-server $(LIVEKIT_VERSION)..." && \
+	echo "Building livekit-server $(LIVEKIT_VERSION), about a minute" && \
 	(cd $$tmp/livekit-$(LIVEKIT_VERSION) && GOTOOLCHAIN=local GOFLAGS=-modcacherw GOPATH=$$tmp/gopath \
 		GOCACHE=$$tmp/gocache $$tmp/go/bin/go build -trimpath -o $$tmp/livekit-server ./cmd/server) && \
 	mkdir -p $(LOCAL_BIN) && install -m 755 $$tmp/livekit-server $(LOCAL_BIN)/livekit-server && \
@@ -141,7 +171,7 @@ else
 	@case $$(uname -m) in x86_64|amd64) arch=amd64 sha=$(LIVEKIT_SHA_amd64);; aarch64|arm64) arch=arm64 sha=$(LIVEKIT_SHA_arm64);; \
 		*) echo "no LiveKit $(LIVEKIT_VERSION) build for $$(uname -m)"; exit 1;; esac; \
 	tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
-	curl -fSL -o $$tmp/livekit.tar.gz $(LIVEKIT_URL)/livekit_$(LIVEKIT_VERSION)_linux_$$arch.tar.gz && \
+	echo "Downloading livekit-server $(LIVEKIT_VERSION)" && curl -fSL --progress-bar -o $$tmp/livekit.tar.gz $(LIVEKIT_URL)/livekit_$(LIVEKIT_VERSION)_linux_$$arch.tar.gz && \
 	echo "$$sha  $$tmp/livekit.tar.gz" | sha256sum -c --quiet - && \
 	tar -xzf $$tmp/livekit.tar.gz -C $$tmp livekit-server && \
 	mkdir -p $(LOCAL_BIN) && install -m 755 $$tmp/livekit-server $(LOCAL_BIN)/livekit-server && \
@@ -151,8 +181,9 @@ endif
 # shasum on macOS; sha256sum where Perl's shasum isn't installed
 SHA256 = $$(command -v shasum >/dev/null && echo shasum -a 256 || echo sha256sum)
 # $(call fetch,FILE,URL,SHA): download once into FILE.part, keep it only if the hash matches
-fetch = [ -f "$(1)" ] || { curl -fSL -o "$(1).part" $(2) && echo "$(3)  $(1).part" | $(SHA256) -c --quiet - && \
-	mv "$(1).part" "$(1)"; }
+# Its label and curl's bar (--progress-bar) are what make install shows while it runs
+fetch = [ -f "$(1)" ] || { echo "Downloading $(notdir $(1))"; curl -fSL --progress-bar -o "$(1).part" $(2) && \
+	echo "$(3)  $(1).part" | $(SHA256) -c --quiet - && mv "$(1).part" "$(1)"; }
 
 models: ## Download speech, VAD, noise and speaker models (into ALFRED_HOME/models)
 	@mkdir -p "$(MODELS_DIR)"
@@ -161,11 +192,14 @@ models: ## Download speech, VAD, noise and speaker models (into ALFRED_HOME/mode
 	@$(call fetch,$(DFN),$(DFN_URL),$(DFN_SHA))
 	@$(call fetch,$(SPK),$(SPK_URL),$(SPK_SHA))
 # Whisper for this machine: MLX on Apple silicon, faster-whisper elsewhere (alfred.media.whisper)
-	$(UV) python -m alfred.media.whisper
+	@echo "Whisper speech recognition"
+	@$(UV) python -m alfred.media.whisper
 # Kokoro's weights for the Apple GPU (alfred.voice.kokoro_mlx), pinned; a no-op elsewhere
-	$(UV) python -m alfred.voice.kokoro_mlx
+	@echo "Kokoro voice for the GPU"
+	@$(UV) python -m alfred.voice.kokoro_mlx
 # os._exit skips teardown, which native plugin libraries can crash on macOS
-	$(UV) python -c "import os, sys; from livekit.agents.__main__ import main; code = main(['download-files']); \
+	@echo "LiveKit turn detection"
+	@$(UV) python -c "import os, sys; from livekit.agents.__main__ import main; code = main(['download-files']); \
 		sys.stdout.flush(); sys.stderr.flush(); os._exit(code)"
 
 models-int8: ## Download the 8-bit Kokoro (~230 MB less memory, slower; ALFRED_TTS_MODEL=kokoro-v1.0.int8.onnx)
@@ -200,8 +234,8 @@ about: ## Show "about you" text (ARGS="--from me.txt")
 servers: ## MCP servers (ARGS="set-secret notion")
 	@$(UV) python -m alfred.integrations.mcp_servers $(or $(ARGS),list)
 
-passcode: ## Show the logins' passcodes (this computer only; never over the web)
-	@$(UV) python -m alfred.auth.logins
+passcode: ## Show the logins' passcodes (this computer only; never over the web); ARGS=set changes yours
+	@$(UV) python -m alfred.auth.logins $(ARGS)
 
 vault: ## Vault status (ARGS=init|rotate|reencrypt|"reset --yes")
 	@$(UV) python -m alfred.auth.vault $(or $(ARGS),status)
@@ -220,7 +254,7 @@ tailscale-serve: ## Serve web app and LiveKit on the tailnet
 RUNNER_UP = import socket, sys; from alfred.config import RUNNER_SOCKET as p; \
 	sys.exit(not p.exists() or socket.socket(socket.AF_UNIX).connect_ex(str(p)))
 
-console: ## Talk via this machine's mic, no server (starts the task runner for the session if it isn't running)
+console: ready ## Talk via this machine's mic, no server (starts the task runner for the session if it isn't running)
 	@mkdir -p "$(LOGS_DIR)"; \
 	if $(UV) python -c "$(RUNNER_UP)" 2>/dev/null; then echo "using the task runner that's already running"; \
 	else echo "starting the task runner for this session ($(LOGS_DIR)/console-runner.log)"; \
@@ -228,33 +262,40 @@ console: ## Talk via this machine's mic, no server (starts the task runner for t
 		trap 'kill -TERM $$runner 2>/dev/null; wait $$runner 2>/dev/null' EXIT INT TERM; fi; \
 	$(UV) python -m alfred.voice.agent console
 
-livekit: ## Run LiveKit server
+livekit: ready ## Run LiveKit server
 	$(LIVEKIT_SERVER) --config "$(ALFRED_HOME_DIR)/secrets/livekit.yaml"
 
-web: web-build ## Build and run web app (:8787)
+web: ready web-build ## Build and run web app (:8787)
 	$(UV) python -m alfred.server
 
 web-dev: $(WEB_STAMP) ## Web app with hot reload (:5173, API via make web; API=https://host for another Alfred)
 	ALFRED_WEB_PORT=$(WEB_PORT) ALFRED_API=$(API) $(NPM) run dev
 
-agent: ## Run voice agent with reload
+agent: ready ## Run voice agent with reload
 	$(UV) python -m alfred.voice.agent dev
 
-runner: ## Run task runner
+runner: ready ## Run task runner
 	$(UV) python -m alfred.tasks.runner
 
-dev: ## Run LiveKit, web, agent and runner together
-	@$(MAKE) -j4 --no-print-directory livekit web agent runner
+# make dev and dev-hot open the dashboard once it answers (not over SSH or without a desktop); OPEN=0 skips that
+DEV_PARTS  = ● LiveKit   ● Web app   ● Voice agent   ● Task runner
+# $(call dev_open,URL): the opener runs beside the services and is stopped with them
+dev_open   = $(STAGE) open $(1) $(if $(filter 0 no false,$(OPEN)),--no-open) & trap "kill $$! 2>/dev/null" EXIT;
 
-dev-hot: ## Like dev, but live: UI on :5173 updates as you save; web server and agent restart on Python changes
-	@$(MAKE) -j5 --no-print-directory livekit web-api agent runner web-dev
+dev: ready ## Run LiveKit, web, agent and runner together, and open the dashboard (OPEN=0: don't)
+	@$(STAGE) header "Alfred · dev" "$(DEV_PARTS)" "Dashboard http://localhost:$(WEB_PORT) · sign in with your passcode (make passcode) · Ctrl+C stops all"
+	@$(call dev_open,http://localhost:$(WEB_PORT)) $(MAKE) -j4 --no-print-directory livekit web agent runner
 
-web-api: ## Web server only, restarted when alfred/ changes (the UI comes from make web-dev)
+dev-hot: ready ## Like dev, but live: UI on :5173 updates as you save; web server and agent restart on Python changes
+	@$(STAGE) header "Alfred · dev-hot" "$(DEV_PARTS)   ● Live UI" "Dashboard http://localhost:5173, updating as you save · Ctrl+C stops all"
+	@$(call dev_open,http://localhost:5173) $(MAKE) -j5 --no-print-directory livekit web-api agent runner web-dev
+
+web-api: ready ## Web server only, restarted when alfred/ changes (the UI comes from make web-dev)
 	$(UV) watchfiles --filter python "python -m alfred.server" alfred
 
 ## ── 24/7 services (launchd on macOS, systemd on Linux) ────────
 
-services-install: setup web-build ## Install and start the services
+services-install: ready web-build ## Install and start the services
 	$(UV) python -m alfred.setup_local --install
 
 # Both also handle services under stale labels (e.g. an old prefix): stop unloads them, start replaces them

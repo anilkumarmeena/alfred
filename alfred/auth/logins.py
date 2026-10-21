@@ -8,16 +8,19 @@ it from .env. With no logins, ALFRED_PASSCODE is checked directly so nobody is l
 Each passcode is also kept encrypted in the vault, so `make passcode` can show it on this computer (whoever can
 run that can read .env and the vault key anyway). Nothing served over HTTP ever returns it.
 
-usage: python -m alfred.auth.logins      show each login and its passcode
+usage: python -m alfred.auth.logins             show each login and its passcode
+       python -m alfred.auth.logins set [NAME]  choose a new passcode, typed hidden (default: the owner's login)
 """
 
 import base64
+import getpass
 import hashlib
 import hmac
 import json
 import logging
 import os
 import re
+import sys
 import threading
 import time
 
@@ -244,7 +247,31 @@ def adopt() -> str:
     return name
 
 
-def main() -> int:
+def _set_command(name: str, ask) -> int:
+    """make passcode ARGS=set: a login's new passcode, typed twice and never echoed."""
+    if not _read():
+        print("No logins yet: make setup makes the first one.")
+        return 1
+    try:
+        passcode = ask(f"New passcode for {name}, {SHORTEST} to {LONGEST} characters: ")
+        if ask("Again: ") != passcode:
+            print("Those don't match; the passcode is unchanged.")
+            return 1
+        set_passcode(name, passcode)
+    except (EOFError, KeyboardInterrupt):  # Ctrl+D or Ctrl+C
+        print("\nThe passcode is unchanged.")
+        return 1
+    except ValueError as e:
+        print(f"{e} The passcode is unchanged.")
+        return 1
+    print(f"{name}'s passcode is changed (make passcode shows it).")
+    return 0
+
+
+def main(args: list[str] | None = None, ask=getpass.getpass) -> int:
+    args = args or []
+    if args[:1] == ["set"]:
+        return _set_command(" ".join(args[1:]) or owner(), ask)
     found = shown()
     if not found:
         print("No logins yet: make setup makes the first one.")
@@ -257,4 +284,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))

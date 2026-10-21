@@ -206,6 +206,33 @@ def test_without_a_vault_key_a_login_still_works_and_make_passcode_says_how_to_r
     assert logins.main() == 0 and "not kept" in capsys.readouterr().out
 
 
+def test_make_passcode_set_changes_the_owners_passcode_typed_twice(home, key, capsys):
+    logins.add("Alex", "123456")
+    logins.add("Sam", "654321")
+    typed = iter(["open sesame", "open sesame"])
+    assert logins.main(["set"], ask=lambda q: next(typed)) == 0
+    assert logins.check("open sesame") == "Alex" and logins.check("123456") is None
+    assert logins.shown()[0] == ("Alex", "open sesame") and "open sesame" not in capsys.readouterr().out
+    typed = iter(["sam-new-one", "sam-new-one"])
+    assert logins.main(["set", "sam"], ask=lambda q: next(typed)) == 0 and logins.check("sam-new-one") == "Sam"
+
+
+def test_make_passcode_set_keeps_the_old_one_on_a_mismatch_a_bad_one_or_ctrl_c(home, key, capsys):
+    logins.add("Alex", "123456")
+    for typed in (["open sesame", "open sesam"], ["12345", "12345"], ["654321", None]):
+        answers = iter(typed)
+
+        def ask(question, answers=answers):
+            answer = next(answers)
+            if answer is None:
+                raise KeyboardInterrupt
+            return answer
+
+        assert logins.main(["set"], ask=ask) == 1
+    assert logins.check("123456") == "Alex"
+    assert capsys.readouterr().out.count("unchanged") == 3
+
+
 def test_adopting_the_first_setup_passcode_keeps_a_copy(home, key, monkeypatch):
     monkeypatch.setenv(logins.VAR, "246810")
     assert logins.adopt() == "Alex" and logins.shown() == [("Alex", "246810")]

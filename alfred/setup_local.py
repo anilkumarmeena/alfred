@@ -1,7 +1,8 @@
 """Local setup, safe to rerun: uv run python -m alfred.setup_local [--install | start | stop | status | labels]
 
   (default)  fill missing LiveKit keys, passcode and vault master key in .env (mode 600), move keys into the vault
-             and the passcode into logins (make passcode shows it again); ask once for the projects folder; write secrets/livekit.yaml
+             and the passcode into logins (make passcode shows it again); ask once for the passcode (Enter: random)
+             and the projects folder; write secrets/livekit.yaml
   --install  also (re)install and start the services: launchd agents from deploy/*.plist on macOS, systemd user
              units from deploy/systemd/*.service on Linux
   start      load installed services, installing missing ones
@@ -93,7 +94,11 @@ def ask_projects_folder(text: str, ask=input) -> str:
         return text
     folder = default = _shown(config.projects_home())
     if sys.stdin.isatty():
-        answer = ask(f"Where are your projects kept? New projects go there, and tasks may read them [{default}]: ")
+        try:
+            answer = ask(f"Where are your projects kept? New projects go there, and tasks may read them [{default}]: ")
+        except EOFError:  # input closed (Ctrl+D): the default
+            answer = ""
+            print()
         folder = answer.strip() or default
     if not Path(folder).expanduser().is_dir():
         print(f"{folder} doesn't exist yet; it's made when the first new project goes there.")
@@ -101,6 +106,26 @@ def ask_projects_folder(text: str, ask=input) -> str:
     if not _env_get(text, "ALFRED_TASK_READ_DIRS") and "ALFRED_TASK_READ_DIRS" not in os.environ:
         text = _env_set(text, "ALFRED_TASK_READ_DIRS", folder)
     return text
+
+
+def ask_passcode(ask=input) -> str:
+    """The first login's passcode: asked for on a TTY, with Enter (or no TTY) taking a random 6 digits. Asks again
+    until it fits the panel's rules: logins.SHORTEST to logins.LONGEST characters, no spaces at either end."""
+    made = f"{secrets.randbelow(10**6):06d}"
+    if not sys.stdin.isatty():
+        return made
+    while True:
+        try:
+            answer = ask(f"Choose your phone passcode, {logins.SHORTEST} to {logins.LONGEST} characters "
+                         "[Enter: a random 6 digits]: ")
+        except EOFError:  # input closed (Ctrl+D): a random one
+            print()
+            return made
+        if not answer.strip():
+            return made
+        if logins.SHORTEST <= len(answer) <= logins.LONGEST and answer == answer.strip():
+            return answer
+        print(f"A passcode is {logins.SHORTEST} to {logins.LONGEST} characters, with no spaces at either end.")
 
 
 # ── Services: launchd on macOS, systemd user units on Linux ─────
@@ -763,7 +788,7 @@ def main() -> None:
         text = _env_set(text, "LIVEKIT_API_KEY", "alfred" + secrets.token_hex(4))
     if not _env_get(text, "LIVEKIT_API_SECRET") and not credentials.get(credentials.LIVEKIT_SECRET):
         text = _env_set(text, "LIVEKIT_API_SECRET", secrets.token_urlsafe(32))
-    new_passcode = "" if _env_get(text, logins.VAR) or logins.ready() else f"{secrets.randbelow(10**6):06d}"
+    new_passcode = "" if _env_get(text, logins.VAR) or logins.ready() else ask_passcode()
     if new_passcode:
         text = _env_set(text, logins.VAR, new_passcode)
     if not _env_get(text, vault.VAR) and not os.environ.get(vault.VAR) and not config.MASTER_KEY:

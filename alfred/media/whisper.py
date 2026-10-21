@@ -229,6 +229,7 @@ def download() -> None:
         if backend() == MLX:
             from huggingface_hub import snapshot_download
 
+            print(f"Whisper {name} for MLX on the GPU")
             snapshot_download(name)
         else:
             from faster_whisper import download_model  # pyright: ignore[reportMissingImports]

@@ -3,6 +3,7 @@ live."""
 
 import os
 import plistlib
+import re
 from pathlib import Path
 
 import pytest
@@ -415,9 +416,37 @@ def test_without_a_terminal_setup_takes_the_default(no_folder_env, monkeypatch):
     assert "ALFRED_NEW_PROJECTS_DIR=~/code\n" in text and "ALFRED_TASK_READ_DIRS=~/a,~/b\n" in text
 
 
+def test_closed_input_takes_the_default(no_folder_env, monkeypatch):
+    monkeypatch.setattr(setup_local.sys.stdin, "isatty", lambda: True, raising=False)
+
+    def ctrl_d(question):
+        raise EOFError
+
+    assert "ALFRED_NEW_PROJECTS_DIR=~/code\n" in setup_local.ask_projects_folder("A=1\n", ask=ctrl_d)
+
+
 def test_a_folder_already_set_is_kept(monkeypatch):
     monkeypatch.setenv("ALFRED_NEW_PROJECTS_DIR", "/srv/projects")
     assert setup_local.ask_projects_folder("A=1\n", ask=lambda q: pytest.fail("asked")) == "A=1\n"
+
+
+def test_setup_takes_a_chosen_passcode_once_it_fits(monkeypatch, capsys):
+    monkeypatch.setattr(setup_local.sys.stdin, "isatty", lambda: True, raising=False)
+    answers = iter(["12345", " spaced out ", "open sesame"])
+    assert setup_local.ask_passcode(ask=lambda q: next(answers)) == "open sesame"
+    assert capsys.readouterr().out.count("6 to 128 characters") == 2
+
+
+def test_enter_closed_input_or_no_terminal_make_a_random_passcode(monkeypatch):
+    monkeypatch.setattr(setup_local.sys.stdin, "isatty", lambda: True, raising=False)
+    assert re.fullmatch(r"\d{6}", setup_local.ask_passcode(ask=lambda q: ""))
+
+    def ctrl_d(question):
+        raise EOFError
+
+    assert re.fullmatch(r"\d{6}", setup_local.ask_passcode(ask=ctrl_d))
+    monkeypatch.setattr(setup_local.sys.stdin, "isatty", lambda: False, raising=False)
+    assert re.fullmatch(r"\d{6}", setup_local.ask_passcode(ask=lambda q: pytest.fail("asked")))
 
 
 def test_projects_default_to_the_folder_alfred_is_in(monkeypatch, tmp_path):

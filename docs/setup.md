@@ -207,6 +207,13 @@ make install
 | 🐍 | `uv sync` | Python 3.12+ and every dependency, into `.venv` |
 | 🧠 | `make models` | Speech, VAD, noise and speaker models for this machine (below) |
 | 🌐 | `make web-build` | `npm install` (once) and a build into `web/dist` |
+| 🔧 | `make setup` | `.env`, keys and your passcode ([step 3](#-3-local-config)) |
+| 🔑 | `claude auth status` | Whether you're signed in to Claude ([step 2](#-2-claude-login)); only warns |
+
+Each step shows as **one line** with a tick and its time; the output goes to **`logs/install.log`**. When a step fails you see its last lines there and then, and running `make install` again is quick for the steps already done.
+
+> [!NOTE]
+> **Skipped `make install` or `make setup`?** `make dev`, `make console`, `make services-install` and the other run targets do whatever is missing first: no models, LiveKit or `.venv` runs `make install`; no `.env` or `secrets/livekit.yaml` runs `make setup`.
 
 `make models` fetches **Kokoro** (TTS, plus its MLX weights on Apple silicon), **Whisper**, **Silero VAD**, **DeepFilterNet 3** (noise filter) and **WeSpeaker ResNet34** (speaker check) into `models/` and the Hugging Face cache. The noise-filter and speaker models are pinned and **checked by hash**. Which Whisper depends on the machine:
 
@@ -229,7 +236,9 @@ make install
 
 ## 🔑 2. Claude login
 
-Alfred uses **your own Claude Code login**: if `claude` already works on this computer, there is nothing to do. Your Claude Code settings, CLAUDE.md, hooks, plugins and MCP servers still stay out of Alfred's sessions.
+Alfred uses **your own Claude Code login**: if `claude` already works on this computer, there is nothing to do, and `make install`'s last step says whose login it found. Your Claude Code settings, CLAUDE.md, hooks, plugins and MCP servers still stay out of Alfred's sessions.
+
+Not signed in? Sign in from the **dashboard**, under **Settings › Claude logins**, or in the terminal:
 
 ```sh
 make claude-status    # which account Alfred uses
@@ -243,7 +252,7 @@ A **claude.ai subscription** login (rather than an API key) also lets background
 
 ## 🔧 3. Local config
 
-**Write `.env`, keys and your passcode** — safe to rerun:
+**Write `.env`, keys and your passcode** — `make install` already did this as its step 6; rerun it any time, for example after installing Tailscale:
 
 ```sh
 make setup            # uv run python -m alfred.setup_local
@@ -265,8 +274,9 @@ flowchart LR
 ```
 
 > [!TIP]
-> Lost your passcode? **`make passcode`** shows it again, on this computer only. Later changes, and logins for other people, are in the control panel under **Settings → Logins and keys**.
+> Lost your passcode? **`make passcode`** shows it again, on this computer only, and **`make passcode ARGS=set`** changes it (typed hidden, twice). Changes and logins for other people are also in the control panel under **Settings → Logins and keys**.
 
+- It **asks once for your phone passcode**: type your own (6 to 128 characters), or press Enter for a random 6 digits. Without a terminal it picks a random one.
 - It **asks once where your projects are kept** (default: the folder this checkout is in) and writes `ALFRED_NEW_PROJECTS_DIR` and `ALFRED_TASK_READ_DIRS`.
 - Then **set who you are**: your name and time zone in **Settings → About you** (or `ALFRED_USER_NAME`, `ALFRED_TIMEZONE`), plus what Alfred should know about you (below).
 - **Name your assistant** there too, if Alfred isn't for you: it goes by whatever you choose, from your next message (or `ALFRED_ASSISTANT_NAME`).

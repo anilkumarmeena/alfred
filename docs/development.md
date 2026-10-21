@@ -165,8 +165,8 @@ The suite runs on **macOS and Linux**.
 
 | | Command | Runs |
 |:-:|---|---|
-| 🚀 | `make dev` | LiveKit, web app, agent (auto-reload) and runner together in the foreground |
-| 🔥 | `make dev-hot` | The same, live: the UI updates as you save, the web server and agent restart on Python changes |
+| 🚀 | `make dev` | LiveKit, web app, agent (auto-reload) and runner together in the foreground; **opens the dashboard** in your browser once it answers (`OPEN=0` doesn't; nor over SSH) |
+| 🔥 | `make dev-hot` | The same, live: the UI updates as you save, the web server and agent restart on Python changes; opens http://localhost:5173 |
 | 🧩 | `make agent` · `make runner` · `make web` · `make livekit` | One part on its own |
 | ⌨️ | `make console` | The agent in the terminal, no LiveKit; starts the task runner for the session if none is running (PortAudio: Linux needs `libportaudio2`) |
 

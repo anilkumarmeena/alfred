@@ -154,27 +154,24 @@ Four **services** keep it running (launchd on macOS, systemd user units on Linux
 > [!IMPORTANT]
 > Everywhere you also need [uv](https://docs.astral.sh/uv/), Node.js 22+ and the **Claude Code CLI** with a Claude account. Package lists and per-platform steps are in **[Setup](docs/setup.md#-pick-your-platform)**.
 
-**1. Install** — LiveKit, Python packages, models and the web app:
+**1. Install** — one command, in **7 numbered steps**: uv, LiveKit, Python packages, models, the web app, then `.env`, keys and your **phone passcode** (`make passcode` shows it again), and a check of your Claude login:
 
 ```sh
 git clone https://github.com/anilkumarmeena/alfred.git && cd alfred
 make install
 ```
 
-**2. Sign in and configure** — Alfred uses your Claude Code login (`make claude-login` if you aren't signed in), then `.env`, keys and your passcode:
+**2. Run it** — every part at once; the dashboard opens in your browser when it's up:
 
 ```sh
-make claude-status    # make claude-login if it says loggedIn: false
-make setup            # prints your phone passcode (make passcode shows it again)
+make dev              # Ctrl+C stops it all
+make services-install # or: keep it running 24/7 in the background
 ```
 
-**3. Talk to it** — straight away in the terminal, or as always-on services:
+**3. Sign in to Claude** — only if install's step 7 warned. Alfred finds your Claude Code login by itself; without one, sign in from the dashboard under **Settings › Claude logins** (or `make claude-login` in the terminal).
 
-```sh
-make console          # talk through this computer's mic, no server needed
-make services-install # or install the four services
-open http://localhost:8787   # xdg-open on Linux
-```
+> [!NOTE]
+> Skipped a step? `make dev`, `make console` and `make services-install` run whatever of `make install` and `make setup` hasn't been done yet, first.
 
 > [!TIP]
 > Next: Google accounts, your phone over Tailscale, projects for code tasks and running with the lid closed are all in **[Setup](docs/setup.md)**.
@@ -202,7 +199,7 @@ open http://localhost:8787   # xdg-open on Linux
 | | Command | What it does |
 |:-:|---|---|
 | ▶️ | `make console` | Talk in this terminal (no server needed) |
-| ▶️ | `make dev` | Run every part in the foreground; <kbd>Ctrl</kbd>+<kbd>C</kbd> stops all |
+| ▶️ | `make dev` | Run every part in the foreground and open the dashboard; <kbd>Ctrl</kbd>+<kbd>C</kbd> stops all |
 | 🔥 | `make dev-hot` | The same with hot reload: edit the UI at http://localhost:5173 and see it live |
 | 🔁 | `make services-restart` | Rebuild the web app and restart the services |
 | 📊 | `make status` · `make logs` | Service health · follow all logs |
