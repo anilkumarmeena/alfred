@@ -122,7 +122,7 @@ def test_old_gmail_and_chat_watches_become_tool_watches_after_the_resume_and_tod
                    "values ('resume', 'Overnight', '', '03:00', 'mon', 'active', 2, 1, 1, '{\"tasks\": [12, 14]}')")
     assert schedules_version() == 2
     gmail, chat, url, resume, done = schedules.items(finished_days=36500)
-    assert schedules_version() == 1 + len(schedules._MIGRATIONS) == 4
+    assert schedules_version() == 1 + len(schedules._MIGRATIONS) == 5
     assert (gmail["probe"], gmail["target"], gmail["expect"]) == ("tool", "gmail_search", None)
     assert schedules.arguments(gmail) == {"query": "from:priya", "max_results": 10}
     assert (chat["probe"], chat["target"], chat["expect"], chat["baseline"]) == ("tool", "chat_unread", "Priya", None)
@@ -140,6 +140,6 @@ def test_a_fresh_database_gets_every_schedules_migration(monkeypatch, tmp_path):
     assert schedules.items() == []
     with closing(database.connect()) as db:
         columns = {r["name"] for r in db.execute("pragma table_info(schedules)")}
-    assert {"picks", "arguments"} <= columns and schedules_version() == 4
+    assert {"picks", "arguments", "scripts"} <= columns and schedules_version() == 5
     job = schedules.add("resume", "Overnight", "", when="03:00", repeat="daily", tasks=[], failed=True)
     assert schedules.picks(job) == {"failed": True} and job["arguments"] is None

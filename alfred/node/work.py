@@ -539,7 +539,8 @@ class Work:
                 continue
             self.journal.add("scheduled", 0, "", {
                 "job": int(key), "started": ran["at"], "ended": now, "code": ended[1], "next_run": ran["next_run"],
-                "output": command_jobs.tail(self.scheduled.log_file(ran["run"]), 4000),
+                "output": command_jobs.tail(self.scheduled.log_file(ran["run"]), 4000,
+                                            (jobs.get(key) or {}).get("folder")),
                 "away": self.agent.link is None or not self.agent.link.up})
             ran["reported"] = True
             self.agent.awake.release(f"scheduled {key}")
@@ -561,8 +562,11 @@ class Work:
             except Refused as e:
                 log.warning("scheduled job %s can't run here: %s", key, e)
                 continue
-            if why := self.refusal(job["text"], "made through the gate", folder):  # weighed when made: secrets never
+            if why := await asyncio.to_thread(self._recheck, kept, key, job, folder):
                 log.warning("scheduled job %s refused: %s", key, why)
+                nxt = schedules.following(job, now)
+                kept["ran"][key] = {"at": now, "refused": why, "next_run": nxt, "reported": True}
+                self.journal.add("scheduled", 0, "", {"job": int(key), "refused": why, "next_run": nxt})
                 continue
             record = self.scheduled.launch(job["text"], job["title"], folder, extra={"schedule": job["id"]})
             self.agent.awake.hold(f"scheduled {key}")
@@ -570,6 +574,19 @@ class Work:
             started.append(job["id"])
         self._keep_schedules(kept)
         return started
+
+    @staticmethod
+    def _recheck(kept: dict, key: str, job: dict, folder: Path) -> str:
+        """schedules.run_refusal for a job starting here. Its folder being here, the scripts its yes covers are taken
+        here, at its first run after each yes."""
+        agreed = schedules.agreed_scripts(job)
+        if agreed is not None and schedules.AGREED in agreed:
+            taken = kept.setdefault("scripts", {})
+            if (mine := taken.get(key)) is None or mine.get("agreed") != agreed[schedules.AGREED]:
+                mine = taken[key] = {"agreed": agreed[schedules.AGREED],
+                                     "files": schedules.fingerprints(job["text"], folder)}
+            agreed = mine["files"]
+        return schedules.run_refusal(job, folder, agreed)
 
     async def schedule_loop(self, every: float = 30.0) -> None:
         while True:

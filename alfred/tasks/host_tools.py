@@ -25,6 +25,7 @@ from alfred.core import platform
 from alfred.llm.claude import READS
 from alfred.llm.sdk import PermissionResultAllow, PermissionResultDeny, create_sdk_mcp_server, tool as sdk_tool
 from alfred.safety import commands, host, remembered
+from alfred.safety.redact import redact
 from alfred.storage import profile
 
 if TYPE_CHECKING:
@@ -215,7 +216,7 @@ def _host_tools(task: dict, cwd: Path, jobs: TaskJobs) -> list:
         except (OSError, RuntimeError) as e:
             return text(f"Couldn't run it: {e}", error=True)
         left = await asyncio.to_thread(_still_running, leaders[0]) if leaders else ""
-        return text(ran.text() + left, error=ran.code != 0)
+        return text(redact(ran.text() + left, folder(args)), error=ran.code != 0)
 
     @sdk_tool(
         "start_job",

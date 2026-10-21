@@ -39,6 +39,7 @@ from alfred.core import platform
 from alfred.core.files import write_atomic
 from alfred.llm import claude_logins
 from alfred.safety.commands import ALFRED_SECRETS, HOME_SECRETS, SECRET_DIRS, secret_file_names
+from alfred.safety.redact import redact
 from alfred.storage import profile as profiles  # not `profile`: that name is the sandbox profile here
 
 log = logging.getLogger("alfred.safety.host")
@@ -774,7 +775,7 @@ class Jobs:
 
     def _view(self, job: dict, now: float, tail: int = 800) -> dict:
         try:
-            end = self.log_file(job["id"]).read_bytes()[-tail:].decode(errors="replace")
+            end = redact(self.log_file(job["id"]).read_bytes()[-tail:].decode(errors="replace"), job["folder"])
         except OSError:
             end = ""
         return {"id": job["id"], "title": job["title"], "command": job["command"], "folder": job["folder"],

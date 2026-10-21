@@ -69,6 +69,7 @@ from alfred.core import memory
 from alfred.llm import claude_logins, retry, roles, usage
 from alfred.llm.sdk import CanUseToolShadowedWarning
 from alfred.safety import host
+from alfred.safety.redact import redact
 from alfred.state import activity as bell, preferences, todo as todos
 from alfred.storage import profile
 from alfred.tasks import (
@@ -100,6 +101,7 @@ from alfred.tasks.command_tasks import CommandTasks
 from alfred.tasks.events import (
     Events,
     bell_entry,  # noqa: F401
+    worked_in,
 )
 from alfred.tasks.git_ops import GitOps
 from alfred.tasks.host_tools import TaskJobs, few
@@ -259,6 +261,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
         self.store.step(task_id, text)  # in memory; flushed by _write_steps
 
     def progress(self, task_id: int, text: str) -> None:
+        text = redact(text, worked_in(self.store.get(task_id)))
         self.store.log(task_id, "progress", text)
         self._emit("progress", self.store.update(task_id, activity=text), text)
 
@@ -725,7 +728,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
         if outcome:
             fields["cost"] = task["cost"] + outcome.cost
             if outcome.result:
-                fields["summary"] = outcome.result
+                fields["summary"] = redact(outcome.result, worked_in(task))
         if task["in_place"] and task["worktree"]:
             fields["changes"] = await self._uncommitted(task)
         elif task["worktree"]:

@@ -147,6 +147,110 @@ def test_scripts_naming_secrets_are_refused_even_with_a_yes(here):
     assert refused("python3 report.py", cwd=here) == ""
 
 
+@pytest.mark.parametrize("script, secret", [
+    ("#!/bin/sh\n# loads settings from .env\n  # see ~/.ssh/config too\necho run\n", False),  # comments only
+    ("#!/bin/sh\n# reads .env\ncat .env\n", True),
+    ("#!/bin/sh\necho \"start\n#$(cat .env)\n\"\n", True),  # a # line in a string still runs its $( )
+    ("#!/bin/cat .env\necho run\n", True),  # the #! line is kept
+    ("#!/bin/sh\nls \\\n# .env\n", True),  # joined to the line before, so not a comment
+    ("#!/bin/sh\nwhile read -r f; do cat \"${f#?}\"; done <<EOF\n#.env\nEOF\n", True),  # a heredoc's # line is data
+    ("#!/bin/sh\nx='\n#.env\n'\ncat \"${x#??}\"\n", True),  # and so is a quoted string's
+    ("#!/bin/sh\n# cat <<EOF\n# .env\necho run\n", False),  # a << in a comment starts no heredoc
+])
+def test_shell_scripts_naming_secrets_only_in_comments_run(script, secret, here):
+    (here / "job.sh").write_text(script)
+    assert seen("sh job.sh", here).secret is secret, script
+    assert ("touches secrets" in refused("sh job.sh", cwd=here)) is secret, script
+
+
+def test_a_script_sourced_with_a_dot_is_read_like_source(here):
+    (here / "wipe.sh").write_text("rm -rf ~/old\n")
+    for command in (". ./wipe.sh", "source wipe.sh", "cd lib && . ../wipe.sh"):
+        assert risky(command, cwd=here) == "runs a script that deletes files", command
+    assert describe(". ./wipe.sh", cwd=here) == "runs a script that deletes files (.)"
+    assert risky(". ./missing.sh", cwd=here) == UNSEEN
+
+
+# ── A script reading its own project's keys asks ────────────────
+
+KEYS = "runs a script that reads its project's keys when it runs"
+RUN = "#!/bin/bash\n# Keys come from .env\nROOT=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"\ncd \"$ROOT\"\n. scripts/keys.sh\nload\n"
+
+
+@pytest.fixture
+def project(tmp_path):
+    root = tmp_path / "proj"
+    (root / ".git").mkdir(parents=True)
+    (root / "scripts").mkdir()
+    (root / ".env").write_text("API_KEY=abcdef123456\n")
+    return root
+
+
+def test_sourced_scripts_resolve_in_the_folder_the_script_cds_into(project):
+    (project / "scripts/run.sh").write_text(RUN)
+    (project / "scripts/keys.sh").write_text("load() { rm -rf build; }\n")
+    elsewhere = project.parent  # run from another folder: $0 and the cd still find scripts/keys.sh
+    assert risky("bash proj/scripts/run.sh", cwd=elsewhere) == "runs a script that deletes files"
+    assert str((project / "scripts/keys.sh").resolve()) in seen("bash proj/scripts/run.sh", elsewhere).files
+    (project / "scripts/run.sh").write_text(RUN.replace('cd "$ROOT"', 'cd "$ROOT"\nROOT=/tmp'))  # set twice: unknown
+    assert risky("bash proj/scripts/run.sh", cwd=elsewhere) == UNSEEN
+
+
+@pytest.mark.parametrize("keys", [
+    "load() {\n  local file=.env\n  grep -E '^API_KEY=' \"$file\"\n}\n",  # like video-agent's keys.sh
+    "load() { set -a; . ./.env; set +a; }\n",  # sourced: never read, still asked about
+    "load() { cat \"$(dirname \"${BASH_SOURCE[0]}\")/../.env\"; }\n",
+])
+def test_a_script_reading_its_projects_env_asks_instead_of_being_refused(project, keys):
+    (project / "scripts/run.sh").write_text(RUN)
+    (project / "scripts/keys.sh").write_text(keys)
+    assert not seen("bash scripts/run.sh", project).secret
+    assert refused("bash scripts/run.sh", cwd=project) == ""
+    assert describe("bash scripts/run.sh", cwd=project) == f"{KEYS} (bash)"
+    assert "API_KEY=abcdef" not in str(seen("bash scripts/run.sh", project).files)
+
+
+def test_reading_the_keys_comes_before_any_other_risk(project):
+    (project / "scripts/keys.sh").write_text("rm -rf build\ncat .env\n")
+    assert risky("bash scripts/keys.sh", cwd=project) == KEYS  # a yes for "deletes files" mustn't cover it
+    (project / "tidy.py").write_text("print(open('.env').read())\n")
+    assert risky("python3 tidy.py", cwd=project) == KEYS
+
+
+@pytest.mark.parametrize("script", [
+    "cat ~/.ssh/id_rsa\n", "cat ../other/.env\n", "cat \"$DIR/.env\"\n", "cd /tmp && cat .env\n",
+    "cd ~\nload() { cat .env; }\n", "cat .env\ncat secrets/token\n", "cat .env\nps eww\n",
+    f"cat {commands.ROOT / '.env'}\n", "cat .env\n# cd somewhere/else is fine in a comment\ncd \"$1\"\n",
+])
+def test_every_other_secret_is_still_refused(project, script):
+    (project / "scripts/job.sh").write_text(script)
+    assert seen("bash scripts/job.sh", project).secret, script
+    assert "touches secrets" in refused("bash scripts/job.sh", cwd=project), script
+
+
+def test_python_that_changes_folder_cant_read_a_bare_env(project):
+    (project / "job.py").write_text("import os\nos.chdir('/tmp')\nprint(open('.env').read())\n")
+    assert seen("python3 job.py", project).secret
+
+
+def test_the_command_line_itself_still_may_not_name_env(project):
+    assert "touches secrets" in refused("cat .env", cwd=project)
+    assert "touches secrets" in refused("bash -c 'cat .env'", cwd=project)
+
+
+def test_a_script_outside_any_project_may_not_read_env(tmp_path):
+    (tmp_path / "loose").mkdir()
+    (tmp_path / "loose/job.sh").write_text("cat .env\n")
+    if commands.checkout(tmp_path / "loose/job.sh") is not None:
+        pytest.skip("the temp folder is inside a git checkout here")
+    assert seen("bash job.sh", tmp_path / "loose").secret
+
+
+def test_a_scripts_own_environment_names_no_env_file(here):
+    (here / "env.js").write_text("console.log(`mode: ${process.env.MODE} ${import.meta.env.X}`);\n")
+    assert risky("node env.js", cwd=here) == ""
+
+
 # ── Reading the line itself ─────────────────────────────────────
 
 

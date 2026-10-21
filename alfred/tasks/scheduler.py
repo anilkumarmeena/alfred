@@ -383,6 +383,9 @@ class Scheduler:
             text = sentence(job["text"]) + (f" It was due at {schedules.clock(due, now)}." if late > LATE_SECONDS else "")
             await self._alert(job, text, spoken=f"Reminder: {text}", title="Reminder")
         elif job["kind"] == "command":
+            if why := await asyncio.to_thread(schedules.start_refusal, job):
+                await self._unrunnable(job, stamp, why)
+                return False
             task = self.runner.start_command(job["text"], job["title"], job["folder"], job=job["id"],
                                              project=job["project"], timeout_minutes=job["timeout_minutes"],
                                              log_file=job["log_file"], summarize=bool(job["summarize"]),

@@ -964,6 +964,7 @@ class _Scan:
     text: str  # the line with its heredoc bodies cut out and backslash-newlines joined
     bodies: list[tuple[str, bool]]  # each heredoc the line's own commands read, and whether the shell expands it
     inner: list[str]  # the code of each $(...) and `...`, which runs wherever it appears, even in double quotes
+    comments: list[tuple[int, int]] = field(default_factory=list)  # (start, end) of each comment in the line
 
 
 _HEREDOC_OP = re.compile(r"""<<(-?)[ \t]*(?:'([^'\n]*)'|"([^"\n]*)"|(\\?)([^\s;&|()<>'"`]+))""")
@@ -985,6 +986,7 @@ def _heredoc_body(command: str, i: int, delim: str, strip: bool) -> tuple[str, i
     return "".join(line + "\n" for line in lines), min(i, len(command))
 
 
+@functools.lru_cache(maxsize=64)  # a script is scanned for its comments, its text checks and its commands
 def _scan(command: str) -> _Scan | None:
     """Split a line's heredoc bodies and command substitutions from it, quote-aware: a << inside quotes is text, and
     inside $(...) quoting starts afresh. Each substitution leaves a placeholder word, so the line reads as the shell
@@ -994,6 +996,7 @@ def _scan(command: str) -> _Scan | None:
     inner: list[str] = []
     pending: list[tuple[bool, str, bool, bool]] = []  # (strip tabs, delimiter, quoted, the line's own)
     frames: list[list] = []  # [kind, start, out index or depth]: ' " $( ` ( ((
+    comments: list[tuple[int, int]] = []
     i, n = 0, len(command)
 
     def substituted(frame: list) -> None:
@@ -1068,9 +1071,11 @@ def _scan(command: str) -> _Scan | None:
             pass  # only $( ) and ` ` are special inside double quotes
         elif c == "'":
             frames.append(["'", i, 0])
-        elif c == "#" and (i == 0 or command[i - 1] in " \t\n;&|()"):
+        elif c == "#" and (i == 0 or command[i - 1] in " \t\n;&|()") and command[i - 2 : i] != "\\\n":
             end = command.find("\n", i)
-            i = n if end == -1 else end  # a comment, to the end of the line: dropped, as the lines are joined
+            end = n if end == -1 else end  # a comment, to the end of the line: dropped, as the lines are joined
+            comments.append((i, end))
+            i = end
             continue
         elif c == "(":
             frames.append(["(", i, 0])
@@ -1092,7 +1097,7 @@ def _scan(command: str) -> _Scan | None:
     if frames:
         return None
     bodies += [("", not quoted) for _, _, quoted, own in pending if own]  # never given a line: empty
-    return _Scan("".join(out), bodies, inner)
+    return _Scan("".join(out), bodies, inner, comments)
 
 
 def _literal(code: str, raw: str) -> bool:
@@ -1406,6 +1411,110 @@ def _shebang(head: bytes) -> str | None:
     return run.language if run is not None else ""
 
 
+_PLAIN_COMMENT = re.compile(r"[ \t]*#[^$`'\"]*")
+
+
+def _uncommented(text: str) -> str:
+    """Shell code without its plain whole-line comments, for the secret-name scan: lines the shell reads as a comment
+    from their first non-blank on (not data in a quoted string or a heredoc, nor a line a backslash-newline joins to
+    the one before), holding no $, backtick or quote, so "#$(cat .env)" still counts. The #! line stays: the kernel
+    runs what it names. Nothing is dropped from code the scan can't read."""
+    if (scan := _scan(text)) is None:
+        return text
+    starts, kept, at = {start for start, _ in scan.comments}, [], 0
+    for n, line in enumerate(text.split("\n")):
+        whole = at + len(line) - len(line.lstrip(" \t")) in starts and _PLAIN_COMMENT.fullmatch(line)
+        if not whole or n == 0 and line.startswith("#!"):
+            kept.append(line)
+        at += len(line) + 1
+    return "\n".join(kept)
+
+
+def _bare(command: str) -> str:
+    """A line without its comments, for the checks that read its text rather than its commands."""
+    if (scan := _scan(command)) is None or not scan.comments:
+        return command
+    spans = [(0, 0), *scan.comments, (len(command), len(command))]
+    return "".join(command[a[1] : b[0]] for a, b in itertools.pairwise(spans))
+
+
+_SAFE_PATH = re.compile(r"[\w./~+@-]+")  # a path that reads the same quoted or not
+# The script's own folder: $(dirname "$0"), $(dirname "${BASH_SOURCE[0]}"), ${0%/*}, ${BASH_SOURCE%/*}
+_HERE = re.compile(r"""\$\(\s*dirname\s+(?:--\s+)?(?P<q>"?)\$(?:\{(?P<a>0|BASH_SOURCE(?:\[0\])?)\}|(?P<b>0|BASH_SOURCE)\b)"""
+                   r"""(?P=q)\s*\)|\$\{(?P<c>0|BASH_SOURCE(?:\[0\])?)%/\*\}""")
+_PWD_OF = re.compile(r"""\$\(\s*cd\s+(?:-[PL]\s+)?(?P<q>"?)(?P<dir>/[\w./~+@-]*)(?P=q)\s*(?:&&|;)\s*pwd(?:\s+-[PL])?\s*\)""")
+_SET_TO_PATH = re.compile(r"""^(?:export[ \t]+|readonly[ \t]+)?(?P<name>[A-Za-z_]\w*)=(?P<q>["']?)(?P<value>/[\w./~+@-]*)"""
+                          r"""(?P=q)[ \t]*$""", re.M)
+
+
+def _pinned(text: str, path: Path, sourced: bool) -> str:
+    """A shell script with the folders it names in ways known before it runs written in, so its cds and the scripts
+    it sources resolve: its own folder ($0 only when run, not sourced), $(cd /dir && pwd), and a variable set once, at
+    the top level, to a path (each later $NAME). A variable named any other way (read, local, ${NAME%x}) stays."""
+    here = str(path.parent)
+    if not _SAFE_PATH.fullmatch(here):
+        return text
+    text = _HERE.sub(lambda m: m[0] if sourced and "0" in (m["a"], m["b"], m["c"]) else here, text)
+    for _ in range(_MAX_DEPTH):  # a path built from another: ROOT=$(cd "$HERE/.." && pwd)
+        before = text
+        text = _PWD_OF.sub(lambda m: os.path.normpath(m["dir"]), text)
+        for m in _SET_TO_PATH.finditer(text):
+            uses, rest = re.compile(rf"\$(?:{m['name']}\b|\{{{m['name']}\}})"), text[m.end():]
+            if uses.search(rest) and not re.search(rf"\b{m['name']}\b", uses.sub("", text[: m.start()] + rest)):
+                text = text[: m.end()] + uses.sub(lambda _, v=m["value"]: v, rest)
+                break  # positions moved: look again
+        if text == before:
+            break
+    return text
+
+
+# A script's own environment variables (process.env.X), which name no .env file
+_ENV_OBJECTS = re.compile(r"\b(?:process|import\.meta|Deno|Bun)\.env\b")
+_ENV_NAME = re.compile(r"(?<![\w.~$}/-])/?(?:[\w.~+@-]+/)*\.env(?:\.[\w-]+)*(?![\w/.-])")
+
+
+_CD = re.compile(r"(?:^|[\s;&|(`])(?:cd|pushd|popd)\b([^\n;&|)]*)")
+
+
+def _leaves(text: str, language: str, where: Path | None, project: Path | None) -> bool:
+    """Whether code may change folder to somewhere outside `project`: a shell cd anywhere but a folder in it, given
+    plainly; any chdir in other code."""
+    if language != "shell":
+        return bool(re.search(r"\bchdir\b", text))
+    for m in _CD.finditer(text):
+        words = m[1].split()
+        to = words[-1].strip("'\"") if words and not words[-1].startswith("-") else ""
+        if not to or "popd" in m[0] or "$" in to or "`" in to or project is None:
+            return True
+        folder = Path(to).expanduser()
+        if not folder.is_absolute():
+            if where is None:
+                return True
+            folder = where / folder
+        if not folder.resolve().is_relative_to(project):
+            return True
+    return False
+
+
+def checkout(path: Path) -> Path | None:
+    """The git checkout a file is in (not the home folder itself, nor Alfred's own), or None."""
+    home = Path.home().resolve()
+    for folder in path.resolve().parents:
+        if folder == home:
+            return None
+        if (folder / ".git").exists():
+            return None if folder == ROOT.resolve() else folder
+    return None
+
+
+def _project_env(path: Path, project: Path | None) -> bool:
+    """Whether `path` is a .env file (.env.local...) in `project`, not one of Alfred's or in a secrets folder."""
+    real = path.resolve()
+    return (project is not None and real.is_relative_to(project) and real.name.startswith(".env")
+            and bool(SECRET_FILES.fullmatch(real.name)) and not secret_place(real)
+            and not SECRET_DIRS.intersection(real.relative_to(project).parts))
+
+
 def _where(piece: _Piece, cwd: Path | None) -> Path | None:
     """The folder a piece runs in, from `cwd` and the line's cds; None if unknown."""
     if piece.dirs is None:
@@ -1443,6 +1552,9 @@ class _Reader:
         self.depth = 0
         self.secret = False
         self.written: list[tuple[Path, str | None]] = []  # paths lines write (with the text, from a heredoc)
+        self.within: list[tuple[Path | None, bool]] = []  # scripts being read, innermost last: (file, it or one
+        # running it changes folder outside its project, so a bare .env may not be the project's)
+        self.keys = False  # the code being read reads its project's .env
 
     def seen(self) -> Seen:
         return Seen(dict(self.files), self.secret)
@@ -1489,17 +1601,24 @@ class _Reader:
         self.files[key] = hashlib.sha256(data).hexdigest()
         return data
 
-    def file(self, path: Path, language: str, roots: tuple[Path, ...] | None = None) -> str:
-        """Why a local script file needs a yes; UNSEEN if it can't be read or was written earlier in the line."""
-        key = (str(path), language)
+    def file(self, path: Path, language: str, roots: tuple[Path, ...] | None = None, where: Path | None = None,
+             sourced: bool = False) -> str:
+        """Why a local script file needs a yes; UNSEEN if it can't be read or was written earlier in the line.
+        `where`: the folder it runs in, if known; `sourced`: read into the running shell (. x.sh), not run."""
+        key = (str(path), language, str(where), sourced)
         if key in self.judged:
+            self.keys = self.keys or self.judged[key] == scripts.KEYS
             return self.judged[key]
         if written := [text for w, text in self.written if path == w or path.is_relative_to(w)]:
             # cat > x.py <<EOF ... python x.py: the heredoc is the script
-            return self.code(written[0], language, path, roots) if len(written) == 1 and written[0] is not None \
-                else UNSEEN
+            return self.code(written[0], language, path, roots, where) \
+                if len(written) == 1 and written[0] is not None else UNSEEN
         if _LIBRARIES & set(path.parts):
             return ""
+        if path.name.startswith(".env") and _project_env(path, self.project()):  # set -a; . ./.env: asked about
+            self.files[str(path.resolve())] = "keys"
+            self.keys = True
+            return scripts.KEYS
         self.judged[key] = ""  # a cycle back here adds nothing
         data = self._bytes(path)
         try:
@@ -1507,11 +1626,11 @@ class _Reader:
         except UnicodeDecodeError:
             text = None
         why = (scripts.SECRETS if self.files.get(str(path.resolve())) == "secret" else UNSEEN) if text is None \
-            else self.code(text, language, path, roots)
+            else self.code(text, language, path, roots, where, sourced)
         self.judged[key] = why
         return why
 
-    def executable(self, path: Path) -> str:
+    def executable(self, path: Path, where: Path | None = None) -> str:
         """Why a file run by its path (./x.sh) needs a yes: its #! line says how to read it; a program is trusted."""
         if _LIBRARIES & set(path.parts):
             return ""
@@ -1522,20 +1641,35 @@ class _Reader:
         if head.startswith(_BINARY_MAGIC) or b"\0" in head:
             return ""  # a built program, like any other
         language = _shebang(head)
-        return self.file(path, "shell" if language is None else language) if language != "" else UNSEEN
+        return self.file(path, "shell" if language is None else language, where=where) if language != "" else UNSEEN
+
+    def project(self) -> Path | None:
+        """The git checkout of the script being read, whose own .env asks rather than being refused; None for the
+        command line itself."""
+        return checkout(self.within[-1][0]) if self.within and self.within[-1][0] else None
 
     def code(self, text: str, language: str, path: Path | None, roots: tuple[Path, ...] | None,
-             where: Path | None = None) -> str:
+             where: Path | None = None, sourced: bool = False) -> str:
         """Why code in `language` needs a yes. `where`: the folder it runs in (a file's spawned commands resolve
         there too: the caller's, or its own folder if unknown)."""
         if self.depth >= _MAX_DEPTH:
             return UNSEEN
         where = where if where is not None else path.parent if path else None
         self.depth += 1
+        outer, moved = self.within[-1] if self.within else (None, False)
+        bare = text
+        if language == "shell":
+            text = _pinned(text, path, sourced) if path else text
+            bare = _uncommented(text)
+        here = path or outer
+        project = checkout(here) if here else None
+        moved = moved or _leaves(bare, language, where, project)
+        self.within.append((here, moved))
+        had, self.keys = self.keys, False
         try:
-            ctx = _Context(self, where)
+            ctx = _Context(self, where, project, moved)
             if language == "shell":
-                why = scripts.SECRETS if ctx.secret(text) else ctx.shell(text)
+                why = scripts.SECRETS if ctx.secret(bare) else ctx.shell(text)
             elif language == "python":
                 why = scripts.python(text, path, roots if roots is not None else (path.parent,) if path else None, ctx)
             elif language == "javascript":
@@ -1544,15 +1678,27 @@ class _Reader:
                 why = UNSEEN
         finally:
             self.depth -= 1
+            self.within.pop()
+        found, self.keys = self.keys, had or self.keys  # here, or in a script it runs
+        if found and why != scripts.SECRETS:  # before any other risk: a yes for that mustn't cover the keys
+            why = scripts.KEYS
         self.secret = self.secret or why == scripts.SECRETS
         return why
 
 
-class _Context:
-    """scripts.Context for one script: its spawned commands go back through the check, in the folder it runs in."""
+def _secret_text(text: str) -> bool:
+    """Whether text names a secret, other processes' environments, Alfred's controls or a keychain service."""
+    return (names_secret(text) or reads_environment(text) or bool(_CONTROLS.search(text))
+            or bool(_SECRET_SERVICE.search(text)))
 
-    def __init__(self, reader: _Reader, where: Path | None) -> None:
-        self.reader, self.where = reader, where
+
+class _Context:
+    """scripts.Context for one script: its spawned commands go back through the check, in the folder it runs in.
+    `project`: the script's git checkout, whose own .env it may read with a yes (the reader's `keys`, once it names
+    it); `moved`: it, or a script running it, may change folder out of the project."""
+
+    def __init__(self, reader: _Reader, where: Path | None, project: Path | None, moved: bool) -> None:
+        self.reader, self.where, self.project, self.moved = reader, where, project, moved
 
     def shell(self, line: str) -> str:
         found = _check(line, None, self.where, self.reader)
@@ -1560,14 +1706,25 @@ class _Context:
         return UNSEEN if why == "can't be checked" else why
 
     def secret(self, text: str) -> bool:
-        return (names_secret(text) or reads_environment(text) or bool(_CONTROLS.search(text))
-                or bool(_SECRET_SERVICE.search(text)))
+        if not _secret_text(text := _ENV_OBJECTS.sub(" ", text)):
+            return False
+        if _secret_text(_ENV_NAME.sub(self._own_env, text)):
+            return True
+        self.reader.keys = True
+        return False
+
+    def _own_env(self, m: re.Match) -> str:
+        """A blank for a name of the project's own .env (relative ones from where the script runs), else the name."""
+        named = Path(m[0]).expanduser()
+        if not named.is_absolute() and (self.where is None or self.moved):
+            return m[0]
+        return " " if _project_env(named if named.is_absolute() else self.where / named, self.project) else m[0]
 
     def startup(self, text: str) -> str:
         return _starts_up(text) or _names_startup(text)
 
     def follow(self, path: Path, language: str, roots: tuple[Path, ...] | None) -> str:
-        return self.reader.file(path, language, roots)
+        return self.reader.file(path, language, roots, self.where)
 
 
 _STARTUP_NAMES = re.compile(r"(^|/)(" + "|".join(re.escape(d) for d in _STARTUP_DOTFILES) + r")$")
@@ -1600,9 +1757,11 @@ def _code(piece: _Piece, cwd: Path | None, reader: _Reader) -> str:
     if args and set(args) <= _INFO:
         return ""
     where = _where(piece, cwd)
-    if program in ("source", "."):
-        return _script_why(reader.file(path, "shell") if (path := _script_path(args[0], where)) else UNSEEN) \
-            if args else ""
+    if program == "source" or word == ".":  # Path(".").name is ''
+        if not args:
+            return ""
+        path = _script_path(args[0], where)
+        return _script_why(reader.file(path, "shell", where=where, sourced=True) if path else UNSEEN)
     if (run := _interpreter(program, args)) is None:
         if "/" not in word:
             return ""  # a program on the PATH
@@ -1611,14 +1770,14 @@ def _code(piece: _Piece, cwd: Path | None, reader: _Reader) -> str:
         if Path(word).expanduser().is_absolute() and not any(
                 path.is_relative_to(d) for d in (*_TEMP_DIRS, *([where] if where else []))):
             return ""  # a program installed elsewhere on the computer
-        return _script_why(reader.executable(path))
+        return _script_why(reader.executable(path, where))
     if not run.language:
         return UNSEEN
     lead = piece.argv[: len(piece.argv) - len(argv)]
     if any(_CODE_ENV.match(w) for w in lead):
         return UNSEEN
     roots = _python_roots(lead, where)
-    whys = [reader.file(p, run.language) if (p := _script_path(f, where)) else UNSEEN for f in run.loads
+    whys = [reader.file(p, run.language, where=where) if (p := _script_path(f, where)) else UNSEEN for f in run.loads
             if run.language == "shell" or f.startswith((".", "/", "~"))]  # node -r a-package: a library
     if run.code is not None:
         if run.language != "shell":  # shell code was read as part of the line
@@ -1629,11 +1788,11 @@ def _code(piece: _Piece, cwd: Path | None, reader: _Reader) -> str:
     elif run.file is not None:
         path = _script_path(run.file, where)
         file_roots = None if roots is None or path is None else (path.parent, *roots[1:])
-        whys.append(reader.file(path, run.language, file_roots) if path else UNSEEN)
+        whys.append(reader.file(path, run.language, file_roots, where) if path else UNSEEN)
     elif run.stdin:
         kind, value, literal = piece.stdin or ("pipe", "", False)
         if kind == "file":
-            whys.append(reader.file(p, run.language, roots) if (p := _script_path(value, where)) else UNSEEN)
+            whys.append(reader.file(p, run.language, roots, where) if (p := _script_path(value, where)) else UNSEEN)
         elif kind == "text" and literal:
             if run.language != "shell":
                 whys.append(reader.code(value, run.language, None, roots, where))
@@ -1717,16 +1876,17 @@ def seen(command: str, cwd: Path | None = None) -> Seen:
 
 
 def _check(command: str, own: "Own | None", cwd: Path | None, reader: _Reader) -> list[tuple[list[str], str]]:
-    if _CLOBBER_DOTFILE.search(command):
+    bare = _bare(command)
+    if _CLOBBER_DOTFILE.search(bare):
         return [([], "overwrites a settings file")]
     if (pieces := _line(command)) is None:
         return [([], "can't be checked")]
-    if why := next((why for t in _REDIRECT_TARGETS.findall(command) if (why := _starts_up(t))), ""):
+    if why := next((why for t in _REDIRECT_TARGETS.findall(bare) if (why := _starts_up(t))), ""):
         return [([], why)]  # > /etc/hosts
     argvs = [p.argv for p in pieces]
     # cd ~/.config/systemd/user && cp x.service .: every write there counts
     there = any(p[0] in ("cd", "pushd") and len(p) > 1 and _starts_up(p[1]) for p in map(_strip_prefixes, argvs) if p)
-    if there and _REDIRECT_TARGETS.search(command):
+    if there and _REDIRECT_TARGETS.search(bare):
         return [([], "changes the system")]
     reader.written += _line_writes(pieces, cwd)
     found, mine = [], None
@@ -1756,7 +1916,7 @@ def _risk(command: str, own: "Own | None" = None, cwd: Path | None = None) -> tu
 def program(argv: list[str]) -> str:
     """Program plus subcommand, if any: 'brew install', 'git push', 'rm'."""
     argv = _strip_prefixes(argv) or argv
-    words = [Path(argv[0].lstrip("\\")).name]
+    words = [Path(argv[0].lstrip("\\")).name or argv[0]]  # '.' (source) has no name
     rest = _options_then(argv[1:], {"-C", "-c", "-R", "--repo", *_SUB_VALUES.get(words[0], ())})
     if rest and re.fullmatch(r"[a-z][a-z-]{1,20}", rest[0]) and words[0] not in _ALWAYS.keys() | _OPTION_DRIVEN:
         words.append(rest[0])

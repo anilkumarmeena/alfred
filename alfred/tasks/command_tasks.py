@@ -169,7 +169,11 @@ class CommandTasks(RunnerBase):
         return again
 
     def _again(self, task: dict, how: dict, **changes) -> dict:
-        """Start command task `task` (spec `how`) again with the same settings, plus `changes` to start_command's."""
+        """Start command task `task` (spec `how`) again with the same settings, plus `changes` to start_command's. A
+        scheduled job's run is checked as at its start: a fix may have changed its scripts. ValueError if refused."""
+        if task["job"] is not None and (job := schedules.get(task["job"])) and job["kind"] == "command" \
+                and (why := schedules.start_refusal(job)):
+            raise ValueError(why)
         return self.start_command(task["instruction"], task["title"], how["folder"], task["job"], task["project"],
                                   how.get("timeout_minutes"), how.get("log_file"), how.get("summarize", True),
                                   how.get("auto_fix", True), how.get("report", False),
@@ -227,7 +231,8 @@ class CommandTasks(RunnerBase):
                 self._end_in_background(task["id"], self._command_ended(task["id"], *ended, now))
             elif (limit := how.get("timeout_minutes")) and now - how.get("started", task["created"]) >= limit * 60:
                 self._end_in_background(task["id"], self._time_up(task["id"]))
-            elif (line := command_jobs.last_line(command_jobs.tail(self.commands.log_file(task["id"]), 400))[:200]) \
+            elif (line := command_jobs.last_line(command_jobs.tail(self.commands.log_file(task["id"]), 400,
+                                                                    how.get("folder")))[:200]) \
                     and line != task["activity"]:
                 self.store.set(task["id"], activity=line)
 

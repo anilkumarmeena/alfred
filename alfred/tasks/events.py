@@ -5,12 +5,14 @@
 
 import logging
 
+from alfred import projects
 from alfred.config import PUSH_ENABLED
 from alfred.core import desktop, platform
 from alfred.integrations.armory import mac_notify
 from alfred.notify.push import send_push, task_target
+from alfred.safety.redact import redact
 from alfred.state import activity as bell
-from alfred.tasks import hold
+from alfred.tasks import command_jobs, hold
 from alfred.tasks.approvals import _VIA, SETTLED, _commands
 from alfred.tasks.runner_base import RunnerBase
 from alfred.tasks.store import APPROVED, DENIED
@@ -42,6 +44,19 @@ def bell_entry(event: dict) -> tuple[str, str, int | None] | None:
     return None
 
 
+def worked_in(task: dict | None) -> str | None:
+    """The folder whose keys a task's words mustn't carry: a command's own, else its project's (a worktree has no
+    .env of its own), else its worktree."""
+    if not task:
+        return None
+    if found := command_jobs.spec(task).get("folder"):
+        return found
+    try:
+        return str(projects.find(task["project"]).path) if task.get("project") else task.get("worktree")
+    except ValueError:
+        return task.get("worktree")
+
+
 class Events(RunnerBase):
     """Ending tasks and reaching the user."""
 
@@ -51,6 +66,7 @@ class Events(RunnerBase):
 
         `title` replaces the task number in the push (e.g. a scheduled job). `alert=False` or do-not-disturb skips the
         desktop notification and push; it's still spoken in a live session or at the next greeting."""
+        spoken = redact(spoken, worked_in(self.store.get(task_id)))
         if self.offload.while_away(task_id, status, spoken, quiet):  # said in the machine's one summary instead
             quiet, fields["seen"] = True, 1
         fields.setdefault("seen", 0 if status in PUSH_TITLES else 1)

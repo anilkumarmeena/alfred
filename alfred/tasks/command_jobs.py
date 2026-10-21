@@ -32,6 +32,7 @@ from alfred.llm.roles import Role
 from alfred.llm.sdk import RateLimitInfo
 from alfred.safety import host
 from alfred.safety.commands import secret_path
+from alfred.safety.redact import redact
 from alfred.storage import profile
 
 COMMANDS_DIR = DATA_DIR / "commands"  # per-task record, output and exit status, named by task id
@@ -108,11 +109,12 @@ class Runs(host.Jobs):
     def output(self, task_id: int, chars: int, log_file: str | None = None, since: float = 0.0) -> str:
         """Tail of the command's output plus its own `log_file` (glob in its folder) if written since start; `chars` total."""
         record = self.get(task_id) or {}
-        own = own_log(Path(record["folder"]), log_file, since or record.get("started", 0)) if record else None
-        mine = tail(self.log_file(task_id), chars // 2 if own else chars)
+        folder = record.get("folder")
+        own = own_log(Path(folder), log_file, since or record.get("started", 0)) if record else None
+        mine = tail(self.log_file(task_id), chars // 2 if own else chars, folder)
         if not own:
             return mine
-        theirs = f"Its own log, {own}:\n{tail(own, chars - len(mine))}"
+        theirs = f"Its own log, {own}:\n{tail(own, chars - len(mine), folder)}"
         return f"What it printed:\n{mine}\n\n{theirs}" if mine.strip() else theirs
 
 
@@ -128,12 +130,13 @@ def own_log(folder: Path, log_file: str | None, since: float) -> Path | None:
     return max((f for f in found if f[0] >= since - 5), default=(0, None))[1]
 
 
-def tail(path: Path, chars: int) -> str:
-    """Last `chars` chars of a file, starting at a line boundary, ANSI codes stripped."""
+def tail(path: Path, chars: int, folder: str | Path | None = None) -> str:
+    """Last `chars` chars of a file, starting at a line boundary, ANSI codes stripped and keys redacted (by value too
+    for those of `folder`, where the command ran)."""
     try:
         with open(path, "rb") as f:
             f.seek(max(0, f.seek(0, 2) - chars * 2))
-            text = _ANSI.sub("", f.read().decode(errors="replace"))
+            text = redact(_ANSI.sub("", f.read().decode(errors="replace")), folder)
     except OSError:
         return ""
     text = text[-chars:]

@@ -235,6 +235,8 @@ def schedule_list(finished: bool = False) -> list[dict] | dict:
     "Change a scheduled job, by its id from schedule_list: what's given replaces what it had, the rest stays. A new "
     "when, in_minutes, repeat or every_minutes replaces its whole timing. paused true pauses it, false resumes it. "
     "A command job's new command or folder meets the same checks as your shell, so a risky one needs the user's yes. "
+    "A command job that didn't run because a script it runs changed since the user's yes (its last_result says so) "
+    "runs again once they agree to it again: give it its same command as text, which asks them. "
     "To pause or resume everything at once, use schedule_hold.",
     {
         "id": {"type": "integer"},

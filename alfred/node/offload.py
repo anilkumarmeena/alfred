@@ -54,7 +54,7 @@ UNREACHABLE_NOTE = 120.0  # seconds a machine with work may be gone before the b
 SUMMARY_WAIT = 5.0  # seconds without a new report from a machine back from away before its one summary
 # What a machine needs of a scheduled job to run it itself
 SCHEDULE_FIELDS = ("id", "title", "text", "folder", "at", "days", "every", "until", "status", "next_run",
-                   "last_run", "timeout_minutes")
+                   "last_run", "timeout_minutes", "scripts")
 MACHINE_KINDS = ("code_change", "code_question")  # scheduled Claude tasks a machine can run (research needs accounts)
 STATE = DATA_DIR / "node"
 # Task fields a machine needs to run one, nothing more
@@ -420,6 +420,17 @@ class Offload:
         job = schedules.get(int(body["job"]))
         if not job or self.owner(job) != node:
             raise Refused("that scheduled job isn't this machine's")
+        later = {"next_run": body["next_run"]} if body.get("next_run") else {}
+        if why := str(body.get("refused") or "")[:300]:  # its own check there turned the run down
+            fails = job["fails"] + 1
+            schedules.update(job["id"], fails=fails, last_result=f"Couldn't run on {self.name(node)}: {why}"[:300],
+                             **later)
+            if fails == 1:
+                said = f"Alfred couldn't run \"{job['title']}\" on {self.name(node)}: {why}."
+                self.runner.broadcast({"type": "alert", "text": said})
+                if not hold.held():
+                    await self.runner._push(job["title"], said[:400], "/?alert=schedule", f"schedule-{job['id']}")
+            return
         r, ok = self.runner, body.get("code") == 0
         started, ended = float(body["started"]), float(body["ended"])
         how = {"folder": job["folder"], "started": started, "ended": ended, "code": body.get("code"),
@@ -431,10 +442,10 @@ class Offload:
         took = command_jobs.took(ended - started)
         said = (f"{job['title']} ran on {self.name(node)} and is done, in {took}." if ok else
                 f"{job['title']} ran on {self.name(node)} and failed ({command_jobs.ending(how)}), after {took}.")
-        schedules.update(job["id"], last_run=started, last_task=task["id"], runs=job["runs"] + 1,
+        schedules.update(job["id"], last_run=started, last_task=task["id"], runs=job["runs"] + 1, fails=0,
                          last_result=said[:300], run=json.dumps({"task": task["id"], "started": started} |
                                                                 {k: how[k] for k in ("ended", "outcome", "code")}),
-                         **({"next_run": body["next_run"]} if body.get("next_run") else {}))
+                         **later)
         r.store.set(task["id"], node=node)
         if body.get("away"):
             r._finish(task["id"], "done" if ok else "failed", said, quiet=True, seen=1)

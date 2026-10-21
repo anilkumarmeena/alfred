@@ -20,6 +20,7 @@ from alfred.safety.risk import Risk
 
 UNSEEN = "runs code it can't see"
 SECRETS = "touches secrets"
+KEYS = "reads its project's keys when it runs"  # its own project's .env: asks, unlike SECRETS
 NETWORK = "sends data off the computer"
 _VALUE = "$X"  # a word known only at run time: never a literal to the command check
 
@@ -32,7 +33,8 @@ class Context(Protocol):
         ...
 
     def secret(self, text: str) -> bool:
-        """Whether text names a secret or other processes' environments."""
+        """Whether text names a secret or other processes' environments (its own project's .env aside: that's noted,
+        and the script asks as KEYS)."""
         ...
 
     def startup(self, text: str) -> str:

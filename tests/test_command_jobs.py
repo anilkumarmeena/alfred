@@ -715,6 +715,63 @@ def test_a_folder_gone_is_said_once_and_the_job_waits_for_its_next_time(env):
     assert r.store.recent() == []
 
 
+def test_a_job_keeps_what_its_scripts_were_when_it_was_agreed_to(env):
+    (env["project"] / "job.sh").write_text("echo hi\n")
+    job = daily("sh job.sh")
+    assert list(json.loads(job["scripts"])) == ["job.sh"]  # relative to its folder, as its machine would see it
+    (env["project"] / "job.sh").write_text("echo hello\n")
+    assert json.loads(schedules.change(job["id"], text="sh job.sh")["scripts"]) != json.loads(job["scripts"])
+    assert schedules.change(job["id"], title="Renamed")["scripts"] == schedules.get(job["id"])["scripts"]
+
+
+def test_a_job_whose_script_changed_since_the_yes_waits_for_it_again(env):
+    (env["project"] / "job.sh").write_text("echo hi\n")
+    job = daily("sh job.sh")
+    (env["project"] / "job.sh").write_text("echo hi\nrm -rf build\n")  # now it deletes files
+    r = make()
+    s, said = scheduled(r)
+    assert asyncio.run(s.tick()) == []
+    why = schedules.get(job["id"])["last_result"]
+    assert "job.sh changed since you agreed to it" in why and "deletes files" in why and "yes again" in why
+    assert len(said["events"]) == 1 and r.store.recent() == []
+    schedules.change(job["id"], text="sh job.sh")  # agreed to again, through the shell gate
+
+    async def main():
+        s, _ = scheduled(r, now=at(days=2, hours=-1, minutes=-15))
+        assert await s.tick() == [job["id"]]
+        return await ended(r, schedules.run_of(schedules.get(job["id"]))["task"])
+
+    assert asyncio.run(main())["status"] == "done"
+
+
+def test_a_harmless_change_and_a_job_from_before_fingerprints_just_run(env):
+    (env["project"] / "job.sh").write_text("echo hi\n")
+    job = daily("sh job.sh")
+    (env["project"] / "job.sh").write_text("echo hello\n")  # changed, but needs no yes
+    old = daily("sh job.sh")
+    schedules.update(old["id"], scripts=None)  # made before scripts were kept
+
+    async def main():
+        r = make()
+        s, _ = scheduled(r)
+        started = await s.tick()
+        await settled(r)
+        return started
+
+    assert sorted(asyncio.run(main())) == sorted([job["id"], old["id"]])
+    assert json.loads(schedules.get(old["id"])["scripts"]) == schedules.fingerprints("sh job.sh", env["project"])
+
+
+def test_a_job_whose_script_now_touches_secrets_never_runs(env):
+    (env["project"] / "job.sh").write_text("echo hi\n")
+    job = daily("sh job.sh")
+    (env["project"] / "job.sh").write_text("cat ~/.ssh/id_rsa\n")
+    r = make()
+    s, _ = scheduled(r)
+    assert asyncio.run(s.tick()) == []
+    assert "touches secrets" in schedules.get(job["id"])["last_result"]
+
+
 # ── Claude logins (core.claude_logins) ──────────────────────────
 
 
@@ -989,3 +1046,46 @@ def test_durations():
     assert command_jobs.tail(Path("/no/such/file"), 100) == ""
     assert command_jobs.spec({"command": json.dumps({"attempt": 2})}) == {"attempt": 2}
     assert command_jobs.spec({"command": None}) == {} and command_jobs.spec({"command": "{bad"}) == {}
+
+
+def test_a_run_that_prints_a_key_never_says_or_keeps_it(env):
+    key = "sk-ant-api03-" + "Zx9" * 10
+    (env["project"] / ".env").write_text("VOICE_ID=pNInz6obpgDQGcFmaJgB\n")
+    (env["project"] / "out.txt").write_text(f"using {key}\nvoice pNInz6obpgDQGcFmaJgB\n")
+
+    async def main():
+        r = make()
+        task = r.start_command("cat out.txt", "the render", str(env["project"]), summarize=False, report=True)
+        return r, await ended(r, task["id"])
+
+    r, done = asyncio.run(main())
+    said = [done["spoken"], done["summary"], *(p["body"] for p in env["pushed"]),
+            *(e["text"] for e in r.store.history(done["id"]))]
+    assert all(key not in s and "pNInz6obpgDQGcFmaJgB" not in s for s in said)
+    assert done["spoken"].endswith("voice [redacted]") and done["summary"] == "voice [redacted]"
+
+
+def test_a_risky_job_made_before_fingerprints_asks_once(env):
+    (env["project"] / "job.sh").write_text("rm -rf build\n")
+    job = daily("sh job.sh")
+    schedules.update(job["id"], scripts=None)  # made before scripts were kept: nothing to say they're as agreed
+    r = make()
+    s, _ = scheduled(r)
+    assert asyncio.run(s.tick()) == []
+    assert "agreed to before Alfred kept what its scripts were" in schedules.get(job["id"])["last_result"]
+
+
+def test_running_a_scheduled_command_again_is_checked_like_its_start(env):
+    (env["project"] / "job.sh").write_text("echo hi\n")
+    job = daily("sh job.sh")
+
+    async def main():
+        r = make()
+        s, _ = scheduled(r)
+        await s.tick()
+        return r, await ended(r, schedules.run_of(schedules.get(job["id"]))["task"])
+
+    r, done = asyncio.run(main())
+    (env["project"] / "job.sh").write_text("rm -rf build\n")  # as a fix task might leave it
+    with pytest.raises(ValueError, match="job.sh changed since you agreed to it"):
+        r.rerun(done["id"])
