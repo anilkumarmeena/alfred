@@ -448,6 +448,21 @@ def test_remove_takes_a_project_off_the_list_and_leaves_its_folder(home):
         projects.remove("other")
 
 
+def test_reorder_puts_the_named_first_and_keeps_the_rest_and_every_setting(home):
+    for name in ("notes", "film"):
+        projects.register(name)
+    before = entries()
+    assert projects.reorder(["film", "Other"]) == ["film", "other", "video-agent", "notes"]
+    assert list(entries().items()) == [(n, before[n]) for n in ("film", "other", "video-agent", "notes")]
+    assert [p["name"] for p in task_tools.projects_list()] == ["film", "other", "video-agent", "notes"]
+    projects.register("late")
+    assert list(entries())[-1] == "late"
+    for names, message in ((["film", "nope"], "Unknown project 'nope'"), (["other", "other"], "only once")):
+        with pytest.raises(ValueError, match=message):
+            projects.reorder(names)
+    assert list(entries()) == ["film", "other", "video-agent", "notes", "late"]
+
+
 def test_the_command_line_lists_adds_changes_and_removes(home, capsys):
     assert projects.main([]) == 0
     assert capsys.readouterr().out.splitlines() == [f"video-agent: {projects.shown(home['video'])}, in place",
@@ -463,6 +478,8 @@ def test_the_command_line_lists_adds_changes_and_removes(home, capsys):
     projects.main(["remove", "notes"])
     assert capsys.readouterr().out.startswith("Removed notes from the project list")
     assert list(entries()) == ["video-agent", "other"]
+    projects.main(["order", "other"])
+    assert capsys.readouterr().out == "other, video-agent\n"
 
 
 # ── Folders holding several repos ───────────────────────────────

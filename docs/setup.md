@@ -380,6 +380,9 @@ uv run python -m alfred.projects set billing-api --in-place
 
 # take it off the list; the folder stays
 uv run python -m alfred.projects remove billing-api
+
+# reorder the list: these first, the rest after them as they were
+uv run python -m alfred.projects order billing-api notes
 ```
 
 Changes apply at once. **In place** (the default) vs **worktrees** is explained in **[🛠️ Tasks](tasks.md#where-code-changes-go)**.

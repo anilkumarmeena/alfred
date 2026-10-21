@@ -10,6 +10,7 @@ tasks use git in each. register/update/remove never touch git; init_git sets it 
     uv run python -m alfred.projects add NAME [--path P] [--aliases "a, b"] [--about T] [--worktrees]
     uv run python -m alfred.projects set NAME [--path P] [--aliases "a, b"] [--about T] [--in-place | --worktrees]
     uv run python -m alfred.projects remove NAME
+    uv run python -m alfred.projects order NAME [NAME ...]
 """
 
 import argparse
@@ -424,6 +425,22 @@ def remove(name: str) -> str:
     return f"Removed {p.name} from the project list; its folder {p.path} is as it was."
 
 
+def reorder(names: list[str]) -> list[str]:
+    """Put the named projects first, in that order, the rest after them as they were; returns the new order."""
+    with _db() as db:
+        db.execute("begin immediate")
+        known = _read(db)
+        first = [_find(known, n).name for n in names]
+        if len(set(first)) < len(first):
+            raise ValueError("Name each project only once.")
+        order = first + [p.name for p in known if p.name not in first]
+        # ids are the list order and unique: renumber through negatives so no two rows ever share one
+        db.executemany("update projects set id = ? where name = ?", [(-i, n) for i, n in enumerate(order, 1)])
+        db.execute("update projects set id = -id")
+        db.execute("commit")
+    return order
+
+
 # ── CLI ─────────────────────────────────────────────────────────
 
 
@@ -463,6 +480,7 @@ def main(argv: list[str] | None = None) -> int:
     how.add_argument("--in-place", dest="in_place", action="store_true", default=None, help="tasks work in its folder")
     how.add_argument("--worktrees", dest="in_place", action="store_false", help="a worktree and branch per task")
     commands.add_parser("remove", help="take a project off the list, leaving its folder").add_argument("name")
+    commands.add_parser("order", help="put these projects first, in this order").add_argument("names", nargs="+")
     args = parser.parse_args(argv)
 
     try:
@@ -477,6 +495,8 @@ def main(argv: list[str] | None = None) -> int:
                                         args.in_place)["name"])]))
             case "remove":
                 print(remove(args.name))
+            case "order":
+                print(", ".join(reorder(args.names)))
     except (ValueError, sqlite3.Error) as e:
         sys.exit(str(e))
     return 0
