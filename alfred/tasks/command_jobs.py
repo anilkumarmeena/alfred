@@ -6,7 +6,9 @@ the sandbox via a login shell, without Alfred's keys, on the Claude login with t
 On end:
   success  `summarize` (Role.COMMAND_SUMMARY)
   failure  `pass_over`: the CLI said its Claude login is signed out or used up, so it reruns on the next login
-           (command_tasks._fall_over), or with none left only says so. Else
+           (command_tasks._fall_over), or with none left only says when the limit resets. A run that sits on its
+           login's limit (`limit_hit` in its last lines for LIMIT_WAIT, however much it repeats it) is stopped and
+           handled the same way (LIMIT), rather than left to hang. Else
            `triage` (Role.COMMAND_TRIAGE): FIX starts a code_change task (`fix_prompt`); ASK waits for the user's yes
            (secrets, deploys, data loss, system settings); REPORT only explains. The fix task never runs the command:
            its sandbox hides the keys the command needs. Once it finishes, `wants_rerun` (Role.VERDICT) reads its
@@ -41,7 +43,7 @@ TAIL_CHARS = 1500  # output tail shown in the task view
 FIX_ATTEMPTS = 1  # fix tasks per failed command, each followed by a rerun
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\r")
 
-DONE, FAILED, TIMEOUT, LOST, STOPPED = "done", "failed", "timeout", "lost", "stopped"
+DONE, FAILED, TIMEOUT, LOST, STOPPED, LIMIT = "done", "failed", "timeout", "lost", "stopped", "limit"
 FIX, ASK, REPORT = "fix", "ask", "report"
 
 
@@ -168,6 +170,8 @@ def ending(how: dict) -> str:
         return f"it ran past its time limit of {took(how['timeout_minutes'] * 60)} and was stopped"
     if how["outcome"] == LOST:
         return "it ended without an exit status: it was killed, or the computer restarted"
+    if how["outcome"] == LIMIT:
+        return "it stalled at its Claude login's usage limit and was stopped"
     return f"exit code {how['code']}"
 
 
@@ -181,6 +185,8 @@ LIMITED = re.compile(r"you.ve hit your (?:(session|weekly|opus|sonnet) )?limit|c
                      re.IGNORECASE)
 RESETS = re.compile(r"resets (\d{1,2})(?::(\d{2}))?\s*([ap]m)(?: \(([\w/+-]+)\))?", re.IGNORECASE)
 WINDOWS = {"session": "five_hour", "weekly": "seven_day", "opus": "seven_day_opus", "sonnet": "seven_day_sonnet"}
+LIMIT_LINES = 5  # last output lines of a running command looked at for the CLI saying its login is used up
+LIMIT_WAIT = 180  # seconds that may stay there before Alfred stops the run: a script may still carry on by itself
 
 
 def _resets(text: str, now: float) -> int | None:
@@ -198,21 +204,33 @@ def _resets(text: str, now: float) -> int | None:
     return int((at if at.timestamp() > now else at + timedelta(days=1)).timestamp())
 
 
+def limit_hit(output: str) -> bool:
+    """Whether a running command's last few lines have the CLI saying its Claude login's limit is used up."""
+    lines = [line for line in output.splitlines() if line.strip()]
+    return any(LIMITED.search(line) for line in lines[-LIMIT_LINES:])
+
+
+def _last(pattern: re.Pattern, text: str) -> re.Match | None:
+    return next(reversed([*pattern.finditer(text)]), None)
+
+
 def pass_over(login: str, output: str, now: float | None = None) -> str:
     """If a command's output tail says its Claude login is signed out or at its usage limit, mark that login so Alfred
-    passes it over (as its own calls do) and say why, e.g. "the work Claude login isn't signed in"; else ""."""
+    passes it over (as its own calls do) and say why, e.g. "the work Claude login isn't signed in" or "the work Claude
+    login's weekly limit is used up, resetting at 8 AM"; else "". The latest of the two it says counts."""
     from alfred.llm import claude, usage
 
     now = now or time.time()
     name = f"the {login or 'default'} Claude login"
-    if found := SIGNED_OUT.search(output):
-        claude.signed_out(login, found[0])
+    out, limited = _last(SIGNED_OUT, output), _last(LIMITED, output)
+    if out and (not limited or out.start() > limited.start()):
+        claude.signed_out(login, out[0])
         return f"{name} isn't signed in"
-    if found := LIMITED.search(output):
-        window = WINDOWS.get((found[1] or "").lower(), "unknown")
-        resets = _resets(output[found.end():found.end() + 80], now)
+    if limited:
+        window = WINDOWS.get((limited[1] or "").lower(), "unknown")
+        resets = _resets(output[limited.end():limited.end() + 80], now)
         usage.record(RateLimitInfo("rejected", resets_at=resets, rate_limit_type=window), now, login)
-        return f"{name}'s {usage.NAMES.get(window, 'usage')} limit is used up"
+        return f"{name}'s {usage.used_up(window, resets, now)}"
     return ""
 
 

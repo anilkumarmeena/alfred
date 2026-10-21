@@ -13,7 +13,8 @@ from alfred.safety.commands import secret_path
 from alfred.state import activity as bell
 from alfred.tasks import command_jobs, connection_jobs, scheduler, schedules
 from alfred.tasks.approvals import SAID_MOST
-from alfred.tasks.command_jobs import ASK, DONE, FAILED, FIX, LOST, REPORT, STOPPED, TIMEOUT, last_lines, spec, took
+from alfred.tasks.command_jobs import (ASK, DONE, FAILED, FIX, LIMIT, LOST, REPORT, STOPPED, TIMEOUT, last_lines, spec,
+                                       took)
 from alfred.tasks.runner_base import RunnerBase
 from alfred.tasks.scheduler import sentence
 from alfred.tasks.store import ACTIVE, COMMAND, CONNECTION, WAIT_QUESTION
@@ -218,8 +219,8 @@ class CommandTasks(RunnerBase):
             await asyncio.sleep(COMMAND_POLL)
 
     def check_commands(self, now: float | None = None) -> None:
-        """Poll running command tasks: end finished ones and stop overdue ones in the background; else show the latest
-        output line as activity."""
+        """Poll running command tasks: end finished ones, and stop overdue ones and ones stuck at their Claude login's
+        limit, in the background; else show the latest output line as activity."""
         now = now or time.time()
         for task in self.store.active():
             if task["kind"] != COMMAND or task["status"] != "running" or task["id"] in self.ending \
@@ -229,12 +230,26 @@ class CommandTasks(RunnerBase):
             ended = self.commands.how(record) if record else (LOST, None)
             if ended is not None:
                 self._end_in_background(task["id"], self._command_ended(task["id"], *ended, now))
-            elif (limit := how.get("timeout_minutes")) and now - how.get("started", task["created"]) >= limit * 60:
-                self._end_in_background(task["id"], self._time_up(task["id"]))
-            elif (line := command_jobs.last_line(command_jobs.tail(self.commands.log_file(task["id"]), 400,
-                                                                    how.get("folder")))[:200]) \
-                    and line != task["activity"]:
+                continue
+            if (limit := how.get("timeout_minutes")) and now - how.get("started", task["created"]) >= limit * 60:
+                self._end_in_background(task["id"], self._cut_short(task["id"], TIMEOUT))
+                continue
+            # Only a run here, on a known login, is checked for its limit (_stuck_at_limit): others need just a line
+            output = command_jobs.tail(self.commands.log_file(task["id"]),
+                                       command_jobs.LOGIN_CHARS if how.get("login") is not None else 400,
+                                       how.get("folder"))
+            if self._stuck_at_limit(task["id"], how, output, now):
+                self._end_in_background(task["id"], self._cut_short(task["id"], LIMIT))
+            elif (line := command_jobs.last_line(output)[:200]) and line != task["activity"]:
                 self.store.set(task["id"], activity=line)
+
+    def _stuck_at_limit(self, task_id: int, how: dict, output: str, now: float) -> bool:
+        """Whether a run here has had the CLI saying its Claude login is used up in its last lines (limit_hit) at every
+        poll for LIMIT_WAIT: it hangs or only repeats it. Output that pushes it out of them starts over."""
+        if how.get("login") is None or not command_jobs.limit_hit(output):
+            self.limit_seen.pop(task_id, None)
+            return False
+        return now - self.limit_seen.setdefault(task_id, now) >= command_jobs.LIMIT_WAIT
 
     def _end_in_background(self, task_id: int, coro) -> None:
         self.ending[task_id] = ending = asyncio.create_task(coro)
@@ -245,14 +260,15 @@ class CommandTasks(RunnerBase):
         while self.ending:
             await asyncio.gather(*self.ending.values(), return_exceptions=True)
 
-    async def _time_up(self, task_id: int) -> None:
+    async def _cut_short(self, task_id: int, outcome: str) -> None:
+        """Stop a run Alfred ends itself (TIMEOUT, LIMIT) and handle that end; one that just ended by itself ends so."""
         try:
             await self._stop_run(self.store.get(task_id))
         except ValueError:  # it ended on its own just now
             record = self.commands.get(task_id)
             if record and (ended := self.commands.how(record)) and ended[0] != STOPPED:
                 return await self._command_ended(task_id, *ended, time.time())
-        await self._command_ended(task_id, TIMEOUT, None, time.time())
+        await self._command_ended(task_id, outcome, None, time.time())
 
     @staticmethod
     def _job_title(task: dict) -> str:
@@ -274,6 +290,7 @@ class CommandTasks(RunnerBase):
 
     async def _command_ended(self, task_id: int, outcome: str, code: int | None, at: float) -> None:
         """Handle a command's end: announce a stop, or hand off to `_command_done` / `_command_failed`."""
+        self.limit_seen.pop(task_id, None)
         task = self.store.get(task_id)
         if not task or task["status"] != "running":
             return
@@ -392,7 +409,7 @@ class CommandTasks(RunnerBase):
     def _login_trouble(self, task: dict, how: dict) -> str:
         """Why the run failed, if its Claude login stopped it (signed out, or used up), which Alfred then passes over;
         else "". Only runs here know their login."""
-        if how.get("login") is None or how["outcome"] != FAILED:
+        if how.get("login") is None or how["outcome"] not in (FAILED, LIMIT):
             return ""
         return command_jobs.pass_over(how["login"], command_jobs.tail(self.commands.log_file(task["id"]),
                                                                       command_jobs.LOGIN_CHARS))

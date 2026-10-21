@@ -23,6 +23,7 @@ class RunnerBase:
     _bg: set[asyncio.Task]
     commands: command_jobs.Runs
     ending: dict[int, asyncio.Task]
+    limit_seen: dict[int, float]
     closing: bool
     placing: dict[int, asyncio.Task]
     limit_waits: dict[int, float]

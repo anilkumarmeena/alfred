@@ -179,6 +179,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
         self.pulse = stall.Pulse()
         self.commands = command_jobs.Runs()
         self.ending: dict[int, asyncio.Task] = {}  # command tasks whose ending is being processed
+        self.limit_seen: dict[int, float] = {}  # running commands whose CLI said their login is used up -> since when
         self.host_jobs = TaskJobs()
         self.host_jobs.on_end = self._job_ended
         self.checks = goal.Budget(GOAL_DAILY_CHECKS)  # goal checks per rolling 24 h, all tasks

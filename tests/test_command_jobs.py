@@ -848,17 +848,19 @@ def test_a_scheduled_run_at_its_logins_limit_moves_on_until_every_login_is_used_
 
     r, first = asyncio.run(main())
     rerun = r.store.get(first + 1)
-    assert "the default Claude login's five-hour limit is used up. Running it again on the work one" in \
-           r.store.get(first)["spoken"]
+    resets = usage.when(usage.of("")["five_hour"]["resets_at"])
+    assert f"the default Claude login's five-hour limit is used up, resetting {resets}. Running it again on the work one" \
+           in r.store.get(first)["spoken"]
     assert schedules.get(job["id"])["last_task"] == rerun["id"] and command_jobs.spec(rerun)["login"] == "work"
     # The work login is used up too: with no login left to try, it's only said, as nothing a fix could change
     assert rerun["status"] == "failed" and rerun["spoken"].endswith(
-        "The work Claude login's five-hour limit is used up, and no other Claude login is free to run it on.")
+        f"The work Claude login's five-hour limit is used up, resetting {resets}, and no other Claude login is free "
+        "to run it on.")
     assert r.store.get(first + 2) is None and triaged(env) == []
     for login in ("", "work"):
         window = usage.of(login)["five_hour"]
         assert window["status"] == "rejected" and time.time() < window["resets_at"] <= time.time() + 86400
-    assert claude_logins.skipped("work").startswith("its five-hour limit is used up until")
+    assert claude_logins.skipped("work").startswith("its five-hour limit is used up, resetting ")
 
 
 def test_only_claudes_own_words_pass_a_login_over(logins):
@@ -867,10 +869,109 @@ def test_only_claudes_own_words_pass_a_login_over(logins):
     assert usage.of("work") == {} and claude_logins.checks() == {}
     now = datetime(2026, 10, 15, 9, 30, tzinfo=ZoneInfo("Asia/Calcutta")).timestamp()
     said = command_jobs.pass_over("work", "■ You've hit your weekly limit · resets 8am (Asia/Calcutta)\n", now)
-    assert said == "the work Claude login's weekly limit is used up"
+    assert said == f"the work Claude login's weekly limit is used up, resetting {usage.when(now + 22.5 * 3600, now)}"
     assert usage.of("work")["seven_day"]["resets_at"] == now + 22.5 * 3600  # 8 AM tomorrow, in the zone it names
     assert command_jobs.pass_over("", "Failed to authenticate: OAuth token revoked. (authentication_failed)") == \
            "the default Claude login isn't signed in"
+    # What it says last counts: signed out earlier on, a limit is what stopped it
+    said = command_jobs.pass_over("work", "Please run /login\nsigned in again\nYou've hit your session limit\n", now)
+    assert said == "the work Claude login's five-hour limit is used up" and "work" not in claude_logins.checks()
+
+
+LIMIT_LINE = "■ turn failed: You've hit your session limit · resets 3:30am (Asia/Calcutta)"
+AT_LIMIT = f'echo "{LIMIT_LINE}"'
+
+
+async def printed(r: runner.Runner, task_id: int, text: str) -> None:
+    """Wait until the command's output has `text`."""
+    for _ in range(200):
+        if text in r.commands.output(task_id, 3000):
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"it never printed {text!r}")
+
+
+def test_a_run_stuck_at_its_logins_limit_is_stopped_and_runs_again_on_another_one(env, logins):
+    # On the default login, Claude's limit leaves it hanging (it says so twice, as a script's retry might)
+    stuck = f'if [ -z "$CLAUDE_CONFIG_DIR" ]; then echo scouting; {AT_LIMIT}; {AT_LIMIT}; sleep 30; fi; echo uploaded'
+
+    async def main():
+        r = make()
+        task = r.start_command(stuck, "the Bitwise run", str(env["project"]), summarize=False)
+        await printed(r, task["id"], "session limit")
+        now = time.time()
+        r.check_commands(now)
+        r.check_commands(now + command_jobs.LIMIT_WAIT - 1)
+        assert not r.ending and r.store.get(task["id"])["status"] == "running"  # a script may yet carry on itself
+        r.check_commands(now + command_jobs.LIMIT_WAIT)
+        await r.drain_commands()
+        failed = r.store.get(task["id"])
+        await settled(r)
+        return r, failed
+
+    r, failed = asyncio.run(main())
+    rerun = r.store.get(failed["id"] + 1)
+    resets = usage.of("")["five_hour"]["resets_at"]
+    assert failed["status"] == "failed" and failed["spoken"] == (
+        f"Task {failed['id']}, the Bitwise run, failed (it stalled at its Claude login's usage limit and was stopped), "
+        f"after {command_jobs.took(command_jobs.spec(failed)['ended'] - command_jobs.spec(failed)['started'])}: the "
+        f"default Claude login's five-hour limit is used up, resetting {usage.when(resets)}. Running it again on the work "
+        f"one, as task {rerun['id']}.")
+    assert r.commands.how(r.commands.get(failed["id"])) == ("stopped", None)
+    assert command_jobs.spec(failed)["outcome"] == "limit" and r.limit_seen == {}
+    assert claude_logins.skipped("").startswith("its five-hour limit is used up, resetting ")  # passed over from now on
+    assert rerun["status"] == "done" and rerun["summary"].endswith("uploaded")
+    assert (command_jobs.spec(rerun)["login"], command_jobs.spec(rerun)["tried"]) == ("work", [""])
+    assert triaged(env) == [] and [p["body"] for p in env["pushed"]] == [rerun["spoken"]]
+
+
+def test_a_run_stuck_at_the_limit_with_no_login_left_is_stopped_saying_when_it_resets(env, logins):
+    usage.record(RateLimitInfo("rejected", resets_at=int(time.time() + 7200), rate_limit_type="seven_day"),
+                 login="work")
+
+    async def main():
+        r = make()
+        task = r.start_command(f"{AT_LIMIT}; sleep 30", "the Bitwise run", str(env["project"]), summarize=False)
+        await printed(r, task["id"], "session limit")
+        r.check_commands(time.time())
+        r.check_commands(time.time() + command_jobs.LIMIT_WAIT)
+        await r.drain_commands()
+        return r, r.store.get(task["id"])
+
+    r, failed = asyncio.run(main())
+    resets = usage.when(usage.of("")["five_hour"]["resets_at"])
+    assert failed["status"] == "failed" and failed["spoken"].endswith(
+        f"The default Claude login's five-hour limit is used up, resetting {resets}, and no other Claude login is "
+        "free to run it on.")
+    assert r.commands.how(r.commands.get(failed["id"])) == ("stopped", None)
+    assert r.store.get(failed["id"] + 1) is None and triaged(env) == []
+
+
+def test_a_run_that_carries_on_past_a_limit_message_is_left_running(env, logins):
+    async def main():
+        r = make()
+        r.commands.grace = 0.5
+        task = r.start_command(f"{AT_LIMIT}; echo 'falling back to the local model'; for i in 1 2 3 4 5; do "
+                               "echo step $i; done; sleep 30", "the Bitwise run", str(env["project"]), summarize=False)
+        await printed(r, task["id"], "step 5")
+        r.check_commands(time.time())
+        r.check_commands(time.time() + 10 * command_jobs.LIMIT_WAIT)
+        running = r.store.get(task["id"])["status"]
+        await r.halt(task["id"])
+        return running
+
+    assert asyncio.run(main()) == "running"
+    assert usage.of("") == {}  # nor passed over
+
+
+def test_only_the_last_lines_saying_the_login_is_used_up_count_as_stuck():
+    limit = LIMIT_LINE
+    assert command_jobs.limit_hit(f"scouting\n{limit}\n\n")
+    assert command_jobs.limit_hit(f"{limit}\n" + "".join(f"step {i}\n" for i in range(command_jobs.LIMIT_LINES - 1)))
+    assert not command_jobs.limit_hit(f"{limit}\n" + "".join(f"step {i}\n" for i in range(command_jobs.LIMIT_LINES)))
+    assert not command_jobs.limit_hit("YouTube: quota exceeded, rate limit reached\n")
+    r = make()
+    assert not r._stuck_at_limit(1, {}, limit, time.time())  # run on another machine: its login isn't known here
 
 
 # ── Voice shell: start_job, job_status, stop_job ────────────────

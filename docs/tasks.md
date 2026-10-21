@@ -211,7 +211,7 @@ flowchart LR
 - The fix task **only fixes the code**: its walls hide the keys the command needs, so it never runs the command itself. When it finishes, **Alfred reruns the command once**, as it always runs it (same folder, outside the walls, with its keys), and says how that went, unless the fix says the cause remains (an expired login, say).
 - A rerun that fails again is **only reported**, so it can't loop.
 - Jobs outside a project, or started with "don't fix it if it fails", are only explained.
-- A `claude` the command calls runs on **the usable Claude login with the most room left** under its limits (Settings › Claude logins; the priority order breaks ties), since a command can't move once it runs. If the run fails because Claude says that login is signed out or its limit is used up, Alfred passes the login over and **reruns the command on the one with the most room now**; with none left, it just says so.
+- A `claude` the command calls runs on **the usable Claude login with the most room left** under its limits (Settings › Claude logins; the priority order breaks ties), since a command can't move once it runs. If the run fails because Claude says that login is signed out or its limit is used up, Alfred passes the login over and **reruns the command on the one with the most room now**; with none left, it just says so, and when the limit resets. A run that **hangs at the limit** instead of failing (Claude's limit message stays among its last 5 lines for 3 minutes, however often it repeats it) is stopped and handled the same way.
 
 ## ✋ Approvals
 

@@ -134,9 +134,7 @@ def skipped(name: str, now: float | None = None) -> str:
     if found and not found.get("ok"):
         return "its sign-in isn't working"
     if out := usage.out(now, kept=usage.of(name)):
-        reset = out[1].get("resets_at")
-        return f"its {usage.NAMES.get(out[0], 'usage')} limit is used up" + (f" until {usage.when(reset, now)}" if reset
-                                                                               else "")
+        return f"its {usage.used_up(out[0], out[1].get('resets_at'), now)}"
     return ""
 
 

@@ -166,6 +166,15 @@ def when(ts: float, now: float | None = None) -> str:
     return said if at.date() == today else f"on {at:%A} {said}"
 
 
+def used_up(window: str, resets: float | None, now: float | None = None) -> str:
+    """'five-hour limit is used up, resetting at 3 PM', without the reset when it isn't known."""
+    return f"{NAMES.get(window, 'usage')} limit is used up" + _resetting(resets, now)
+
+
+def _resetting(resets: float | None, now: float) -> str:
+    return f", resetting {when(resets, now)}" if resets else ""
+
+
 def _what(name: str) -> str:
     """A window as it's said: 'five-hour', 'weekly Opus'."""
     return NAMES.get(name, name.replace("_", " "))
@@ -183,7 +192,7 @@ def _window(name: str, w: dict, now: float) -> str:
         said = f"the {what} limit is used up, and extra usage is carrying on"
     else:
         said = f"the {what} limit is fine"
-    return said + (f", resetting {when(w['resets_at'], now)}" if w.get("resets_at") else "")
+    return said + _resetting(w.get("resets_at"), now)
 
 
 def said(now: float | None = None, kept: dict[str, dict] | None = None) -> str:
