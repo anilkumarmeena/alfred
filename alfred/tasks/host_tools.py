@@ -2,7 +2,8 @@
 
   host_run     one command, up to MAX_MINUTES
   start_job    long command that runs detached; follow with job_status / job_wait
-They run in the runner inside the host walls (Seatbelt on macOS, bubblewrap on Linux), without Alfred's keys.
+They run in the runner inside the host walls (Seatbelt on macOS, bubblewrap on Linux), without Alfred's keys; a
+project's env files are opened for a command whose scripts read them (commands.project_keys).
 host_run and start_job pass `_host_gate` first: refused, allowed, allowed by a prior yes or rule, or sent to the user
 for approval. The gate reads the scripts a command runs; the tool runs it only if they're unchanged since
 (`TaskJobs.vet`), and a yes covers them only as they were when asked.
@@ -51,19 +52,24 @@ class TaskJobs(host.Jobs):
         # host_run commands in flight per task. A task cut off mid-command isn't auto-resumed on restart, since the
         # command's effect is unknown. Long jobs survive restarts and aren't tracked here.
         self.on_mac: dict[int, list[str]] = {}
-        self.vetted: dict[tuple[int, str, str], dict[str, str]] = {}  # (task, command, folder) -> scripts as read
+        self.vetted: dict[tuple[int, str, str], commands.Seen] = {}  # (task, command, folder) -> scripts as read
 
     def vet(self, task_id: int, command: str, folder: Path) -> None:
         """Note the scripts a command the gate let through runs, as it read them."""
-        self.vetted[(task_id, command, str(folder))] = commands.seen(command, folder).files
+        self.vetted[(task_id, command, str(folder))] = commands.seen(command, folder)
         while len(self.vetted) > KEEP_VETTED:
             del self.vetted[next(iter(self.vetted))]
 
     def changed(self, task_id: int, command: str, folder: Path) -> bool:
         """Whether a script the command runs changed since the gate read it. The check and the run are a moment apart:
         a change in that moment still slips through."""
-        files = self.vetted.get((task_id, command, str(folder)))
-        return files is not None and files != commands.seen(command, folder).files
+        found = self.vetted.get((task_id, command, str(folder)))
+        return found is not None and found.files != commands.seen(command, folder).files
+
+    def keys(self, task_id: int, command: str, folder: Path) -> list[Path]:
+        """The project env files the walls open for a command (commands.project_keys), from the gate's read of it."""
+        found = self.vetted.get((task_id, command, str(folder))) or commands.seen(command, folder)
+        return commands.project_keys(found, folder)
 
     def ended(self, job: dict, code: int) -> None:
         if self.on_end:
@@ -188,8 +194,8 @@ def _host_tools(task: dict, cwd: Path, jobs: TaskJobs) -> list:
     @sdk_tool(
         "host_run",
         f"Run one shell command on {MACHINE} itself, outside the sandbox, and get its output (the start and end, if "
-        f"it's long) and exit code. For what the sandbox blocks: {_FOR}. Secrets stay unreadable. At most 10 minutes; "
-        "use start_job for longer.",
+        f"it's long) and exit code. For what the sandbox blocks: {_FOR}, and scripts that read their project's .env "
+        "files. Other secrets stay unreadable. At most 10 minutes; use start_job for longer.",
         {"type": "object", "properties": {
             "command": {"type": "string", "description": f"The shell command, as you'd give it to Bash ({_SHELL})."},
             "folder": {"type": "string", "description": "Where to run it: your folder (the default) or a folder inside it."},
@@ -197,12 +203,12 @@ def _host_tools(task: dict, cwd: Path, jobs: TaskJobs) -> list:
         }, "required": ["command"]},
     )
     async def host_run(args: dict) -> dict:
-        command = args.get("command", "").strip()
-        if why := commands.refused(command, in_place, folder(args)) or changed(args):
+        command, where = args.get("command", "").strip(), folder(args)
+        if why := commands.refused(command, in_place, where) or changed(args):
             return text(f"Not run: {why}.", error=True)
         walls = not unwalled(command)
         log.warning("task %s runs on %s%s, in %s: %s", task_id, MACHINE, "" if walls else " outside the host walls",
-                    folder(args), command)
+                    where, command)
         leaders: list[int] = []
 
         def started(pid: int) -> None:
@@ -211,12 +217,12 @@ def _host_tools(task: dict, cwd: Path, jobs: TaskJobs) -> list:
 
         try:
             with jobs.running(task_id, command):
-                ran = await host.run(command, folder(args), call_minutes(args) * 60, walls=walls, env=temp_env(),
-                                     started=started)
+                ran = await host.run(command, where, call_minutes(args) * 60, walls=walls, env=temp_env(),
+                                     started=started, keys=jobs.keys(task_id, command, where))
         except (OSError, RuntimeError) as e:
             return text(f"Couldn't run it: {e}", error=True)
         left = await asyncio.to_thread(_still_running, leaders[0]) if leaders else ""
-        return text(redact(ran.text() + left, folder(args)), error=ran.code != 0)
+        return text(redact(ran.text() + left, where), error=ran.code != 0)
 
     @sdk_tool(
         "start_job",
@@ -230,12 +236,12 @@ def _host_tools(task: dict, cwd: Path, jobs: TaskJobs) -> list:
         }, "required": ["command", "title"]},
     )
     async def start_job(args: dict) -> dict:
-        command = args.get("command", "").strip()
-        if why := commands.refused(command, in_place, folder(args)) or changed(args):
+        command, where = args.get("command", "").strip(), folder(args)
+        if why := commands.refused(command, in_place, where) or changed(args):
             return text(f"Not started: {why}.", error=True)
         try:
-            job = jobs.launch(command, args.get("title") or command[:40], folder(args), task=task_id, env=temp_env(),
-                              walls=not unwalled(command))
+            job = jobs.launch(command, args.get("title") or command[:40], where, task=task_id, env=temp_env(),
+                              walls=not unwalled(command), keys=jobs.keys(task_id, command, where))
         except (ValueError, OSError, RuntimeError) as e:
             return text(f"Not started: {e}", error=True)
         return text(f"Started job {job['id']}, {job['title']}. It runs on its own; its whole output goes to "

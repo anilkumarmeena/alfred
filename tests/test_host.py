@@ -64,6 +64,16 @@ def test_ssh_can_check_known_hosts_but_never_read_a_key():
     assert f'(subpath "{home}/.ssh")' in rules("file-write*")  # and nothing there is writable
 
 
+def test_a_commands_project_env_files_can_be_left_readable_and_nothing_else(tmp_path):
+    env = tmp_path / "proj/.env"
+    profile = host.profile(keys=[env])
+    reads = next(line for line in profile.splitlines() if line.startswith("(deny file-read*"))
+    exempt = reads[reads.index("(require-not (require-any"):]
+    assert f'(literal "{os.path.realpath(env)}")' in exempt
+    assert f'(literal "{os.path.realpath(env)}")' not in host.profile()  # only for the command given them
+    assert "(allow" not in profile.replace("(allow default)", "") and profile.count("(") == profile.count(")")
+
+
 def test_pem_certificate_bundles_stay_readable_for_tls():
     reads = rules("file-read*")
     assert r"\.pem$" in reads and "site-packages" in reads and "cacert" in reads
@@ -217,6 +227,13 @@ def test_bwrap_mounts_everything_then_hides_and_locks_what_seatbelt_denies(linux
     assert ("--bind", f"{run}/pipewire-0", f"{run}/pipewire-0") in ops and ("--bind", f"{run}/gcr", f"{run}/gcr") in ops
     assert not any(op[-1] in (f"{run}/bus", f"{run}/systemd") for op in ops)
     assert where(ops, bus) == [("--ro-bind", "/dev/null", bus)]
+
+
+def test_bwrap_leaves_a_commands_project_env_files_readable(linux_home):
+    home, _, _ = linux_home
+    ops = mounts(host.bwrap_args(home, keys=[f"{home}/proj/.env"]))
+    assert not where(ops, f"{home}/proj/.env")  # not masked
+    assert where(ops, f"{home}/.netrc") == [("--ro-bind", "/dev/null", f"{home}/.netrc")]  # the rest stay hidden
 
 
 def test_bwrap_keeps_alfred_own_files_read_only_and_the_runner_socket_out(linux_home):

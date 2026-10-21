@@ -420,7 +420,7 @@ class Offload:
         job = schedules.get(int(body["job"]))
         if not job or self.owner(job) != node:
             raise Refused("that scheduled job isn't this machine's")
-        later = {"next_run": body["next_run"]} if body.get("next_run") else {}
+        later = scheduler.moved_on(body["next_run"]) if "next_run" in body else {}  # None: a one-off, now done
         if why := str(body.get("refused") or "")[:300]:  # its own check there turned the run down
             fails = job["fails"] + 1
             schedules.update(job["id"], fails=fails, last_result=f"Couldn't run on {self.name(node)}: {why}"[:300],

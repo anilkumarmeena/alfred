@@ -1,7 +1,8 @@
 """Run commands on the host outside Claude Code's sandbox: task host_run/start_job and voice-shell long jobs.
 
 Task commands run inside walls: allow by default, deny only
-  - reading secrets (Alfred secrets/ and .env, home logins/keys, secret-named files in home; commands.py lists)
+  - reading secrets (Alfred secrets/ and .env, home logins/keys, secret-named files in home; commands.py lists), but
+    for the project env files a command's scripts may read (`keys`, from commands.project_keys)
   - writing Alfred's folder, except task worktrees, cache, data/tasks/ and git objects
   - writing home logins, shell start-up files and launch agents / systemd user units; the runner socket
 On macOS that's `sandbox-exec` with `profile()` (plus: no setuid /bin/ps). On Linux it's bubblewrap with
@@ -112,8 +113,8 @@ def _any(*filters: str) -> str:
     return f"(require-any {' '.join(filters)})"
 
 
-def profile(home: Path | str | None = None) -> str:
-    """Seatbelt profile for a task's host commands."""
+def profile(home: Path | str | None = None, keys: Iterable[Path] = ()) -> str:
+    """Seatbelt profile for a task's host commands; `keys` stay readable."""
     home = _real(home or Path.home())
     root = _real(ROOT)
     own = list(dict.fromkeys([root, _real(HOME_DIR)]))  # the checkout, and ALFRED_HOME when that's elsewhere
@@ -136,7 +137,8 @@ def profile(home: Path | str | None = None) -> str:
         *(f"(subpath {_str(f'{home}/{name}')})" for name in _STARTUP_DIRS),
     )
     readable = _any(f"(subpath {_str(_real(claude_logins.voice_logs()))})",
-                    *(f"(literal {_str(f'{home}/.ssh/{name}')})" for name in _SSH_READABLE))
+                    *(f"(literal {_str(f'{home}/.ssh/{name}')})" for name in _SSH_READABLE),
+                    *(f"(literal {_str(_real(p))})" for p in keys))
     sock = _real(RUNNER_SOCKET)
     return "\n".join([
         "(version 1)",
@@ -168,17 +170,18 @@ def task_env() -> dict[str, str]:
             if k in _KEPT or not (SENSITIVE.search(k) or k in dropped)}
 
 
-def walled(argv: list[str], home: Path | str | None = None) -> list[str]:
-    """Wrap argv in the host walls. Raises RuntimeError if they can't go up (never runs unwalled)."""
+def walled(argv: list[str], home: Path | str | None = None, keys: Iterable[Path] = ()) -> list[str]:
+    """Wrap argv in the host walls, `keys` (project env files) left readable. Raises RuntimeError if they can't go up
+    (never runs unwalled)."""
     if platform.MAC:
         if not Path(SANDBOX_EXEC).exists():
             raise RuntimeError("sandbox-exec isn't on this computer, so host commands can't run safely")
-        return [SANDBOX_EXEC, "-p", profile(home), *argv]
+        return [SANDBOX_EXEC, "-p", profile(home, keys), *argv]
     if platform.LINUX:
         bwrap = _bwrap()
         for folder in (WORKTREES_DIR, TASK_CACHE_DIR, TASK_DATA_DIR):  # can't be made from inside
             folder.mkdir(parents=True, exist_ok=True)
-        return [bwrap, *bwrap_args(home), *argv]
+        return [bwrap, *bwrap_args(home, keys), *argv]
     raise RuntimeError(f"host commands have no walls on {sys.platform}, so they can't run safely")
 
 
@@ -304,7 +307,7 @@ def _ancestors(path: str) -> Iterator[str]:
         yield (path := parent)
 
 
-def bwrap_args(home: Path | str | None = None) -> list[str]:
+def bwrap_args(home: Path | str | None = None, keys: Iterable[Path] = ()) -> list[str]:
     """bubblewrap options for a task's host commands on Linux: profile()'s rules as mounts. The command follows."""
     home = _real(home or Path.home())
     root, data, sock = _real(ROOT), _real(DATA_DIR), _real(RUNNER_SOCKET)
@@ -342,7 +345,8 @@ def bwrap_args(home: Path | str | None = None) -> list[str]:
     secret_paths = [_real(p) for p in ALFRED_SECRETS] + [_real(p.replace("~", home, 1)) for p in HOME_SECRETS]
     for path in secret_paths:
         put(path, MASK)
-    shown = [_real(claude_logins.voice_logs()), *(_real(f"{home}/.ssh/{name}") for name in _SSH_READABLE)]
+    shown = [_real(claude_logins.voice_logs()), *(_real(f"{home}/.ssh/{name}") for name in _SSH_READABLE),
+             *(_real(p) for p in keys)]
     if agent := os.environ.get("SSH_AUTH_SOCK"):
         shown.append(_real(agent))  # the agent signs without giving out keys, even from inside ~/.ssh
     walked = {p for p, rule in rules.items() if rule == MASK} | set(shown)
@@ -451,15 +455,16 @@ def _kill(pid: int) -> None:
 
 async def run(command: str, cwd: Path, timeout: float = RUN_TIMEOUT, walls: bool = True,
               shell: tuple[str, ...] = SHELL, env: dict[str, str] | None = None,
-              started: Callable[[int], None] | None = None) -> Ran:
+              started: Callable[[int], None] | None = None, keys: Iterable[Path] = ()) -> Ran:
     """Run in a new session; wait for it and anything holding its output, up to `timeout` s, then kill.
 
-    `env` extends task_env(). `started` receives the session id (shell pid) on start. Cancellation kills it.
+    `env` extends task_env(). `started` receives the session id (shell pid) on start. `keys`: project env files the
+    walls leave readable. Cancellation kills it.
     """
     argv = [*shell, command]
     start = time.monotonic()
     if walls:
-        argv = await asyncio.to_thread(walled, argv)  # on Linux it walks home for secret-named files
+        argv = await asyncio.to_thread(walled, argv, keys=keys)  # on Linux it walks home for secret-named files
     proc = await asyncio.create_subprocess_exec(
         *argv, cwd=cwd, env=task_env() | (env or {}), stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
@@ -708,11 +713,12 @@ class Jobs:
 
     def launch(self, command: str, title: str, cwd: Path, task: int | None = None, env: dict[str, str] | None = None,
                report: bool = False, extra: dict | None = None, job_id: int | None = None,
-               walls: bool = True) -> dict:
+               walls: bool = True, keys: Iterable[Path] = ()) -> dict:
         """Start a job; returns its record.
 
         Raises ValueError if `cwd` isn't a folder or an explicit `job_id` is taken. `report`: its last output line is
-        spoken at the end. `extra` is merged into the record. `walls=False` skips the profile (commands.own_sandbox).
+        spoken at the end. `extra` is merged into the record. `walls=False` skips the profile (commands.own_sandbox);
+        `keys`: project env files the walls leave readable.
         """
         if not cwd.is_dir():
             raise ValueError(f"{cwd} isn't a folder.")
@@ -728,7 +734,7 @@ class Jobs:
             "ALFRED_JOB_FROM": profiles.assistant(),  # the notification's title
         }
         argv = [*self.shell, _JOB_SCRIPT]
-        argv = walled(argv) if self.walls and walls else argv  # before the log, so a refusal leaves none
+        argv = walled(argv, keys=keys) if self.walls and walls else argv  # before the log, so a refusal leaves none
         # Popen, not asyncio subprocesses, which kill their child when the loop drops them
         with open(f"{base}.log", "wb") as out:
             proc = subprocess.Popen(argv, cwd=cwd, env=env,

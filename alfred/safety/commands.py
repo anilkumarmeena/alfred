@@ -4,6 +4,7 @@
   refused                 why a task may never run it, even with a yes (secrets, Alfred controls, sudo)
   own_sandbox             a bare brew/port install, approved to run outside the host profile
   names_secret / secret_path / reads_environment   secret detection, refused even with a yes
+  project_keys / env_files                         a registered project's own env files, which its scripts may read
   approves / refuses / yes_scope                   clear yes / no / how far a yes goes, from word lists
   tells_approve / tells_deny / ordered / agreed_to the user's words as a later answer or a direct order
   same_risk               two lines do the same risky things in the same folders
@@ -22,7 +23,10 @@ import stat
 import string
 import sys
 import tempfile
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -146,6 +150,67 @@ def secret_path(path: Path) -> bool:
     """Whether a resolved path is a secret: in a secrets/login folder, a .env file, key or credential."""
     return (secret_place(path) or bool(SECRET_DIRS.intersection(path.parts))
             or bool(SECRET_FILES.fullmatch(path.name)))
+
+
+# ── Projects' own keys ──────────────────────────────────────────
+# A script inside a registered project may read that project's env files (.env, .env.local...) and use the keys,
+# with no yes of its own; the command line itself still may not name one, and a script may not show, copy or send
+# one (_LEAKERS). Task host commands get those files opened in their walls (project_keys); the task sandbox, whose
+# commands go unchecked, keeps hiding them. Whatever a command prints has their values redacted (alfred.safety.redact).
+
+# The registered projects' folders on this computer, from alfred.projects (wired by alfred.bootstrap: it sits above)
+_registered: Callable[[], Iterable[Path]] = lambda: ()
+_also: ContextVar[tuple[Path, ...]] = ContextVar("projects_also", default=())
+# Seconds the list is reused: redaction looks every 2 s for each running command job
+_LISTED_SECONDS = 10
+_listed: tuple[object, float, list[Path]] | None = None  # (the _registered read, when, its folders)
+
+
+def use_projects(listed: Callable[[], Iterable[Path]]) -> None:
+    global _registered
+    _registered = listed
+
+
+@contextmanager
+def projects_also(*folders: Path) -> Iterator[None]:
+    """Count `folders` as registered projects for the checks made inside: a machine's own projects, which only the
+    main computer lists."""
+    token = _also.set(_also.get() + folders)
+    try:
+        yield
+    finally:
+        _also.reset(token)
+
+
+def _alfred_own(path: Path) -> bool:
+    return any(path.is_relative_to(p.resolve()) for p in (ROOT, HOME_DIR, DATA_DIR))
+
+
+def _registered_folders() -> list[Path]:
+    """_registered()'s folders, read again after _LISTED_SECONDS; none if the list can't be read."""
+    global _listed
+    now = time.monotonic()
+    if _listed is None or _listed[0] is not _registered or now - _listed[1] >= _LISTED_SECONDS:
+        try:
+            found = list(_registered())
+        except Exception:  # an unreadable project list: no project's keys, as if none were listed
+            found = []
+        _listed = _registered, now, found
+    return _listed[2]
+
+
+def project_folders() -> list[Path]:
+    """The registered projects' folders, resolved, deepest first; never Alfred's own folder nor one inside it."""
+    found = {Path(p).expanduser().resolve() for p in (*_registered_folders(), *_also.get())}
+    return sorted((p for p in found if not _alfred_own(p) and p != Path.home().resolve()),
+                  key=lambda p: len(p.parts), reverse=True)
+
+
+def project_root(path: Path) -> Path | None:
+    """The registered project holding `path`, the deepest if several; None for one in none, or in Alfred's own
+    folder."""
+    real = path.resolve()
+    return None if _alfred_own(real) else next((p for p in project_folders() if real.is_relative_to(p)), None)
 
 
 # ── What counts as a yes, or a no ───────────────────────────────
@@ -1510,9 +1575,57 @@ def checkout(path: Path) -> Path | None:
 def _project_env(path: Path, project: Path | None) -> bool:
     """Whether `path` is a .env file (.env.local...) in `project`, not one of Alfred's or in a secrets folder."""
     real = path.resolve()
-    return (project is not None and real.is_relative_to(project) and real.name.startswith(".env")
-            and bool(SECRET_FILES.fullmatch(real.name)) and not secret_place(real)
+    return (project is not None and real.is_relative_to(project) and names_env(real.name) and not secret_place(real)
             and not SECRET_DIRS.intersection(real.relative_to(project).parts))
+
+
+def env_files(folder: Path) -> list[Path]:
+    """The env files (not templates) at the top of `folder`, of its git checkout and of its registered project: whose
+    values come out of what a command run there prints, and which the host walls open for its project's scripts."""
+    found: list[Path] = []
+    for where in dict.fromkeys([folder, checkout(folder / "_") or folder, project_root(folder) or folder]):
+        try:
+            found += [p for p in where.glob(".env*") if SECRET_FILES.fullmatch(p.name) and p.is_file()]
+        except OSError:
+            continue
+    return found
+
+
+def project_keys(found: "Seen", folder: Path) -> list[Path]:
+    """The env files the host walls open for a command run in `folder`: its project's (env_files) when a script the
+    command runs reads that project's keys (`found`, its check), else none."""
+    if (project := project_root(folder)) is None or project not in found.keys:
+        return []
+    return [p for p in env_files(folder) if _project_env(p, project)]
+
+
+# Programs that show, copy, encode, archive or send a file: a script may read its project's env files, but never hand
+# one to these (cat .env, cp .env x, curl -d @.env, nc host < .env). Filters that take values out (grep, sed, awk,
+# cut) may; what they print is redacted.
+_LEAKERS = _COPIERS | {
+    "cat", "tac", "nl", "head", "tail", "less", "more", "most", "bat", "batcat", "pr", "fold", "diff", "sdiff", "vimdiff",
+    "od", "xxd", "hexdump", "hd", "strings", "base64", "base32", "basenc", "uuencode", "openssl", "gpg",
+    "dd", "tee", "scp", "sftp", "zip", "tar", "gzip", "bzip2", "xz", "zstd", "7z",
+    "curl", "wget", "http", "https", "xh", "nc", "ncat", "netcat", "socat", "telnet", "ssh", "ftp", "mail", "mailx",
+    "sendmail", "mutt", "pbcopy", "xclip", "xsel", "wl-copy", "open", "xdg-open", "gh", "git", "aws", "gsutil", "gcloud",
+    "az", "rclone", "s3cmd",
+}
+_WORD_PARTS = re.compile(r"[/@=:;,]")  # curl -d @.env, --data-binary=@.env, scp .env host:x, file=@.env;type=...
+
+
+def names_env(text: str) -> bool:
+    """Whether a word names an env file (not a template), as a path or a value of an option."""
+    name = _WORD_PARTS.split(text.strip("'\""))[-1]
+    return name.startswith(".env") and bool(SECRET_FILES.fullmatch(name))
+
+
+def _leaks(piece: _Piece) -> bool:
+    """Whether a simple command shows, copies or sends an env file: one of _LEAKERS given one, or fed one on stdin."""
+    argv = _strip_prefixes(piece.argv)
+    if not argv or Path(argv[0].lstrip("\\")).name not in _LEAKERS:
+        return False
+    fed = [piece.stdin[1]] if piece.stdin and piece.stdin[0] == "file" else []
+    return any(map(names_env, [*argv[1:], *fed]))
 
 
 def _where(piece: _Piece, cwd: Path | None) -> Path | None:
@@ -1535,11 +1648,12 @@ def _script_path(word: str, where: Path | None) -> Path | None:
 
 @dataclass(frozen=True)
 class Seen:
-    """The script files one check read: each one's fingerprint, to tell later whether it changed, and whether any of
-    them touches secrets."""
+    """The script files one check read: each one's fingerprint, to tell later whether it changed, whether any of
+    them touches secrets, and the projects whose own env files they read."""
 
     files: dict[str, str]  # resolved path -> sha256 of its bytes, or why it wasn't read ('missing', 'too large'...)
     secret: bool
+    keys: frozenset[Path]
 
 
 class _Reader:
@@ -1554,10 +1668,10 @@ class _Reader:
         self.written: list[tuple[Path, str | None]] = []  # paths lines write (with the text, from a heredoc)
         self.within: list[tuple[Path | None, bool]] = []  # scripts being read, innermost last: (file, it or one
         # running it changes folder outside its project, so a bare .env may not be the project's)
-        self.keys = False  # the code being read reads its project's .env
+        self.keys: set[Path] = set()  # projects whose own env files the scripts read
 
     def seen(self) -> Seen:
-        return Seen(dict(self.files), self.secret)
+        return Seen(dict(self.files), self.secret, frozenset(self.keys))
 
     def _bytes(self, path: Path, head_only: bool = False) -> bytes | None:
         """A regular file's bytes (or first 4 KB), or None, noting why in `files`. Never a secret, a pipe or a device."""
@@ -1607,7 +1721,6 @@ class _Reader:
         `where`: the folder it runs in, if known; `sourced`: read into the running shell (. x.sh), not run."""
         key = (str(path), language, str(where), sourced)
         if key in self.judged:
-            self.keys = self.keys or self.judged[key] == scripts.KEYS
             return self.judged[key]
         if written := [text for w, text in self.written if path == w or path.is_relative_to(w)]:
             # cat > x.py <<EOF ... python x.py: the heredoc is the script
@@ -1615,10 +1728,10 @@ class _Reader:
                 if len(written) == 1 and written[0] is not None else UNSEEN
         if _LIBRARIES & set(path.parts):
             return ""
-        if path.name.startswith(".env") and _project_env(path, self.project()):  # set -a; . ./.env: asked about
+        if path.name.startswith(".env") and _project_env(path, project := self.project()):  # set -a; . ./.env
             self.files[str(path.resolve())] = "keys"
-            self.keys = True
-            return scripts.KEYS
+            self.keys.add(project)
+            return ""
         self.judged[key] = ""  # a cycle back here adds nothing
         data = self._bytes(path)
         try:
@@ -1644,9 +1757,9 @@ class _Reader:
         return self.file(path, "shell" if language is None else language, where=where) if language != "" else UNSEEN
 
     def project(self) -> Path | None:
-        """The git checkout of the script being read, whose own .env asks rather than being refused; None for the
-        command line itself."""
-        return checkout(self.within[-1][0]) if self.within and self.within[-1][0] else None
+        """The registered project of the script being read, whose own env files it may read; None for the command line
+        itself."""
+        return project_root(self.within[-1][0]) if self.within and self.within[-1][0] else None
 
     def code(self, text: str, language: str, path: Path | None, roots: tuple[Path, ...] | None,
              where: Path | None = None, sourced: bool = False) -> str:
@@ -1662,10 +1775,9 @@ class _Reader:
             text = _pinned(text, path, sourced) if path else text
             bare = _uncommented(text)
         here = path or outer
-        project = checkout(here) if here else None
+        project = project_root(here) if here else None
         moved = moved or _leaves(bare, language, where, project)
         self.within.append((here, moved))
-        had, self.keys = self.keys, False
         try:
             ctx = _Context(self, where, project, moved)
             if language == "shell":
@@ -1679,9 +1791,6 @@ class _Reader:
         finally:
             self.depth -= 1
             self.within.pop()
-        found, self.keys = self.keys, had or self.keys  # here, or in a script it runs
-        if found and why != scripts.SECRETS:  # before any other risk: a yes for that mustn't cover the keys
-            why = scripts.KEYS
         self.secret = self.secret or why == scripts.SECRETS
         return why
 
@@ -1694,8 +1803,8 @@ def _secret_text(text: str) -> bool:
 
 class _Context:
     """scripts.Context for one script: its spawned commands go back through the check, in the folder it runs in.
-    `project`: the script's git checkout, whose own .env it may read with a yes (the reader's `keys`, once it names
-    it); `moved`: it, or a script running it, may change folder out of the project."""
+    `project`: the script's registered project, whose own env files it may read (noted in the reader's `keys`);
+    `moved`: it, or a script running it, may change folder out of the project."""
 
     def __init__(self, reader: _Reader, where: Path | None, project: Path | None, moved: bool) -> None:
         self.reader, self.where, self.project, self.moved = reader, where, project, moved
@@ -1708,10 +1817,20 @@ class _Context:
     def secret(self, text: str) -> bool:
         if not _secret_text(text := _ENV_OBJECTS.sub(" ", text)):
             return False
-        if _secret_text(_ENV_NAME.sub(self._own_env, text)):
+        if _secret_text(_ENV_NAME.sub(self._own_env, text)) or self.project is None:
             return True
-        self.reader.keys = True
+        self.reader.keys.add(self.project)
         return False
+
+    def keys(self) -> bool:
+        if self.project is None or self.moved or self.where is None or not self.where.resolve().is_relative_to(
+                self.project):
+            return False  # dotenv looks in the folder it runs in, which may not be the project's
+        self.reader.keys.add(self.project)
+        return True
+
+    def env_file(self, text: str) -> bool:
+        return names_env(text)
 
     def _own_env(self, m: re.Match) -> str:
         """A blank for a name of the project's own .env (relative ones from where the script runs), else the name."""
@@ -1892,6 +2011,10 @@ def _check(command: str, own: "Own | None", cwd: Path | None, reader: _Reader) -
     found, mine = [], None
     for piece in pieces:
         argv = piece.argv
+        if reader.within and _leaks(piece):  # a script showing or sending its project's keys (the line can't name them)
+            reader.secret = True
+            found.append((list(_strip_prefixes(argv) or argv), scripts.SECRETS))
+            continue
         why = _piece(argv) or _code(piece, cwd, reader)
         if not why and there and Path((_strip_prefixes(argv) or argv)[0]).name in _WRITES_THERE:
             why = "changes the system"

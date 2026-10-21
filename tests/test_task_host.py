@@ -298,6 +298,36 @@ def test_a_task_starts_and_waits_for_its_jobs(folder, unwalled):
     assert text(asyncio.run(other["job_status"]({}))) == "No jobs in the last day."
 
 
+def test_a_projects_script_gets_its_env_files_opened_in_the_walls_and_its_keys_redacted(folder, monkeypatch):
+    from alfred.safety import commands
+
+    (folder / ".env").write_text("API_KEY=abcdef123456\n")
+    (folder / "voice.sh").write_text("set -a; . ./.env; set +a\necho \"using $API_KEY\"\n")
+    (folder / "plain.sh").write_text("echo hi\n")
+    monkeypatch.setattr(commands, "_registered", lambda: [folder])
+    ran, launched = [], []
+
+    async def run(command, cwd, timeout, walls=True, keys=(), **extra):
+        ran.append(list(keys))
+        return host.Ran(0, "using abcdef123456", 0)
+
+    monkeypatch.setattr(host, "run", run)
+    monkeypatch.setattr(host, "walled", lambda argv, home=None, keys=(): launched.append(list(keys)) or argv)
+    monkeypatch.setattr(host.subprocess, "Popen", lambda argv, **kw: SimpleNamespace(pid=os.getpid(), poll=lambda: 0))
+    t = tools(folder, worker.TaskJobs(folder.parent / "jobs"))
+
+    async def main():
+        said = text(await t["host_run"]({"command": "sh voice.sh"}))
+        await t["host_run"]({"command": "sh plain.sh"})
+        await t["start_job"]({"command": "sh voice.sh", "title": "voice"})
+        return said
+
+    said = asyncio.run(main())
+    env = (folder / ".env").resolve()
+    assert ran == [[env], []] and launched == [[env]]
+    assert "abcdef123456" not in said and "[redacted]" in said
+
+
 @pytest.mark.skipif(not platform.MAC, reason="Homebrew's own sandbox is a macOS matter")
 def test_an_approved_install_runs_outside_the_host_profile(folder, monkeypatch):
     """Homebrew sandboxes its own steps, and macOS won't start that sandbox inside the host profile."""
@@ -308,7 +338,7 @@ def test_an_approved_install_runs_outside_the_host_profile(folder, monkeypatch):
         return host.Ran(0, "", 0)
 
     monkeypatch.setattr(host, "run", run)
-    monkeypatch.setattr(host, "walled", lambda argv, home=None: ["sandbox-exec", *argv])
+    monkeypatch.setattr(host, "walled", lambda argv, home=None, keys=(): ["sandbox-exec", *argv])
     monkeypatch.setattr(host.subprocess, "Popen", lambda argv, **kw: launched.append(argv[0]) or SimpleNamespace(
         pid=os.getpid(), poll=lambda: 0))
     t = tools(folder, worker.TaskJobs(folder.parent / "jobs"))

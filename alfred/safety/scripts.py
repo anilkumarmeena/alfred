@@ -20,7 +20,6 @@ from alfred.safety.risk import Risk
 
 UNSEEN = "runs code it can't see"
 SECRETS = "touches secrets"
-KEYS = "reads its project's keys when it runs"  # its own project's .env: asks, unlike SECRETS
 NETWORK = "sends data off the computer"
 _VALUE = "$X"  # a word known only at run time: never a literal to the command check
 
@@ -33,8 +32,17 @@ class Context(Protocol):
         ...
 
     def secret(self, text: str) -> bool:
-        """Whether text names a secret or other processes' environments (its own project's .env aside: that's noted,
-        and the script asks as KEYS)."""
+        """Whether text names a secret or other processes' environments (its own project's env files aside: those are
+        noted, and it may read them)."""
+        ...
+
+    def keys(self) -> bool:
+        """Whether the script may load its project's env files with dotenv, noting that it does; if not, they're
+        secrets."""
+        ...
+
+    def env_file(self, text: str) -> bool:
+        """Whether text names an env file: one the script may read, if its project's, but never copy."""
         ...
 
     def startup(self, text: str) -> str:
@@ -61,7 +69,8 @@ _PY_NETWORK = ("socket", "http.client", "urllib.request", "urllib3", "requests",
                "googleapiclient", "httplib2", "mechanize", "scrapy", "selenium", "playwright", "openai", "anthropic",
                "slack_sdk", "twilio", "sendgrid", "yagmail", "dropbox", "pysftp", "asyncssh", "zmq",
                "asyncio.open_connection", "asyncio.open_unix_connection", "asyncio.start_server")
-_PY_SECRETS = ("dotenv", "keyring")
+_PY_SECRETS = ("keyring",)
+_PY_DOTENV = ("dotenv",)  # loads the project's env files: allowed in a project (Context.keys)
 # Code it can't follow: native calls, code objects, other interpreters, exec-family process replacement
 _PY_UNSEEN = ("ctypes", "cffi", "code.interact", "code.InteractiveConsole", "code.InteractiveInterpreter", "marshal",
               "types.CodeType", "types.FunctionType", "importlib.util",
@@ -88,11 +97,28 @@ _METHOD_WRITES = {"write_text", "write_bytes", "symlink_to", "hardlink_to", "ren
 _DUNDERS = {"__dict__", "__builtins__", "__globals__", "__subclasses__", "__code__", "__getattribute__", "__loader__",
             "__import__"}
 _STAR_RISKY = {"os", "subprocess", "shutil", "importlib", "builtins", "socket", "ctypes"}
+# Paths built in code, followed so an env file named in pieces is judged as the whole path
+_PY_JOINS = {"os.path.join", "posixpath.join", "pathlib.Path", "pathlib.PurePath", "pathlib.PosixPath"}
+_PY_SAME_PATH = {"os.path.abspath", "os.path.realpath", "os.path.normpath", "str", "os.fspath"}
+_PY_CWD = {"os.getcwd", "pathlib.Path.cwd"}
 
 
 def _under(name: str, modules) -> bool:
     """Whether `name` is one of `modules` or inside one."""
     return any(name == m or name.startswith(m + ".") for m in modules)
+
+
+def _up(path: Path | None) -> Path | None:
+    """The folder holding `path` (relative ones: where the script runs), or None if unknown."""
+    if path is None:
+        return None
+    return path.parent if path.is_absolute() or path.parts and path.parts[-1] != ".." else path / ".."
+
+
+def _joined(parts: list[Path | None]) -> Path | None:
+    """The parts joined as os.path.join does (an absolute one starts again), or None if one is unknown."""
+    known = [p for p in parts if p is not None]
+    return Path(*known) if len(known) == len(parts) else None
 
 
 def _text(node: ast.AST) -> str | None:
@@ -107,6 +133,14 @@ class _Python:
         self.whys: list[str] = []
         self.local: list[Path] = []  # files local imports load
         self.called = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
+        self.set: dict[str, list[ast.AST]] = {}  # names set at the top level, to what
+        for stmt in tree.body:
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign)) and stmt.value is not None:
+                for target in stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]:
+                    if isinstance(target, ast.Name):
+                        self.set.setdefault(target.id, []).append(stmt.value)
+        self.built: list[ast.AST] = []  # paths joined from pieces, judged whole (_path)
+        self.in_built: set[int] = set()
 
     def judge(self) -> str:
         for node in ast.walk(self.tree):
@@ -122,7 +156,10 @@ class _Python:
                         continue
                     self.aliases[a.asname or a.name] = f"{module}.{a.name}" if module and not node.level else a.name
                     self._imported(f"{module}.{a.name}" if module else a.name, node.level)
+        self.built = [node for node in ast.walk(self.tree) if self._builds(node)]
+        self.in_built = {id(n) for node in self.built for n in ast.walk(node)}
         self.whys += [self._node(node) for node in ast.walk(self.tree)]
+        self.whys += [self._path(node) for node in self.built]
         self.whys.append(self._startup())
         self.whys += [self.ctx.follow(f, "python", self.roots) for f in dict.fromkeys(self.local)]
         return first(self.whys)
@@ -133,7 +170,7 @@ class _Python:
         if not level:
             if _under(module, _PY_NETWORK):
                 self.whys.append(NETWORK)
-            if _under(module, _PY_SECRETS):
+            if _under(module, _PY_SECRETS) or (_under(module, _PY_DOTENV) and not self.ctx.keys()):
                 self.whys.append(SECRETS)
             if _under(module, _PY_UNSEEN):
                 self.whys.append(UNSEEN)
@@ -188,6 +225,8 @@ class _Python:
         if isinstance(node, ast.Attribute) and node.attr in _DUNDERS:
             return UNSEEN
         if (text := _text(node)) is not None:
+            if id(node) in self.in_built and self.ctx.env_file(text):
+                return ""  # a piece of a path: the whole is judged (_path)
             return SECRETS if self.ctx.secret(text) else ""
         if isinstance(node, ast.Call):
             return self._call(node)
@@ -219,6 +258,8 @@ class _Python:
             return self._dynamic(name, call)
         if name == "getattr" and (len(call.args) < 2 or _text(call.args[1]) is None):
             return UNSEEN  # getattr(os, name): any function at all
+        if name in _PY_WRITES and any(self.ctx.env_file(t) for a in call.args if (t := _text(a)) is not None):
+            return SECRETS  # shutil.copy('.env', ...): a copy of its keys
         if name in _PY_SHELL_LINE:
             return self._spawn(call, shell=True)
         if name in _PY_ARGV:
@@ -274,6 +315,67 @@ class _Python:
             return shlex.quote(text)
         return "python" if self._name(node) == "sys.executable" else _VALUE
 
+    # ── paths joined from pieces ──
+    def _builds(self, node: ast.AST) -> bool:
+        """Whether `node` joins a path from pieces: os.path.join, Path(a, b), joinpath, / or +, an f-string."""
+        if isinstance(node, ast.BinOp):
+            return isinstance(node.op, (ast.Div, ast.Add))
+        if isinstance(node, ast.Call):
+            name = self._name(node.func)
+            return (name in ("os.path.join", "posixpath.join") or name in _PY_JOINS and len(node.args) > 1
+                    or isinstance(node.func, ast.Attribute) and node.func.attr == "joinpath")
+        return isinstance(node, ast.JoinedStr)
+
+    def _path(self, node: ast.AST) -> str:
+        """SECRETS if a joined path is an env file the script mayn't read, or has an env file's name in it and can't
+        be followed (os.path.join(ALFRED, '.env'), ALFRED set to a folder the check can't tell)."""
+        if (value := self._value(node)) is None:
+            return SECRETS if any(self.ctx.env_file(t) for n in ast.walk(node) if (t := _text(n)) is not None) else ""
+        return SECRETS if self.ctx.env_file(str(value)) and self.ctx.secret(str(value)) else ""
+
+    def _value(self, node: ast.AST, depth: int = 0) -> Path | None:
+        """The path an expression makes (relative: to where the script runs), or None if the check can't tell. A name
+        the script doesn't set at the top level (an import, a parameter) counts as where it runs, as a bare '.env'
+        does."""
+        if depth > 20:
+            return None
+        if (text := _text(node)) is not None:
+            return Path(text).expanduser()
+        if isinstance(node, ast.Name):
+            if node.id == "__file__":
+                return self.path
+            values = self.set.get(node.id)
+            if values is None:
+                return Path()
+            return self._value(values[0], depth + 1) if len(values) == 1 else None
+        if isinstance(node, ast.JoinedStr):
+            parts = [self._value(p.value, depth + 1) if isinstance(p, ast.FormattedValue) else _text(p) for p in node.values]
+            return None if None in parts else Path("".join(map(str, parts)))
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Div, ast.Add)):
+            left, right = self._value(node.left, depth + 1), self._value(node.right, depth + 1)
+            if left is None or right is None:
+                return None
+            return left / right if isinstance(node.op, ast.Div) else Path(str(left) + str(right))
+        if isinstance(node, ast.Attribute) and node.attr == "parent":
+            return _up(self._value(node.value, depth + 1))
+        if not isinstance(node, ast.Call) or node.keywords or any(isinstance(a, ast.Starred) for a in node.args):
+            return None
+        name, args = self._name(node.func), list(node.args)
+        on, method = (node.func.value, node.func.attr) if isinstance(node.func, ast.Attribute) else (None, "")
+        if name in _PY_CWD and not args:
+            return Path()
+        if on is not None and method in ("resolve", "absolute") and not args:
+            return self._value(on, depth + 1)
+        if name == "os.path.dirname" and len(args) == 1:
+            return _up(self._value(args[0], depth + 1))
+        if name in _PY_SAME_PATH and len(args) == 1:
+            return self._value(args[0], depth + 1)
+        if on is not None and method == "joinpath":
+            args.insert(0, on)
+        elif name not in _PY_JOINS:
+            return None
+        return _joined([self._value(a, depth + 1) for a in args])
+
     def _startup(self) -> str:
         """A login item, unit or /etc path named in a script that writes files: what runs at login may change."""
         for node in ast.walk(self.tree):
@@ -317,7 +419,10 @@ _JS_NETWORK = {"http", "https", "net", "tls", "dgram", "http2", "axios", "node-f
                "playwright", "aws-sdk", "openai", "@anthropic-ai/sdk", "@aws-sdk", "@slack/web-api", "twilio"}
 _JS_SPAWNS = {"child_process", "cross-spawn"}
 _JS_UNSEEN = {"vm", "module", "worker_threads", "execa", "shelljs", "zx", "ffi-napi", "node-ffi"}
-_JS_SECRETS = {"dotenv", "keytar"}
+_JS_SECRETS = {"keytar"}
+_JS_DOTENV = {"dotenv", "dotenv-expand", "@dotenvx/dotenvx"}  # loads the project's env files: allowed in a project
+_JS_COPIES = re.compile(rf"(?<![\w$])(?:copyFile|copyFileSync|cp|cpSync|rename|renameSync|link|linkSync|symlink"
+                        rf"|symlinkSync|copy|copySync|move|moveSync)\s*\(\s*{_JS_QUOTED}")
 _JS_DELETERS = {"rimraf", "del", "trash"}
 _JS_NETWORK_CALLS = re.compile(r"(?<![\w$.])fetch\s*\(|\bnew\s+(?:WebSocket|EventSource|XMLHttpRequest)\b"
                                r"|\bnavigator\.sendBeacon\b")
@@ -342,6 +447,80 @@ def _js_string(match: re.Match) -> str:
     """A matched JS string literal's value (simple escapes only: letters spelled as escapes count as unseen)."""
     raw = next(g for g in match.groups() if g is not None)
     return re.sub(r"\\(.)", lambda m: {"n": "\n", "t": "\t"}.get(m.group(1), m.group(1)), raw)
+
+
+_JS_JOIN_CALL = re.compile(r"(?<![\w$.])(?:path\s*\.\s*)?(?:join|resolve)\s*\(")
+_JS_PATH_CALL = re.compile(r"(?:path\s*\.\s*)?(dirname|join|resolve|normalize)\s*\(")
+_JS_TEMPLATE = re.compile(r"`((?:\\.|[^`\\])*?\$\{(?:\\.|[^`\\])*)`")
+_JS_FILE_URL = re.compile(r"(?:url\s*\.\s*)?fileURLToPath\s*\(\s*import\.meta\.url\s*\)|import\.meta\.filename")
+
+
+def _js_args(source: str, start: int) -> tuple[list[str], int] | None:
+    """The arguments of a call whose '(' is just before `start`, and the index after its ')'; None if unclosed."""
+    args, depth, piece, i = [], 0, start, start
+    while i < len(source):
+        if string := _JS_STRINGS.match(source, i):
+            i = string.end()
+            continue
+        if (c := source[i]) in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                return ([a.strip() for a in [*args, source[piece:i]] if a.strip()], i + 1) if c == ")" else None
+            depth -= 1
+        elif c == "," and depth == 0:
+            args.append(source[piece:i])
+            piece = i + 1
+        i += 1
+    return None
+
+
+def _js_value(expr: str, source: str, path: Path | None, depth: int = 0) -> Path | None:
+    """The path a JS expression makes (relative: to where the script runs), or None if the check can't tell. A name
+    the script doesn't set (an import, a parameter) counts as where it runs, as a bare '.env' does."""
+    expr = expr.strip()
+    if depth > 20:
+        return None
+    if literal := re.fullmatch(_JS_QUOTED, expr):
+        return Path(_js_string(literal)).expanduser()
+    if template := _JS_TEMPLATE.fullmatch(expr):
+        parts = re.split(r"\$\{([^}]*)\}", template.group(1))  # text, then each ${...} and the text after it
+        values = [p if i % 2 == 0 else _js_value(p, source, path, depth + 1) for i, p in enumerate(parts)]
+        return None if None in values else Path("".join(map(str, values)))
+    if expr == "process.cwd()":
+        return Path()
+    if _JS_FILE_URL.fullmatch(expr):
+        return path
+    if expr == "import.meta.dirname":
+        return _up(path)
+    if (call := _JS_PATH_CALL.match(expr)) and (found := _js_args(expr, call.end())) and found[1] == len(expr):
+        values = [_js_value(a, source, path, depth + 1) for a in found[0]]
+        if call.group(1) == "dirname":
+            return _up(values[0]) if len(values) == 1 else None
+        return _joined(values) if values else None
+    if not re.fullmatch(r"[A-Za-z_$][\w$]*", expr):
+        return None
+    set_to = re.findall(rf"(?<![\w$.])(?:const|let|var)\s+{re.escape(expr)}\s*(?::[^=\n]+)?=\s*([^;\n]+)", source)
+    if len(set_to) == 1:
+        return _js_value(set_to[0], source, path, depth + 1)
+    if set_to:
+        return None
+    return {"__filename": path, "__dirname": _up(path)}.get(expr, Path())
+
+
+def _js_paths(source: str, path: Path | None, ctx: Context) -> tuple[bool, list[tuple[int, int]]]:
+    """Whether a path the code joins (path.join, path.resolve, a template) is an env file it mayn't read, or has an env
+    file's name in it and can't be followed; and where those joins are, whose pieces are judged whole here."""
+    spans = [(m.start(), found[1]) for m in _JS_JOIN_CALL.finditer(source) if (found := _js_args(source, m.end()))]
+    spans += [m.span() for m in _JS_TEMPLATE.finditer(source)]
+    for a, b in spans:
+        whole = source[a:b]
+        named = any(ctx.env_file(_js_string(s)) for s in _JS_STRINGS.finditer(whole)) or (
+            whole.startswith("`") and ctx.env_file(whole.strip("`")))
+        value = _js_value(whole, source, path)
+        if value is None and named or value is not None and ctx.env_file(str(value)) and ctx.secret(str(value)):
+            return True, spans
+    return False, spans
 
 
 def _js_module(spec: str) -> str:
@@ -392,7 +571,9 @@ def javascript(source: str, path: Path | None, cwd: Path | None, ctx: Context) -
     inline code."""
     if _JS_LOAD_BUILT.search(source) or _JS_DYNAMIC.search(source):
         return UNSEEN
-    if any(ctx.secret(_js_string(m)) for m in _JS_STRINGS.finditer(source)):
+    joined, spans = _js_paths(source, path, ctx)
+    if joined or any(ctx.secret(value) for m in _JS_STRINGS.finditer(source)
+                     if not (ctx.env_file(value := _js_string(m)) and any(a <= m.start() < b for a, b in spans))):
         return SECRETS
     whys, modules = [], set()
     base = path.parent if path else cwd
@@ -403,8 +584,10 @@ def javascript(source: str, path: Path | None, cwd: Path | None, ctx: Context) -
         elif not spec.endswith(".json"):  # .json is data
             file = _js_file(spec, base)
             whys.append(UNSEEN if file is None or file.suffix == ".node" else ctx.follow(file, "javascript", ()))
-    if modules & _JS_SECRETS:
+    if modules & _JS_SECRETS or (modules & _JS_DOTENV and not ctx.keys()):
         return SECRETS
+    if any(ctx.env_file(_js_string(m)) for m in _JS_COPIES.finditer(source)):
+        return SECRETS  # copyFile('.env', ...): a copy of its keys
     if modules & _JS_UNSEEN:
         whys.append(UNSEEN)
     if modules & _JS_NETWORK or _JS_NETWORK_CALLS.search(source):

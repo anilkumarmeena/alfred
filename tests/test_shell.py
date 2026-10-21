@@ -315,6 +315,28 @@ def test_secrets_are_refused_even_with_a_yes():
     assert "secrets" in ask(gate, "cat ~/Desktop/projects/alfred/.env").message
 
 
+def test_a_projects_script_may_use_its_keys_from_the_shell_a_job_or_a_schedule(tmp_path, monkeypatch):
+    from alfred.safety import commands
+    from alfred.tasks import schedules
+
+    project = tmp_path / "proj"
+    (project / "scripts").mkdir(parents=True)
+    (project / ".env").write_text("API_KEY=abcdef123456\n")
+    (project / "scripts/voice.mjs").write_text("import 'dotenv/config';\nconsole.log(Boolean(process.env.API_KEY));\n")
+    (project / "scripts/leak.sh").write_text("cat .env\n")
+    monkeypatch.setattr(commands, "_registered", lambda: [project])
+    gate = ShellGate()
+    gate.new_turn("make the voiceover")
+    job = {"command": "node scripts/voice.mjs", "title": "voiceover", "folder": str(project)}
+    assert isinstance(asyncio.run(gate(shell.START_JOB, job, None)), PermissionResultAllow)
+    assert schedules.run_refusal({"text": "node scripts/voice.mjs"}, project, None) == ""
+    leak = job | {"command": "bash scripts/leak.sh"}
+    assert "secrets" in asyncio.run(gate(shell.START_JOB, leak, None)).message
+    assert "secrets" in schedules.run_refusal({"text": "bash scripts/leak.sh"}, project, None)
+    monkeypatch.setattr(commands, "_registered", list)  # not a listed project: its keys are secrets
+    assert "secrets" in asyncio.run(gate(shell.START_JOB, job, None)).message
+
+
 def test_start_job_meets_the_same_gate():
     gate = ShellGate()
     gate.new_turn("render the launch video")

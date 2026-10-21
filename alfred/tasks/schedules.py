@@ -514,7 +514,12 @@ def run_refusal(job: dict, folder: str | Path, agreed: dict[str, str] | None) ->
 
 def start_refusal(job: dict) -> str:
     """run_refusal for a command job starting on this computer, scheduled or run again. Its scripts are taken here
-    when its yes was given for another machine, or when it was made before they were kept and needs no yes."""
+    when its yes was given for another machine, or when it was made before they were kept and needs no yes. One whose
+    folder lives on another machine is checked there as it starts (node.work.Work.refusal)."""
+    from alfred import projects
+
+    if projects.living_at(Path(job["folder"])):
+        return ""
     agreed = agreed_scripts(job)
     if agreed is not None and AGREED in agreed and Path(job["folder"]).is_dir():
         agreed = fingerprints(job["text"], job["folder"])

@@ -1,8 +1,9 @@
 """Keys and tokens taken out of command and task output before a model, a log or an announcement gets it.
 
 Two ways: by shape (sk-..., ghp_..., AKIA..., a private key block, a value given to a key-like NAME= or "token":), and
-by value: Alfred's own keys from its environment, and each entry of the .env files in the folder a command ran in and
-its git checkout. Both sets are what a script that reads its project's keys (commands, scripts.KEYS) could print.
+by value: Alfred's own keys from its environment, and each entry of the .env files in the folder a command ran in, its
+git checkout and its registered project (commands.env_files). Both sets are what a script that reads its project's keys
+could print.
 """
 
 import functools
@@ -53,7 +54,9 @@ def _values(folder: str | Path | None) -> set[str]:
     values = {v for k, v in os.environ.items() if (k in names or SENSITIVE.search(k)) and k != "SSH_AUTH_SOCK"
               and _keylike(v)}
     if folder:
-        for env in _env_files(Path(folder).expanduser()):
+        from alfred.safety.commands import env_files
+
+        for env in env_files(Path(folder).expanduser()):
             values |= _file_values(env, _stamp(env))
     return values
 
@@ -77,19 +80,6 @@ def _own_names(_stamp: float) -> frozenset[str]:
     from alfred.safety.host import env_keys
 
     return frozenset(env_keys())
-
-
-def _env_files(folder: Path) -> list[Path]:
-    """The .env files (not templates) in `folder` and at the top of its git checkout."""
-    from alfred.safety.commands import SECRET_FILES, checkout
-
-    found: list[Path] = []
-    for where in dict.fromkeys([folder, checkout(folder / "_") or folder]):
-        try:
-            found += [p for p in where.glob(".env*") if SECRET_FILES.fullmatch(p.name) and p.is_file()]
-        except OSError:
-            continue
-    return found
 
 
 @functools.lru_cache(maxsize=64)

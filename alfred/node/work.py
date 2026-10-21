@@ -562,7 +562,7 @@ class Work:
             except Refused as e:
                 log.warning("scheduled job %s can't run here: %s", key, e)
                 continue
-            if why := await asyncio.to_thread(self._recheck, kept, key, job, folder):
+            if why := await asyncio.to_thread(self._recheck, kept, key, job, folder):  # folder: a project here
                 log.warning("scheduled job %s refused: %s", key, why)
                 nxt = schedules.following(job, now)
                 kept["ran"][key] = {"at": now, "refused": why, "next_run": nxt, "reported": True}
@@ -579,14 +579,15 @@ class Work:
     def _recheck(kept: dict, key: str, job: dict, folder: Path) -> str:
         """schedules.run_refusal for a job starting here. Its folder being here, the scripts its yes covers are taken
         here, at its first run after each yes."""
-        agreed = schedules.agreed_scripts(job)
-        if agreed is not None and schedules.AGREED in agreed:
-            taken = kept.setdefault("scripts", {})
-            if (mine := taken.get(key)) is None or mine.get("agreed") != agreed[schedules.AGREED]:
-                mine = taken[key] = {"agreed": agreed[schedules.AGREED],
-                                     "files": schedules.fingerprints(job["text"], folder)}
-            agreed = mine["files"]
-        return schedules.run_refusal(job, folder, agreed)
+        with commands.projects_also(folder):  # a project living here, whose scripts may read its env files
+            agreed = schedules.agreed_scripts(job)
+            if agreed is not None and schedules.AGREED in agreed:
+                taken = kept.setdefault("scripts", {})
+                if (mine := taken.get(key)) is None or mine.get("agreed") != agreed[schedules.AGREED]:
+                    mine = taken[key] = {"agreed": agreed[schedules.AGREED],
+                                         "files": schedules.fingerprints(job["text"], folder)}
+                agreed = mine["files"]
+            return schedules.run_refusal(job, folder, agreed)
 
     async def schedule_loop(self, every: float = 30.0) -> None:
         while True:
@@ -612,13 +613,17 @@ class Work:
         """{"task", "key", "rel", "command", "title", "approved"} -> {"started"}, or {"refused": why}. Runs as the
         main computer runs a job: outside the sandbox in a login shell, without Alfred's keys."""
         task, command = int(body["task"]), str(body["command"]).strip()
+        own = []  # its scripts may read their project's env files
         if body.get("path"):  # in a project living here
             folder = self.own_folder(body["path"])
             if not folder.is_dir():
                 raise Refused(f"{folder} isn't a folder here")
+            own.append(folder)
         else:
             folder = self._inside(str(body["key"]), str(body.get("rel") or ""))
-        if why := self.refusal(command, str(body.get("approved") or ""), folder):
+        with commands.projects_also(*own):
+            why = self.refusal(command, str(body.get("approved") or ""), folder)
+        if why:
             return {"refused": why}
         if (old := self.jobs.get(task)) is not None:
             if self.jobs.how(old) is None:
