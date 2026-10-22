@@ -278,12 +278,12 @@ def test_a_worktree_tasks_changes_are_committed_to_its_branch_here(world, tmp_pa
     assert git(world["other"], "show", f"{done['branch']}:feature.py") == "y = 2"
 
 
-def test_a_risky_command_there_waits_for_a_yes_given_here(world, tmp_path):
+def test_what_auto_mode_asks_about_there_waits_for_a_yes_given_here(world, tmp_path):
     answered = asyncio.Event()
     heard = {}
 
     async def run(task, prompt, reporter) -> Outcome:
-        item = {"tool": "host_run", "command": "rm -rf build", "folder": task["worktree"], "why": "is harmless",
+        item = {"tool": "Bash", "command": "rm -rf build", "folder": task["worktree"], "why": "is harmless",
                 "remember": {}}
         heard["cleared"] = await reporter.cleared(task["id"], item)
         heard["approval"] = await reporter.request_approval(task["id"], item)
@@ -306,26 +306,8 @@ def test_a_risky_command_there_waits_for_a_yes_given_here(world, tmp_path):
     pending, done = asyncio.run(main())
     command = pending["commands"][0]
     assert heard["cleared"] is False and heard["approval"]["id"] == pending["id"]
-    assert command["machine"] == "Studio" and command["why"] != "is harmless"  # described here, not by the machine
+    assert command["machine"] == "Studio" and command["why"] == "deletes files (rm)"  # described here, not by the machine
     assert "approved request" in heard["nudges"][0] and done["status"] == "done"
-
-
-def test_a_task_in_a_copy_there_never_commits_as_only_its_files_come_back(world, tmp_path):
-    heard = []
-
-    async def run(task, prompt, reporter) -> Outcome:
-        heard.append(await reporter.commit_ordered(task["id"]))
-        return Outcome("Done.", "", 0.01)
-
-    async def main():
-        w = await World(tmp_path, run).up()
-        machines.set_placement("tasks", str(w.node))
-        task = w.r.start("code_change", "fix typo", "Fix the typo", "video-agent", order="Fix the typo and commit it.")
-        await finished(w.r, task["id"])
-        await w.down()
-
-    asyncio.run(main())
-    assert heard == [False]
 
 
 def test_reports_made_while_the_link_was_down_arrive_in_order_afterwards(world, tmp_path):
@@ -490,8 +472,9 @@ def test_a_machine_may_only_report_on_its_own_tasks(world, tmp_path):
             await w.r.offload._report(w.node, {"seq": 1, "kind": "progress", "task": task["id"], "run": "x",
                                                "body": {"text": "hi"}})
         w.r.store.set(task["id"], node=w.node)
-        with pytest.raises(Refused, match="secrets"):
-            await w.r.offload._cleared(w.node, {"task": task["id"], "item": {
-                "tool": "host_run", "command": "cat ~/.ssh/id_ed25519", "folder": "/x"}})
+        with pytest.raises(Refused, match="isn't a request"):
+            await w.r.offload._cleared(w.node, {"task": task["id"], "item": {"command": "ls", "folder": "/x"}})
+        with pytest.raises(Refused, match="nothing to ask about"):
+            await w.r.offload._cleared(w.node, {"task": task["id"], "item": {"tool": "Bash", "command": " "}})
 
     asyncio.run(main())

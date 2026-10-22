@@ -289,7 +289,7 @@ make vault ARGS="reset --yes"            # lost key: forget every secret and sta
 
 ## 🌐 Web browser
 
-Alfred has its own Chrome, driven by [Playwright](https://playwright.dev/python/), for pages that need your logins or JavaScript ("what's on my Jira board?"). It uses **a profile of its own** in `data/browser/profile`: you log in there once, yourself, and two-factor codes stay with you. Sandboxed commands and tasks can't read its cookies.
+Alfred has its own Chrome, driven by [Playwright](https://playwright.dev/python/), for pages that need your logins or JavaScript ("what's on my Jira board?"). It uses **a profile of its own** in `data/browser/profile`: you log in there once, yourself, and two-factor codes stay with you.
 
 | | Rule | Detail |
 |:-:|---|---|
@@ -405,6 +405,7 @@ How-tos for workflows you repeat, in **Claude Code's own skill format** (a folde
 | ✍️ | **Write together** | "Let's make a skill for my standup notes": drafted, summarised aloud, saved after your yes |
 | 📄 | **From a file** | "Save task 12's SKILL.md as my review skill": read in place from a task's folder or your Desktop, Documents or Downloads (never a secret), summarised aloud with where it came from, saved after your yes |
 | 📥 | **Install** | "Install the skill from owner/repo": fetched over https from GitHub or a zip, staged, described, installed after your yes |
+| 🤖 | **From Claude Code** | "Install all my Claude skills": the skills Claude Code loads on this computer (your own in `~/.claude/skills`, those synced from your Claude account, switched-on plugins'), copied and installed after one yes; ones you already have unchanged are skipped |
 | 💡 | **Learned** | The [learning review](tasks.md#-learning-review) may suggest one for a workflow you keep asking for |
 
 **The walls around a skill:**

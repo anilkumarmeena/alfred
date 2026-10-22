@@ -8,8 +8,6 @@ from types import SimpleNamespace
 import pytest
 from claude_agent_sdk import (
     AssistantMessage,
-    PermissionResultAllow,
-    PermissionResultDeny,
     ResultMessage,
     StreamEvent,
     TextBlock,
@@ -20,7 +18,6 @@ from claude_agent_sdk import (
 
 from alfred import projects, tools
 from alfred.brain import cli, side
-from alfred.config import SECRETS_DIR
 from alfred.gates import shell
 from alfred.llm import roles
 from alfred.llm.roles import Role
@@ -284,7 +281,8 @@ def test_a_side_job_runs_on_its_model_with_reads_only(monkeypatch):
     monkeypatch.setattr("claude_agent_sdk.query", query)
     assert asyncio.run(side.look("Weather in Lisbon tomorrow?")) == "It's sunny."
     options = seen["options"]
-    assert options.permission_mode == "dontAsk" and options.tools == side.WEB
+    assert options.permission_mode == "auto" and options.tools == side.WEB and options.sandbox is None
+    assert options.setting_sources == [] and options.skills == []  # quick: none of the user's Claude Code setup
     assert set(options.allowed_tools) <= set(side.WEB) | {f"mcp__alfred__{t.name}" for t in tools.all_tools() if side.reads(t)}
     assert "Bash" not in options.allowed_tools and options.model
 
@@ -386,26 +384,17 @@ def test_file_lookups_count_against_the_running_limit(monkeypatch):
     assert told[2].startswith("Not started") and "one, two" in told[2] and "in the turn" not in told[2]
 
 
-def test_a_file_lookup_reads_only_non_secrets_and_only_so_many():
-    reads = side.Reads(limit=2)
-    run = lambda name, args: asyncio.run(reads(name, args, None))  # noqa: E731
+def test_a_lookup_takes_only_its_tools_and_only_so_many_steps():
+    steps = side.Steps(side.FILE_READS + side.DB_READS, limit=2)
     for name, args in (("Edit", {"file_path": "/Users/x/app/a.py"}), ("Bash", {"command": "ls"}),
-                       ("Agent", {"subagent_type": "lookup"}), ("Read", {"file_path": f"{SECRETS_DIR}/google.json"}),
-                       ("Read", {"file_path": "/Users/x/app/.env"}), ("Glob", {"pattern": "*", "path": "~/.ssh"})):
-        assert isinstance(run(name, args), PermissionResultDeny), name
-    assert isinstance(run("Read", {"file_path": "/Users/x/app/pyproject.toml"}), PermissionResultAllow)
-    assert isinstance(run("Grep", {"pattern": "version", "path": "/Users/x/app"}), PermissionResultAllow)
-    spent = run("Glob", {"pattern": "*.toml", "path": "/Users/x/app"})
-    assert isinstance(spent, PermissionResultDeny) and "answer now with what you found" in spent.message
-
-
-def test_a_file_lookup_s_database_reads_count_as_steps_too():
-    reads = side.Reads(limit=1)
-    run = lambda name, args: asyncio.run(reads(name, args, None))  # noqa: E731
-    assert isinstance(run("mcp__db__query", {"sql": "select cost from tasks where id = 3"}), PermissionResultAllow)
-    assert isinstance(run("mcp__db__tables", {}), PermissionResultDeny)
-    other = asyncio.run(side.Reads()("mcp__alfred__task_stop", {"id": 3}, None))
-    assert isinstance(other, PermissionResultDeny) and "isn't available" in other.message
+                       ("Agent", {"subagent_type": "lookup"}), ("mcp__alfred__task_stop", {"id": 3})):
+        assert "isn't available" in steps.refused(name, args), name
+    assert steps.refused("Read", {"file_path": "/Users/x/app/pyproject.toml"}) == ""
+    assert steps.refused("mcp__db__query", {"sql": "select cost from tasks where id = 3"}) == ""  # a step too
+    assert "answer now with what you found" in steps.refused("Glob", {"pattern": "*.toml", "path": "/Users/x/app"})
+    commands = side.Steps(["Bash", *side.DB_READS], limit=1)
+    assert commands.refused("Read", {"file_path": "/Users/x/a.py"}) and commands.refused("Bash", {"command": "uptime"}) == ""
+    assert "answer now" in commands.refused("mcp__db__tables", {})
 
 
 def test_the_database_tools_answer_a_query_and_refuse_a_write(own_profile):
@@ -426,7 +415,7 @@ def test_the_database_tools_answer_a_query_and_refuse_a_write(own_profile):
     assert call(query, {"sql": "select cost from tasks"})["content"][0]["text"] == "cost\n11.49"
 
 
-def test_a_file_lookup_runs_on_the_lookup_model_with_every_read_gated(monkeypatch, tmp_path):
+def test_a_file_lookup_runs_on_the_lookup_model_with_every_read_counted(monkeypatch, tmp_path):
     seen = {}
 
     async def query(prompt, options):
@@ -438,10 +427,12 @@ def test_a_file_lookup_runs_on_the_lookup_model_with_every_read_gated(monkeypatc
     monkeypatch.setattr(shell, "scratch_dir", lambda: tmp_path / "scratch")
     assert asyncio.run(side.find("Which port does the web server use?")) == "Port 8080, in config.py."
     options = seen["options"]
-    assert options.model == roles.model(Role.LOOKUP) and options.tools == side.FILE_READS and options.allowed_tools == []
-    assert isinstance(options.can_use_tool, side.Reads) and options.max_turns == side.LOOKUP_TURNS
+    assert options.model == roles.model(Role.LOOKUP) and options.tools == side.FILE_READS
+    assert options.allowed_tools == side.FILE_READS + side.DB_READS and options.permission_mode == "auto"
+    assert options.hooks["PreToolUse"] and options.max_turns == side.LOOKUP_TURNS  # its steps counted
+    assert options.setting_sources == [] and options.can_use_tool is None
     assert options.cwd == str(tmp_path / "scratch") and (tmp_path / "scratch").is_dir()
-    assert list(options.mcp_servers) == [side.DB]  # its database reads, gated like the rest
+    assert list(options.mcp_servers) == [side.DB]  # its database reads, counted like the rest
 
 
 def test_the_file_lookup_tool_uses_the_conversation_s_jobs(monkeypatch):
@@ -460,7 +451,7 @@ def test_the_file_lookup_tool_uses_the_conversation_s_jobs(monkeypatch):
 # ── Computer lookups: checks run beside the conversation ──────────
 
 
-def test_a_computer_lookup_runs_only_sandboxed_commands_on_the_lookup_model(monkeypatch, tmp_path):
+def test_a_computer_lookup_runs_commands_on_the_lookup_model_in_auto_mode(monkeypatch, tmp_path):
     seen = {}
 
     async def query(prompt, options):
@@ -475,23 +466,10 @@ def test_a_computer_lookup_runs_only_sandboxed_commands_on_the_lookup_model(monk
     options = seen["options"]
     assert options.model == roles.model(Role.LOOKUP) and options.tools == ["Bash"]
     assert options.allowed_tools == side.DB_READS and list(options.mcp_servers) == [side.DB]
-    assert options.sandbox["enabled"] and options.sandbox["allowUnsandboxedCommands"] is False
-    assert options.sandbox["network"] == {"allowedDomains": []} and options.cwd == str(tmp_path / "scratch")
+    assert options.permission_mode == "auto" and options.sandbox is None and options.cwd == str(tmp_path / "scratch")
     assert options.env["BASH_MAX_TIMEOUT_MS"] == str(side.CHECK_SECONDS * 1000)  # a hung command can't spend it all
-    assert "Read(" in options.settings and options.max_turns == side.LOOKUP_TURNS
-    denied = asyncio.run(options.can_use_tool("Bash", {"command": "ls", "dangerouslyDisableSandbox": True}, None))
-    assert isinstance(denied, PermissionResultDeny)
+    assert options.hooks["PreToolUse"] and options.max_turns == side.LOOKUP_TURNS
     assert "network" in side.check_system() and "never change, install" in side.check_system()
-
-
-def test_a_computer_lookup_runs_only_so_many_commands_and_none_naming_secrets():
-    commands = side.Commands(limit=2)
-    for name, args in (("Edit", {"file_path": "/Users/x/a.py"}), ("Read", {"file_path": "/Users/x/a.py"}),
-                       ("Bash", {"command": f"cat {SECRETS_DIR}/google.json"}), ("Bash", {"command": "cat ~/.ssh/id_rsa"})):
-        assert commands.refused(name, args), (name, args)
-    assert commands.refused("Bash", {"command": "uptime"}) == commands.refused("mcp__db__tables", {}) == ""
-    assert "answer now" in commands.refused("mcp__db__query", {"sql": "select count(*) from tasks"})
-    assert commands.refused("mcp__alfred__task_stop", {"id": 3})
 
 
 def test_the_computer_lookup_tool_answers_in_the_turn_when_quick_and_else_carries_on(monkeypatch):
@@ -679,10 +657,10 @@ def test_a_file_lookup_out_of_time_carries_on_as_a_code_question_on_its_project(
                                     "its answer is announced when it's done."]
 
 
-def test_a_computer_lookup_carries_on_with_a_sandboxed_shell_and_a_file_lookup_without_a_project_too(monkeypatch):
+def test_a_computer_lookup_carries_on_as_research_and_a_file_lookup_without_a_project_too(monkeypatch):
     monkeypatch.setattr(projects, "load", lambda: [])
-    assert side._carrier("computer_lookup", "uptime") == ("research", None, ["shell"])
-    assert side._carrier("file_lookup", "the wake word") == ("research", None, ["shell"])
+    assert side._carrier("computer_lookup", "uptime") == ("research", None, [])  # every task has the shell
+    assert side._carrier("file_lookup", "the wake word") == ("research", None, [])
     assert side._carrier("background_lookup", "flights") == ("research", None, ["accounts"])
 
 

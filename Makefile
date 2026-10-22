@@ -99,7 +99,7 @@ NPM       := npm --prefix web
 # web-install reruns only when the manifests change
 WEB_STAMP := web/node_modules/.install-stamp
 
-.PHONY: help install ready claude-signed-in uv-bin livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks speech-gate voice-timing voiceprint test host-check artifact-check features \
+.PHONY: help install ready claude-signed-in uv-bin livekit-bin models models-int8 setup console livekit web web-api web-install web-build web-dev agent runner dev dev-hot tasks speech-gate voice-timing voiceprint test artifact-check features \
         services-install services-start services-stop services-restart status logs awake sleep-normal \
         claude-login claude-status accounts about servers passcode vault chat-check tailscale-serve check clean \
         node-setup node-login node-pair node-install node-stop node-check node-status uninstall uninstall-all
@@ -414,9 +414,6 @@ web-build: $(WEB_STAMP) ## Build web app into web/dist
 # In parallel (pytest-xdist): a process a core, at most 4, as merge checks run it (alfred.tasks.merge_check.PARALLEL)
 test: ## Run unit tests
 	$(UV) --with pytest --with pytest-xdist pytest -q -n auto --maxprocesses=4
-
-host-check: ## Check task sandbox walls
-	$(UV) python -m alfred.apps.host_check check
 
 artifact-check: ## Test artifact publishing (FILE=page.html)
 	$(if $(CLAUDE_PATH),ALFRED_CLAUDE_CONFIG_DIR="$(CLAUDE_PATH)" )$(ALFRED_PYTHON) -m alfred.apps.artifact_check $(if $(FILE),--file "$(abspath $(FILE))")

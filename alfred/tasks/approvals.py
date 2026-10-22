@@ -166,10 +166,6 @@ class Approvals(RunnerBase):
         return next((o["said"] for o in self._orders(task_id)
                      if all(ordered(o["said"], i["command"]) for i in items)), "")
 
-    def commit_ordered(self, task_id: int) -> bool:
-        """Whether the user's own words ordered a commit ("fix it and commit"), which an in-place task may then make."""
-        return any("commit" in orders(o["said"]) for o in self._orders(task_id))
-
     def _order(self, task_id: int, said: str | None) -> None:
         """Keep the user's words if they order a risky action ("merge and push"); such commands then skip asking.
 

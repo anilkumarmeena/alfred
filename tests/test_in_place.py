@@ -1,7 +1,6 @@
 """Tests for in-place code tasks (the default; in_place false opts out): config, runs, worker, merging."""
 
 import asyncio
-import functools
 import shutil
 import subprocess
 from pathlib import Path
@@ -12,7 +11,7 @@ from alfred import projects
 from alfred.tasks import events, git_ops, merge_check, runner, warm, worker
 from alfred.tasks.worker import Outcome
 from alfred.tools import tasks as task_tools
-from conftest import use_profile, use_task_cache
+from conftest import use_profile
 
 
 def git(repo: Path, *args: str) -> str:
@@ -308,10 +307,6 @@ def test_stopping_a_queued_in_place_task_frees_nothing_it_never_held(env, monkey
 
 
 class NullReporter:
-    @functools.cached_property
-    def host_jobs(self) -> worker.TaskJobs:
-        return worker.TaskJobs()  # in the tests' own data folder
-
     def session(self, *a): ...
     def alive(self, *a): ...
     def activity(self, *a): ...
@@ -323,27 +318,44 @@ class NullReporter:
     def commit_ordered(self, *a): return False
 
 
+class Asking(NullReporter):
+    """Records approvals a task asks for; approves those in `agreed`."""
+
+    def __init__(self, agreed: list[str] = ()) -> None:
+        self.asked: list[dict] = []
+        self.agreed = list(agreed)
+
+    def cleared(self, task_id: int, item: dict) -> bool:
+        if item["command"] in self.agreed:
+            self.agreed.remove(item["command"])
+            return True
+        return False
+
+    def request_approval(self, task_id: int, item: dict) -> dict:
+        self.asked.append(item)
+        return {"id": 12, "commands": [item]}
+
+
 def worker_task(**fields) -> dict:
     return {"id": 9, "kind": "code_change", "project": "video-agent", "session_id": None, "in_place": 0,
             "worktree": "/repo", "branch": "alfred/9-x", "base": "abcdef1234"} | fields
 
 
-def test_in_place_worker_runs_in_the_repo_and_refuses_git_writes(env, monkeypatch):
-    use_task_cache(monkeypatch, env["tmp"] / "cache")
+def test_in_place_worker_runs_in_the_repo_and_refuses_git_writes(env):
     opts = worker._options(worker_task(in_place=1, worktree=str(env["video"]), branch="main"), NullReporter())
     assert opts.cwd == str(env["video"])
     for command in ("push", "reset", "checkout", "stash", "clean", "branch"):
         assert f"Bash(git {command}:*)" in opts.disallowed_tools
-    assert "Bash(git commit:*)" not in opts.disallowed_tools  # the gate lets an ordered one through (test_in_place_commits)
+    assert "Bash(git commit:*)" not in opts.disallowed_tools  # one the user's request asks for (test_in_place_commits)
     prompt = opts.system_prompt["append"]
     assert "on branch main" in prompt and "uncommitted" in prompt and "worktree" in prompt
     assert "fresh git worktree" not in prompt
 
 
-def test_worktree_worker_is_unchanged(env, monkeypatch):
-    use_task_cache(monkeypatch, env["tmp"] / "cache")
-    opts = worker._options(worker_task(), NullReporter())
-    assert opts.cwd == "/repo" and opts.disallowed_tools == worker.BUILTIN_AGENTS_DENIED
+def test_worktree_worker_is_unchanged(env):
+    worktree = env["tmp"] / "worktree"
+    opts = worker._options(worker_task(worktree=str(worktree)), NullReporter())
+    assert opts.cwd == str(worktree) and not any(d.startswith("Bash(git") for d in opts.disallowed_tools)
     assert "fresh git worktree of video-agent, on branch alfred/9-x" in opts.system_prompt["append"]
 
 

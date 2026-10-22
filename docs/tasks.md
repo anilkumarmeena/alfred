@@ -101,13 +101,17 @@ Work can wait for other work: say "once that's merged, start the rebuild" or "wh
 
 ### What tasks can and can't see
 
+Every task runs as **Claude Code's auto mode**, the way it runs in your terminal: a separate check clears each action and blocks what goes beyond what you asked, reaches unknown places or looks driven by something the task read. **Nothing is sandboxed.**
+
 | | Area | Access |
 |:-:|---|---|
-| 👀 | **Your other projects** (`ALFRED_TASK_READ_DIRS`), Alfred's voice session logs | Read, not change. **Secrets stay hidden** |
-| 🧩 | **The project's Claude Code setup** | Its CLAUDE.md, subagents, skills, slash commands; **not** its settings or hooks |
+| 🛡️ | **The computer** | Every Claude Code tool and subagent, on any file and the network, as auto mode's check allows |
+| 🧩 | **Your Claude Code setup**, and the project's | CLAUDE.md, settings, skills, plugins, subagents and hooks, loaded as Claude Code loads them |
+| 📂 | **Your own checkout**, for a task working in place | No push, reset or branch switching: those stay yours |
+| 👁️ | **A read-only task** (a lookup carried on) | No file edits, and nothing changed through a connection |
 | 🔒 | **Alfred's own data** (projects, to-dos, memory) | Off limits: tasks **suggest edits** instead |
 
-- The project's setup is **scanned for hidden instructions** first; skipping its settings and hooks keeps Alfred's permissions and sandbox in force.
+- **When auto mode stops to ask**, the question comes to your phone as an [approval](#-approvals).
 - **Suggested edits:** small ones are applied when the task finishes and you're told; bigger ones (deleting memory, changing a project's settings) wait for your yes.
 - **Goal loop:** when a task says it's finished, a short model call checks the result against what was asked and sends it back to finish what it can (`ALFRED_GOAL_LOOP`, up to 2 rounds) before you hear about it.
 - **How many at once:** up to **3** (`ALFRED_MAX_TASKS`); the rest queue. While the computer is **short of memory** (macOS memory pressure at warning or worse, or under 10% available on Linux), a queued task waits for it to ease or for the others to finish, rechecking every 20 seconds, so an 8 GB Mac doesn't swap. The first task always starts.
@@ -155,7 +159,7 @@ To-dos live in the `todos` table of `data/tasks.db`, not in memory.
 
 ## 💻 Shell commands and long jobs
 
-Alfred runs everyday commands itself: checks, builds, tests, renders, git commits. **Only risky ones wait for your yes**: deleting files, pushing, installing or removing software, stopping processes, changing system settings, sending data off the computer.
+Alfred runs commands itself, in **Claude Code's auto mode**: its own check clears each one and blocks what goes beyond what you asked. When auto mode **stops to ask**, Alfred's checker looks at the command: an ordinary one runs, and a risky one (deleting files, pushing, installing or removing software, stopping processes, changing system settings, sending data off the computer) waits for your yes.
 
 It asks **"Okay to go ahead?"**; answer within **five minutes**, even after talking about something else.
 
@@ -166,8 +170,6 @@ It asks **"Okay to go ahead?"**; answer within **five minutes**, even after talk
 | ➖ | A lone "thank you" or "bye" | **Neither** |
 
 A reply the word lists can't read goes to a short model call that sees only your words and what's waiting (`ALFRED_CONSENT`). A remark or apology alone ("Alfred, good", "sorry") isn't a yes: Alfred checks back instead of acting.
-
-These voice commands run in Claude Code's own sandbox, which on Linux needs **bubblewrap** and **socat** installed.
 
 ### Long jobs
 
@@ -208,20 +210,20 @@ flowchart LR
     linkStyle default stroke:#64748b
 ```
 
-- The fix task **only fixes the code**: its walls hide the keys the command needs, so it never runs the command itself. When it finishes, **Alfred reruns the command once**, as it always runs it (same folder, outside the walls, with its keys), and says how that went, unless the fix says the cause remains (an expired login, say).
+- The fix task **only fixes the code**: it never runs the command itself, which may deploy, publish or take hours. When it finishes, **Alfred reruns the command once**, as it always runs it (same folder, with its keys), and says how that went, unless the fix says the cause remains (an expired login, say).
 - A rerun that fails again is **only reported**, so it can't loop.
 - Jobs outside a project, or started with "don't fix it if it fails", are only explained.
 - A `claude` the command calls runs on **the usable Claude login with the most room left** under its limits (Settings › Claude logins; the priority order breaks ties), since a command can't move once it runs. If the run fails because Claude says that login is signed out or its limit is used up, Alfred passes the login over and **reruns the command on the one with the most room now**; with none left, it just says so, and when the limit resets. A run that **hangs at the limit** instead of failing (Claude's limit message stays among its last 5 lines for 3 minutes, however often it repeats it) is stopped and handled the same way.
 
 ## ✋ Approvals
 
-Background tasks run their commands on Alfred's computer **inside walls** that hide secrets and Alfred's own files. A **risky** command becomes a request that waits for your answer, up to `ALFRED_TASK_APPROVAL_HOURS` (**12 h**).
+Background tasks run in **Claude Code's auto mode**. When its check **stops to ask** about something, or a task wants to **change something through a connection**, a request waits for your answer, up to `ALFRED_TASK_APPROVAL_HOURS` (**12 h**).
 
 ```mermaid
 flowchart LR
-    Cmd["⚙️ Task runs<br/>a command"] --> Risky{{"Risky?"}}
-    Risky -->|no| Run["▶️ Runs"]
-    Risky -->|yes| Rule{{"📜 Remembered<br/>approval?"}}
+    Cmd["⚙️ Task makes<br/>a call"] --> Risky{{"Auto mode's<br/>check"}}
+    Risky -->|clears it| Run["▶️ Runs"]
+    Risky -->|"asks · a connection's change"| Rule{{"📜 Remembered<br/>approval?"}}
     Rule -->|covers it| Run
     Rule -->|no| Ask["✋ Request waits<br/>up to 12 h"]
     Ask -->|yes| Run
@@ -242,12 +244,12 @@ flowchart LR
 | 📱 | The **app's buttons** |
 | 💻 | `runner approve N` in a terminal |
 
-- A task **deleting files in its own folders**, **`chmod` on files in its temp folder**, or stopping processes it started, doesn't ask. Each path must be spelled out (or be a folder the same command made with `mktemp`) and lead inside, links resolved. `chmod` is stricter: no variables, wildcards or `..`, a plain mode (`+x`, `755`; no setuid bits), and no file hard-linked from elsewhere.
+- What auto mode **blocks** outright never reaches you: the task is told why and tries another way, or says so in its summary.
 - The request is **withdrawn** once the task no longer needs it (finished, failed, stopped).
 
 ### Changes through a connection
 
-A task with the **accounts** access uses your [connections](integrations.md#-connections) (those marked for research) the way the conversation does: **reading is free**, and each call to a **changing** tool (a merge request comment, an inline review note on a diff line, an issue, a merge) becomes a request like a risky command's. Alfred reads out what it would do, from the tool's own phrase and the call's arguments ("Your task, the MR review, wants to run a GitLab call to comment on web/player merge request 280 at src/ads.ts line 42, saying '…'. Okay to go ahead?"), and the app's **Approve** and **Deny** buttons answer it too.
+A task with the **accounts** access uses your [connections](integrations.md#-connections) (those marked for research) the way the conversation does: **reading is free**, and each call to a **changing** tool (a merge request comment, an inline review note on a diff line, an issue, a merge) becomes a request, whatever auto mode thinks of it. Alfred reads out what it would do, from the tool's own phrase and the call's arguments ("Your task, the MR review, wants to run a GitLab call to comment on web/player merge request 280 at src/ads.ts line 42, saying '…'. Okay to go ahead?"), and the app's **Approve** and **Deny** buttons answer it too.
 
 - **A yes covers that exact call once**, with exactly the same arguments: posting the same comment again asks again.
 - **Never remembered**, and never covered by your words ordering something ("push it"): each call needs its own yes.
@@ -256,29 +258,9 @@ A task with the **accounts** access uses your [connections](integrations.md#-con
 
 A task with a **GitLab** connection also gets two reading tools that use the connection's own key, which the task never sees: `mcp__repo__file` saves one file **whole**, however long (the connection's own reader cuts long files off), and `mcp__repo__download` unpacks a project, or one folder of it, at a branch, tag or commit (the files, without git history). Both save into the task's `downloads` folder in its temp folder, for `Read` and `Grep`, and send the key only to the connection's own `https://` address.
 
-### The sandbox
-
-| | macOS | Linux (and WSL2) |
-|---|---|---|
-| **Walls** | Seatbelt (`sandbox-exec`) | **bubblewrap** (`bwrap`), required |
-| **Without them** | Always there | Commands **refuse to run**, saying how to fix it |
-| **Restarting Alfred** | A task runs `make services-restart` itself | A task can't reach systemd, so it **asks you** to run it |
-| **Other processes** | Visible, their environments not | **Invisible**: a PID namespace of its own |
-| **Keyrings** | Keychain reads refused | Keyring files and the Secret Service hidden |
-| **Secret-named files** | Hidden anywhere, by a pattern rule | Found by a walk at launch (100k entries, 8 levels deep) |
-
-- **Overall** the Linux walls match macOS's on most rules: **stricter** on processes and keyrings, **weaker** on secret-named files deep in your home.
-- **Linux only:** your home and `~/.config` take **no new top-level entries**, so a tool that makes its own folder on first use (`~/.cargo`, say) must be **run once yourself**, outside Alfred. **`sudo`**, setuid programs and **snap-packaged tools** don't work inside.
-- **The GPU on macOS:** sandboxed commands, in tasks and the voice shell, can use Metal, so MLX Whisper and its tests run there. Only the GPU device and Metal's shader compiler are let in. Metal's shader caches stay closed, so code that compiles Metal source at run time (`mx.compile`, say) still needs a host command.
-- **What host commands are for:** what the inner sandbox blocks: signed Xcode builds, `devicectl` and Homebrew on macOS; Docker, `adb` and emulators on Linux.
-- **`make host-check`** tests the walls on either system.
-
-> [!IMPORTANT]
-> **Ubuntu 23.10 and later (24.04 too)** restrict user namespaces through AppArmor, and bubblewrap then can't start, so background tasks' commands refuse to run. Install bubblewrap (`sudo apt install bubblewrap`), then give `bwrap` an AppArmor profile that allows user namespaces, or set `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`.
-
 ### What counts as risky
 
-On every system: **deleting**, **pushing**, **installing or removing software**, **stopping processes**, **changing permissions**, **system settings**, **running as root** and **sending data off the computer**. On Linux the checker also knows:
+What auto mode stops to ask about, Alfred's own checker reads: it decides whether the conversation asks you, names what a task's command does in its request, and says what a yes may cover. Risky on every system: **deleting**, **pushing**, **installing or removing software**, **stopping processes**, **changing permissions**, **system settings**, **running as root** and **sending data off the computer**. On Linux the checker also knows:
 
 | | Kind | Linux commands that ask |
 |:-:|---|---|
@@ -289,7 +271,7 @@ On every system: **deleting**, **pushing**, **installing or removing software**,
 | 🕰️ | **Machine settings** | `timedatectl`, `hostnamectl`, `localectl` |
 | 👥 | **Users and the kernel** | User and group commands, `mount`, `modprobe`, `sysctl -w` |
 | 🚀 | **Startup files** | Writes into `~/.config/systemd`, `~/.config/autostart`, `/etc` and shell startup files |
-| 🔑 | **Keyrings** | `secret-tool`, `kwallet-query`, `pass` and `nmcli --show-secrets`: **refused** to tasks |
+| 🔑 | **Keyrings** | `secret-tool`, `kwallet-query`, `pass` and `nmcli --show-secrets`: **refused**, even with a yes |
 
 ### Remembered approvals
 
@@ -306,7 +288,7 @@ Only some kinds can be remembered: **installing software, stopping processes, ch
 > [!WARNING]
 > These **always ask**, every time, and can never be remembered: **deleting**, **pushing**, **sending data off the computer**, **system settings** and **secrets**, plus anything risky found **inside a script**, and code the check can't see.
 
-Scripts a command runs (`python x.py`, `bash -c '…'`, a heredoc, `./x.sh`) are read and judged by what they do, so a harmless one just runs. A yes covers a script **as it was when asked**: change it and the identical command is checked, and if need be asked about, again; `host_run` and `start_job` also refuse a script that changed between the check and the run.
+Scripts a command runs (`python x.py`, `bash -c '…'`, a heredoc, `./x.sh`) are read and judged by what they do, so a harmless one just runs. A yes covers a script **as it was when asked**: change it and the identical command is checked, and if need be asked about, again.
 
 ## ⏰ Scheduler
 

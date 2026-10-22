@@ -1,11 +1,11 @@
-"""Voice brain on the local `claude` CLI via the Claude Agent SDK.
+"""Voice brain on the local `claude` CLI via the Claude Agent SDK, in Claude Code's auto mode.
 
-The user's own Claude login (or Alfred's, see CLAUDE_OWN_CONFIG_DIR); one CLI process per voice session. Claude Code's own abilities (file edits,
-settings, its skills, other MCP servers) are off. Available: Alfred tools, web search/fetch, sandboxed shell and jobs
-(alfred.gates.shell), the browser when on, enabled MCP servers (writes gated by alfred.gates.mcp_gate), side jobs
-for slow reading and file lookups (alfred.brain.side), and enabled skills as a per-session plugin. The brain has no
-file reads or subagents of its own: a file lookup holds a turn at most LOOKUP_WAIT seconds in all, then carries on in
-the background.
+The user's own Claude login (or Alfred's, see CLAUDE_OWN_CONFIG_DIR); one CLI process per voice session, with all of
+Claude Code's tools and subagents and the user's own Claude Code setup, unsandboxed: auto mode's check clears each
+action (alfred.llm.claude.auto_mode). Alfred adds its tools, jobs (alfred.gates.shell), the browser when on, enabled
+MCP servers, side jobs for slow reading and lookups (alfred.brain.side), and enabled skills as a per-session plugin.
+The gate (alfred.gates.mcp_gate) hears what still needs a spoken yes, as ask rules (drafted sends and deletes, a
+connection's changes), and what auto mode stops to ask about.
 
 Photos sent from the page ride along with the next turn as image blocks. Talking over Alfred stops the reply,
 except while a shell command runs: then the reply finishes unheard and the next turn waits for it.
@@ -22,7 +22,6 @@ Docs, Sheets and Slides editing tools load through ToolSearch when needed (alfre
 """
 
 import asyncio
-import json
 import logging
 import warnings
 from collections.abc import AsyncIterator
@@ -35,10 +34,10 @@ from alfred.brain.kept import Kept
 from alfred.brain.persona import Notes, system_prompt
 from alfred.brain.sdk import alfred_server, sdk_options
 from alfred.config import CONNECTION_WAIT, EFFORT, INJECTION_VOICE_SECONDS, MAX_TOOL_ROUNDS
-from alfred.gates import mcp_gate, shell
+from alfred.gates import draft_gate, mcp_gate, shell
 from alfred.integrations import accounts, mcp_servers
 from alfred.llm import claude_logins, usage
-from alfred.llm.claude import BUILTIN_AGENTS_DENIED, LimitWatch
+from alfred.llm.claude import AUTO_DENIED, LimitWatch, auto_mode
 from alfred.llm.roles import Role
 from alfred.llm.sdk import (
     AssistantMessage,
@@ -108,8 +107,9 @@ def _setup() -> tuple[dict[str, str], str]:
 
 def _options(gate: mcp_gate.Gate, jobs: shell.Jobs, kept: Kept | None = None, budget: Budget | None = None,
              resume: str | None = None) -> ClaudeAgentOptions:
-    """The voice CLI's options; with `resume`, carrying on that session's conversation on the login holding it (a
-    fresh one if no login does)."""
+    """The voice CLI's options: Claude Code's tools and the user's setup, unsandboxed, auto mode's check clearing each
+    action; the gate hears the ask rules (`_asking`) and what auto mode stops to ask about. With `resume`, carrying on
+    that session's conversation on the login holding it (a fresh one if no login does)."""
     login = claude_logins.resume_on(resume)
     # Docs, Sheets and Slides editing waits for ToolSearch, while tool search is on (else it could never load)
     server, allowed = alfred_server(kept=kept, later=google.editing if mcp_servers.ON_DEMAND else None)
@@ -130,27 +130,26 @@ def _options(gate: mcp_gate.Gate, jobs: shell.Jobs, kept: Kept | None = None, bu
                                     + skill_tools.prompt(found)),
         model=usage.available(Role.VOICE),  # lighter model while Opus's weekly limit is used up
         effort=EFFORT,
-        tools=ALLOWED_BUILTINS + ["Bash"] + (["Skill"] if found else []),
-        skills=[skills.qualified(s) for s in found],  # only these, as Skill(name)
         plugins=[{"type": "local", "path": str(plugin)}] if found else [],
         mcp_servers={"alfred": server, "shell": shell.job_server(jobs)} | mcp.configs,
-        # sandboxed Bash is allowed by the sandbox
         allowed_tools=ALLOWED_BUILTINS + allowed + [shell.JOB_STATUS, shell.STOP_JOB] + mcp.allowed,
-        disallowed_tools=BUILTIN_AGENTS_DENIED + mcp.blocked,
-        permission_mode="default",
-        # Everything else: unsandboxed Bash and start_job (risky ones need a yes), Google sends/deletes and MCP
-        # writes (always need a yes)
+        disallowed_tools=AUTO_DENIED + ["EnterPlanMode"] + mcp.blocked,
         can_use_tool=gate,
         hooks={"PreToolUse": (budget or Budget()).hook, "PostToolUse": _bell_hook(gate)},
-        screen_seconds=INJECTION_VOICE_SECONDS,  # the reply waits on each tool-result injection check
-        sandbox=shell.SANDBOX,
-        settings=json.dumps(json.loads(shell.SETTINGS) | skills.FLAGS),  # no skill's hooks or !`commands` run
+        screen_seconds=INJECTION_VOICE_SECONDS,
         max_turns=MAX_TOOL_ROUNDS,
         include_partial_messages=True,
         stderr=lambda line: log.debug("claude: %s", line),
         resume=resume if login is not None else None,
         login=login,
+        **auto_mode(_asking(mcp)),
     )
+
+
+def _asking(mcp: mcp_servers.Session) -> list[str]:
+    """Ask rules: what still waits for a spoken yes, through the gate: drafted sends and deletes, a connection's
+    changes."""
+    return sorted(draft_gate.gated()) + [s.tool(t) for s in mcp.servers for t in s.named("write")]
 
 
 def _photos(n: int) -> str:

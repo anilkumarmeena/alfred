@@ -450,7 +450,7 @@ def test_the_voice_brain_loads_connections_tools_on_demand_and_its_own_up_front(
     assert opts.mcp_servers["github"]["alwaysLoad"] is False and opts.mcp_servers["gitlab"]["alwaysLoad"] is False
     # Deferred but for its own tools marked one by one, all bar the Docs and Sheets edits (test_google_tools)
     assert opts.mcp_servers["alfred"]["alwaysLoad"] is False and opts.mcp_servers["shell"]["alwaysLoad"] is True
-    assert claude.TOOL_SEARCH_TOOL in opts.tools and claude.TOOL_SEARCH_TOOL in opts.allowed_tools
+    assert opts.tools is None and claude.TOOL_SEARCH_TOOL in opts.allowed_tools  # all of Claude Code's tools, ToolSearch too
     assert opts.env["ENABLE_TOOL_SEARCH"] == "true"
     assert "ToolSearch" in opts.system_prompt and "GitHub (mcp__github__…)" in opts.system_prompt
 
@@ -460,8 +460,8 @@ def test_research_tasks_load_only_their_reporting_tools_up_front(fresh):
     opts = worker._options(worker_task(kind="research", project=None), NullReporter())
     assert opts.mcp_servers["task"]["alwaysLoad"] is True  # report_progress, ask_user: every run's
     assert all(opts.mcp_servers[s]["alwaysLoad"] is False for s in ("github", "alfred", "repo"))
-    assert "ToolSearch" in opts.tools and "ToolSearch" in opts.allowed_tools
-    assert "ToolSearch" in opts.system_prompt
+    assert opts.tools is None and "ToolSearch" in opts.allowed_tools
+    assert "ToolSearch" in opts.system_prompt["append"]
     # Deferred, not taken away: still allowed once loaded
     assert {"mcp__alfred__gmail_search", "mcp__alfred__sheets_write"} <= set(opts.allowed_tools)
 
@@ -469,8 +469,8 @@ def test_research_tasks_load_only_their_reporting_tools_up_front(fresh):
 def test_a_code_task_without_accounts_needs_no_tool_search(fresh):
     """Its few tools of Alfred's would save less deferred than ToolSearch's own description costs."""
     opts = worker._options(worker_task(worktree=str(fresh)), NullReporter())
-    assert all(opts.mcp_servers[s]["alwaysLoad"] is True for s in ("task", "host"))
-    assert "ToolSearch" not in opts.tools and "ENABLE_TOOL_SEARCH" not in opts.env
+    assert list(opts.mcp_servers) == ["task"] and opts.mcp_servers["task"]["alwaysLoad"] is True
+    assert "ToolSearch" not in opts.allowed_tools and "ENABLE_TOOL_SEARCH" not in opts.env
 
 
 def test_tool_search_off_loads_a_tasks_own_tools_up_front(fresh, monkeypatch):
@@ -479,7 +479,7 @@ def test_tool_search_off_loads_a_tasks_own_tools_up_front(fresh, monkeypatch):
     for task in (worker_task(kind="research", project=None), worker_task(worktree=str(fresh))):
         opts = worker._options(task, NullReporter())
         assert all(c.get("alwaysLoad") is not False for c in opts.mcp_servers.values())
-        assert "ToolSearch" not in opts.tools and "ENABLE_TOOL_SEARCH" not in opts.env
+        assert "ToolSearch" not in opts.allowed_tools and "ENABLE_TOOL_SEARCH" not in opts.env
 
 
 def test_an_in_process_server_marked_deferred_stays_deferred():
@@ -492,18 +492,18 @@ def test_an_in_process_server_marked_deferred_stays_deferred():
 
 def test_gitlab_guidance_is_given_only_with_a_gitlab_connection_on(fresh):
     seeded(gitlab_on=False)
-    prompt = worker._options(worker_task(kind="research", project=None), NullReporter()).system_prompt
+    prompt = worker._options(worker_task(kind="research", project=None), NullReporter()).system_prompt["append"]
     assert "With the tools Sam has connected" in prompt and "Never look for their keys" in prompt
     assert "GitLab file whole" not in prompt and "create_merge_request_thread" not in prompt
     _emptied()
     seeded()
-    prompt = worker._options(worker_task(kind="research", project=None), NullReporter()).system_prompt
+    prompt = worker._options(worker_task(kind="research", project=None), NullReporter()).system_prompt["append"]
     assert "GitLab file whole" in prompt and "create_merge_request_thread" in prompt
 
 
 def test_a_session_without_connections_or_google_accounts_gets_no_tool_search(fresh, own_profile):
     opts = cli._options(cli.CliBrain().shell, shell.Jobs())
-    assert "ToolSearch" not in opts.tools and "ToolSearch" not in opts.allowed_tools
+    assert "ToolSearch" not in opts.allowed_tools  # its tools all up front: nothing to search for
     assert "ENABLE_TOOL_SEARCH" not in opts.env and opts.mcp_servers["alfred"]["alwaysLoad"] is True
     assert "ToolSearch" not in opts.system_prompt
 
@@ -515,7 +515,7 @@ def test_tool_search_off_loads_every_tool_up_front_as_before(fresh, monkeypatch)
     opts = cli._options(brain.shell, brain.jobs)
     assert "alwaysLoad" not in opts.mcp_servers["github"]  # the CLI would leave a deferred tool unloaded
     assert opts.mcp_servers["alfred"]["alwaysLoad"] is True  # Docs and Sheets edits too
-    assert "ToolSearch" not in opts.tools and "ENABLE_TOOL_SEARCH" not in opts.env
+    assert "ToolSearch" not in opts.allowed_tools and "ENABLE_TOOL_SEARCH" not in opts.env
     assert "ToolSearch" not in opts.system_prompt and "GitHub and GitLab:" in opts.system_prompt
 
 

@@ -1,13 +1,13 @@
 """What a machine does for the main computer: copies of projects, command jobs and Claude task runs.
 
-Copies (one folder per run, under data/worktrees/, so the walls let its commands write there):
+Copies (one folder per run, under data/worktrees/):
   copy.sync    bring a copy up to the main computer's files: git history from a bundle (into a per-project mirror the
                copies share), then every file whose hash differs, and remove what's gone there
   copy.back    what the run changed since, as one archive; copy.backed once the main computer has it
   copy.forget  remove a copy
 Command jobs (as `start_job` runs them on the main computer: a login shell, without Alfred's keys):
   job.start / job.poll / job.stop   numbered by the main computer's task id
-Claude task runs (alfred.tasks.worker.run, unchanged: the same sandbox, file gate and host walls as there):
+Claude task runs (alfred.tasks.worker.run, unchanged: auto mode, as there):
   task.run / task.stop / task.running
   with Alfred's skills as the main computer has them switched on: each version fetched once (skills.pack) and kept
   in data/node/skills/, checked against the digest it was offered with
@@ -42,7 +42,6 @@ from alfred.node.link import Link, LinkDown, Refused
 from alfred.safety import commands
 from alfred.skills import home as skills
 from alfred.tasks import command_jobs, git_ops, schedules, stall
-from alfred.tasks.host_tools import TaskJobs
 from alfred.tasks.worker import Outcome, run as run_task
 
 log = logging.getLogger("alfred.node.work")
@@ -66,7 +65,6 @@ class NetReporter:
 
     def __init__(self, work: "Work", task_id: int, run: str) -> None:
         self.work, self.task_id, self.run = work, task_id, run
-        self.host_jobs = work.host_jobs
         self.pulse = stall.Pulse()
         self.sent_alive = 0.0
 
@@ -81,8 +79,7 @@ class NetReporter:
         self.pulse.saw(task_id, msg)
         if (now := time.time()) - self.sent_alive >= ALIVE_SECONDS and self.task_id > 0:
             self.sent_alive = now
-            busy = self.pulse.busy(task_id, now) or ("a long job it started is still running" if any(
-                j["state"] == "running" for j in self.host_jobs.status(task=task_id)) else "")
+            busy = self.pulse.busy(task_id, now)
             self.work.tell("alive", {"task": self.task_id, "busy": busy, "limited": self.pulse.limit(task_id, now)})
 
     def activity(self, task_id: int, text: str) -> None:
@@ -131,10 +128,6 @@ class NetReporter:
     async def cleared(self, task_id: int, item: dict) -> bool:
         return await self._main_says("task.cleared", {"item": item}, "cleared")
 
-    async def commit_ordered(self, task_id: int) -> bool:
-        # Well within the CLI's hook timeout, past which the commit would run unchecked; unreachable: no commit
-        return await self._main_says("task.commit", {}, "ordered", timeout=10)
-
     async def request_approval(self, task_id: int, item: dict) -> dict:
         try:
             got = await self._ask_main("task.approval", {"item": item})
@@ -175,7 +168,6 @@ class Work:
         self.state = DATA_DIR / "node"
         self.jobs = command_jobs.Runs(self.state / "jobs")
         self.scheduled = command_jobs.Runs(self.state / "scheduled")  # runs of the jobs this machine owns
-        self.host_jobs = TaskJobs()
         self.runs: dict[int, tuple[str, asyncio.Task]] = {}  # task id (as the main computer knows it) -> (run, coroutine)
         self.reporters: dict[str, NetReporter] = {}  # run -> its reporter
         self.aliases: dict[int, int] = {}  # task id -> the stand-in id its run began with here, while it was away
@@ -793,8 +785,7 @@ class Work:
         if found := self.runs.get(task_id):
             self.stopped.add(task_id)
             found[1].cancel()
-        stopped = self.host_jobs.stop_all(self.aliases.get(task_id, task_id))
-        return {"stopped": bool(found), "jobs": stopped}
+        return {"stopped": bool(found)}
 
     async def task_running(self, _: dict) -> dict:
         """Runs going here, once the journal has gone out (so a run that ended is reported, not listed)."""

@@ -368,13 +368,6 @@ def test_requests_a_restart_cut_short_are_announced_when_it_starts(env, pushes):
     assert [p["category"] for p in pushes] == ["ALFRED_APPROVAL"]
 
 
-def test_a_task_job_ending_goes_in_its_log(env):
-    r = runner.Runner()
-    task = r.store.create("code_change", "build", "Build it", "other")
-    r.host_jobs.on_end({"id": 3, "title": "the release build", "task": task["id"]}, 65)
-    assert r.store.history(task["id"])[-1]["text"] == "job 3, the release build, failed, with exit code 65"
-
-
 # ── The API and the command line ────────────────────────────────
 
 

@@ -1,32 +1,30 @@
-"""Tests for tasks.access grants beyond a task's kind: at start, on a reply, and via request_access."""
+"""Tests for tasks.access grants beyond a task's kind (accounts, artifacts): at start, on a reply, and via
+request_access. Everything else every task has: it runs in Claude Code's auto mode."""
 
 import asyncio
 import json
 
 import pytest
-from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from test_in_place import NullReporter, env, worker_task  # noqa: F401  (env is a fixture)
 from test_nudges import fake_run, settle
-from test_task_access import call, denied_paths, mac  # noqa: F401  (mac is a fixture)
 
 from alfred import tools
 from alfred.brain import persona, sdk
 from alfred.storage import profile
-from alfred.tasks import access, briefs, client, gate, reporting, runner, worker
+from alfred.tasks import access, client, reporting, runner, worker
 from alfred.tasks.worker import Outcome
 from alfred.tools import tasks as task_tools
 
 
 @pytest.fixture
-def box(mac, monkeypatch):
-    """mac fixture folders, Alfred's repo and data under projects, and a code_question project, video."""
-    alfred = mac["projects"] / "alfred"
-    monkeypatch.setattr(worker, "DATA_DIR", alfred / "data")
-    monkeypatch.setattr(gate, "ROOT", alfred)
-    monkeypatch.setattr(briefs, "ROOT", alfred)
-    video = mac["projects"] / "video"
+def box(tmp_path, monkeypatch):
+    """A worktree, a code_question project (video) and Alfred's data folder, all under tmp_path."""
+    monkeypatch.setattr(worker, "DATA_DIR", tmp_path / "data")
+    video, worktree = tmp_path / "video", tmp_path / "worktree"
+    video.mkdir()
+    worktree.mkdir()
     monkeypatch.setattr(worker.projects, "find", lambda name: type("P", (), {"path": video}))
-    return mac | {"alfred": alfred, "video": video, "own": alfred / "data" / "tasks" / "9"}
+    return {"video": video, "worktree": worktree, "own": tmp_path / "data" / "tasks" / "9"}
 
 
 def granted(*names: str) -> dict:
@@ -37,95 +35,38 @@ def question(*names: str) -> dict:
     return worker_task(kind="code_question", project="video", worktree=None, **granted(*names))
 
 
-def allowed(decision) -> bool:
-    return isinstance(decision, PermissionResultAllow)
-
-
 # ── What a grant adds to a task's session ───────────────────────
 
 
-def test_a_plain_code_question_is_unchanged_but_can_ask(box):
+def test_a_plain_code_question_has_claude_codes_tools_but_no_artifacts_and_can_ask(box):
     opts = worker._options(question(), NullReporter())
-    assert "Write" not in opts.tools and "Artifact" not in opts.tools and "host" not in opts.mcp_servers
-    assert opts.sandbox["network"] == {"allowedDomains": []} and not opts.sandbox["autoAllowBashIfSandboxed"]
+    assert opts.tools is None and "Artifact" in opts.disallowed_tools and "CLAUDE_CODE_ARTIFACT" not in opts.env
+    assert opts.cwd == str(box["video"])
     prompt = opts.system_prompt["append"]
-    assert "You can't edit anything" in prompt and "request_access" in prompt
+    assert "leave its files as they are" in prompt and "request_access" in prompt
     assert all(f"{name} (" in prompt for name in access.GRANTS)
     assert worker.REQUEST_ACCESS in opts.allowed_tools and worker.REQUEST_ACCESS in reporting.PAUSES
 
 
 def test_a_code_question_granted_artifacts_publishes_from_its_own_folder(box):
     opts = worker._options(question("artifacts"), NullReporter())
-    assert opts.env["CLAUDE_CODE_ARTIFACT"] == "1" and {"Artifact", "Write"} <= set(opts.tools)
-    assert "Edit" not in opts.tools
-    page = str(box["own"] / "features.html")
-    assert allowed(call(opts, "Write", file_path=page)) and allowed(call(opts, "Artifact", file_path=page))
-    for tool in ("Write", "Artifact"):
-        assert not allowed(call(opts, tool, file_path=str(box["code"]))), tool  # its project stays as it is
-    prompt = opts.system_prompt["append"]
-    assert str(box["own"]) in prompt and "claude.ai/code/artifact" in prompt and "but not change them" in prompt
-    assert "artifacts (" not in prompt  # nothing left to ask for it
+    assert opts.env["CLAUDE_CODE_ARTIFACT"] == "1" and "Artifact" in opts.allowed_tools
+    assert "Artifact" not in opts.disallowed_tools and str(box["own"]) in opts.system_prompt["append"]
 
 
-def test_research_granted_shell_runs_sandboxed_commands_without_secrets(box):
-    opts = worker._options(worker_task(kind="research", project=None, **granted("shell")), NullReporter())
-    assert "Bash" in opts.tools and opts.sandbox["autoAllowBashIfSandboxed"]
-    assert opts.sandbox["network"]["allowedDomains"] == ["*"] and not opts.sandbox["allowUnsandboxedCommands"]
-    assert not allowed(call(opts, "Bash", command="ls", dangerouslyDisableSandbox=True))
-    rules = denied_paths(opts)
-    projects = str(box["projects"].resolve())
-    assert f"{projects}/**/.env" in rules and "~/.ssh/**" in rules
-    assert not allowed(call(opts, "Read", file_path=str(box["code"])))  # its file tools still read nothing
-    assert "Bash commands run in a sandbox" in opts.system_prompt
+def test_artifacts_switched_off_leave_every_task_without_them(box, monkeypatch):
+    monkeypatch.setattr(access, "TASK_ARTIFACTS", False)
+    opts = worker._options(worker_task(worktree=str(box["worktree"])), NullReporter())
+    assert "Artifact" in opts.disallowed_tools and "CLAUDE_CODE_ARTIFACT" not in opts.env
+    with pytest.raises(ValueError, match="switched off"):
+        access.check(["artifacts"])
 
 
-def test_a_code_question_granted_shell_leaves_the_checkout_unwritten(box):
-    opts = worker._options(question("shell"), NullReporter())
-    assert opts.sandbox["autoAllowBashIfSandboxed"] and str(box["own"]) in opts.add_dirs
-    rules = json.loads(opts.settings)["permissions"]["deny"]
-    video = box["video"].resolve()
-    assert f"Edit(/{video})" in rules and f"Edit(/{video}/**)" in rules
-    assert "can't write there" in opts.system_prompt["append"]
-
-
-def test_a_code_question_on_alfred_itself_can_still_write_its_own_folder(box, monkeypatch):
-    monkeypatch.setattr(worker.projects, "find", lambda name: type("P", (), {"path": box["alfred"]}))
-    opts = worker._options(question("shell"), NullReporter())
-    rules = json.loads(opts.settings)["permissions"]["deny"]
-    edits = [r.removeprefix("Edit(/").removesuffix(")").removesuffix("/**") for r in rules if r.startswith("Edit(")]
-    own = box["own"].resolve()
-    assert not any(own.is_relative_to(e) for e in edits)
-    assert str((box["alfred"] / "logs").resolve()) in edits
-
-
-def test_a_code_question_granted_mac_runs_host_commands_from_its_own_folder(box):
-    opts = worker._options(question("mac"), NullReporter())
-    assert "host" in opts.mcp_servers and worker.JOB_WAIT in opts.allowed_tools
-    assert allowed(call(opts, worker.HOST_RUN, command="ls"))
-    assert not allowed(call(opts, worker.HOST_RUN, command="ls", folder=str(box["video"])))
-    refused = call(opts, worker.HOST_RUN, command=f"git -C {box['video']} commit -m x")
-    assert not allowed(refused) and "own checkout" in refused.message  # as for in-place work
-    assert "host_run" in opts.system_prompt["append"]
-
-
-def test_projects_lets_a_task_edit_other_projects_but_never_secrets_or_alfred(box):
-    plain = worker._options(worker_task(worktree=str(box["worktree"])), NullReporter())
-    assert not allowed(call(plain, "Write", file_path=str(box["code"])))
-    opts = worker._options(worker_task(worktree=str(box["worktree"]), **granted("projects")), NullReporter())
-    assert allowed(call(opts, "Edit", file_path=str(box["code"])))
-    assert allowed(call(opts, "Write", file_path=str(box["worktree"] / "new.py")))  # its own worktree, in Alfred's data
-    for name in ("env_local", "key", "agent_log", "env"):
-        denied = call(opts, "Write", file_path=str(box[name]))
-        assert isinstance(denied, PermissionResultDeny) and "Alfred's own files" in denied.message, name
-    assert "edit files in" in opts.system_prompt["append"]
-
-
-def test_research_granted_projects_reads_and_edits_them(box):
-    opts = worker._options(worker_task(kind="research", project=None, **granted("projects")), NullReporter())
-    assert {"Read", "Edit", "Write"} <= set(opts.tools)
-    assert allowed(call(opts, "Read", file_path=str(box["code"]))) and allowed(call(opts, "Edit", file_path=str(box["code"])))
-    assert not allowed(call(opts, "Read", file_path=str(box["env"])))
-    assert "You can't contact anyone, and change only what the access below allows" in opts.system_prompt
+def test_grants_no_longer_given_are_left_out_of_a_stored_task():
+    assert access.granted({"grants": json.dumps(["shell", "accounts", "mac", "projects"])}) == ["accounts"]
+    assert access.wanted({"wants": json.dumps(["mac", "artifacts"])}) == ["artifacts"]
+    with pytest.raises(ValueError, match="Unknown access"):
+        access.check(["shell"])
 
 
 def test_a_code_task_granted_accounts_reads_mail(box):
@@ -160,33 +101,13 @@ def test_tasks_with_accounts_edit_sheets_and_docs_but_never_delete_or_send(box, 
     assert SHEETS_DOCS_EDITS <= served(opts) and "sheets_read" in served(opts)
     assert {f"mcp__alfred__{n}" for n in SHEETS_DOCS_EDITS} <= set(opts.allowed_tools)  # as the voice has them
     assert not NEVER & served(opts) and not {f"mcp__alfred__{n}" for n in NEVER} & set(opts.allowed_tools)
-    prompt = opts.system_prompt if kind == "research" else opts.system_prompt["append"]
+    prompt = opts.system_prompt["append"]
     assert "edit their Google Sheets and Docs" in prompt and "delete sheet tabs or delete doc content" in prompt
 
 
 def test_tasks_without_accounts_get_no_google_tools(box):
     opts = worker._options(worker_task(worktree=str(box["worktree"])), NullReporter())
     assert "alfred" not in opts.mcp_servers and not any(t.startswith("mcp__alfred__") for t in opts.allowed_tools)
-
-
-def test_doc_images_come_from_links_or_files_the_task_may_read_never_secrets(box):
-    code = worker._options(worker_task(worktree=str(box["worktree"]), **granted("accounts")), NullReporter())
-    research = worker._options(worker_task(kind="research", project=None), NullReporter())
-    doc = {"account": "work", "document": "Plan"}
-
-    def insert(opts, *images) -> bool:
-        return allowed(call(opts, gate.DOC_IMAGES, **doc, images=list(images)))
-
-    chart = str(box["worktree"] / "chart.png")
-    assert insert(code, chart, {"image": "https://example.com/a.png", "caption": "A"}, {"image": chart})
-    assert insert(research, "https://example.com/a.png")
-    assert not insert(research, chart)  # no folder of its own to take images from
-    assert not insert(code, "/etc/hosts") and not insert(code, {"image": "~/Desktop/x.png"})
-    refused = call(code, gate.DOC_IMAGES, **doc, images=[str(box["key"])])  # readable folder, but a key
-    assert isinstance(refused, PermissionResultDeny) and "never secrets" in refused.message
-    hooked = asyncio.run(code.hooks["PreToolUse"][0].hooks[0](
-        {"tool_name": gate.DOC_IMAGES, "tool_input": doc | {"images": ["/etc/hosts"]}}, "t1", None))
-    assert hooked["hookSpecificOutput"]["permissionDecision"] == "deny"  # even if a rule allowed it outright
 
 
 def test_request_access_asks_the_runner_and_pauses(monkeypatch):
@@ -197,7 +118,7 @@ def test_request_access_asks_the_runner_and_pauses(monkeypatch):
     class Reporter(NullReporter):
         def request_access(self, task_id, names, reason):
             asked.append((task_id, names, reason))
-            if "mac" in names:
+            if "accounts" in names:
                 raise ValueError("this task has that access already, so use it")
             return names
 
@@ -206,7 +127,7 @@ def test_request_access_asks_the_runner_and_pauses(monkeypatch):
     out = asyncio.run(tool.handler({"access": ["artifacts"], "reason": "To publish the list, as asked."}))
     assert asked == [(9, ["artifacts"], "To publish the list, as asked.")]
     assert "End your turn" in out["content"][0]["text"] and not out.get("is_error")
-    assert asyncio.run(tool.handler({"access": ["mac"], "reason": "x"}))["is_error"]
+    assert asyncio.run(tool.handler({"access": ["accounts"], "reason": "x"}))["is_error"]
 
 
 # ── Granting, asking and upgrading via the runner ──────────────
@@ -242,17 +163,18 @@ def test_tasks_start_with_access_beyond_their_kind(env, monkeypatch):
 
     async def main():
         r = runner.Runner()
-        first = r.start("code_question", "feature list", "List them", "video-agent", grants=["mac", "artifacts"])
-        second = r.start("code_change", "a fix", "Fix it", "video-agent", grants=["shell", "projects"])
-        with pytest.raises(ValueError, match="Unknown access"):
-            r.start("research", "x", "Look it up", grants=["root"])
+        first = r.start("code_question", "feature list", "List them", "video-agent", grants=["accounts", "artifacts"])
+        second = r.start("code_change", "a fix", "Fix it", "video-agent", grants=["artifacts", "accounts"])
+        for gone in ("root", "shell", "mac", "projects"):
+            with pytest.raises(ValueError, match="Unknown access"):
+                r.start("research", "x", "Look it up", grants=[gone])
         await settle(r)
         return r.store.get(first["id"]), r.store.get(second["id"])
 
     first, second = asyncio.run(main())
-    assert access.granted(first) == ["artifacts", "mac"] and access.granted(second) == ["projects"]  # shell it has
-    assert {"artifacts", "mac"} <= access.has(seen[0]) and first["status"] == "done"
-    assert task_tools._brief(first)["access"] == ["artifacts", "mac"]
+    assert access.granted(first) == ["artifacts", "accounts"] and access.granted(second) == ["accounts"]  # artifacts it has
+    assert {"artifacts", "accounts"} <= access.has(seen[0]) and first["status"] == "done"
+    assert task_tools._brief(first)["access"] == ["artifacts", "accounts"]
 
 
 def test_a_task_asks_for_access_and_carries_on_once_granted(env, monkeypatch):
@@ -367,12 +289,12 @@ def test_a_read_only_task_has_only_the_access_it_started_with_and_is_never_given
     async def main():
         r = runner.Runner()
         task = r.start("research", "flights", "Find them.", grants=["accounts"], read_only=True)
-        for kind, grants in (("research", ["artifacts"]), ("code_question", ["mac"]), ("code_change", [])):
+        for kind, grants in (("research", ["artifacts"]), ("code_question", ["artifacts"]), ("code_change", [])):
             with pytest.raises(ValueError, match="only reads"):
                 r.start(kind, "x", "Look.", "video-agent", grants=grants, read_only=True)
         await settle(r)
         for more in (lambda: r.reply(task["id"], "Publish it.", ["artifacts"]),
-                     lambda: r.request_access(task["id"], ["shell"], "To check.")):
+                     lambda: r.request_access(task["id"], ["artifacts"], "To check.")):
             with pytest.raises(ValueError, match="can't be given more access"):
                 more()
         r.reply(task["id"], "Also look at trains.")  # a follow-up without access still carries on
@@ -385,21 +307,19 @@ def test_a_read_only_task_has_only_the_access_it_started_with_and_is_never_given
     assert access.missing(after) == [] and "can't be given more" in task_tools._brief(after)["read_only"]
 
 
-def test_a_read_only_task_reads_accounts_without_edits_and_runs_commands_without_the_network(box):
+def test_a_read_only_task_reads_accounts_without_edits_or_changes(box):
     reads = worker._options(worker_task(kind="research", project=None, read_only=1, **granted("accounts")),
                             NullReporter())
-    assert "mcp__alfred__gmail_search" in reads.allowed_tools
+    assert reads.permission_mode == "auto" and "mcp__alfred__gmail_search" in reads.allowed_tools
     assert not {f"mcp__alfred__{t}" for t in worker.GOOGLE_EDIT_TOOLS} & set(reads.allowed_tools)
-    assert not {"Artifact", "Write", "Bash"} & set(reads.tools) and "CLAUDE_CODE_ARTIFACT" not in reads.env
-    assert "You can only read" in reads.system_prompt and "edit their Google" not in reads.system_prompt
-    assert "request_access" not in reads.system_prompt
-    looks = worker._options(worker_task(kind="research", project=None, read_only=1, **granted("shell")),
-                            NullReporter())
-    assert "Bash" in looks.tools and looks.sandbox["network"] == {"allowedDomains": []}
-    assert "can't reach the network" in looks.system_prompt and "any host" not in looks.system_prompt
+    assert {"Edit", "Write", "NotebookEdit", "Artifact"} <= set(reads.disallowed_tools)
+    assert "CLAUDE_CODE_ARTIFACT" not in reads.env and reads.can_use_tool.connections is None
+    prompt = reads.system_prompt["append"]
+    assert "You only find things out" in prompt and "edit their Google" not in prompt and "request_access" not in prompt
+    looks = worker._options(worker_task(kind="research", project=None, read_only=1), NullReporter())
     assert not any(t.startswith("mcp__alfred__") for t in looks.allowed_tools)  # no mail without accounts
     files = worker._options(question() | {"read_only": 1}, NullReporter())
-    assert "Artifact" not in files.tools and "request_access" not in files.system_prompt["append"]
+    assert "Artifact" in files.disallowed_tools and "request_access" not in files.system_prompt["append"]
 
 
 # ── What a session costs up front ───────────────────────────────
@@ -407,15 +327,7 @@ def test_a_read_only_task_reads_accounts_without_edits_and_runs_commands_without
 
 def test_every_kind_of_task_uses_the_five_minute_prompt_cache_not_the_hour(box):
     """Hour-long cache writes cost twice the input price; a task's calls come minutes apart."""
-    for task in (worker_task(worktree=str(box["video"])), question(), question("shell", "mac"),
+    for task in (worker_task(worktree=str(box["worktree"])), question(), question("artifacts"),
                  worker_task(kind="research", project=None)):
         env = worker._options(task, NullReporter()).env
         assert env["FORCE_PROMPT_CACHING_5M"] == "1" and not env.get("ENABLE_PROMPT_CACHING_1H")
-
-
-def test_a_task_loads_the_built_in_tools_its_kind_works_with(box):
-    change = worker._options(worker_task(worktree=str(box["video"])), NullReporter()).tools
-    assert {"Read", "Edit", "Write", "Bash", "WebSearch", "WebFetch", "Agent", "Artifact"} <= set(change)
-    assert "TodoWrite" not in change  # a planning list no one sees, with a long description
-    looks = worker._options(question(), NullReporter()).tools
-    assert set(looks) == {"Read", "Glob", "Grep", "Bash", "WebSearch", "WebFetch", "Agent"}

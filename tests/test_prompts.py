@@ -35,7 +35,7 @@ def test_every_prompt_file_loads_where_it_is_used():
     from alfred.skills import review
     from alfred.tasks import announce, briefs, goal, learning, unattended
 
-    for text in (persona.persona(), side.lookup_system(), side.check_system(), side.spoken_system(), cli.LOOKUP_PROMPT, briefs.brief(), briefs._host_brief(1),
+    for text in (persona.persona(), side.lookup_system(), side.check_system(), side.spoken_system(), cli.LOOKUP_PROMPT, briefs.brief(),
                  goal.system(), learning.system(), review.system(), announce.system(), injection.PROMPT,
                  prompts.load("placement", user_name=profile.name()), unattended.system(),
                  prompts.load("todo_match", user_name=profile.name())):
@@ -43,7 +43,7 @@ def test_every_prompt_file_loads_where_it_is_used():
     assert persona.persona().startswith(f"You are Alfred, {profile.name()}'s personal AI assistant")
     assert f"You run on {profile.name()}'s computer ({platform.NAME})" in persona.persona()
     assert f"computer ({platform.NAME})" in review.system()
-    used = {"persona", "lookup_agent", "computer_lookup", "lookup_spoken", "lookup_carried_on", "voice_lookups", "task_brief", "task_host", "goal_check", "learning_review",
+    used = {"persona", "lookup_agent", "computer_lookup", "lookup_spoken", "lookup_carried_on", "voice_lookups", "task_brief", "goal_check", "learning_review",
             "skill_review", "task_announcement", "injection_check", "placement", "todo_plan", "todo_match"}
     assert {p.stem for p in prompts.DIR.glob("*.md")} == used
 

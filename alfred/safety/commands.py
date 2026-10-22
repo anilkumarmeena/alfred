@@ -49,8 +49,7 @@ ALFRED_SECRETS = [SECRETS_DIR, Path(CLAUDE_CONFIG_DIR), *dict.fromkeys([ROOT / "
 # Secret wherever they appear
 SECRET_DIRS = {"secrets", ".ssh", ".aws", ".gnupg", "Keychains"}
 # .env.example and the like hold placeholders, not secrets: every check here leaves them out, while .env, .env.local,
-# .env.production and any other .env.* stay secret. Neither Seatbelt's regexes nor globs can say "but not these", so
-# the rest is spelled out from where a name leaves every template's path (_ENV_RESTS).
+# .env.production and any other .env.* stay secret. Globs can't say "but not these", so the rest is spelled out from where a name leaves every template's path (_ENV_RESTS).
 ENV_TEMPLATES = ("example", "sample", "template")
 # What follows '.env.' in a name that isn't a template: (a prefix of one, characters that can't come next, whether the
 # prefix alone counts). Any other character after a prefix, or a prefix that's no template itself, is secret.
@@ -155,8 +154,7 @@ def secret_path(path: Path) -> bool:
 # ── Projects' own keys ──────────────────────────────────────────
 # A script inside a registered project may read that project's env files (.env, .env.local...) and use the keys,
 # with no yes of its own; the command line itself still may not name one, and a script may not show, copy or send
-# one (_LEAKERS). Task host commands get those files opened in their walls (project_keys); the task sandbox, whose
-# commands go unchecked, keeps hiding them. Whatever a command prints has their values redacted (alfred.safety.redact).
+# one (_LEAKERS). Whatever a command prints has their values redacted (alfred.safety.redact).
 
 # The registered projects' folders on this computer, from alfred.projects (wired by alfred.bootstrap: it sits above)
 _registered: Callable[[], Iterable[Path]] = lambda: ()
@@ -1581,7 +1579,7 @@ def _project_env(path: Path, project: Path | None) -> bool:
 
 def env_files(folder: Path) -> list[Path]:
     """The env files (not templates) at the top of `folder`, of its git checkout and of its registered project: whose
-    values come out of what a command run there prints, and which the host walls open for its project's scripts."""
+    values come out of what a command run there prints."""
     found: list[Path] = []
     for where in dict.fromkeys([folder, checkout(folder / "_") or folder, project_root(folder) or folder]):
         try:
@@ -1589,14 +1587,6 @@ def env_files(folder: Path) -> list[Path]:
         except OSError:
             continue
     return found
-
-
-def project_keys(found: "Seen", folder: Path) -> list[Path]:
-    """The env files the host walls open for a command run in `folder`: its project's (env_files) when a script the
-    command runs reads that project's keys (`found`, its check), else none."""
-    if (project := project_root(folder)) is None or project not in found.keys:
-        return []
-    return [p for p in env_files(folder) if _project_env(p, project)]
 
 
 # Programs that show, copy, encode, archive or send a file: a script may read its project's env files, but never hand
@@ -2100,28 +2090,6 @@ def describe(command: str, own: "Own | None" = None, cwd: Path | None = None) ->
     return f"{why} ({what})" if why else ""
 
 
-# Package managers that sandbox their own build steps; macOS sandboxes can't nest, so an approved install runs
-# outside the host profile.
-_OWN_SANDBOX = {"brew", "port"}
-_STDIN_FILTERS = {"head", "tail"}  # allowed to trim output, if reading no file
-
-
-def own_sandbox(command: str) -> bool:
-    """Whether a line is only a brew/port install (plus cd, or head/tail on its output).
-
-    Approved, such a line runs outside the host profile, so nothing may ride along: bare program names, no prefixes,
-    no substitution, no redirect but 2>&1.
-    """
-    if (_SUBSTITUTIONS.search(command) or re.search(r"[<>]", command.replace("2>&1", ""))
-            or not (pieces := _simple_commands(command))):
-        return False
-    installs = False
-    for argv in pieces:
-        if argv[0] in _OWN_SANDBOX and _piece(argv) == Risk.INSTALLS:
-            installs = True
-        elif not (argv[0] == "cd" or argv[0] in _STDIN_FILTERS and all(a.startswith("-") or a.isdigit() for a in argv[1:])):
-            return False
-    return installs
 
 
 # ── The user's own order ────────────────────────────────────────
@@ -2511,92 +2479,13 @@ class _Mine:
         return False
 
 
-# ── What a task may never run ───────────────────────────────────
+# ── What a task working in the user's checkout leaves to them ───
 
-# Alfred's controls: the runner socket and the approvals endpoint
-_CONTROLS = re.compile(r"runner\.sock|/api/approvals|/approvals/\d")
-_KEYCHAIN_DUMPS = re.compile(r"find-(generic|internet)-password|dump-keychain|export|unlock-keychain|set-key-partition-list"
-                             r"|add-(generic|internet)-password|delete-(generic|internet)-password")
-# Linux keychains: the Secret Service (GNOME Keyring, KeePassXC), KWallet, pass, and either over D-Bus
-_SECRET_TOOL_USES = {"lookup", "search", "store", "clear"}
-_SECRET_SERVICE = re.compile(r"org\.freedesktop\.secrets|org\.freedesktop\.Secret\b|org\.kde\.kwalletd|org\.gnome\.keyring")
-_ROOT = {"sudo", "su", "doas", "pkexec", "run0"}
-# Linux: the task sandbox shuts out the user's D-Bus, so these would only fail with "Failed to connect to bus"
-_SERVICE_TARGETS = re.compile(r"services-[\w-]+")
-USER_BUS = ("it needs the user's own session (systemd --user), which tasks can't reach: ask the user to run it "
-            "themselves (make services-restart for Alfred's own services)")
-# Refused for in-place tasks, which share the user's checkout
+# Denied to tasks working in place, which share the user's checkout (alfred.tasks.gate._IN_PLACE_DENIED)
 IN_PLACE_GIT = ("commit", "push", "reset", "checkout", "switch", "restore", "stash", "clean", "rebase", "merge",
                 "pull", "cherry-pick", "revert", "am", "branch", "tag", "worktree", "update-ref", "gc", "prune", "init")
-# Lines cat prints from a heredoc (a commit message), up to its delimiter alone on a line; group 1 keeps the cat <<
-# word. Only cat's: what a heredoc feeds a shell are commands.
-_HEREDOC_BODY = re.compile(r"(\bcat[ \t]+<<-?[ \t]*(['\"]?)([A-Za-z_]\w*)\2[^\n]*)\n.*?\n[ \t]*\3[ \t]*(?=\n|\)|$)", re.S)
-
-
-def refused(command: str, in_place: bool = False, cwd: Path | None = None) -> str:
-    """Why a task may never run this on the computer, even with a yes, or ''. `in_place`: git writes are the user's.
-    `cwd`: where it runs, for reading the scripts it runs."""
-    if names_secret(command):
-        return "it touches secrets, which stay out of reach even with a yes"
-    if seen(command, cwd).secret:
-        return "it runs a script that touches secrets, which stay out of reach even with a yes"
-    if reads_environment(command):
-        return "it reads other processes' environments, where their keys are, which stay out of reach even with a yes"
-    if _CONTROLS.search(command):
-        return "it touches Alfred's own controls, which tasks can't reach"
-    if _SECRET_SERVICE.search(command):
-        return "it reads or changes passwords in the keychain"
-    for argv in _simple_commands(command) or []:
-        argv = _strip_prefixes(argv)
-        if not argv:
-            continue
-        program, rest = Path(argv[0].lstrip("\\")).name, _options_then(argv[1:])
-        if program in _ROOT:
-            return f"{program} wants a password typed in a terminal, and tasks have none"
-        if (program == "security" and rest and _KEYCHAIN_DUMPS.fullmatch(rest[0])
-                or program in ("kwallet-query", "pass") or program == "secret-tool" and set(rest[:1]) & _SECRET_TOOL_USES
-                or program == "nmcli" and _nmcli(argv[1:]) == "reads the keychain"):
-            return "it reads or changes passwords in the keychain"
-        if platform.LINUX and (why := _user_bus(program, argv[1:])):
-            return why
-    if in_place and (found := in_place_git(command)):
-        return (f"git {found[0]} changes the user's own checkout, which in-place tasks leave to them; "
-                "list it in your summary instead")
-    return ""
-
-
-def in_place_git(command: str) -> list[str]:
-    """Each git subcommand here that changes the user's checkout ('commit', 'push'...), in order.
-
-    An amend, which rewrites a commit of theirs, is 'commit --amend' (as is its abbreviation), unlike a new commit."""
-    if "git" not in command:  # most of a task's commands: skip the parsing
-        return []
-    if "<<" in command:
-        command = _HEREDOC_BODY.sub(r"\1", command)  # a commit message's lines aren't commands, nor its apostrophes quotes
-    if (pieces := _simple_commands(command)) is None:  # unbalanced quotes: every git word, operators split off
-        words = re.split(r"[\s;&|()`]+", command)
-        pieces = [words[i:] for i, w in enumerate(words) if Path(w).name == "git"]
-    found = []
-    for argv in pieces:
-        argv = _strip_prefixes(argv)
-        if not argv or Path(argv[0].lstrip("\\")).name != "git":
-            continue
-        sub = _options_then(argv[1:], {"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
-        if sub and sub[0] in IN_PLACE_GIT:
-            found.append("commit --amend" if sub[0] == "commit" and any(a.startswith("--am") for a in sub) else sub[0])
-    return found
-
-
-def _user_bus(program: str, args: list[str]) -> str:
-    """Why a task can't run this on Linux for want of the user's D-Bus, or ''."""
-    if program == "make" and (target := next((a for a in args if _SERVICE_TARGETS.fullmatch(a)), "")):
-        return f"Alfred's services are started and stopped by the user, not tasks: ask them to run make {target}"
-    if "--user" not in args:
-        return ""
-    if program == "systemd-run":
-        return USER_BUS
-    if program == "systemctl":
-        sub = _options_then(args, _SUB_VALUES["systemctl"])
-        if sub and sub[0] not in _READ_ONLY_SUBCOMMANDS["systemctl"]:
-            return USER_BUS
-    return ""
+# Alfred's controls (the runner socket, the approvals endpoint) and the keychain's services: a script naming one counts
+# as touching secrets (_secret_text); sudo and the like are looked past to the command they run
+_CONTROLS = re.compile(r"runner\.sock|/api/approvals|/approvals/\d")
+_SECRET_SERVICE = re.compile(r"org\.freedesktop\.secrets|org\.freedesktop\.Secret\b|org\.kde\.kwalletd|org\.gnome\.keyring")
+_ROOT = {"sudo", "su", "doas", "pkexec", "run0"}

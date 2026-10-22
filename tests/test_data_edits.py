@@ -15,7 +15,6 @@ from alfred.tasks import announce, client, data_edits, reporting, runner, worker
 from alfred.tasks.store import edits
 from alfred.tasks.worker import Outcome
 from alfred.tools import tasks as task_tools
-from conftest import use_task_cache
 
 TODAY = f"{date.today():%Y-%m-%d}"
 
@@ -388,12 +387,12 @@ def test_a_suggested_to_do_the_list_gained_meanwhile_is_not_added_again(data, mo
 
 
 def test_every_task_kind_can_suggest_edits(data, monkeypatch):
-    use_task_cache(monkeypatch, data["tmp"] / "cache")
-    for task in (worker_task(), worker_task(in_place=1), worker_task(kind="code_question"),
-                 worker_task(kind="research", project=None)):
+    worktree = str(data["tmp"] / "worktree")
+    for task in (worker_task(worktree=worktree), worker_task(in_place=1, worktree=worktree),
+                 worker_task(kind="code_question"), worker_task(kind="research", project=None)):
         opts = worker._options(task, NullReporter())
         assert "mcp__task__propose_data_edit" in opts.allowed_tools
-        prompt = opts.system_prompt if isinstance(opts.system_prompt, str) else opts.system_prompt["append"]
+        prompt = opts.system_prompt["append"]
         assert "propose_data_edit" in prompt and f"rather than leaving {profile.name()} edits to make by hand" in prompt
 
 

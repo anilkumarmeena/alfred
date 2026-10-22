@@ -88,24 +88,21 @@ def _shown(path: Path) -> str:
 
 
 def ask_projects_folder(text: str, ask=input) -> str:
-    """Set ALFRED_NEW_PROJECTS_DIR (and ALFRED_TASK_READ_DIRS if unset) in `text`, asking on a TTY, else
+    """Set ALFRED_NEW_PROJECTS_DIR in `text`, asking on a TTY, else
     config.projects_home(). No-op if ALFRED_NEW_PROJECTS_DIR is already set in .env or the environment."""
     if _env_get(text, "ALFRED_NEW_PROJECTS_DIR") or os.environ.get("ALFRED_NEW_PROJECTS_DIR", "").strip():
         return text
     folder = default = _shown(config.projects_home())
     if sys.stdin.isatty():
         try:
-            answer = ask(f"Where are your projects kept? New projects go there, and tasks may read them [{default}]: ")
+            answer = ask(f"Where are your projects kept? New projects go there [{default}]: ")
         except EOFError:  # input closed (Ctrl+D): the default
             answer = ""
             print()
         folder = answer.strip() or default
     if not Path(folder).expanduser().is_dir():
         print(f"{folder} doesn't exist yet; it's made when the first new project goes there.")
-    text = _env_set(text, "ALFRED_NEW_PROJECTS_DIR", folder)
-    if not _env_get(text, "ALFRED_TASK_READ_DIRS") and "ALFRED_TASK_READ_DIRS" not in os.environ:
-        text = _env_set(text, "ALFRED_TASK_READ_DIRS", folder)
-    return text
+    return _env_set(text, "ALFRED_NEW_PROJECTS_DIR", folder)
 
 
 def ask_passcode(ask=input) -> str:

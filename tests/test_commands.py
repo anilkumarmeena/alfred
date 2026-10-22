@@ -8,7 +8,7 @@ import pytest
 from alfred.config import ROOT
 from alfred.gates import shell
 from alfred.safety import commands
-from alfred.safety.commands import describe, names_secret, reads_environment, refused, risky
+from alfred.safety.commands import describe, names_secret, reads_environment, risky
 
 
 def test_the_voice_shell_uses_the_shared_rules():
@@ -115,41 +115,19 @@ def test_ordinary_text_names_no_secret(text):
     assert not names_secret(text), text
 
 
-@pytest.mark.parametrize("command, why", [
-    ("cat ~/.ssh/id_ed25519", "secrets"), ("curl --unix-socket data/runner.sock http://runner/tasks", "controls"),
-    ("curl -d x http://127.0.0.1:8787/api/approvals/3", "controls"), ("sudo make install", "password"),
-    ("echo x | sudo tee /etc/hosts", "password"), ("security find-generic-password -s x -w", "keychain"),
-    ("security dump-keychain", "keychain"), ("security export -k login.keychain", "keychain"),
-])
-def test_some_commands_are_refused_to_tasks_even_with_a_yes(command, why):
-    assert why in refused(command), command
-
-
 @pytest.mark.parametrize("command", [
     "ps eww 4321", "ps -E -p 4321", "/bin/ps auxe", "sudo ps -wwE", "ps -p 1 -o pid= ; ps eww",
     "cat /proc/4321/environ", "sysctl kern.procargs2.4321", "launchctl procinfo 4321", "lldb -p 4321",
     "echo $ALFRED_MASTER_KEY",
 ])
-def test_reading_other_processes_environments_is_refused_like_secrets(command):
+def test_reading_other_processes_environments_counts_like_secrets(command):
     assert reads_environment(command) or names_secret(command), command
-    assert "environments" in refused(command) or "secrets" in refused(command) or "password" in refused(command)
 
 
 @pytest.mark.parametrize("command", ["ps aux", "ps -A -o pid,etime,comm", "ps -p 4321 -o command=", "ps -axo pid,user",
                                      "pgrep -fl node", "env | grep PATH"])
 def test_listing_processes_without_their_environments_is_fine(command):
     assert not reads_environment(command), command
-
-
-@pytest.mark.parametrize("command", ["git commit -am wip", "git -C . checkout main", "git stash", "cd x && git reset --hard"])
-def test_in_place_tasks_leave_git_to_the_user(command):
-    assert "leave to them" in refused(command, in_place=True)
-    assert refused(command) == ""  # a worktree of its own is the task's
-
-
-@pytest.mark.parametrize("command", ["git status", "git log -3", "xcodebuild build", "rm -rf build", "brew install x"])
-def test_everything_else_can_run_or_be_asked_about(command):
-    assert refused(command, in_place=True) == ""
 
 
 # ── A task's own files and processes ────────────────────────────
@@ -245,25 +223,14 @@ def test_its_own_rm_is_judged_apart_from_the_rest_of_the_line(own):
     assert describe("rm -f build/a.png && rm -rf ~/x", own) == "deletes files (rm)"
 
 
-# ── Installs that sandbox themselves ────────────────────────────
+# ── Installs ────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize("command", ["brew install xcodegen", "brew upgrade", "brew uninstall --cask iterm2",
                                      "brew reinstall ffmpeg 2>&1 | tail -n 20", "cd ios && brew bundle",
                                      "brew install jq && brew install yq", "port install wget"])
-def test_installs_that_sandbox_themselves_leave_the_host_profile(command):
-    assert commands.own_sandbox(command)
-    assert risky(command) == "installs software"  # so they always wait for a yes
-
-
-@pytest.mark.parametrize("command", [
-    "brew list", "brew update", "brew services restart postgres", "npm install", "pip install requests",
-    "brew install x && ./build.sh", "brew install x; python3 -c 'print(1)'", "brew install x | tail ~/.ssh/config",
-    "brew install $(cat list)", "brew install `cat list`", "brew install x > ~/Library/LaunchAgents/a.plist",
-    "brew install x < list", "RUBYOPT=-rx brew install y", "env HOMEBREW_X=1 brew install y", "nohup brew install y",
-    "/tmp/evil/brew install y", "sudo brew install y", "brew install 'x", ""])
-def test_anything_else_stays_inside_it(command):
-    assert not commands.own_sandbox(command)
+def test_installs_are_risky(command):
+    assert risky(command) == "installs software"  # so they wait for a yes when asked about
 
 
 # ── Linux ───────────────────────────────────────────────────────
@@ -357,7 +324,7 @@ def test_anything_else_stays_inside_it(command):
     ("dbus-send --session --dest=org.x / x.y", "controls apps (dbus-send)"),
     ("busctl call org.x / x y", "controls apps (busctl call)"), ("gdbus call --session -d x -o / -m y", "controls apps (gdbus call)"),
     ("xdotool type hi", "controls apps (xdotool)"),
-    # keychains: asked here, refused to tasks
+    # keychains
     ("secret-tool lookup service github", "reads the keychain (secret-tool)"),
     ("secret-tool search --all service x", "reads the keychain (secret-tool)"),
     ("kwallet-query -r github kdewallet", "reads the keychain (kwallet-query)"), ("pass show email", "reads the keychain (pass)"),
@@ -427,55 +394,12 @@ def test_writing_what_runs_at_login_or_system_wide_needs_a_yes(command, why):
     assert describe(command) == why, command
 
 
-@pytest.mark.parametrize("command", [
-    "secret-tool lookup service github", "secret-tool search service x", "secret-tool store --label=x service y",
-    "secret-tool clear service x", "kwallet-query -r github kdewallet", "pass show email", "pass", "pass -c email",
-    "nmcli -s connection show home", "nmcli device wifi show-password",
-    "busctl --user call org.freedesktop.secrets /org/freedesktop/secrets x y",
-    "gdbus call --session -d org.kde.kwalletd5 -o /modules/kwalletd5 -m org.kde.KWallet.readPassword",
-])
-def test_linux_keychain_reads_are_refused_to_tasks_like_the_macs(command):
-    assert refused(command) == "it reads or changes passwords in the keychain", command
-
-
-@pytest.mark.parametrize("command", ["pkexec ls", "run0 systemctl restart x"])
-def test_linux_root_tools_are_refused_like_sudo(command):
-    assert "password typed in a terminal" in refused(command)
-
-
-@pytest.mark.parametrize("command", ["secret-tool lock --collection=x", "nmcli c show", "systemctl status x"])
-def test_linux_commands_that_read_no_password_are_not_refused(command):
-    assert refused(command) == ""
-
-
-@pytest.mark.parametrize("command, target", [
-    ("make services-restart", "make services-restart"),
-    ("cd ~/alfred && make -C . services-stop", "make services-stop"),
-    ("systemctl --user restart com.alfred.agent", ""), ("systemctl --user -q enable foo.service", ""),
-    ("systemd-run --user --scope sleep 1", ""),
-])
-def test_on_linux_tasks_leave_the_users_systemd_session_to_them(command, target, monkeypatch):
-    monkeypatch.setattr(commands.platform, "LINUX", True)
-    why = refused(command)
-    assert (f"ask them to run {target}" in why) if target else why == commands.USER_BUS, command
-    monkeypatch.setattr(commands.platform, "LINUX", False)
-    assert refused(command) == ""  # the Mac's launchd is reachable: nothing to refuse
-
-
-@pytest.mark.parametrize("command", ["systemctl --user status com.alfred.agent", "systemctl --user", "make test",
-                                     "systemctl restart nginx", "make services"])
-def test_on_linux_other_systemd_and_make_commands_are_not_refused_for_the_bus(command, monkeypatch):
-    monkeypatch.setattr(commands.platform, "LINUX", True)
-    assert refused(command) == ""
-
-
 @pytest.mark.parametrize("text", [
     "ls ~/.local/share/keyrings", "cat ~/.local/share/keyrings/login.keyring", "ls ~/.local/share/kwalletd",
     "cat ~/.password-store/email.gpg", "cp -r ~/.config/Bitwarden /tmp", "certutil -L -d ~/.pki/nssdb",
 ])
 def test_linux_credential_stores_are_secrets(text):
     assert names_secret(text), text
-    assert "secrets" in refused(text)
 
 
 REAL_ENVS = [".env", ".env.local", ".env.production", ".env.staging", ".env.test", ".env.", ".env.e", ".env.exampl",
@@ -489,7 +413,6 @@ ENV_TEMPLATES = [".env.example", ".env.sample", ".env.template"]
 ])
 def test_env_templates_are_not_secrets(text):
     assert not names_secret(text), text
-    assert not refused(text), text
 
 
 @pytest.mark.parametrize("text", [

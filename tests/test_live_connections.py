@@ -2,10 +2,11 @@
 conversation on into a CLI with the new setup, and a running task bringing its connections up to date in place."""
 
 import asyncio
+import json
 from dataclasses import replace
 
 import pytest
-from claude_agent_sdk import ClaudeSDKError
+from claude_agent_sdk import ClaudeSDKError, PermissionResultDeny, ToolPermissionContext
 from test_in_place import NullReporter, worker_task
 from test_mcp_servers import GH_TOKEN, GL_TOKEN, fresh, seeded  # noqa: F401  (fixture)
 from test_skills import manual, skills_home  # noqa: F401  (fixture)
@@ -283,11 +284,11 @@ def test_a_watched_tasks_comment_is_held_for_a_yes_not_refused_as_unavailable(fr
     seeded()
     live, reporter = Watch(), Asking()
     opts = worker._options(worker_task(kind="research", project=None), reporter, live)
-    call = {"hook_event_name": "PreToolUse", "tool_name": "mcp__gitlab__create_merge_request_note",
-            "tool_input": {"project_id": "web/player"}}
-    said = [asyncio.run(hook(call, "t2", None)) for m in opts.hooks["PreToolUse"] for hook in m.hooks]
-    denials = [s["hookSpecificOutput"]["permissionDecisionReason"] for s in said if s.get("hookSpecificOutput")]
-    assert len(denials) == 1 and "Alfred has asked them" in denials[0]
+    name = "mcp__gitlab__create_merge_request_note"
+    assert name in json.loads(opts.settings)["permissions"]["ask"]  # auto mode hands it to can_use_tool
+    said = asyncio.run(opts.can_use_tool(name, {"project_id": "web/player"},
+                                         ToolPermissionContext(tool_use_id="t2", agent_id=None)))
+    assert isinstance(said, PermissionResultDeny) and "Alfred has asked them" in said.message
     assert [i["tool"] for i in reporter.asked] == ["mcp__gitlab__create_merge_request_note"]
 
 

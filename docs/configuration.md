@@ -303,7 +303,6 @@ Answers only your enrolled voice. What each case means is in **[🗣️ Voice](v
 | `ALFRED_TASK_SEARCH_MODEL` | Haiku | A task's read-only code-search subagent |
 | `ALFRED_TASK_HELPER_MODEL` | Sonnet | A task's test-runner and web-research subagents |
 | `ALFRED_NEW_PROJECTS_DIR` | Folder this checkout is in | Where a project made by voice gets its folder |
-| `ALFRED_TASK_READ_DIRS` | Same as above | Comma-separated folders code tasks may read but not change |
 | `ALFRED_TASK_ARTIFACTS` | `on` | Let tasks publish mockups and previews as claude.ai artifacts |
 | `ALFRED_TASK_STALL_MINUTES` | `15` | Flag a running task with no progress for this long (`0` off) |
 | `ALFRED_GOAL_LOOP` | `on` | Check a finished task against what it was asked, and send it back to finish |

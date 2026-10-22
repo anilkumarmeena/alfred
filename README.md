@@ -31,7 +31,7 @@ Whisper, Kokoro, the noise filter and your voiceprint run locally. Data, secrets
 <td width="33%" valign="top">
 
 ### 🧠 A real brain
-The `claude` CLI with Alfred's own tools, web search, a sandboxed shell and Google, MCP and desktop integrations.
+The `claude` CLI in Claude Code's auto mode, with your own Claude Code setup, Alfred's tools, web search, the shell and Google, MCP and desktop integrations.
 
 </td>
 <td width="33%" valign="top">
@@ -148,7 +148,7 @@ Four **services** keep it running (launchd on macOS, systemd user units on Linux
 | | Platform | What you need |
 |:-:|---|---|
 | 🍎 | **macOS** on Apple silicon (M1 or later, 8 GB is enough) | [Homebrew](https://brew.sh) |
-| 🐧 | **Linux** with systemd (x86_64 or arm64) | Distro packages, including **bubblewrap** and **socat** |
+| 🐧 | **Linux** with systemd (x86_64 or arm64) | A few distro packages ([Setup](docs/setup.md)) |
 | 🪟 | **Windows** via WSL2 | Ubuntu in WSL2 with **systemd** on, then the Linux steps |
 
 > [!IMPORTANT]
@@ -255,13 +255,13 @@ Layers, contracts and configuration outside the package: the why and the plan
 
 ## 🔐 Security model
 
-Alfred acts on your behalf, so what it may do alone is deliberately narrow. Every guard is **enforced in code**, not left to the model.
+Alfred acts on your behalf the way Claude Code does in **auto mode**: a separate check clears each action and blocks what goes beyond what you asked. On top of that, these guards are **enforced in code**, not left to the model.
 
 | | Guard | What it means |
 |:-:|---|---|
 | 🗣️ | **Spoken yes** | Emails, messages, invites and deletions are drafted, read aloud and sent only after a clear yes |
-| ✋ | **Approvals** | Deleting, pushing, installing, killing processes or sending data off the computer waits for you |
-| 📦 | **Sandboxes** | The voice shell runs in Claude Code's sandbox; tasks run walled in, secrets hidden: **Seatbelt** on macOS, **bubblewrap** on Linux |
+| 🛡️ | **Auto mode** | Voice and tasks run in Claude Code's auto mode, unsandboxed: its check blocks what you didn't ask for or what something it read tries to make it do |
+| ✋ | **Approvals** | Whatever auto mode stops to ask about waits for you: aloud in the conversation, on your phone for a task |
 | 🔌 | **Gated connections** | MCP tools that change things need a yes; unsorted tools are refused |
 | 🔒 | **Encrypted vault** | Tokens and keys are AES-256-GCM encrypted; keys are pasted, never spoken |
 | 🛡️ | **Injection checks** | Mail, pages, documents and tool results are screened for hidden instructions |

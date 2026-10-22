@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from alfred.safety import commands
-from alfred.safety.commands import describe, refused, risky, seen
+from alfred.safety.commands import describe, names_secret, reads_environment, risky, seen
 from alfred.safety.scripts import NETWORK, SECRETS
 from alfred.tasks.store import same_command
 
@@ -43,6 +43,12 @@ SCRIPTS = {
     "run.js": "const { execSync } = require('child_process');\nexecSync('git push');\n",
     "script.rb": "puts 1\n",
 }
+
+
+def touches_secrets(command: str, cwd) -> bool:
+    """Whether a command, or a script it runs, touches secrets: what the voice gate refuses even with a yes."""
+    return bool(names_secret(command) or reads_environment(command) or seen(command, cwd).secret)
+
 
 
 @pytest.fixture
@@ -144,10 +150,10 @@ def test_a_built_program_run_by_its_path_is_trusted_like_any_other(here):
     assert risky("/usr/bin/env ls", cwd=here) == ""
 
 
-def test_scripts_naming_secrets_are_refused_even_with_a_yes(here):
+def test_scripts_naming_secrets_touch_secrets(here):
     assert seen("python3 keys.py", here).secret
-    assert "touches secrets" in refused("python3 keys.py", cwd=here)
-    assert refused("python3 report.py", cwd=here) == ""
+    assert touches_secrets("python3 keys.py", here)
+    assert not touches_secrets("python3 report.py", here)
 
 
 @pytest.mark.parametrize("script, secret", [
@@ -163,7 +169,7 @@ def test_scripts_naming_secrets_are_refused_even_with_a_yes(here):
 def test_shell_scripts_naming_secrets_only_in_comments_run(script, secret, here):
     (here / "job.sh").write_text(script)
     assert seen("sh job.sh", here).secret is secret, script
-    assert ("touches secrets" in refused("sh job.sh", cwd=here)) is secret, script
+    assert (touches_secrets("sh job.sh", here)) is secret, script
 
 
 def test_a_script_sourced_with_a_dot_is_read_like_source(here):
@@ -212,7 +218,7 @@ def test_a_script_reading_its_projects_env_runs_with_no_yes_of_its_own(project, 
     (project / "scripts/keys.sh").write_text(keys)
     found = seen("bash scripts/run.sh", project)
     assert not found.secret and found.keys == {project}
-    assert refused("bash scripts/run.sh", cwd=project) == ""
+    assert not touches_secrets("bash scripts/run.sh", project)
     assert risky("bash scripts/run.sh", cwd=project) == ""
     assert "API_KEY=abcdef" not in str(found.files)
 
@@ -232,7 +238,7 @@ def test_a_script_reading_its_projects_env_runs_with_no_yes_of_its_own(project, 
 def test_scripts_load_their_projects_keys_with_dotenv_or_by_sourcing(project, program, name, code, calls):
     command = f"{program} scripts/{name}"
     (project / "scripts" / name).write_text(code)
-    assert refused(command, cwd=project) == "", command
+    assert not touches_secrets(command, project), command
     assert seen(command, project).keys == {project}
     assert risky(command, cwd=project) == ""  # its keys ask nothing
     (project / "scripts" / name).write_text(code + calls)
@@ -247,10 +253,10 @@ def test_scripts_load_their_projects_keys_with_dotenv_or_by_sourcing(project, pr
     "pbcopy < .env\n", "git add -f .env\n", "rm -rf build\ncat .env\n",  # a yes for deleting mustn't cover it
     "load() { cat ./.env | sed 's/=.*//'; }\nload\n",
 ])
-def test_a_script_that_shows_copies_or_sends_its_keys_is_refused(project, script):
+def test_a_script_that_shows_copies_or_sends_its_keys_touches_secrets(project, script):
     (project / "scripts/job.sh").write_text(script)
     assert seen("bash scripts/job.sh", project).secret, script
-    assert SECRETS in refused("bash scripts/job.sh", cwd=project), script
+    assert touches_secrets("bash scripts/job.sh", project), script
 
 
 @pytest.mark.parametrize("name, code", [
@@ -260,10 +266,10 @@ def test_a_script_that_shows_copies_or_sends_its_keys_is_refused(project, script
     ("copy.mjs", "import { copyFileSync } from 'node:fs';\ncopyFileSync('.env', '/tmp/keys');\n"),
     ("leak.js", "const { execSync } = require('child_process');\nexecSync('cat .env');\n"),
 ])
-def test_python_and_javascript_that_show_or_copy_the_keys_are_refused(project, name, code):
+def test_python_and_javascript_that_show_or_copy_the_keys_touch_secrets(project, name, code):
     (project / name).write_text(code)
     command = f"{'python3' if name.endswith('.py') else 'node'} {name}"
-    assert SECRETS in refused(command, cwd=project), name
+    assert touches_secrets(command, project), name
 
 
 ALFRED = str(commands.ROOT)
@@ -284,7 +290,7 @@ ALFRED = str(commands.ROOT)
 def test_an_env_file_joined_from_pieces_is_judged_as_the_whole_path(project, name, code):
     (project / name).write_text(code)
     command = f"{'python3' if name.endswith('.py') else 'node'} {name}"
-    assert SECRETS in refused(command, cwd=project), name
+    assert touches_secrets(command, project), name
 
 
 @pytest.mark.parametrize("name, code", [
@@ -307,7 +313,7 @@ def test_a_projects_env_file_joined_from_its_folder_is_its_own(project, name, co
     (project / "scripts/paths.py").write_text("ROOT = '.'\n")
     (project / "scripts/paths.mjs").write_text("export const ROOT = '.';\n")
     command = f"{'python3' if name.endswith('.py') else 'node'} {name}"
-    assert refused(command, cwd=project) == "", name
+    assert not touches_secrets(command, project), name
     assert seen(command, project).keys == {project}
 
 
@@ -316,10 +322,10 @@ def test_a_projects_env_file_joined_from_its_folder_is_its_own(project, name, co
     "cd ~\nload() { grep KEY .env; }\n", "grep KEY .env\ngrep KEY secrets/token\n", "grep KEY .env\nps eww\n",
     f"grep KEY {commands.ROOT / '.env'}\n", "grep KEY .env\n# cd somewhere/else is fine in a comment\ncd \"$1\"\n",
 ])
-def test_every_other_secret_is_still_refused(project, script):
+def test_every_other_secret_still_counts(project, script):
     (project / "scripts/job.sh").write_text(script)
     assert seen("bash scripts/job.sh", project).secret, script
-    assert refused("bash scripts/job.sh", cwd=project), script
+    assert touches_secrets("bash scripts/job.sh", project), script
 
 
 def test_python_that_changes_folder_cant_read_a_bare_env(project):
@@ -327,7 +333,7 @@ def test_python_that_changes_folder_cant_read_a_bare_env(project):
     assert seen("python3 job.py", project).secret
 
 
-def test_dotenv_run_from_outside_the_project_may_look_anywhere_so_is_refused(project):
+def test_dotenv_run_from_outside_the_project_may_look_anywhere_so_counts(project):
     (project / "job.js").write_text("require('dotenv').config();\n")
     assert not seen("node job.js", project).secret
     assert seen("node proj/job.js", project.parent).secret  # it reads the .env of the folder it runs in
@@ -336,9 +342,9 @@ def test_dotenv_run_from_outside_the_project_may_look_anywhere_so_is_refused(pro
 
 
 def test_the_command_line_itself_still_may_not_name_env(project):
-    assert SECRETS in refused("cat .env", cwd=project)
-    assert SECRETS in refused("bash -c 'cat .env'", cwd=project)
-    assert SECRETS in refused("set -a && . ./.env && node x.js", cwd=project)
+    assert touches_secrets("cat .env", project)
+    assert touches_secrets("bash -c 'cat .env'", project)
+    assert touches_secrets("set -a && . ./.env && node x.js", project)
 
 
 def test_a_script_outside_any_registered_project_may_not_read_env(project, tmp_path, monkeypatch):
@@ -360,19 +366,6 @@ def test_alfred_own_folder_is_never_a_project_whose_keys_scripts_may_read(monkey
     (tmp_path / "job.sh").write_text("grep KEY .env\n")
     assert not seen("bash job.sh", tmp_path).secret
     assert seen(f"bash {tmp_path / 'job.sh'}", commands.ROOT).secret  # run from Alfred's folder, its own .env
-
-
-def test_the_project_keys_opened_are_its_env_files_only_when_a_script_reads_them(project):
-    (project / "scripts/use.sh").write_text("set -a; . ./.env; set +a\n")
-    (project / "scripts/plain.sh").write_text("echo hi\n")
-    (project / "app").mkdir()
-    def keys(command, folder):
-        return sorted(commands.project_keys(seen(command, folder), folder))
-
-    assert keys("bash scripts/use.sh", project) == [project / ".env", project / ".env.local"]
-    assert keys("bash ../scripts/use.sh", project / "app") == [project / ".env", project / ".env.local"]
-    assert keys("bash scripts/plain.sh", project) == []
-    assert keys("bash proj/scripts/use.sh", project.parent) == []  # run outside the project
 
 
 def test_what_a_project_script_prints_has_its_keys_redacted(project):

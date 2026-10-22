@@ -93,7 +93,7 @@ def test_the_voice_brain_loads_docs_sheets_and_slides_edits_through_tool_search_
     later = {name for name, meta in listed(own).items() if not meta.get(claude.UP_FRONT)}
     edits = {n for n in TOOLS["docs"] | TOOLS["sheets"] | TOOLS["slides"] if not n.endswith(("_search", "_read"))}
     assert later == edits and {"docs_insert", "sheets_write", "docs_draft_delete", "docs_delete"} <= later
-    assert own["alwaysLoad"] is False and claude.TOOL_SEARCH_TOOL in opts.tools
+    assert own["alwaysLoad"] is False and opts.tools is None  # all of Claude Code's tools, ToolSearch among them
     assert claude.TOOL_SEARCH_TOOL in opts.allowed_tools and opts.env["ENABLE_TOOL_SEARCH"] == claude.TOOL_SEARCH
     # Deferred, not taken away: allowed once loaded, deletes still only through the gate
     assert "mcp__alfred__docs_insert" in opts.allowed_tools and "mcp__alfred__docs_delete" not in opts.allowed_tools

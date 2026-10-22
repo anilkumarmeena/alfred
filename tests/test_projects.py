@@ -577,7 +577,7 @@ def test_an_in_place_task_in_a_folder_of_repos_saves_each_repos_work_and_lists_i
 def test_a_task_in_a_folder_of_repos_is_told_them(home):
     top = several_repos(home)
     task = {"id": 9, "kind": "code_change", "project": "split", "in_place": 1, "branch": None, "base": None}
-    prompt = briefs._system_prompt(task, top)["append"]
+    prompt = briefs._system_prompt(task, top, top, set())["append"]
     assert "holds separate ones, each with its own history: apps/web, backend, frontend" in prompt
     assert "git -C <repo>" in prompt and "isn't a git repository yet" not in prompt
-    assert "isn't a git repository yet" in briefs._system_prompt(task, top / "docs")["append"]
+    assert "isn't a git repository yet" in briefs._system_prompt(task, top / "docs", top / "docs", set())["append"]

@@ -39,7 +39,7 @@ from alfred.skills import home as skills
 from alfred.state import activity as bell
 from alfred.storage import profile
 from alfred.tasks import command_jobs, hold, scheduler, schedules, tokens
-from alfred.tasks.host_tools import HOST_COMMANDS
+from alfred.tasks.gate import ASKED
 from alfred.tasks.store import ACTIVE, COMMAND
 from alfred.tasks.worker import Outcome
 
@@ -91,7 +91,7 @@ class Offload:
         self.adoptions_file = STATE / "adopted.json"  # "machine:run" -> the task each run alone became here
         hub.handlers |= {"copy.pack": self._pack, "copy.bundle": self._bundle, "skills.pack": self._skills_pack,
                          "schedule.due": self._due, "report": self._report, "alive": self._alive, "task.nudges": self._nudges, "task.cleared": self._cleared,
-                         "task.commit": self._commit, "task.approval": self._approval, "task.propose": self._propose, "task.access": self._access}
+                         "task.approval": self._approval, "task.propose": self._propose, "task.access": self._access}
         hub.on_connect.append(self._connected)
         hub.on_lost.append(self._gone)
 
@@ -708,17 +708,21 @@ class Offload:
         return task
 
     def _item(self, node: int, task: dict, item: object) -> dict:
-        """An approval request from a machine, described here from the command itself."""
-        if not isinstance(item, dict) or item.get("tool") not in HOST_COMMANDS.values():
-            raise Refused("that isn't a command request")
-        command = str(item.get("command") or "").strip()
-        if not command or (why := commands.refused(command, bool(task["in_place"]))):
-            raise Refused(f"not asked: {why or 'there is no command'}")
+        """An approval request from a machine (what auto mode stopped to ask about there), described here from the
+        command itself when it's a Bash command."""
+        tool = item.get("tool") if isinstance(item, dict) else None
+        if not isinstance(tool, str) or not tool or len(tool) > 200 or item.get("connection"):
+            raise Refused("that isn't a request this computer asks about")
+        command = str(item.get("command") or "").strip()[:4000]
+        if not command:
+            raise Refused("not asked: there is nothing to ask about")
+        where = {"tool": tool, "command": command, "folder": str(item.get("folder") or ""), "machine": self.name(node)}
+        if tool != "Bash":
+            return where | {"why": ASKED, "remember": {"pieces": [], "never": "auto mode asks about each one"}}
         scripts = item.get("scripts") if isinstance(item.get("scripts"), dict) else {}
         kept = {str(k)[:1000]: str(v)[:64] for k, v in list(scripts.items())[:64]}  # its files' fingerprints there
-        return {"tool": item["tool"], "command": command, "folder": str(item.get("folder") or ""),
-                "why": commands.describe(command) or str(item.get("why") or "needs a go-ahead")[:200],
-                "remember": remembered.pieces(command), "machine": self.name(node)} | ({"scripts": kept} if kept else {})
+        return where | {"why": commands.describe(command) or ASKED, "remember": remembered.pieces(command)} | (
+            {"scripts": kept} if kept else {})
 
     async def _report(self, node: int, body: dict) -> dict:
         """One journal event from a machine, applied once, in order."""
@@ -768,11 +772,6 @@ class Offload:
     async def _cleared(self, node: int, body: dict) -> dict:
         task = self._own(node, body["task"])
         return {"cleared": self.runner.cleared(task["id"], self._item(node, task, body.get("item")))}
-
-    async def _commit(self, node: int, body: dict) -> dict:
-        task = self._own(node, body["task"])
-        # A copy of the project there sends back its files, not commits: only in the project's own folder does one stay
-        return {"ordered": self.runner._lives_on(task) == node and self.runner.commit_ordered(task["id"])}
 
     async def _approval(self, node: int, body: dict) -> dict:
         task = self._own(node, body["task"])

@@ -10,11 +10,9 @@ import pytest
 from test_in_place import env, worker_task  # noqa: F401  (fixture)
 from test_nudges import fake_run, finishes, settle, until
 
-from alfred.safety import host
-from alfred.tasks import access, api, host_tools, runner, worker
+from alfred.tasks import access, api, runner
 from alfred.tasks.store import Store
 from alfred.tasks.worker import Outcome
-from conftest import use_task_cache
 
 
 def logged(r: runner.Runner, task_id: int) -> list[str]:
@@ -25,24 +23,21 @@ def cut_off(task: dict) -> dict:
     return json.loads(task["interrupted"])
 
 
-def hangs(on_mac: str | None = None):
-    """Fake run: starts its session, then works until stopped, running `on_mac` on the computer if given."""
+def hangs():
+    """Fake run: starts its session, then works until stopped."""
     async def body(task, prompt, reporter) -> Outcome:
         reporter.session(task["id"], f"s{task['id']}")
-        if on_mac:
-            with reporter.host_jobs.running(task["id"], on_mac):
-                await asyncio.Event().wait()
         await asyncio.Event().wait()
 
     return body
 
 
-def interrupted(store: Store, status: str = "running", session: str | None = "s1", on_mac: list[str] = (),
+def interrupted(store: Store, status: str = "running", session: str | None = "s1",
                 prompt: str | None = "Find flights to Goa.", **fields) -> dict:
     """A research task as a clean shutdown left it."""
     task = store.create("research", "Flights", "Find flights to Goa.", None)
     store.set(task["id"], status=status, session_id=session, **fields,
-              interrupted=json.dumps({"at": 1.0, "on_mac": list(on_mac), "prompt": prompt}))
+              interrupted=json.dumps({"at": 1.0, "prompt": prompt}))
     return store.get(task["id"])
 
 
@@ -50,28 +45,26 @@ def interrupted(store: Store, status: str = "running", session: str | None = "s1
 
 
 def test_a_shutdown_notes_tasks_as_interrupted_and_says_nothing(env, monkeypatch):
-    fake_run(monkeypatch, hangs(), hangs("xcodebuild -scheme App"))
+    fake_run(monkeypatch, hangs(), hangs())
 
     async def main():
         r = runner.Runner(capacity=2)
         events: asyncio.Queue = asyncio.Queue()
         r.listeners.add(events)
         plain = r.start("research", "Flights", "Find flights to Goa.")
-        on_mac = r.start("research", "Build", "Build the app.")
+        build = r.start("research", "Build", "Build the app.")
         queued = r.start("research", "Hotels", "Find a hotel.")
-        await until(lambda: r.host_jobs.on_mac.get(on_mac["id"]) and r.store.get(plain["id"])["session_id"])
+        await until(lambda: r.store.get(build["id"])["session_id"] and r.store.get(plain["id"])["session_id"])
         await r.shutdown()
-        return r, events, [r.store.get(t["id"]) for t in (plain, on_mac, queued)]
+        return r, events, [r.store.get(t["id"]) for t in (plain, build, queued)]
 
-    r, events, (plain, on_mac, queued) = asyncio.run(main())
-    assert r.jobs == {} and r.prompts == {} and r.host_jobs.on_mac == {}
-    assert [t["status"] for t in (plain, on_mac, queued)] == ["running", "running", "queued"]  # to resume
-    assert cut_off(plain)["on_mac"] == [] and cut_off(plain)["prompt"] == "Find flights to Goa."
-    assert cut_off(on_mac)["on_mac"] == ["xcodebuild -scheme App"]
+    r, events, (plain, build, queued) = asyncio.run(main())
+    assert r.jobs == {} and r.prompts == {}
+    assert [t["status"] for t in (plain, build, queued)] == ["running", "running", "queued"]  # to resume
+    assert cut_off(plain)["prompt"] == "Find flights to Goa." and cut_off(build)["prompt"] == "Build the app."
     assert cut_off(queued)["prompt"] == "Find a hotel."
-    assert logged(r, on_mac["id"]) == ["Alfred is shutting down, while it ran xcodebuild -scheme App on the computer"]
-    assert logged(r, plain["id"]) == ["Alfred is shutting down"]
-    assert events.empty() and all(t["spoken"] is None for t in (plain, on_mac, queued))  # nothing announced
+    assert logged(r, plain["id"]) == logged(r, build["id"]) == ["Alfred is shutting down"]
+    assert events.empty() and all(t["spoken"] is None for t in (plain, build, queued))  # nothing announced
 
 
 def test_a_task_cut_off_before_its_first_step_is_left_to_resume_too(env, monkeypatch):
@@ -123,21 +116,6 @@ def test_the_api_refuses_changes_while_shutting_down(env):
     refused = call("POST")
     assert refused.status == 503 and "shutting down" in refused.text
     assert call("GET") == "handled"  # tasks can still be read
-
-
-def test_host_commands_are_kept_in_on_mac_while_they_run(tmp_path, monkeypatch):
-    use_task_cache(monkeypatch, tmp_path / "cache")
-    seen = []
-
-    async def run(command, cwd, timeout, walls=True, **extra):
-        seen.append({k: list(v) for k, v in jobs.on_mac.items()})
-        return host.Ran(0, "", 0)
-
-    monkeypatch.setattr(host, "run", run)
-    jobs = worker.TaskJobs(tmp_path / "jobs", walls=False)
-    tools = {t.name: t.handler for t in host_tools._host_tools(worker_task(worktree=str(tmp_path)), tmp_path, jobs)}
-    asyncio.run(tools["host_run"]({"command": "make build"}))
-    assert seen == [{9: ["make build"]}] and jobs.on_mac == {}
 
 
 # ── Starting again ──────────────────────────────────────────────
@@ -248,13 +226,12 @@ def test_a_task_that_dies_again_straight_after_resuming_is_not_resumed_again(env
                                              "runner stopped again without a clean shutdown")
 
 
-def test_tasks_cut_off_mid_command_or_waiting_on_the_user_stop_as_before(env, monkeypatch):
+def test_tasks_waiting_on_the_user_stop_as_before(env, monkeypatch):
     store = Store()
-    on_mac = interrupted(store, on_mac=["brew install jq"])
     asked = interrupted(store, question="Which airline?")
-    wants = interrupted(store, wants='["mac"]')
+    wants = interrupted(store, wants='["accounts"]')
     approval = interrupted(store)
-    request, _ = store.ask_approval(approval["id"], {"tool": "host_run", "command": "git push", "folder": "/x",
+    request, _ = store.ask_approval(approval["id"], {"tool": "Bash", "command": "git push", "folder": "/x",
                                                      "why": "pushes"}, expires=9e9, batch_seconds=5)
     store.set_approval(request["id"], announced=1)
     check = interrupted(store, hidden=1)
@@ -268,11 +245,10 @@ def test_tasks_cut_off_mid_command_or_waiting_on_the_user_stop_as_before(env, mo
 
     r = asyncio.run(main())
     assert prompts == []
-    for t in (on_mac, asked, wants, approval):
+    for t in (asked, wants, approval):
         task = r.store.get(t["id"])
         assert task["status"] == "stopped" and task["error"] == runner.RESTARTED and task["interrupted"] is None
     assert r.store.get(check["id"])["status"] == "stopped" and r.store.get(check["id"])["error"] is None
-    assert logged(r, on_mac["id"]) == ["not resumed on its own: it was cut off running brew install jq on the computer"]
     assert logged(r, approval["id"]) == ["not resumed on its own: it's waiting for a go-ahead"]
     assert logged(r, asked["id"]) == logged(r, wants["id"]) == ["not resumed on its own: it's waiting for an answer"]
 

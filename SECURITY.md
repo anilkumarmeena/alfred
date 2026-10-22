@@ -36,7 +36,7 @@ Use **[Report a vulnerability](https://github.com/anilkumarmeena/alfred/security
 
 ## 🎯 In scope
 
-- A way past a **guard that is enforced in code**: the spoken yes, approvals, the task sandbox (Seatbelt or bubblewrap), gated MCP tools, the encrypted vault, injection checks, or the passcode on the web app
+- A way past a **guard that is enforced in code**: the spoken yes, approvals (what auto mode stops to ask about), gated MCP tools, the encrypted vault, injection checks, or the passcode on the web app
 - **Prompt injection** that makes Alfred act (send, delete, run, leak) without the user agreeing
 - Secrets from `.env`, `data/` or `secrets/` reaching a log, a prompt, a task or the network
 

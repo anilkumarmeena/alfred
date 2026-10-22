@@ -13,7 +13,7 @@
 ---
 
 > [!IMPORTANT]
-> You need **macOS on Apple silicon**, **Linux** with systemd, or **Windows through WSL2**, plus [uv](https://docs.astral.sh/uv/), Node.js 22+ and the platform's packages (Homebrew on macOS; bubblewrap, socat and friends on Linux). The full list per platform is in **[Setup](docs/setup.md#-pick-your-platform)**.
+> You need **macOS on Apple silicon**, **Linux** with systemd, or **Windows through WSL2**, plus [uv](https://docs.astral.sh/uv/), Node.js 22+ and the platform's packages (Homebrew on macOS; a few distro packages on Linux). The full list per platform is in **[Setup](docs/setup.md#-pick-your-platform)**.
 
 ## 🚀 Your first pull request
 
@@ -37,9 +37,8 @@ make setup            # .env and local keys
 |:-:|---|---|
 | 🧪 | `make test` | Pass, on macOS and on Linux: pytest, plus the web app's vitest tests with `web/node_modules` installed |
 | 🔍 | `make check` | Pass: byte-compile, pyright (errors only), web type-check, imports |
-| 🧱 | `make host-check` | Pass, if you touched `alfred/safety/` or how tasks run commands (Seatbelt on macOS, bubblewrap on Linux) |
 
-Tests that need one OS's programs (`sips`, `afconvert`, a working `bwrap`) skip themselves elsewhere, so a green run on one platform doesn't prove the other: say in the PR which one you ran.
+Tests that need one OS's programs (`sips`, `afconvert`) skip themselves elsewhere, so a green run on one platform doesn't prove the other: say in the PR which one you ran.
 
 ## 🎨 Code style
 

@@ -31,7 +31,7 @@ def call_item(server: Server, tool: str, args: dict) -> dict:
 
 
 class ConnectionGate:
-    """Decides calls to the task's connections' changing tools; `tools` are their full names, for TaskGate."""
+    """Decides calls to the task's connections' changing tools; `tools` are their full names, asked about as ask rules."""
 
     def __init__(self, task_id: int, servers: list[Server], reporter) -> None:
         self.task_id, self.reporter = task_id, reporter

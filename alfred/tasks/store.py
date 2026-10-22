@@ -56,7 +56,7 @@ create table tasks (
     command text,               -- command tasks: JSON spec and outcome
     fixes integer,              -- id of the failed command task this fixes
     todo integer,               -- to-do item it serves, settled on finish
-    interrupted text            -- JSON {at, on_mac, prompt}: cut off by shutdown, to resume
+    interrupted text            -- JSON {at, prompt}: cut off by shutdown, to resume
 )"""
 # interrupted also holds {prompt, after} while a task waits for a usage limit's reset (Runner._launch)
 _TASKS_MIGRATIONS = (

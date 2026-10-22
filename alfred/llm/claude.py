@@ -22,18 +22,12 @@ from claude_agent_sdk import (
 )
 
 from alfred.config import ASSISTANT_NAME, CLAUDE_CLI, DATA_DIR, MODELS, TOOL_SEARCH
-from alfred.core import gpu
 from alfred.llm import claude_logins, retry, usage
 from alfred.llm.roles import Role, model as model_for
 
 log = logging.getLogger("alfred.llm.claude")
 TOOL_SEARCH_TOOL = "ToolSearch"  # CLI tool that loads deferred tools
 UP_FRONT = "anthropic/alwaysLoad"  # in a tool's _meta: the CLI loads it up front though its server is deferred
-
-# Built-in subagents inherit every session tool, so deny them; only Alfred's narrower subagents run.
-# The CLI may report the tool as "Task", so rules name it both ways.
-BUILTIN_AGENTS_DENIED = [f"{tool}({a})" for tool in ("Agent", "Task")
-                         for a in ("general-purpose", "claude", "Explore", "Plan", "statusline-setup", "claude-code-guide")]
 
 # The CLI may cache prompts for an hour, whose writes cost twice the input price; calls that follow each other
 # within minutes (a task's, a burst of checks) do better on the five-minute cache, whose writes cost 1.25x.
@@ -80,7 +74,8 @@ def on_demand(options: dict) -> dict:
     servers = servers | {name: {"alwaysLoad": True} | c for name, c in servers.items() if c.get("type") == "sdk"}
     if not any(c.get("alwaysLoad") is False for c in servers.values()):
         return options | {"mcp_servers": servers}
-    return options | {"mcp_servers": servers, "tools": [*options["tools"], TOOL_SEARCH_TOOL],
+    listed = options.get("tools")  # None: all of Claude Code's tools, ToolSearch among them (auto mode)
+    return options | {"mcp_servers": servers, "tools": None if listed is None else [*listed, TOOL_SEARCH_TOOL],
                       "allowed_tools": [*options.get("allowed_tools", []), TOOL_SEARCH_TOOL],
                       "env": options["env"] | {"ENABLE_TOOL_SEARCH": TOOL_SEARCH}}
 
@@ -102,22 +97,42 @@ def deferring(server: dict, up_front: list[str]) -> dict:
 
 def sdk_options(env: dict[str, str] | None = None, login: str | None = None, **options) -> ClaudeAgentOptions:
     """CLI options on the Claude login in use (claude_logins), or `login`: no user/project settings, no other MCP
-    servers, no skills unless named.
+    servers, no skills unless named; a session in `auto_mode` loads the user's.
 
     Settings are excluded because their allow rules would bypass permission_mode and can_use_tool. `settings` (JSON)
     gains ATTRIBUTION, which the CLI reads from flag settings. Sessions with Alfred's tools add their screening
     (alfred.brain.sdk).
     """
     signed_in = claude_logins.env(claude_logins.active() if login is None else login)
-    env = signed_in | gpu.env(options.get("sandbox")) | (env or {})
+    env = signed_in | (env or {})
     settings = {"attribution": ATTRIBUTION} | json.loads(options.get("settings") or "{}")
     options = on_demand(options | {"env": env, "settings": json.dumps(settings)})
     return ClaudeAgentOptions(
         cli_path=CLAUDE_CLI or None,
         strict_mcp_config=True,
-        setting_sources=[],
-        **{"skills": [], "max_buffer_size": MAX_BUFFER_SIZE} | options,
+        **{"setting_sources": [], "skills": [], "max_buffer_size": MAX_BUFFER_SIZE} | options,
     )
+
+
+# ── Auto mode ───────────────────────────────────────────────────
+# The voice brain, its lookups and tasks run the way Claude Code's auto mode runs in a terminal: its own
+# check (a separate model) clears each action, blocking what goes beyond the request, reaches unknown places or looks
+# driven by something the session read; the user's Claude Code setup loads (CLAUDE.md, skills, plugins, agents,
+# settings, hooks); nothing is sandboxed. can_use_tool is reached only by ask rules (Alfred's own spoken or phone yes
+# for sends, deletes and a connection's changes) and when auto mode stops to ask (after blocking several in a row).
+
+AUTO_SOURCES = ["user", "project", "local"]  # as Claude Code loads them
+AUTO_DENIED = ["AskUserQuestion"]  # needs a terminal: tasks ask with ask_user, the voice brain aloud
+
+
+def auto_mode(ask: list[str] | None = None, settings: dict | None = None) -> dict:
+    """Session options for auto mode: `ask` rules (tool names) still reach can_use_tool, on top of `settings`."""
+    rules = settings or {}
+    if ask:
+        kept = rules.get("permissions") or {}
+        rules = rules | {"permissions": kept | {"ask": list(dict.fromkeys([*kept.get("ask", []), *ask]))}}
+    return {"permission_mode": "auto", "setting_sources": AUTO_SOURCES, "skills": "all", "sandbox": None,
+            "settings": json.dumps(rules) if rules else None}
 
 
 def short_options(system_prompt: str, model: Role | str, env: dict[str, str] | None = None,

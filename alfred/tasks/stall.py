@@ -3,7 +3,7 @@
 Signs of life: any session message (incl. subagent progress via Reporter.alive), log lines and updates in tasks.db.
 A running task with none for TASK_STALL_MINUTES is stalled unless the quiet is expected:
   pending approval of a risky command, an open question or access request, Claude's usage limit hit,
-  a command still within its time limit (host_run, Bash, job_wait), or a running start_job job.
+  or a Bash command still within its time limit.
 Queued and waiting tasks never count.
 
 The pulse is in memory only. Task views show `stalled` at once; alfred.tasks.notices says it once per stall (voice,
@@ -16,22 +16,17 @@ from collections.abc import Callable
 from alfred.config import TASK_STALL_MINUTES
 from alfred.llm import usage
 from alfred.llm.sdk import AssistantMessage, RateLimitEvent, ToolResultBlock, ToolUseBlock, UserMessage
-from alfred.safety import host
-from alfred.tasks.host_tools import HOST_RUN, JOB_WAIT, call_minutes
 from alfred.tasks.store import COMMAND
 
 GRACE = 120  # seconds of slack past a command's own time limit
 BASH_DEFAULT, BASH_MOST = 120, 600  # seconds: Bash tool default and maximum timeout
 # Excuse shown for a quiet task, per still-running command tool
-DOING = {"Bash": "running a command", HOST_RUN: "running a command on the computer",
-         JOB_WAIT: "waiting for one of its jobs"}
+DOING = {"Bash": "running a command"}
 
 
 def lasts(block: ToolUseBlock) -> float:
     """Seconds a tool call may legitimately stay silent; 0 for tools that don't block."""
     args = block.input or {}
-    if block.name in (HOST_RUN, JOB_WAIT):
-        return call_minutes(args) * 60
     if block.name == "Bash" and not args.get("run_in_background"):
         try:  # timeout is in ms
             return min(float(args.get("timeout") or BASH_DEFAULT * 1000) / 1000, BASH_MOST)
@@ -86,7 +81,7 @@ class Pulse:
             kept.pop(task_id, None)
 
 
-def excuse(task: dict, store, pulse: Pulse, jobs: host.Jobs, now: float,
+def excuse(task: dict, store, pulse: Pulse, now: float,
            remote: Callable[[dict, float], str] | None = None) -> str:
     """Why a running task may legitimately be quiet now, or "". `remote` gives the excuse of a task on another
     machine (unreachable, or busy there)."""
@@ -101,12 +96,10 @@ def excuse(task: dict, store, pulse: Pulse, jobs: host.Jobs, now: float,
         return "waiting for Claude's usage limit to reset"
     if doing := pulse.busy(task_id, now):
         return doing
-    if any(j["state"] == host.RUNNING for j in jobs.status(task=task_id)):
-        return "a long job it started is still running"
     return ""
 
 
-def check(task: dict, store, pulse: Pulse, jobs: host.Jobs, now: float | None = None,
+def check(task: dict, store, pulse: Pulse, now: float | None = None,
           minutes: int = TASK_STALL_MINUTES, remote: Callable[[dict, float], str] | None = None) -> dict | None:
     """{"minutes", "since"} for a stalled running task, else None.
 
@@ -116,6 +109,6 @@ def check(task: dict, store, pulse: Pulse, jobs: host.Jobs, now: float | None = 
         return None
     now = now or time.time()
     since = max(pulse.heard(task["id"]), task["updated"], store.last_logged(task["id"]))
-    if now - since < minutes * 60 or excuse(task, store, pulse, jobs, now, remote):
+    if now - since < minutes * 60 or excuse(task, store, pulse, now, remote):
         return None
     return {"minutes": int((now - since) // 60), "since": since}

@@ -1,12 +1,10 @@
-"""Tests for subagents: which helpers tasks get, the gate, progress log, waiting for reports, the voice brain."""
+"""Tests for subagents: which helpers tasks get, progress log, waiting for reports, the voice brain."""
 
 import asyncio
-from pathlib import Path
 
 import pytest
 from claude_agent_sdk import (
     AssistantMessage,
-    PermissionResultAllow,
     PermissionResultDeny,
     TaskNotificationMessage,
     TaskStartedMessage,
@@ -23,11 +21,10 @@ from alfred import config
 from alfred.brain import cli
 from alfred.gates import mcp_gate, shell
 from alfred.llm import roles
-from alfred.llm.claude import BUILTIN_AGENTS_DENIED
 from alfred.llm.roles import Role
 from alfred.state import memory
 from alfred.tasks import runner, worker
-from conftest import use_profile, use_task_cache
+from conftest import use_profile
 
 EDITS = {"Edit", "Write", "NotebookEdit"}
 MAIN = ToolPermissionContext(tool_use_id="t1")
@@ -42,9 +39,8 @@ TASKS = {
 
 
 def task_options(env, monkeypatch, name: str):
-    use_task_cache(monkeypatch, env["tmp"] / "cache")
     monkeypatch.setattr(worker, "DATA_DIR", env["tmp"] / "data")
-    task = TASKS[name] | ({"worktree": str(env["video"])} if name == "in place" else {})
+    task = TASKS[name] | {"worktree": str(env["video"] if name == "in place" else env["tmp"] / "worktree")}
     return worker._options(task, NullReporter())
 
 
@@ -59,17 +55,16 @@ def task_options(env, monkeypatch, name: str):
 ])
 def test_each_kind_of_task_gets_its_own_subagents(env, monkeypatch, name, agents):
     opts = task_options(env, monkeypatch, name)
-    assert set(opts.agents) == agents
-    assert "Agent" in opts.tools and "Agent" not in opts.allowed_tools  # the gate decides which ones start
-    assert set(BUILTIN_AGENTS_DENIED) <= set(opts.disallowed_tools)  # general-purpose would inherit every tool
+    assert set(opts.agents) == agents  # beside Claude Code's own (Explore, Plan, general-purpose), which aren't denied
+    assert not any(d.startswith(("Agent", "Task")) for d in opts.disallowed_tools)
     for agent in opts.agents.values():
-        assert set(agent.tools) <= set(opts.tools) - EDITS - {"Agent"}  # none edits or starts its own subagents
+        assert not (EDITS | {"Agent"}) & set(agent.tools)  # none edits or starts its own subagents
         assert agent.model != roles.model(Role.TASK) and agent.maxTurns
 
 
-def test_in_place_tasks_keep_refusing_git_writes_alongside_the_builtin_agents(env, monkeypatch):
+def test_in_place_tasks_keep_refusing_git_writes(env, monkeypatch):
     opts = task_options(env, monkeypatch, "in place")
-    assert "Bash(git push:*)" in opts.disallowed_tools and "Agent(general-purpose)" in opts.disallowed_tools
+    assert "Bash(git push:*)" in opts.disallowed_tools
 
 
 def test_only_the_test_runner_gets_a_shell_and_the_searcher_is_read_only():
@@ -86,59 +81,6 @@ def test_the_brief_tells_the_task_how_to_use_its_subagents(env, monkeypatch):
         prompt = task_options(env, monkeypatch, name).system_prompt
         text = prompt["append"] if isinstance(prompt, dict) else prompt
         assert "Agent tool" in text and "Only you edit files" in text
-
-
-# ── The gate ────────────────────────────────────────────────────
-
-
-def gate(tmp: Path, **kw):
-    return worker.TaskGate(tmp, [tmp], [tmp], agents=["code-searcher", "test-runner"], **kw)
-
-
-@pytest.mark.parametrize("tool", ["Agent", "Task"])
-def test_gate_starts_only_the_task_s_own_subagents(tmp_path, tool):
-    g = gate(tmp_path)
-    allow = lambda t: asyncio.run(g(tool, {"subagent_type": t, "prompt": "p", "description": "d"}, MAIN))  # noqa: E731
-    assert isinstance(allow("code-searcher"), PermissionResultAllow)
-    assert isinstance(allow("test-runner"), PermissionResultAllow)
-    for other in ("general-purpose", "claude", "Explore", "web-researcher", None):
-        denied = allow(other)
-        assert isinstance(denied, PermissionResultDeny) and "code-searcher, test-runner" in denied.message
-
-
-def test_helpers_run_on_their_own_model_whatever_the_task_asks(tmp_path):
-    """Tasks asked for Opus code-searchers 110 times in a day; the searcher's role is Haiku."""
-    g = gate(tmp_path)
-    call = {"subagent_type": "code-searcher", "prompt": "p", "description": "d", "model": "opus"}
-    allowed = asyncio.run(g("Agent", call, MAIN))
-    assert isinstance(allowed, PermissionResultAllow)
-    assert allowed.updated_input == {"subagent_type": "code-searcher", "prompt": "p", "description": "d"}
-    # The hook too, since a project skill's allow rule skips can_use_tool
-    hooked = asyncio.run(g.pre_tool_use({"tool_name": "Agent", "tool_input": call}, "t1", None))
-    assert hooked["hookSpecificOutput"]["updatedInput"] == allowed.updated_input
-    plain = {k: v for k, v in call.items() if k != "model"}
-    assert asyncio.run(g.pre_tool_use({"tool_name": "Agent", "tool_input": plain}, "t2", None)) == {}
-
-
-def test_builtin_agents_are_denied_under_both_names_of_the_tool():
-    for name in ("general-purpose", "claude", "Explore", "Plan"):
-        assert {f"Agent({name})", f"Task({name})"} <= set(BUILTIN_AGENTS_DENIED)
-
-
-def test_gate_refuses_edits_from_subagents_even_inside_the_worktree(tmp_path):
-    g = gate(tmp_path)
-    path = str(tmp_path / "app.py")
-    for name, arg in (("Edit", "file_path"), ("Write", "file_path"), ("NotebookEdit", "notebook_path")):
-        assert isinstance(asyncio.run(g(name, {arg: path}, HELPER)), PermissionResultDeny)
-        assert isinstance(asyncio.run(g(name, {arg: path}, MAIN)), PermissionResultAllow)
-    assert isinstance(asyncio.run(g("Read", {"file_path": path}, HELPER)), PermissionResultAllow)
-    assert isinstance(asyncio.run(g("Read", {"file_path": "/etc/passwd"}, HELPER)), PermissionResultDeny)
-
-
-def test_subagent_bash_meets_the_same_read_only_git_rule(tmp_path):
-    g = worker.TaskGate(tmp_path, [tmp_path], [], worker._read_only_git, agents=["code-searcher"])
-    assert isinstance(asyncio.run(g("Bash", {"command": "git log -3"}, HELPER)), PermissionResultAllow)
-    assert isinstance(asyncio.run(g("Bash", {"command": "rm -rf ."}, HELPER)), PermissionResultDeny)
 
 
 def test_nudges_wait_for_the_task_s_own_session_not_a_subagent():
@@ -387,12 +329,11 @@ def voice_options(tmp_path, monkeypatch):
     return cli._options(mcp_gate.Gate(), shell.Jobs())
 
 
-def test_voice_brain_has_no_subagent_or_file_read_that_could_hold_a_turn(voice_options):
-    """File lookups go through file_lookup (alfred.brain.side), which can't keep the turn waiting."""
+def test_voice_brain_has_claude_codes_tools_and_still_its_lookups(voice_options):
+    """Claude Code's own tools and subagents are there, but file and computer lookups still run beside the turn."""
     opts = voice_options
-    assert not opts.agents and not {"Agent", "Task", "Read", "Glob", "Grep"} & set(opts.tools)
-    assert not EDITS & set(opts.tools)
-    assert opts.disallowed_tools == BUILTIN_AGENTS_DENIED  # no MCP server is on in the tests' database
+    assert not opts.agents and opts.tools is None  # all of Claude Code's tools
+    assert not any(d.startswith(("Agent", "Task")) for d in opts.disallowed_tools)
     assert {"mcp__alfred__file_lookup", "mcp__alfred__computer_lookup"} <= set(opts.allowed_tools)
     assert "file_lookup" in opts.system_prompt and "code_question background task" in opts.system_prompt
     assert {"alfred", "shell"} <= set(opts.mcp_servers) and shell.JOB_STATUS in opts.allowed_tools  # long jobs kept
@@ -403,9 +344,9 @@ def test_voice_prompt_hands_multi_step_work_to_background_tasks(voice_options):
     for words in ("Anything with several steps goes to a background task", "installing or setting something up",
                   "fixing what a build or test run turned up", "stop after your second step"):
         assert words in prompt
-    # the shell does one thing the user asks for; checks go to computer_lookup, long work to start_job
-    assert "only to do one thing" in shell.prompt() and "never a chain of several" in shell.prompt()
-    assert "use computer_lookup, even when it's one command" in shell.prompt() and "start_job" in shell.prompt()
+    # the shell does one command a call; checks go to computer_lookup, long work to start_job
+    assert "one command a call" in shell.prompt() and "use computer_lookup" in shell.prompt()
+    assert "start_job" in shell.prompt()
     for words in ("You talk; helpers and tasks do the work", "computer_lookup for anything about this computer",
                   "Alfred refuses more"):
         assert words in prompt

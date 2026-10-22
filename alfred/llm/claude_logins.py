@@ -37,7 +37,7 @@ from alfred import config
 from alfred.core.files import locked, write_atomic
 
 if TYPE_CHECKING:
-    from alfred.storage.profile import Profile
+    pass
 
 MAC = ""  # this Mac's own Claude Code sign-in
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
@@ -260,12 +260,3 @@ def note(name: str, ok: bool, said: str) -> None:
     _root().mkdir(mode=0o700, parents=True, exist_ok=True)
     with locked(file := _root() / "checks.json"):  # each process notes its own logins' checks
         write_atomic(file, json.dumps(checks() | {name: {"ok": ok, "said": said, "at": time.time()}}))
-
-
-def voice_logs(who: "Profile | None" = None) -> Path:
-    """The voice brain's Claude session transcripts for a profile (the current one), in the login in use: the CLI
-    names the folder after the session's working folder, the profile's `shell`."""
-    from alfred.storage import profile
-
-    shell = (who or profile.current()).shell
-    return folder(active()) / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(shell))

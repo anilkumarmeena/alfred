@@ -11,10 +11,9 @@ from test_nudges import FakeClient, result, settle, until, worker_run
 from test_subagents import Recorder
 
 from alfred.llm import usage
-from alfred.safety import host
 from alfred.tasks import notices, runner, stall
 from alfred.tasks.stall import GRACE, Pulse
-from alfred.tasks.worker import HOST_RUN, JOB_WAIT, Outcome
+from alfred.tasks.worker import Outcome
 from alfred.tools import tasks as task_tools
 
 NOW = AFTERNOON.timestamp()
@@ -42,21 +41,13 @@ class Store:
         return self.logged
 
 
-class Jobs:
-    def __init__(self, *states: str) -> None:
-        self.states = states
-
-    def status(self, task: int | None = None) -> list[dict]:
-        return [{"id": i, "state": s} for i, s in enumerate(self.states, 1)]
-
-
 def running(**fields) -> dict:
     return {"id": 7, "title": "retry logic", "status": "running", "updated": NOW - 20 * MINUTE, "question": None,
             "wants": None} | fields
 
 
-def check(task: dict, store=None, pulse: Pulse | None = None, jobs=None, at: float = NOW, minutes: int = 15):
-    return stall.check(task, store or Store(), pulse or Pulse(Clock()), jobs or Jobs(), at, minutes)
+def check(task: dict, store=None, pulse: Pulse | None = None, at: float = NOW, minutes: int = 15):
+    return stall.check(task, store or Store(), pulse or Pulse(Clock()), at, minutes)
 
 
 def called(call: str, name: str, **args) -> AssistantMessage:
@@ -100,23 +91,21 @@ def test_any_sign_of_life_counts_as_progress():
     assert check(running(), pulse=pulse, at=NOW + 14 * MINUTE)["minutes"] == 16  # quiet since the last of them
 
 
-@pytest.mark.parametrize("why, fields, store, jobs", [
-    ("waiting for your go-ahead", {}, Store(approvals=[{"id": 3}]), Jobs()),
-    ("waiting for your answer", {"question": "Which DB?"}, Store(), Jobs()),
-    ("waiting for your answer", {"wants": '["mac"]'}, Store(), Jobs()),
-    ("a long job it started is still running", {}, Store(), Jobs("done", host.RUNNING)),
+@pytest.mark.parametrize("why, fields, store", [
+    ("waiting for your go-ahead", {}, Store(approvals=[{"id": 3}])),
+    ("waiting for your answer", {"question": "Which DB?"}, Store()),
+    ("waiting for your answer", {"wants": '["accounts"]'}, Store()),
 ])
-def test_waiting_on_the_user_or_a_long_job_is_not_a_stall(why, fields, store, jobs):
+def test_waiting_on_the_user_is_not_a_stall(why, fields, store):
     task = running(**fields)
-    assert stall.excuse(task, store, Pulse(Clock()), jobs, NOW) == why
-    assert check(task, store=store, jobs=jobs) is None
-    assert check(running(), jobs=Jobs("done", "failed, exit code 1")) is not None  # only one still running excuses
+    assert stall.excuse(task, store, Pulse(Clock()), NOW) == why
+    assert check(task, store=store) is None
 
 
 def test_waiting_for_the_usage_limit_is_not_a_stall(monkeypatch):
     pulse = Pulse(Clock(NOW - 20 * MINUTE))
     pulse.saw(7, limit("rejected", resets_at=int(NOW + 3600)))
-    assert stall.excuse(running(), Store(), pulse, Jobs(), NOW) == "waiting for Claude's usage limit to reset"
+    assert stall.excuse(running(), Store(), pulse, NOW) == "waiting for Claude's usage limit to reset"
     assert check(running(), pulse=pulse) is None
     assert check(running(), pulse=pulse, at=NOW + 2 * 3600) is not None  # it has reset, and still nothing
     pulse.saw(7, limit("allowed"))
@@ -129,15 +118,15 @@ def test_waiting_for_the_usage_limit_is_not_a_stall(monkeypatch):
 def test_a_command_is_given_its_own_time_limit_before_its_quiet_counts():
     clock = Clock(NOW - 20 * MINUTE)
     pulse = Pulse(clock)
-    pulse.saw(7, called("h1", HOST_RUN, command="xcodebuild", minutes=10))
-    assert stall.excuse(running(), Store(), pulse, Jobs(), NOW - 15 * MINUTE) == "running a command on the computer"
+    pulse.saw(7, called("b1", "Bash", command="xcodebuild", timeout=600000))
+    assert stall.excuse(running(), Store(), pulse, NOW - 15 * MINUTE) == "running a command"
     assert check(running(), pulse=pulse, at=NOW - 20 * MINUTE + 10 * MINUTE + GRACE - 1, minutes=5) is None
     assert check(running(), pulse=pulse) == {"minutes": 20, "since": NOW - 20 * MINUTE}  # past its limit: stuck
 
     clock.at = NOW - 3 * MINUTE
-    pulse.saw(7, called("w1", JOB_WAIT, id=4))
-    assert pulse.busy(7, NOW) == "waiting for one of its jobs"
-    pulse.saw(7, answered("w1"))  # it came back
+    pulse.saw(7, called("b2", "Bash", command="make"))
+    assert pulse.busy(7, NOW) == "running a command"
+    pulse.saw(7, answered("b2"))  # it came back
     assert pulse.busy(7, NOW) == ""
     assert check(running(), pulse=pulse, at=NOW + 13 * MINUTE)["minutes"] == 16
 
@@ -147,9 +136,6 @@ def test_how_long_each_tool_call_may_take():
     assert stall.lasts(ToolUseBlock(id="b", name="Bash", input={"command": "make", "timeout": 300000})) == 300
     assert stall.lasts(ToolUseBlock(id="b", name="Bash", input={"command": "x", "timeout": 10 ** 9})) == 600
     assert stall.lasts(ToolUseBlock(id="b", name="Bash", input={"command": "x", "run_in_background": True})) == 0
-    assert stall.lasts(ToolUseBlock(id="h", name=HOST_RUN, input={"command": "x"})) == 600
-    assert stall.lasts(ToolUseBlock(id="h", name=HOST_RUN, input={"command": "x", "minutes": 2})) == 120
-    assert stall.lasts(ToolUseBlock(id="w", name=JOB_WAIT, input={"id": 1, "minutes": "lots"})) == 600
     assert stall.lasts(ToolUseBlock(id="f", name="WebFetch", input={"url": "x"})) == 0  # a hang there is a stall
 
 

@@ -68,7 +68,6 @@ from alfred.contracts.remote import HERE, HERE_WORD, TASKS, Offline, Place
 from alfred.core import memory
 from alfred.llm import claude_logins, retry, roles, usage
 from alfred.llm.sdk import CanUseToolShadowedWarning
-from alfred.safety import host
 from alfred.safety.redact import redact
 from alfred.state import activity as bell, preferences, todo as todos
 from alfred.storage import profile
@@ -104,7 +103,6 @@ from alfred.tasks.events import (
     worked_in,
 )
 from alfred.tasks.git_ops import GitOps
-from alfred.tasks.host_tools import TaskJobs, few
 from alfred.tasks.local import NoLinks, NoMachines, NoOffload
 from alfred.tasks.reporting import nudge_text, with_nudges
 from alfred.tasks.store import (
@@ -180,8 +178,6 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
         self.commands = command_jobs.Runs()
         self.ending: dict[int, asyncio.Task] = {}  # command tasks whose ending is being processed
         self.limit_seen: dict[int, float] = {}  # running commands whose CLI said their login is used up -> since when
-        self.host_jobs = TaskJobs()
-        self.host_jobs.on_end = self._job_ended
         self.checks = goal.Budget(GOAL_DAILY_CHECKS)  # goal checks per rolling 24 h, all tasks
         self.prompts: dict[int, str] = {}  # launch prompt per queued/running task
         self.services: list[asyncio.Task] = []  # notices/scheduler/learning loops
@@ -237,8 +233,6 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
             return "it was resumed after the last restart, and the runner stopped again without a clean shutdown", ""
         if task["node"] and task["status"] == "running":  # its run went on there: take it up again
             return "", RESUMED
-        if cut.get("on_mac"):
-            return f"it was cut off running {few(cut['on_mac'])} on the computer", ""
         if self.store.approvals(task["id"]):
             return "it's waiting for a go-ahead", ""
         if task["question"] or task["wants"]:
@@ -311,12 +305,6 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
             await asyncio.sleep(every)
             await asyncio.to_thread(self.store.write_steps)
 
-    def _job_ended(self, job: dict, code: int) -> None:
-        """Log a host job's end on its task."""
-        if (task_id := job.get("task")) is None or not self.store.get(task_id):
-            return
-        self.store.log(task_id, "job", f"job {job['id']}, {job['title']}, {host.outcome(code)}")
-
     def start_background(self) -> None:
         """Start background loops (approval expiry, commands, step flush); re-announce approvals; resume tasks."""
         self._background(self._expire_approvals())
@@ -343,19 +331,17 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
         self.services.append(self._background(coro))
 
     async def shutdown(self, wait: float = SHUTDOWN_SECONDS) -> None:
-        """Stop cleanly on SIGTERM: refuse new work, mark active tasks `interrupted` (with in-flight host commands and
-        launch prompt), then cancel them silently. The next start resumes what it can."""
+        """Stop cleanly on SIGTERM: refuse new work, mark active tasks `interrupted` (with their launch prompt), then
+        cancel them silently. The next start resumes what it can."""
         self.closing = True
         for loop in self.services:
             loop.cancel()
         cut = dict(self.jobs)
         for task_id in cut:
-            on_mac = self.host_jobs.on_mac.get(task_id, [])
             self.store.set(task_id, interrupted=json.dumps(
-                {"at": time.time(), "on_mac": on_mac, "prompt": self.prompts.get(task_id),
-                 "after": self.limit_waits.get(task_id)}, ensure_ascii=False))
-            self.store.log(task_id, "interrupted", "Alfred is shutting down" + (
-                f", while it ran {few(on_mac)} on the computer" if on_mac else ""))
+                {"at": time.time(), "prompt": self.prompts.get(task_id), "after": self.limit_waits.get(task_id)},
+                ensure_ascii=False))
+            self.store.log(task_id, "interrupted", "Alfred is shutting down")
         for job in cut.values():
             job.cancel()
         if cut:
@@ -505,8 +491,6 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
         task = self._get(task_id)
         if task["kind"] == COMMAND and task["status"] == "running":
             raise ValueError(f"Task {task_id} is running a command: stop it with halt.")
-        if stopped := self.host_jobs.stop_all(task_id):  # its host jobs stop too
-            self.store.log(task_id, "job", f"stopped job{'s' if len(stopped) > 1 else ''} {', '.join(map(str, stopped))}")
         if job := self.jobs.get(task_id):
             job.cancel()  # _job records the stop and commits work
         elif task["kind"] == CONNECTION and task["status"] == "running":  # its relay cancels the call
@@ -537,7 +521,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
             return task | command_jobs.view(task, self.commands, now) | {"stalled": None}
         if task["kind"] == CONNECTION:  # no pulse kept here
             return task | {"stalled": None}
-        return task | {"stalled": stall.check(task, self.store, self.pulse, self.host_jobs, now, remote=self.offload.excuse)}
+        return task | {"stalled": stall.check(task, self.store, self.pulse, now, remote=self.offload.excuse)}
 
     def stalls(self, now: float | None = None) -> list[dict]:
         """Running tasks that seem stuck, oldest first."""

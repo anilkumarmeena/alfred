@@ -438,14 +438,15 @@ def test_prompt_says_what_needs_a_yes_and_how_long_jobs_run():
     assert "will be read out" not in shell.prompt()
     assert shell.QUESTION in shell.prompt()
     assert "start_job" in shell.prompt() and "up front" in shell.prompt()
-    assert "deleting files" in shell.prompt() and "a few minutes later" in shell.prompt()
+    assert "auto mode" in shell.prompt() and "a few minutes later" in shell.prompt()
+    assert "sandbox" not in shell.prompt().replace("Nothing is sandboxed", "")
 
 
 def test_the_brain_offers_jobs_and_a_command_can_t_hold_the_conversation_for_long():
     brain = cli.CliBrain()
     opts = cli._options(brain.shell, brain.jobs)
     assert set(opts.mcp_servers) == {"alfred", "shell"}
-    assert shell.JOB_STATUS in opts.allowed_tools and shell.START_JOB not in opts.allowed_tools  # start_job goes through the gate
+    assert shell.JOB_STATUS in opts.allowed_tools and shell.START_JOB not in opts.allowed_tools  # auto mode's check clears it
     assert shell.STOP_JOB in opts.allowed_tools  # stops only start_job's own jobs, on the user's word
     assert opts.env["BASH_DEFAULT_TIMEOUT_MS"] == opts.env["BASH_MAX_TIMEOUT_MS"] == "120000"  # longer: start_job
     assert "stops a command after 2 minutes" in shell.prompt()

@@ -16,7 +16,7 @@ import pytest
 from ai_armory.toolsets.google import drafts, pending
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from test_in_place import worker_task
-from test_task_host import Asking
+from test_in_place import Asking
 
 from alfred import panel, tools
 from alfred.brain import cli
@@ -26,7 +26,7 @@ from alfred.skills import home, install, review
 from alfred.storage import profile
 from alfred.tasks import data_edits, learning, worker
 from alfred.tools import skills as skill_tools  # noqa: F401  (registers the skill tools)
-from conftest import use_profile, use_task_cache
+from conftest import use_profile
 
 STANDUP = "1. Read yesterday's commits with git log.\n2. Read today's calendar.\n3. Say three bullet points."
 PDF_MD = """---
@@ -313,6 +313,65 @@ def test_staged_fetches_are_cleared_after_a_day(skills_home):
     assert not old.exists()
 
 
+@pytest.fixture
+def claude_home(tmp_path, monkeypatch):
+    """A Claude Code config folder: a skill of the user's own, two synced from their account (one sharing the own
+    one's name), an installed plugin's, a synced plugin's, and what Claude Code leaves out: a deleted one in .trash,
+    another sign-in's synced ones, a plugin switched off, a synced plugin the manifest doesn't list."""
+    base = tmp_path / "claude"
+    (base / ".claude.json").parent.mkdir()
+    (base / ".claude.json").write_text(json.dumps({"oauthAccount": {"organizationUuid": "org", "accountUuid": "me"}}))
+    manual(base / "skills", "notes", "---\nname: notes\ndescription: The user's own notes.\n---\nWrite them.\n")
+    manual(base / "skills" / ".trash" / "1", "gone")
+    synced = base / "skills" / "synced" / "org_me"
+    manual(synced, "notes", "---\nname: notes\ndescription: The account's notes.\n---\nOther.\n")
+    pdf = manual(synced, "pdf", PDF_MD, {"scripts/extract.py": "print(1)\n"})
+    (pdf / "scripts" / "extract.py").chmod(0o755)
+    (pdf / "key").symlink_to("/Users/me/.ssh/id_rsa")
+    manual(base / "skills" / "synced" / "org_someone-else", "stale")
+    manual(tmp_path / "cache" / "creator" / "skills", "skill-creator")
+    manual(tmp_path / "cache" / "caveman" / "skills", "caveman")
+    (base / "settings.json").write_text(json.dumps({"enabledPlugins": {"skill-creator@official": True,
+                                                                       "caveman@caveman": False}}))
+    (base / "plugins").mkdir()
+    (base / "plugins" / "installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": {
+        "skill-creator@official": [{"installPath": str(tmp_path / "cache" / "creator")}],
+        "caveman@caveman": [{"installPath": str(tmp_path / "cache" / "caveman")}]}}))
+    plugins = base / "plugins" / "synced" / "org_me"
+    manual(plugins / "tools~g2" / "skills", "helper")
+    manual(plugins / "tools" / "skills", "old-helper")  # an earlier generation
+    manual(plugins / "unlisted" / "skills", "unlisted")
+    (plugins / "manifest.json").write_text(json.dumps({"plugins": [{"name": "tools", "generation": 2}]}))
+    monkeypatch.setattr(install, "claude_dirs", lambda: [base])
+    return base
+
+
+def test_claude_codes_own_synced_and_plugin_skills_are_found(claude_home):
+    found = install.claude_skills()
+    assert list(found) == ["notes", "pdf", "skill-creator", "helper"]
+    assert found["notes"] == (claude_home / "skills" / "notes").resolve()  # the user's own over the account's
+    assert install.is_claude("Claude Code") and install.is_claude("claude's skills") and not install.is_claude("acme/claude")
+
+
+def test_staging_claude_codes_skills_copies_them_as_a_download_would(skills_home, claude_home):
+    staged = asyncio.run(install.stage("claude"))
+    assert staged.origin == "Claude Code" and staged.root.is_relative_to(skills_home / ".staging")
+    by_name = {s.name: s for s in staged.skills}
+    assert set(by_name) == {"notes", "pdf", "skill-creator", "helper"}
+    pdf = by_name["pdf"]
+    assert (pdf.rel, pdf.scripts, pdf.dropped) == ("pdf", ["scripts/extract.py"], ["allowed-tools", "hooks"])
+    assert any("links" in p for p in pdf.problems) and not (staged.root / "pdf" / "key").exists()
+    assert os.stat(staged.root / "pdf" / "scripts" / "extract.py").st_mode & 0o111
+    assert home.all_skills() == []  # staged only
+
+
+def test_claude_codes_skills_too_many_to_copy_are_refused_and_cleared(skills_home, claude_home, monkeypatch):
+    monkeypatch.setattr(install, "MAX_FILES", 2)
+    with pytest.raises(ValueError, match="too many to copy"):
+        asyncio.run(install.stage("claude"))
+    assert list((skills_home / ".staging").iterdir()) == []
+
+
 # ── Reviewing scripts ───────────────────────────────────────────
 
 
@@ -503,6 +562,30 @@ def test_installing_by_voice_says_what_it_holds_and_keeps_scripts_off(skills_hom
     assert error and "can't be installed" in out and "links" in out
 
 
+def test_all_of_claude_codes_skills_install_by_voice_after_one_yes(skills_home, claude_home, gate):
+    (claude_home / "skills" / "synced" / "org_me" / "pdf" / "key").unlink()
+    several, error = run("skill_install", {"source": "claude"})
+    assert not error and {s["name"] for s in several["several"]} == {"notes", "pdf", "skill-creator", "helper"}
+    draft, error = run("skill_install", {"source": "claude", "name": "all"})
+    assert not error and draft["skills"] == ["notes", "pdf", "skill-creator", "helper"]
+    assert draft["summary"] == (
+        "Install 4 skills from Claude Code. 3 are instructions only, switched on once installed: notes, skill creator "
+        "and helper. 1 has scripts, which stay off until you've heard a review of them and approved it: pdf. I'll take "
+        "out the allowed-tools, hooks settings some of them have, which would skip my checks.")
+    _, done = confirm(gate, draft["draft_id"], "install all my Claude skills")
+    assert done == ("Installed 4 skills: 3 switched on from the next turn; 1 switched off until their scripts are "
+                    "reviewed and Sam approves them, which skill_enable starts: pdf.")
+    assert {s.name: (s.origin, s.state) for s in home.all_skills()} == {
+        "helper": ("Claude Code", "on"), "notes": ("Claude Code", "on"), "pdf": ("Claude Code", "needs approval"),
+        "skill-creator": ("Claude Code", "on")}
+    again, error = run("skill_install", {"source": "claude", "name": "all"})
+    assert error and "nothing new to install from Claude Code: 4 skills you already have as they are" in again
+    (claude_home / "skills" / "notes" / "SKILL.md").write_text("---\nname: notes\ndescription: Better notes.\n---\nNew.\n")
+    draft, _ = run("skill_install", {"source": "claude", "name": "all"})
+    assert draft["skills"] == ["notes"] and "It replaces your notes" in draft["summary"]
+    assert "Left out: 3 skills you already have as they are." in draft["summary"]
+
+
 def test_switching_on_a_skill_with_scripts_reads_its_review_first(skills_home, gate, monkeypatch, tmp_path):
     monkeypatch.setattr(review, "summarise", summary_of)
     home.install(staged(tmp_path, text=home.sanitize(PDF_MD)[0]), "pdf", "github.com/acme/skills")
@@ -654,22 +737,19 @@ def test_listing_and_reading_skills(skills_home):
 def test_the_voice_brain_gets_the_usable_skills_as_its_own_plugin(skills_home, monkeypatch, tmp_path):
     brain = cli.CliBrain()
     opts = cli._options(brain.shell, brain.jobs)
-    assert opts.skills == [] and opts.plugins == [] and "Skill" not in opts.tools
-    assert json.loads(opts.settings)["disableSkillShellExecution"] is True
+    assert opts.skills == "all" and opts.plugins == [] and opts.tools is None  # the user's own skills, and Claude Code's
     home.save("standup-notes", "Writes the standup.", STANDUP)
     home.install(staged(tmp_path, text=home.sanitize(PDF_MD)[0]), "pdf", "x")  # not approved: left out
     opts = cli._options(brain.shell, brain.jobs)
-    assert opts.skills == ["alfred-skills:standup-notes"] and "Skill" in opts.tools
     [plugin] = opts.plugins
     assert Path(plugin["path"]) == skills_home / ".sessions" / f"voice-{os.getpid()}"
-    settings = json.loads(opts.settings)
-    assert settings["disableAllHooks"] is True and settings["permissions"]["deny"]  # the secrets stay hidden
-    assert settings["attribution"] == ATTRIBUTION  # its commits credit Alfred
+    assert sorted(p.name for p in (Path(plugin["path"]) / "skills").iterdir()) == ["standup-notes"]
+    assert json.loads(opts.settings)["attribution"] == ATTRIBUTION  # its commits credit Alfred
     assert "alfred-skills:standup-notes: Writes the standup." in opts.system_prompt
     assert "skill_draft" in opts.system_prompt and "mcp__alfred__skill_confirm" not in opts.allowed_tools
 
 
-def test_the_sdk_hands_the_cli_the_plugin_and_one_allow_rule_per_skill(skills_home):
+def test_the_sdk_hands_the_cli_the_plugin_and_every_skill(skills_home):
     from dataclasses import replace
 
     from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
@@ -679,28 +759,24 @@ def test_the_sdk_hands_the_cli_the_plugin_and_one_allow_rule_per_skill(skills_ho
     opts = cli._options(brain.shell, brain.jobs)
     command = SubprocessCLITransport("hi", replace(opts, cli_path="/bin/true", can_use_tool=None))._build_command()
     assert command[command.index("--plugin-dir") + 1] == opts.plugins[0]["path"]
-    allowed = command[command.index("--allowedTools") + 1].split(",")
-    assert "Skill(alfred-skills:standup-notes)" in allowed and "Skill" not in allowed  # only the listed skills
-    assert opts.setting_sources == []  # still no user or project settings
+    assert "Skill" in command[command.index("--allowedTools") + 1].split(",")  # every skill found, Alfred's among them
+    assert opts.setting_sources == ["user", "project", "local"]  # the user's own Claude Code setup
 
 
 @pytest.mark.parametrize("kind", ["code_change", "code_question", "research"])
 def test_tasks_get_the_usable_skills_too(skills_home, tmp_path, monkeypatch, kind):
     monkeypatch.setattr(worker, "DATA_DIR", tmp_path / "data")
-    use_task_cache(monkeypatch, tmp_path / "cache")
     (tmp_path / "plain").mkdir()
     monkeypatch.setattr(worker.projects, "find", lambda name: type("P", (), {"path": tmp_path / "plain"}))
     home.save("standup-notes", "Writes the standup.", STANDUP)
     task = worker_task(kind=kind, worktree=str(tmp_path / "plain"), in_place=1, branch="main",
                        project=None if kind == "research" else "video-agent")
     opts = worker._options(task, Asking())
-    assert opts.skills == ["alfred-skills:standup-notes"] and "Skill" in opts.tools
+    assert opts.skills == "all" and opts.tools is None
     assert opts.plugins == [{"type": "local", "path": str(tmp_path / "data" / "tasks" / "9" / "alfred-skills")}]
-    flags = json.loads(opts.settings)
-    assert flags["disableAllHooks"] is True and flags["disableSkillShellExecution"] is True
-    assert flags["attribution"] == ATTRIBUTION
-    prompt = opts.system_prompt if isinstance(opts.system_prompt, str) else opts.system_prompt["append"]
-    assert "alfred-skills:standup-notes: Writes the standup." in prompt
+    assert not (tmp_path / "plain" / "alfred-skills").exists()  # never in the project's own folder
+    assert json.loads(opts.settings)["attribution"] == ATTRIBUTION
+    assert "alfred-skills:standup-notes: Writes the standup." in opts.system_prompt["append"]
 
 
 # ── The learning review ─────────────────────────────────────────

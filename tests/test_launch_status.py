@@ -145,8 +145,8 @@ def test_access_granted_before_a_run_begins_comes_with_it_from_the_start(env, mo
 
     async def main():
         r = runner.Runner()
-        task = r.start("research", "list", "List them")
-        r.reply(task["id"], "Run the build too.", ["shell"])  # before its job's first step
+        task = r.start("code_question", "list", "List them", "video-agent")
+        r.reply(task["id"], "Publish it too.", ["artifacts"])  # before its job's first step
         nudge = r.store.get(task["id"])["nudges"]
         gate.set()
         await settle(r)

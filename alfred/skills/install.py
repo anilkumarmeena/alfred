@@ -1,4 +1,4 @@
-"""Fetch skills from a GitHub repo, a folder in one, or an https zip link.
+"""Fetch skills from a GitHub repo, a folder in one, an https zip link, or Claude Code's own skills on this computer.
 
 `stage` downloads into data/skills/.staging/<id> (never loaded by sessions), unpacking only the requested folder:
 paths escaping the folder are refused, symlinks left out, size capped (MAX_DOWNLOAD, MAX_FILES, MAX_UNPACKED). It
@@ -7,9 +7,15 @@ until the user says yes; `install` then hands one skill to home.install. Stale s
 
 https only, never local addresses, redirects included (browser's checks). GitHub links map to codeload.github.com
 archives of the default branch unless the link names one.
+
+"claude" copies Claude Code's skills instead (`claude_skills`): the user's own, those synced from their Claude
+account, and installed plugins'. They're staged and installed the same way: same limits, links left out, frontmatter
+stripped, scripts off until reviewed and approved.
 """
 
+import asyncio
 import io
+import json
 import logging
 import os
 import re
@@ -24,6 +30,7 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
+from alfred import config
 from alfred.safety import urls
 from alfred.skills import home, review
 
@@ -38,6 +45,8 @@ STAGING_HOURS = 24
 SKIPPED = {".git", "__MACOSX", "node_modules", "__pycache__", ".DS_Store"}  # never unpacked
 _GITHUB = {"github.com", "www.github.com"}
 _SHORT = re.compile(r"([A-Za-z0-9][\w.-]*)/([\w.-]+)")  # owner/repo
+CLAUDE = "Claude Code"  # origin of skills copied from Claude Code's folders
+_CLAUDE_SOURCES = {"claude", "claude code", "claude-code", "claude skills", "claude code skills"}
 
 
 @dataclass
@@ -265,7 +274,10 @@ def describe(where: Path, rel: str, left_out: list[str]) -> Found:
 
 
 async def stage(text: str, transport: httpx.AsyncBaseTransport | None = None) -> Staged:
-    """Fetch `text` into a new stage and find its skills. Raises ValueError if the fetch fails or finds none."""
+    """Fetch `text` (or copy Claude Code's skills, for "claude") into a new stage and find its skills. Raises
+    ValueError if the fetch fails or finds none."""
+    if is_claude(text):
+        return await asyncio.to_thread(stage_claude)
     source = parse(text)
     clear_old()
     sid = secrets.token_hex(4)
@@ -305,13 +317,142 @@ def staged_skill(sid: str, rel: str) -> Path:
     return where
 
 
+def is_claude(text: str) -> bool:
+    """Whether `text` asks for Claude Code's own skills rather than a link."""
+    return " ".join(text.lower().replace("'s", "").split()) in _CLAUDE_SOURCES
+
+
+def claude_dirs() -> list[Path]:
+    """Claude Code's config folders: the one Alfred's login uses and the user's own (~/.claude), each once."""
+    found: list[Path] = []
+    for d in (Path(config.CLAUDE_CONFIG_DIR), Path.home() / ".claude"):
+        if d.is_dir() and d.resolve() not in {f.resolve() for f in found}:
+            found.append(d)
+    return found
+
+
+def _json(path: Path) -> dict:
+    """A JSON file's object, or {} if it's missing or isn't one."""
+    try:
+        found = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+def _synced(base: Path, kind: str) -> list[Path]:
+    """The folder synced from the signed-in Claude account (<kind>/synced/<organization>_<account>), as Claude Code
+    picks it: other buckets are left from other sign-ins. Every bucket if the sign-in can't be read."""
+    kept = [base / ".claude.json"] + ([Path.home() / ".claude.json"] if base == Path.home() / ".claude" else [])
+    signed_in = next((a for f in kept if isinstance(a := _json(f).get("oauthAccount"), dict) and a), {})
+    buckets = sorted(d for d in (base / kind / "synced").glob("*") if d.is_dir())
+    if not (signed_in.get("organizationUuid") and signed_in.get("accountUuid")):
+        return buckets
+    return [d for d in buckets if d.name == f"{signed_in['organizationUuid']}_{signed_in['accountUuid']}"]
+
+
+def _plugin_skills(base: Path) -> list[Path]:
+    """Skills folders of the plugins Claude Code has installed and switched on, then of those synced from the Claude
+    account that its manifest lists (in <name>~g<generation> for later generations)."""
+    on = {k for k, v in (_json(base / "settings.json").get("enabledPlugins") or {}).items() if v}
+    found = [Path(i["installPath"]) / "skills"
+             for key, installs in (_json(base / "plugins" / "installed_plugins.json").get("plugins") or {}).items()
+             if key in on and isinstance(installs, list)
+             for i in installs if isinstance(i, dict) and isinstance(i.get("installPath"), str)]
+    for bucket in _synced(base, "plugins"):
+        for plugin in _json(bucket / "manifest.json").get("plugins") or []:
+            if isinstance(plugin, dict) and isinstance(name := plugin.get("name"), str) and "/" not in name:
+                found.append(bucket / (f"{name}~g{plugin['generation']}" if plugin.get("generation") else name) / "skills")
+    return found
+
+
+def claude_skills() -> dict[str, Path]:
+    """Skill folders Claude Code loads, by folder name: the user's own (skills/), those synced from their Claude
+    account, then plugins'. The first of each name wins, as the user's own come first."""
+    found: dict[str, Path] = {}
+    for base in claude_dirs():
+        for group in [base / "skills", *_synced(base, "skills"), *_plugin_skills(base)]:
+            if not group.is_dir():
+                continue
+            for where in sorted(group.iterdir()):
+                if not where.name.startswith(".") and where.is_dir() and (where / home.SKILL_FILE).is_file():
+                    found.setdefault(where.name, where.resolve())  # a skill linked in by hand is copied from its folder
+    return found
+
+
+def copy(found: dict[str, Path], into: Path) -> list[str]:
+    """Copy each skill folder into `into`/<name>, as `unpack` would: SKIPPED folders and links left out (returned, as
+    <name>/<path>), executable bits kept. Raises ValueError if they come to more than MAX_FILES or MAX_UNPACKED."""
+    count, total, left_out = 0, 0, []
+    for name, where in found.items():
+        for rel in home.files(where):
+            src = where / rel
+            if any(p in SKIPPED for p in PurePosixPath(rel).parts):
+                continue
+            if src.is_symlink():
+                left_out.append(f"{name}/{rel}")
+                continue
+            if not src.is_file():
+                continue
+            count += 1
+            total += (size := src.stat()).st_size
+            if count > MAX_FILES or total > MAX_UNPACKED:
+                raise ValueError(f"Claude Code's skills are too many to copy at once: over {MAX_FILES} files or "
+                                 f"{MAX_UNPACKED // 2**20} MB.")
+            target = into / name / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, target)
+            os.chmod(target, 0o755 if size.st_mode & 0o111 else 0o644)
+    return left_out
+
+
+def stage_claude() -> Staged:
+    """Copy Claude Code's skills into a new stage. Raises ValueError if it has none."""
+    found = claude_skills()
+    if not found:
+        raise ValueError("Claude Code has no skills on this computer: none of its own, synced from the Claude account, "
+                         "or in its plugins.")
+    clear_old()
+    sid = secrets.token_hex(4)
+    root = staging() / sid / "files"
+    root.mkdir(parents=True)
+    try:
+        left_out = copy(found, root)
+        skills = [describe(root / name, name, left_out) for name in found]
+    except BaseException:
+        shutil.rmtree(staging() / sid, ignore_errors=True)
+        raise
+    log.info("staged %s from %s: %s", sid, CLAUDE, ", ".join(s.name for s in skills))
+    return Staged(sid, CLAUDE, root, skills, left_out)
+
+
+def unchanged(sid: str, skill: Found) -> bool:
+    """Whether the staged skill, once installed, would be the same as the one of its name already here."""
+    where, have = staged_skill(sid, skill.rel), home.folder(skill.name)
+    if not (have / home.SKILL_FILE).is_file():
+        return False
+    try:
+        text, _ = home.sanitize((where / home.SKILL_FILE).read_text(encoding="utf-8"), skill.name)
+    except (OSError, UnicodeDecodeError, ValueError):
+        return False
+    return text == home.skill_md(have) and home.digest(where) == home.digest(have)
+
+
 def install(sid: str, rel: str, name: str, origin: str) -> home.Skill:
     """Sanitize and rename the staged SKILL.md, install it as `name`, then delete the stage."""
-    where = staged_skill(sid, rel)
+    return install_many(sid, [(rel, name)], origin)[0]
+
+
+def install_many(sid: str, picks: list[tuple[str, str]], origin: str) -> list[home.Skill]:
+    """Install each staged (rel, name) as `install` does, then delete the stage."""
+    try:
+        return [_install(staged_skill(sid, rel), name, origin) for rel, name in picks]
+    finally:
+        shutil.rmtree(staging() / sid, ignore_errors=True)
+
+
+def _install(where: Path, name: str, origin: str) -> home.Skill:
     skill_md = where / home.SKILL_FILE
     text, _ = home.sanitize(skill_md.read_text(encoding="utf-8"), name)
     skill_md.write_text(text, encoding="utf-8")
-    try:
-        return home.install(where, name, origin)
-    finally:
-        shutil.rmtree(staging() / sid, ignore_errors=True)
+    return home.install(where, name, origin)

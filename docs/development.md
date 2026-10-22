@@ -63,7 +63,7 @@ alfred/
 │  ── foundations ────────────────────────────────────────────────────────────────────────
 ├── state/           memory, preferences, settings, to-dos, vocabulary, voiceprints, history,
 │                    the conversation in progress
-├── safety/          command and script rules, the host walls, URL guard, consent, risk kinds,
+├── safety/          command and script rules, host jobs, URL guard, consent, risk kinds,
 │                    remembered approvals, the hidden-instruction scan
 ├── llm/             the only code that talks to Claude: roles, one-shot calls, sessions,
 │                    the SDK facade, logins, usage limits, retries
@@ -95,7 +95,7 @@ docs/                these pages
 
 - **`VoiceSession`** routes each turn and speaks tasks' requests.
 - **`claude.ask_json`** (`alfred/llm/claude.py`) is the one way a short model call gives a verdict: JSON checked against a schema. Calls name a **role** (`Role.ANNOUNCE`), never a model.
-- **The guards:** `commands.py` (what's risky) and `scripts.py` (what a script's code does), `gates/shell.py` / `gates/draft_gate.py` (spoken yes), `host.py` (the host walls: Seatbelt on macOS, bubblewrap on Linux), `gates/injection.py` / `scan.py`.
+- **The guards:** `commands.py` (what's risky) and `scripts.py` (what a script's code does), `gates/shell.py` / `gates/draft_gate.py` (spoken yes), `tasks/gate.py` (`AutoGate`: what auto mode stops to ask about goes to the phone), `gates/injection.py` / `scan.py`. Sessions themselves run in Claude Code's auto mode (`llm/claude.py` `auto_mode`).
 - **The Google and Mac tools** come from **[AI Armory](https://github.com/anilkumarmeena/ai-armory)**, a git dependency pinned to a commit in `pyproject.toml`, registered in `alfred/tools/google.py` and `alfred/tools/mac.py`, and imported only through `alfred/integrations/armory.py`. The Linux desktop tools are Alfred's own: `alfred/tools/desktop.py` on top of `alfred/core/desktop.py`.
 - **OS differences** stay behind `platform.MAC` / `platform.LINUX` checks; speech goes through `alfred/media/whisper.py`, which hides whether MLX Whisper or faster-whisper runs.
 
@@ -135,14 +135,12 @@ The architecture test's baseline (`tests/architecture_baseline.txt`) is **empty*
 | 🧪 | `make test` | The pytest suite in `tests/`, plus the web app's vitest tests |
 | 🌐 | `npm test --prefix web` | The web app's tests alone |
 | ✅ | `make check` | Byte-compiles `alfred/`, **pyright**, web type-check, imports every entry module |
-| 🧱 | `make host-check` | The real sandbox walls around tasks' commands (Seatbelt or bubblewrap) |
 | 🖼️ | `make artifact-check` | Publishes a tiny claude.ai artifact on Alfred's login, the way tasks do |
 
 - **`make test`** fetches pytest and **pytest-xdist** with `uv run --with pytest --with pytest-xdist`, and runs the suite **in parallel**: `-n auto --maxprocesses=4`, a process a core and at most 4, which an 8 GB Mac has the memory for. Merge checks run it the same way (`PARALLEL` in `alfred/tasks/merge_check.py`). For one process (a debugger, `-x`), drop `-n` or pass `-n 0`. The vitest tests are skipped if `web/node_modules` is missing (`make web-install`).
 - **A run of the suite notes what it ran** against the code it ran on (`tests/conftest.py`, kept in the repo's git dir), so merging exactly that code needn't run it again. In parallel, only xdist's controller notes it, with every worker's results.
 - **Pyright** is a pinned version, errors only. Its softer rules are listed under `[tool.pyright]` in `pyproject.toml`; `uv run --with pyright pyright` shows their warnings.
 - **`make check`** passes with **only one speech engine installed**: MLX Whisper on Apple silicon, faster-whisper elsewhere (`pyproject.toml` picks by platform marker), and the other's imports are marked for pyright.
-- **`make host-check`** checks that secrets and Alfred's files are blocked, while PyPI, the task cache and the SSH agent stay reachable, and signing in over SSH works for each SSH git host in your projects' remotes (skipped when none use SSH). Each OS has its own list: macOS adds code signing; Linux adds the session bus, other processes, `sudo` and new files at the top of home.
 - **`make artifact-check`** takes `FILE=page.html` to publish a real page.
 
 > [!NOTE]
@@ -156,7 +154,6 @@ The suite runs on **macOS and Linux**.
 |:-:|---|---|
 | 🔀 | **Platform branches** | Run everywhere by faking the OS: `monkeypatch.setattr(platform, "MAC", False)` and `"LINUX", True` (see `tests/test_desktop.py`, `tests/test_platform.py`) |
 | 🍎 | **macOS-only** | `skipif`-marked: real `screencapture`, `sips`, `textutil`, `afconvert`, the Mac tools, memory footprints |
-| 🐧 | **Linux-only** | `skipif`-marked: the real bubblewrap walls (`needs_bwrap` in `tests/test_host.py`) |
 | 🎤 | **Speech backends** | `tests/test_whisper.py` fakes both MLX Whisper and faster-whisper, so neither needs to be installed |
 
 - **Writing a platform test:** fake `platform.MAC` / `platform.LINUX` (and `WSL` where it matters) rather than skipping, so both branches run on every machine. Skip only when the test needs a real program or OS feature.

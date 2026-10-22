@@ -3,8 +3,8 @@
   code_change    code-searcher (read-only), test-runner
   code_question  code-searcher
   other kinds    web-researcher
-Their tool calls pass the same gate and sandbox, which refuses any edit from them. `Subagents` logs starts and ends
-and labels their activity.
+They run in the task's auto mode, told not to edit; `own_models` keeps each on its role's model. `Subagents` logs
+starts and ends and labels their activity.
 """
 
 from dataclasses import replace
@@ -14,6 +14,7 @@ from alfred.llm.roles import Role
 from alfred.llm.sdk import (
     TERMINAL_TASK_STATUSES,
     AgentDefinition,
+    HookMatcher,
     TaskStartedMessage,
     TaskUpdatedMessage,
     ToolResultBlock,
@@ -66,6 +67,21 @@ and prefer recent, primary sources.
     maxTurns=30,
 )
 
+
+
+def own_models(helpers) -> list[HookMatcher]:
+    """A PreToolUse hook taking the model out of an Agent call that starts one of Alfred's `helpers`, so each runs on
+    its role's model. Tasks asked for Opus code-searchers 110 times on 14 October 2026 ($40) where Haiku does."""
+    names = set(helpers)
+
+    async def hook(data: dict, _tool_use_id, _ctx) -> dict:
+        args = data.get("tool_input") or {}
+        if data.get("tool_name") not in _AGENT_TOOLS or args.get("subagent_type") not in names or "model" not in args:
+            return {}
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                       "updatedInput": {k: v for k, v in args.items() if k != "model"}}}
+
+    return [HookMatcher(hooks=[hook])]
 
 def _agents(kind: str) -> dict[str, AgentDefinition]:
     """Subagents available to a task of `kind`, by name, with the user's name filled in."""

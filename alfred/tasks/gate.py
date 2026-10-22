@@ -1,28 +1,18 @@
-"""Permission gate for a task session's tool calls (`TaskGate`).
+"""The fallback that asks, for a task's session (`AutoGate`), and the rules every task keeps.
 
-  reads   task folders, the user's projects (TASK_READ_DIRS), voice session logs
-  writes  the task's own folder (plus `more_writes` with the projects grant)
-  host    host_run / start_job go to the host gate (alfred.tasks.host_tools)
-  calls   a connection's changing tools go to the connection gate (alfred.tasks.connection_calls)
-  images  docs_insert_image uploads only local files the task may read or write
-Secrets are hidden from file tools (`_secret`) and from the sandbox via Read deny rules (`_secret_rules`).
+A task runs in Claude Code's auto mode (alfred.tasks.worker), whose own check clears each action; can_use_tool is
+reached only by ask rules (a connection's changes) and when auto mode stops to ask.
 """
 
+import json
 import logging
-import re
-import shlex
-from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 
-from alfred.config import CLAUDE_CONFIG_DIR, HOME_DIR, ROOT, SECRETS_DIR, TASK_CACHE_DIR
-from alfred.llm import claude_logins
-from alfred.llm.claude import deny
-from alfred.llm.sdk import HookMatcher, PermissionResultAllow, PermissionResultDeny, ToolPermissionContext
+from alfred.llm.sdk import PermissionResultAllow, PermissionResultDeny
 from alfred.safety import commands
 from alfred.storage import profile
 from alfred.tasks.connection_calls import ConnectionGate
-from alfred.tasks.host_tools import HOST_COMMANDS, _inside, _resolve, answer
-from alfred.tasks.subagents import _AGENT_TOOLS
+from alfred.tasks.host_tools import answer, approval_item
 
 log = logging.getLogger("alfred.tasks.gate")
 
@@ -30,265 +20,45 @@ ARTIFACT = "Artifact"
 
 _FILE_ARG = {"Read": "file_path", "Glob": "path", "Grep": "path", "Edit": "file_path", "Write": "file_path", "NotebookEdit": "notebook_path"}
 _WRITES = {"Edit", "Write", "NotebookEdit"}
-_GIT_READS = {"log", "show", "diff", "blame", "status", "shortlog", "ls-files", "rev-parse"}
-_GIT_BLOCKED = ("--output", "--ext-diff", "--no-index")  # write files, run programs, or read outside the repo
-_SHELL_META = re.compile(r"[;&|`$<>()\\\n]")
-# In-place tasks share the user's checkout: deny git commands that commit, push, move branches or drop changes.
-# Commits are left to TaskGate.checkout, which lets one through when the user ordered it. Host side: commands.refused
+# In-place tasks share the user's checkout: deny git commands that push, move branches or drop their changes
 _IN_PLACE_DENIED = [f"Bash(git {c}:*)" for c in commands.IN_PLACE_GIT if c != "commit"]
-_ARTIFACT_ACTIONS = {"publish", "read", "list"}
-_ARTIFACT_PATHS = ("file_path", "file_paths", "out_dir", "paths")  # Artifact args naming local paths
-DOC_IMAGES = "mcp__alfred__docs_insert_image"  # uploads local image files, so their paths are checked
-
-
-# ── Secrets ─────────────────────────────────────────────────────
-# Enforced twice: `TaskGate` for file tools, and Read deny rules (`_secret_rules`) that the CLI applies to file tools
-# and the sandbox. secrets/ holds the Claude config; its voice session logs are the only readable part.
-# Patterns come from alfred.safety.commands, shared with the voice shell and host profile.
-
-def _secret(path: Path) -> bool:
-    """Whether resolved `path` is secret (secrets folders, .env, keys, credentials); voice logs are exempt, and so are
-    names that only look secret inside the task cache (package caches, written only by sandboxed commands)."""
-    if path.is_relative_to(claude_logins.voice_logs().resolve()):
-        return False
-    if path.is_relative_to(TASK_CACHE_DIR.resolve()):
-        return commands.secret_place(path)
-    return commands.secret_path(path)
-
-
-def _hide_except(root: Path, keep: Path) -> list[Path]:
-    """Paths to hide so all of `root` is hidden except `keep`: every sibling along the path down to it."""
-    if not keep.is_relative_to(root):
-        return [root]
-    hidden, folder = [], root
-    for part in keep.relative_to(root).parts:
-        try:
-            hidden += [entry for entry in folder.iterdir() if entry.name != part]
-        except OSError:  # doesn't exist (yet): nothing below to hide
-            break
-        folder = folder / part
-    return hidden
-
-
-def _secret_folders(folder: Path, keep: tuple[Path, ...]) -> list[str]:
-    """Deny rules for every secrets/ folder under `folder`, skipping the paths to `keep` (see `_hide_except`)."""
-    if not any(k.is_relative_to(folder) for k in keep):
-        return [f"Read(/{folder}/**/secrets/**)"] + ([f"Read(/{folder}/**)"] if folder.name == "secrets" else [])
-    if folder in keep:
-        return []
-    try:
-        return [r for entry in folder.iterdir() if entry.is_dir() for r in _secret_folders(entry, keep)]
-    except OSError:
-        return []
-
-
-def _secret_files(folder: Path, skip: Path) -> list[str]:
-    """Deny rules for secret files (SECRET_PATTERNS) anywhere under `folder` except in `skip`, walking down to it."""
-    if not skip.is_relative_to(folder):
-        return [f"Read(/{folder}/{p})" for p in commands.SECRET_PATTERNS]
-    if skip == folder:
-        return []
-    rules = [f"Read(/{folder}/{p.removeprefix('**/')})" for p in commands.SECRET_PATTERNS]  # its own files
-    try:
-        return rules + [r for entry in folder.iterdir() if entry.is_dir() for r in _secret_files(entry, skip)]
-    except OSError:
-        return rules
-
-
-def _secret_rules(read_dirs: list[Path]) -> dict:
-    """CLI settings with Read deny rules for every secret the task could otherwise see."""
-    keep = claude_logins.voice_logs().resolve()
-    hidden = {p for root in (SECRETS_DIR, Path(CLAUDE_CONFIG_DIR)) for p in _hide_except(root.resolve(), keep)}
-    rules = [r for p in sorted(hidden) for r in (f"Read(/{p})", f"Read(/{p}/**)")]
-    rules += [r for p in commands.HOME_SECRETS for r in (f"Read({p})", f"Read({p}/**)")]
-    # The rest of Alfred's own secrets (.env, the browser profile), and the install's folder like a read folder: once
-    # ALFRED_HOME is outside the checkout, no read folder covers its .env
-    walled = (SECRETS_DIR.resolve(), Path(CLAUDE_CONFIG_DIR).resolve())
-    own = dict.fromkeys(Path(p).resolve() for p in commands.ALFRED_SECRETS)
-    rules += [r for p in own if p not in walled for r in (f"Read(/{p})", f"Read(/{p}/**)")]
-    # The task cache is left out: package caches (Go, Gradle, typeshed) hold names that only look secret
-    cache = TASK_CACHE_DIR.resolve()
-    for folder in dict.fromkeys([*(d.resolve() for d in read_dirs), HOME_DIR.resolve()]):
-        rules += _secret_files(folder, cache)
-        rules += _secret_folders(folder, (SECRETS_DIR.resolve(), cache))
-    return {"permissions": {"deny": list(dict.fromkeys(rules))}}
-
-
-def _alfred_own(path: Path) -> bool:
-    """Whether `path` is Alfred's code, its install's files (ALFRED_HOME), db or memory, which no grant may write.
-
-    A task's own folder under ROOT or ALFRED_HOME is fine: write roots are checked before this."""
-    mine = profile.current()
-    return (any(path.is_relative_to(own.resolve()) for own in (ROOT, HOME_DIR))
-            or path in (mine.db.resolve(), mine.memory_file.resolve()))
-
-
-def _read_only_git(command: str) -> bool:
-    if _SHELL_META.search(command):
-        return False
-    try:
-        argv = shlex.split(command)
-    except ValueError:
-        return False
-    return (
-        len(argv) >= 2 and argv[0] == "git" and argv[1] in _GIT_READS
-        and not any(a.startswith(_GIT_BLOCKED) for a in argv[2:])
-    )
-
 
 Decision = PermissionResultAllow | PermissionResultDeny
 
-
-def own_model(args: dict) -> dict:
-    """An Agent call's input without a model of the task's choosing: each helper runs on its role's model
-    (alfred.tasks.subagents). Tasks asked for Opus code-searchers 110 times on 14 October 2026 ($40) where Haiku does."""
-    return {k: v for k, v in args.items() if k != "model"}
+ASKED = "needs your yes before auto mode lets it run"  # why, when the command itself doesn't say
+SHOWN_ARGS = 1500  # chars of a tool's arguments shown in its request
 
 
-class TaskGate:
-    """The session's can_use_tool; denies anything it doesn't handle.
+class AutoGate:
+    """can_use_tool for a task in auto mode (alfred.llm.claude.auto_mode). Auto mode's own check clears or blocks each
+    action, so this is reached only by ask rules (a connection's changes, decided by `connections`) and when auto mode
+    stops to ask: the user answers on their phone, as for a risky host command, and a yes lets the identical call
+    through once."""
 
-    `bash` approves unsandboxed Bash (None: deny all). `agents`: allowed subagents; `editors`: those that may edit
-    (project ones only). `host_gate` decides host_run/start_job, `connections` a connection's changing tools. `more_writes`: extra write roots from the projects
-    grant, never secrets or Alfred's files. `commit_ordered` (the user's own checkout, in place): whether they ordered
-    a commit, which sandboxed Bash may then make (`checkout`).
-
-    Allow rules from project skills skip can_use_tool, so `hook` (PreToolUse) runs the same checks on every call."""
-
-    def __init__(self, cwd: Path, read_roots: list[Path], write_roots: list[Path], bash: Callable[[str], bool] | None = None,
-                 agents: Iterable[str] = (), host_gate: Callable | None = None, editors: Iterable[str] = (),
-                 more_writes: Iterable[Path] = (), commit_ordered: Callable[[], bool | Awaitable[bool]] | None = None,
-                 connections: ConnectionGate | None = None) -> None:
-        self.cwd, self.read_roots, self.write_roots, self.more_writes = cwd, read_roots, write_roots, list(more_writes)
-        self.bash, self.agents, self.host_gate, self.editors = bash, set(agents), host_gate, set(editors)
-        self.commit_ordered, self.connections = commit_ordered, connections
-        # Decided once per call: looking again would ask the user twice or spend a one-time yes twice
-        self.once = (set(HOST_COMMANDS) if host_gate is not None else set()) | (connections.tools if connections else set())
-        # Tools `hook` checks: all the gate decides, plus sandboxed Bash in the user's own checkout
-        self.checked = (_AGENT_TOOLS | set(_FILE_ARG) | {ARTIFACT, DOC_IMAGES} | self.once
-                        | ({"Bash"} if bash is not None or commit_ordered is not None else set()))
-        self.kinds: dict[str, str] = {}  # subagent id -> type, from PreToolUse
-        self.decided: dict[str, Decision] = {}  # decisions on `once` tools made by `hook`, by tool_use_id
+    def __init__(self, task_id: int, cwd: Path, reporter, connections: ConnectionGate | None = None) -> None:
+        self.task_id, self.cwd, self.reporter, self.connections = task_id, cwd, reporter, connections
 
     async def __call__(self, name: str, args: dict, ctx) -> Decision:
-        if name in self.once and (done := self.decided.pop(getattr(ctx, "tool_use_id", None) or "", None)):
-            return done  # don't ask the user twice or spend a one-time approval again
-        return await answer(self.decide(name, args, ctx))
-
-    def decide(self, name: str, args: dict, ctx) -> Decision | Awaitable[Decision]:
-        """The decision; for host commands an awaitable one (the host gate may ask the runner, perhaps over a link)."""
-        cwd = self.cwd
-        if name in HOST_COMMANDS and self.host_gate is not None:
-            return self.host_gate(name, args, ctx)
         if self.connections and name in self.connections.tools:
-            return self.connections(name, args, ctx)
-        if name in _AGENT_TOOLS:
-            if args.get("subagent_type") in self.agents:
-                return PermissionResultAllow(updated_input=own_model(args))
-            return PermissionResultDeny(message=f"The subagents in this task are {', '.join(sorted(self.agents)) or 'none'}.")
-        agent = getattr(ctx, "agent_id", None)
-        if name in _WRITES | {ARTIFACT} and agent and self.kinds.get(agent) not in self.editors:
-            return PermissionResultDeny(message="Subagents don't edit files; report back and the task's agent will make the change.")
-        if name == ARTIFACT:
-            return self.artifact(args)
-        if name == DOC_IMAGES:
-            return self.doc_images(args)
-        if name in _FILE_ARG:
-            path = args.get(_FILE_ARG[name]) or str(cwd)
-            if name not in _WRITES and _secret(_resolve(path, cwd)):
-                return PermissionResultDeny(message=f"{name} can't read secrets (.env files, keys, credentials, secrets folders).")
-            roots = self.write_roots if name in _WRITES else self.read_roots
-            if roots and _inside(path, cwd, roots):
-                return PermissionResultAllow()
-            if name in _WRITES and self.more_writes and _inside(path, cwd, self.more_writes):
-                if _secret(target := _resolve(path, cwd)) or _alfred_own(target):
-                    return PermissionResultDeny(message=f"{name} can't change secrets or Alfred's own files.")
-                return PermissionResultAllow()
-            where = " and ".join(str(r) for r in roots + (self.more_writes if name in _WRITES else [])) or "nothing"
-            return PermissionResultDeny(message=f"{name} is limited to {where} in this task.")
-        if name == "Bash":
-            if self.bash is None:  # sandboxed: the CLI asks for some commands anyway (its own path checks)
-                if not args.get("dangerouslyDisableSandbox"):
-                    return PermissionResultAllow()  # the sandbox's walls still apply
-                return PermissionResultDeny(message="Commands must run inside the sandbox.")
-            if self.bash(args.get("command", "")):
-                return PermissionResultAllow()
-            return PermissionResultDeny(message="Only single read-only git commands are allowed, without pipes, redirection or chaining.")
-        return PermissionResultDeny(message=f"{name} isn't available in this task.")
-
-    def artifact(self, args: dict) -> Decision:
-        """Allow only publish/read/list, with every local path inside the write roots and not secret."""
-        if (action := args.get("action") or "publish") not in _ARTIFACT_ACTIONS:
-            return PermissionResultDeny(message=f"Tasks only publish, read and list artifacts, not {action}. Give the link "
-                                                f"in your summary for {profile.name()} to do the rest.")
-        paths: list = []
-        for key in _ARTIFACT_PATHS:
-            value = args.get(key)
-            paths += [value] if isinstance(value, str) else [*value, *value.values()] if isinstance(value, dict) else value or []
-        for path in paths:
-            if not isinstance(path, str) or _secret(_resolve(path, self.cwd)) or not _inside(path, self.cwd, self.write_roots):
-                where = " and ".join(str(r) for r in self.write_roots) or "nowhere"
-                return PermissionResultDeny(message=f"Artifact only publishes and saves files in {where}, and never secrets.")
-        return PermissionResultAllow()
-
-    def doc_images(self, args: dict) -> Decision:
-        """Allow https links, and local images only where the task may read or write, never secrets."""
-        images = args.get("images")
-        if not isinstance(images, list):
-            return PermissionResultAllow()  # the tool refuses it itself
-        roots = self.read_roots + self.write_roots
-        for item in images:
-            source = item.get("image") if isinstance(item, dict) else item
-            path = source.strip() if isinstance(source, str) else ""
-            if not path or path.lower().startswith("https://"):
-                continue  # a link, or not an image at all: the tool refuses that itself
-            if _secret(_resolve(path, self.cwd)) or not _inside(path, self.cwd, roots):
-                where = f" and images in {' and '.join(str(r) for r in roots)}, never secrets" if roots else ""
-                return PermissionResultDeny(message=f"docs_insert_image takes https links{where} in this task.")
-        return PermissionResultAllow()
-
-    async def checkout(self, command: str) -> Decision:
-        """Sandboxed Bash in the user's own checkout: no git that changes it, except a plain commit they ordered."""
-        if not (found := commands.in_place_git(command)):
+            return await answer(self.connections(name, args, ctx))
+        item = self.item(name, args)
+        if await answer(self.reporter.cleared(self.task_id, item)):
+            log.warning("task %s runs, as agreed: %s %s", self.task_id, name, item["command"][:200])
             return PermissionResultAllow()
-        if set(found) == {"commit"} and await self._commit_ordered():
-            return PermissionResultAllow()
-        name, other = profile.name(), next((sub for sub in found if sub != "commit"), "")
-        if other == "commit --amend":
-            return PermissionResultDeny(message=f"Not run: git commit --amend rewrites a commit of {name}'s; make a new one.")
-        if other:
-            return PermissionResultDeny(message=f"Not run: git {other} changes {name}'s own checkout, which in-place "
-                                                "tasks leave to them; list it in your summary instead.")
-        return PermissionResultDeny(message=f"Not run: commit here only when {name}'s own words ask for one. Leave "
-                                            "your changes uncommitted and list the files you changed in your summary.")
+        if getattr(ctx, "agent_id", None):
+            return PermissionResultDeny(message=f"Not done: it needs {profile.name()}'s go-ahead, and only the task's own "
+                                                "agent can ask for that. Report back what you wanted to do instead.")
+        approval = await answer(self.reporter.request_approval(self.task_id, item))
+        return PermissionResultDeny(message=(
+            f"Not done yet: it needs {profile.name()}'s go-ahead. Alfred has asked them (request {approval['id']}). Carry "
+            "on with anything that doesn't depend on it; if nothing's left, end your turn with one short line. When they "
+            f"answer you'll get a message; if it's a yes, make the identical {name} call again, once."))
 
-    async def _commit_ordered(self) -> bool:
-        """Whether the user ordered a commit; no on any failure, as a hook that fails lets the command run."""
-        try:
-            return bool(self.commit_ordered and await answer(self.commit_ordered()))
-        except Exception:
-            log.exception("couldn't check for an order to commit")
-            return False
-
-    async def pre_tool_use(self, data: dict, tool_use_id: str | None, _ctx) -> dict:
-        if agent := data.get("agent_id"):
-            self.kinds[agent] = data.get("agent_type") or ""
-        if (name := data.get("tool_name")) not in self.checked:
-            return {}
-        args = data.get("tool_input") or {}
-        if name == "Bash" and self.bash is None:  # sandboxed; can_use_tool denies asking to leave the sandbox
-            decision = await self.checkout(str(args.get("command") or ""))
-        else:
-            decision = await answer(self.decide(name, args, ToolPermissionContext(tool_use_id=tool_use_id, agent_id=agent)))
-        if isinstance(decision, PermissionResultDeny):
-            return deny(decision.message)
-        if name in self.once and tool_use_id:
-            self.decided[tool_use_id] = decision  # reused by can_use_tool if it gets called
-        if name in _AGENT_TOOLS and (helper := own_model(args)) != args:  # also when an allow rule skips can_use_tool
-            return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": helper}}
-        return {}  # no opinion: deny rules and can_use_tool still apply
-
-    @property
-    def hook(self) -> list[HookMatcher]:
-        return [HookMatcher(hooks=[self.pre_tool_use])]
+    def item(self, name: str, args: dict) -> dict:
+        """The approval request: for Bash its command and what makes it risky, else the tool and its arguments."""
+        if name == "Bash" and (command := str(args.get("command") or "").strip()):
+            return approval_item(name, {"command": command}, self.cwd, commands.describe(command, cwd=self.cwd) or ASKED)
+        shown = json.dumps(args, sort_keys=True, ensure_ascii=False)
+        return {"tool": name, "command": f"{name} {shown[:SHOWN_ARGS]}", "folder": str(self.cwd), "why": ASKED,
+                "remember": {"pieces": [], "never": "auto mode asks about each one"}}
 

@@ -927,24 +927,17 @@ def test_tidying_removes_ended_tasks_temp_folders_after_a_week(db, tmp_path, mon
     assert folders["running"].exists() and folders["recent"].exists() and (temp / "task-notes").exists()
 
 
-def test_the_task_caches_uv_packages_are_pruned_weekly_while_no_task_runs(db, tmp_path, monkeypatch):
+def test_the_package_caches_sandboxed_tasks_kept_are_removed(db, tmp_path, monkeypatch):
     cache = tmp_path / "cache"
-    (cache / "uv").mkdir(parents=True)
+    for old in ("uv", "npm", "go-build"):
+        (cache / old / "pkg").mkdir(parents=True)
+    (cache / ".uv-pruned").touch()
+    (cache / "tmp" / "task-3").mkdir(parents=True)  # a task's temp folder stays while the task is about
     monkeypatch.setattr(scheduler, "TASK_CACHE_DIR", cache)
-    ran = []
-
-    async def run_try(*argv, env=None, **_):
-        ran.append((argv, env["UV_CACHE_DIR"]))
-        return 0, "Removed 12 files (40.0MiB)"
-
-    monkeypatch.setattr(scheduler.proc, "run_try", run_try)
-    busy = type("R", (), {"store": Store(), "jobs": {1: None}})()
-    asyncio.run(Scheduler(busy, None).prune())
-    assert ran == []  # a running task may be installing from it
-    idle = type("R", (), {"store": Store(), "jobs": {}})()
-    asyncio.run(Scheduler(idle, None).prune())
-    asyncio.run(Scheduler(idle, None).prune())  # within the week: not again
-    assert ran == [(("uv", "cache", "prune"), str(cache / "uv"))]
+    store = Store()
+    store.create("research", "r", "look", None)
+    asyncio.run(Scheduler(type("R", (), {"store": store, "jobs": {}})(), None).prune())
+    assert sorted(p.name for p in cache.iterdir()) == ["tmp"]
 
 
 # ── The voice tools ─────────────────────────────────────────────

@@ -97,12 +97,9 @@ def _status() -> int:
 def _check() -> int:
     import asyncio
 
-    from alfred.apps import host_check
     from alfred.node import agent, bundles, home, link
 
     good = True
-    print("Walls around tasks' commands:")
-    good &= asyncio.run(host_check.check())
     pairing = home.pairing()
     print(f"{'ok  ' if pairing else 'FAIL'}  paired" + (f" with {pairing['main']}" if pairing else ": make node-pair"))
     good &= bool(pairing)

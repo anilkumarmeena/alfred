@@ -342,7 +342,7 @@ def test_an_ordinary_failure_is_fixed_then_rerun_and_the_rerun_says_it_all(env, 
     assert (fixer["kind"], fixer["project"], fixer["fixes"], fixer["title"]) == \
            ("code_change", "video-agent", first["id"], "Fix the produce run")
     for part in ("exit code 3", "ffmpeg: not found", command, str(env["project"]), f"Command task {first['id']}",
-                 "Never run the command yourself", "secrets are hidden from you", "Alfred runs the command once more",
+                 "Never run the command yourself", "Alfred runs it itself once you finish", "Alfred runs the command once more",
                  "with its keys", "whether the cause is now dealt with"):
         assert part in briefs[0]
     assert first["status"] == "failed" and command_jobs.spec(first)["fix_task"] == fixer["id"]
@@ -507,8 +507,8 @@ def test_a_fix_is_rerun_unless_its_summary_is_read_as_saying_the_cause_remains(m
     monkeypatch.setattr(claude, "ask_flag", flag)
     for answer, again in ((True, True), (False, False), (None, True)):  # None: the call failed
         assert asyncio.run(command_jobs.wants_rerun("Fixed the path.")) is again
-    # the verdict knows the fix task couldn't run it for want of hidden keys, which the rerun has
-    assert "secrets are hidden from it" in command_jobs.rerun_system()
+    # the verdict knows the fix task doesn't run it itself, which the rerun does, with its keys
+    assert "doesn't run the command itself" in command_jobs.rerun_system()
 
 
 # ── Scheduled commands ──────────────────────────────────────────
@@ -1138,7 +1138,7 @@ def test_the_schedule_tools_that_can_keep_a_command_are_never_allowed_outright()
 
 def test_a_command_task_is_never_stalled():
     task = {"id": 1, "kind": COMMAND, "status": "running", "updated": 0}
-    assert stall.check(task, None, stall.Pulse(), None, now=10 ** 9) is None
+    assert stall.check(task, None, stall.Pulse(), now=10 ** 9) is None
 
 
 def test_durations():

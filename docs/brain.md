@@ -40,7 +40,7 @@
 |---|--:|---|
 | [`__init__.py`](../alfred/brain/__init__.py) | 33 | **`VoiceBrain` protocol** and `make_brain()` (always returns `CliBrain`) |
 | [`cli.py`](../alfred/brain/cli.py) | 340 | **`CliBrain`**: the session, the turn loop, interruptions, the lookup subagent |
-| [`sdk.py`](../alfred/brain/sdk.py) | 201 | SDK options **shared with tasks**: lockdown, tool server, `ask` / `ask_json` / `ask_flag` |
+| [`sdk.py`](../alfred/brain/sdk.py) | 201 | SDK options **shared with tasks**: tool server, injection screening, `ask` / `ask_json` / `ask_flag` |
 | [`persona.py`](../alfred/brain/persona.py) | 94 | Builds the system prompt; frames each user turn, a session's first with memory and recent talk (`Notes`) |
 | [`quick.py`](../alfred/llm/quick.py) | 159 | **`Quick`**: one warm fast-model session for sub-second judgements |
 | [`route.py`](../alfred/brain/route.py) | 57 | **`Router`**: optional small-talk → lighter model |
@@ -213,18 +213,16 @@ A session carried on with `resume` already has them in its history, so they aren
 
 ## 🧰 What the brain can do
 
+The brain runs in **Claude Code's auto mode** (`claude.auto_mode`), with your own Claude Code setup loaded and **no sandbox**: a separate check clears each action and blocks what goes beyond what you asked.
+
 | | Capability | Permission |
 |:-:|---|---|
-| 🟢 | `WebSearch`, `WebFetch` | Allowed outright |
-| 🟢 | Alfred tools (`mcp__alfred__*`) not `gated` / `shell` | Allowed outright |
-| 🟢 | `job_status`, `stop_job`, MCP **reads** | Allowed outright |
-| 🟢 | `Bash` **inside the sandbox** (reads anything but secrets, writes only `data/shell/`, no network) | Allowed by the sandbox |
-| 🟡 | Unsandboxed `Bash`, `start_job`, `shell` tools | **Gate**: risky → spoken yes |
-| 🟡 | Google sends/deletes, MCP **writes**, `gated` tools | **Gate**: always a spoken yes |
-| 🟡 | `Agent` (lookup subagent only) + its `Read`/`Glob`/`Grep` | Via the gate |
-| 🟡 | `Skill` (enabled skills only) | When skills are on |
-| 🔴 | File edits, user settings, other MCP config | **Not offered** (`setting_sources=[]`, `strict_mcp_config`) |
-| 🔴 | Built-in subagents (`general-purpose`, `Explore`, `Plan`, …) | **Denied** (`BUILTIN_AGENTS_DENIED`) |
+| 🟢 | `WebSearch`, `WebFetch`, Alfred tools not `gated`, `job_status`, `stop_job`, MCP **reads** | Allowed outright |
+| 🛡️ | Every other Claude Code tool: `Bash`, file reads and edits, subagents (`Explore`, `Plan`, …), `Skill` (yours and Alfred's) | **Auto mode's check** |
+| 🟡 | Drafted Google sends and deletes (`gated` tools), MCP **writes** | **Ask rules**: always a spoken yes |
+| 🟡 | Whatever auto mode stops to ask about | **Gate**: risky commands → spoken yes |
+| 🧩 | Your Claude Code setup: CLAUDE.md, settings, skills, plugins, agents, hooks | **Loaded**, as Claude Code loads them; its MCP servers stay out (`strict_mcp_config`) |
+| 🔴 | `AskUserQuestion`, `EnterPlanMode` | **Off**: the brain asks aloud |
 
 **Extra wiring in `_options()`:**
 
@@ -284,9 +282,9 @@ Whatever was running, the next turn is told **where the reply was cut off**: the
 | You say | What runs | The conversation |
 |---|---|---|
 | **"Merge it"** | `task_merge`. Past `ALFRED_TOOL_WAIT` (8 s), e.g. while Alfred's own tests run, the call is **kept** | Alfred says "Merging, I'll tell you" and **keeps talking** |
-| **"Take a pull"** | `git pull` / `fetch` / `clone` in `Bash` is **refused by the gate** and redirected to `start_job` | Runs as a command task; announced when done |
+| **"Take a pull"** | `git pull` / `fetch` / `clone` goes to `start_job`, as the brain is told, never `Bash` | Runs as a command task; announced when done |
 | **"Research X"** | `background_lookup` (more than one search) or a `research` task | Answer announced when ready |
-| **"Does the computer need a restart?"** | `computer_lookup`: a Haiku helper runs a few sandboxed commands, each stopped after 20 s | Answered in the turn if quick, else announced when ready |
+| **"Does the computer need a restart?"** | `computer_lookup`: a Haiku helper runs a few commands, each stopped after 20 s | Answered in the turn if quick, else announced when ready |
 | The brain keeps working in one turn | `budget.py` refuses calls past `ALFRED_TURN_TOOLS` (3) or `ALFRED_TURN_SECONDS` (15 s), and any `Bash` line chaining more than two programs | The brain hands the rest to a lookup or a task and answers |
 | You **talk over** a reply mid-tool | The Alfred tool call **carries on**; only the reply stops | Next turn is told it's still running |
 | **"Stop the merge"** | `background_stop` (or `task_stop` with the task's id): the runner stops the merge cleanly, and the kept call ends without a follow-up | Alfred says it stopped and nothing was merged |
@@ -376,11 +374,11 @@ sequenceDiagram
 <summary><b>🧵 <code>side.py</code>: background lookups</b></summary>
 
 - Started by the `background_lookup` tool, for reading that takes **longer than a few seconds** but is smaller than a task.
-- Own short session on Sonnet: **web + read-only Alfred tools only**, `dontAsk`, ≤ 12 turns, capped at `ALFRED_SIDE_MINUTES` (3 min).
-- `computer_lookup` checks the computer's state (health, uptime, what's running, versions, git status) with `Bash` on Haiku: **held in the sandbox** (no network, writes only `data/shell/`, no secrets, `allowUnsandboxedCommands` off), ≤ 12 commands of 20 s each. Like `file_lookup`, it answers in the turn within `ALFRED_LOOKUP_WAIT`, else carries on in the background.
+- Own short session on Sonnet in auto mode, **without your Claude Code setup** (to stay quick): **web + read-only Alfred tools only**, ≤ 12 turns, capped at `ALFRED_SIDE_MINUTES` (3 min).
+- `computer_lookup` checks the computer's state (health, uptime, what's running, versions, git status) with `Bash` on Haiku, in auto mode like the others, ≤ 12 commands of 20 s each (a step-limit hook, `side.Steps`). Like `file_lookup`, it answers in the turn within `ALFRED_LOOKUP_WAIT`, else carries on in the background.
 - **Alfred's own database**: `file_lookup` and `computer_lookup` both get an in-process `db` server (`tables`, `query`) on `data/tasks.db`, so they can answer "what did task 383 cost and what did it do". Read-only in code ([`alfred/storage/readonly.py`](../alfred/storage/readonly.py)): the file opened `mode=ro`, the connection `query_only`, and an SQLite authorizer allowing nothing but a single SELECT (no writes, `PRAGMA` or `ATTACH`) and reading only the tables listed as safe (`READABLE`, so a new table stays out of reach until listed), less the columns holding keys: never the vault's secrets, its check value or voiceprints. ≤ 50 rows a query, stopped after 5 s, each query one of the lookup's steps.
 - **Max 2 at once** per conversation; cancelled when the session ends.
-- **Out of time, it becomes a task**: a lookup still going at `ALFRED_SIDE_MINUTES` starts a background task that carries it on (`prompts/lookup_carried_on.md`), told the brief and the steps it got through (its searches, reads and notes, never the raw pages). The task is **read-only**, with the lookup's reach and no more: `background_lookup` becomes a `research` task reading the accounts (no Sheets or Docs edits), `file_lookup` a `code_question` on the project its brief points at (else Alfred's own; research with a shell when neither is listed), `computer_lookup` research with a shell. Its shell has no network, it publishes no artifacts, it stays on this computer, and it can't be given more access (not on a reply, not by `request_access`). It's said to carry on as a task, once, and the task's end is announced like any task's; a task never becomes one again. With the runner down it's stopped, as "took too long".
+- **Out of time, it becomes a task**: a lookup still going at `ALFRED_SIDE_MINUTES` starts a background task that carries it on (`prompts/lookup_carried_on.md`), told the brief and the steps it got through (its searches, reads and notes, never the raw pages). The task is **read-only**, with the lookup's reach and no more: `background_lookup` becomes a `research` task reading the accounts (no Sheets or Docs edits), `file_lookup` a `code_question` on the project its brief points at (else plain research), `computer_lookup` plain research. It can't edit files or change anything through a connection, it publishes no artifacts, it stays on this computer, and it can't be given more access (not on a reply, not by `request_access`). It's said to carry on as a task, once, and the task's end is announced like any task's; a task never becomes one again. With the runner down it's stopped, as "took too long".
 - The answer is spoken through the **floor** when there's a gap, as **at most three plain sentences**: said as it is when it already is that, else worded down by `ALFRED_ANNOUNCE_MODEL` (`prompts/lookup_spoken.md`), else trimmed by hand. Markdown, paths and line numbers are never read out; the whole answer goes to the brain unsaid via `note()`, for follow-up questions.
 
 </details>

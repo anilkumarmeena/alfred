@@ -1,24 +1,22 @@
-"""One run of a background task: a Claude Code session limited to what its kind allows.
+"""One run of a background task: a Claude Code session in auto mode (alfred.llm.claude.auto_mode).
 
   code_change    edits the project folder in place (uncommitted), or a worktree + branch when in_place=false
-  code_question  reads the live checkout; shell is read-only git only
+  code_question  answers about the live checkout
   research       web plus account tools (reads, Sheets and Docs edits) and connections; works in data/tasks/ID
 
-Safety: every tool call passes TaskGate (also as a PreToolUse hook, since skills' allowed-tools become allow rules).
-Reads stay in task folders, TASK_READ_DIRS and voice logs; writes in the worktree. Secrets are hidden from file tools
-and the sandbox. code_change shell runs sandboxed (writes: worktree + cache; network: open); escaping is denied.
-Host-level work goes through host tools (host_tools), gated by `_host_gate`. The CLI's env has .env values blanked.
-Connections (the accounts access) read freely; each change waits for the user's yes (connection_calls). GitLab ones
-also get repo_files, which fetches whole files and projects with the connection's key, out of the task's sight.
-Tasks never write Alfred's data files; they propose edits. Extra access (alfred.tasks.access) shapes `_options`.
-Code tasks load the project's Claude setup (project_claude); Alfred's enabled skills load as a plugin. Alfred's
-helper subagents win name clashes. A run doesn't end while background subagents run, nor without a final report.
-Its token use, per model and subagent, is reported however it ends (alfred.tasks.tokens).
+Every task gets Claude Code's tools and subagents, the user's own Claude Code setup and the project's, and nothing is
+sandboxed: auto mode's check clears each action. AutoGate is reached only by ask rules (each change through a
+connection) and when auto mode stops to ask; either way the user answers on their phone. A task working in the user's
+own checkout can't push, reset or switch branches there. A read-only task (a carried-on lookup) can't edit files or
+change anything through its connections. The CLI's env has .env values blanked.
+GitLab connections also get repo_files, which fetches whole files and projects with the connection's key. Tasks never
+write Alfred's data files; they propose edits. Granted access (alfred.tasks.access: accounts, artifacts) shapes
+`_options`. Alfred's enabled skills load as a plugin; Alfred's helper subagents sit beside Claude Code's own. A run
+doesn't end while background subagents run, nor without a final report. Its token use, per model and subagent, is
+reported however it ends (alfred.tasks.tokens).
 """
 
 import asyncio
-import functools
-import json
 import logging
 import time
 from collections.abc import Callable
@@ -27,19 +25,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from alfred import projects
-from alfred.config import (
-    DATA_DIR,
-    SCHEDULE_EFFORT,
-    TASK_ANSWER_EFFORT,
-    TASK_CACHE_DIR,
-    TASK_EFFORT,
-    TASK_MAX_TURNS,
-    TASK_READ_DIRS,
-)
-from alfred.core import platform
+from alfred.config import DATA_DIR, SCHEDULE_EFFORT, TASK_ANSWER_EFFORT, TASK_EFFORT, TASK_MAX_TURNS
 from alfred.integrations import mcp_servers
 from alfred.llm import claude_logins, retry, usage
-from alfred.llm.claude import BUILTIN_AGENTS_DENIED, FIVE_MINUTE_CACHE, LimitWatch, Spend
+from alfred.llm.claude import AUTO_DENIED, FIVE_MINUTE_CACHE, LimitWatch, Spend, auto_mode
 from alfred.llm.roles import Role
 from alfred.llm.sdk import (
     AssistantMessage,
@@ -57,32 +46,11 @@ from alfred.llm.sdk import (
 )
 from alfred.safety import host
 from alfred.skills import home as skills
-from alfred.tasks import access, project_claude, repo_files, tokens
+from alfred.tasks import access, repo_files, tokens
 from alfred.tasks.briefs import _system_prompt
 from alfred.tasks.connection_calls import ConnectionGate
 from alfred.tasks.connection_watch import Watch
-from alfred.tasks.gate import (
-    _FILE_ARG,
-    _IN_PLACE_DENIED,
-    _WRITES,
-    ARTIFACT,
-    TaskGate,
-    _hide_except,
-    _read_only_git,
-    _secret_rules,
-)
-
-# Re-exported: other modules and tests import these from here
-from alfred.tasks.host_tools import (
-    HOST_RUN,
-    JOB_STATUS,
-    JOB_WAIT,
-    START_JOB,
-    TaskJobs,  # noqa: F401
-    _host_gate,
-    _host_server,
-    task_temp,
-)
+from alfred.tasks.gate import _FILE_ARG, _IN_PLACE_DENIED, _WRITES, ARTIFACT, AutoGate
 from alfred.tasks.reporting import (
     PAUSES,
     REQUEST_ACCESS,
@@ -93,7 +61,7 @@ from alfred.tasks.reporting import (
     nudge_text,
     with_nudges,  # noqa: F401
 )
-from alfred.tasks.subagents import _AGENT_TOOLS, RESEARCHER, SEARCHER, TESTER, Subagents, _agents, result_text  # noqa: F401
+from alfred.tasks.subagents import _AGENT_TOOLS, RESEARCHER, SEARCHER, TESTER, Subagents, _agents, own_models, result_text  # noqa: F401
 
 log = logging.getLogger("alfred.tasks.worker")
 
@@ -140,22 +108,6 @@ class Outcome:
 ARTIFACT_ENV = {"CLAUDE_CODE_ARTIFACT": "1"}  # undocumented; the CLI omits Artifact under the SDK without it
 
 
-# "*" allows every domain through the sandbox proxy. configd (macOS network settings) is needed by uv and other
-# Rust tools that read the system proxy, or they crash on start; Mach lookups are a Seatbelt rule, so Mac only.
-OPEN_NETWORK = {"allowedDomains": ["*"]} | (
-    {"allowMachLookup": ["com.apple.SystemConfiguration.configd"]} if platform.MAC else {})
-CLOSED_NETWORK = {"allowedDomains": []}
-
-
-def _cache_env() -> dict[str, str]:
-    """Env pointing build/package caches into TASK_CACHE_DIR (sandbox-writable)."""
-    dirs = {"GOCACHE": "go-build", "GOMODCACHE": "go-mod", "npm_config_cache": "npm", "UV_CACHE_DIR": "uv",
-            "PIP_CACHE_DIR": "pip", "XDG_CACHE_HOME": "xdg", "PYTHONPYCACHEPREFIX": "pycache"}
-    for sub in dirs.values():
-        (TASK_CACHE_DIR / sub).mkdir(parents=True, exist_ok=True)
-    return {var: str(TASK_CACHE_DIR / sub) for var, sub in dirs.items()}
-
-
 def _blank_env() -> dict[str, str]:
     """Blank every .env key (except CLAUDE_*) plus MCP secrets and the vault key, so commands can't inherit them.
 
@@ -185,158 +137,76 @@ def _model(task: dict) -> tuple[str, str]:
 
 
 def _options(task: dict, reporter: Reporter, live: Watch | None = None) -> ClaudeAgentOptions:
-    """The task session's options; `live` keeps its connections current while it runs."""
+    """The task session's options: Claude Code's tools, subagents and setup, the user's and the project's, with no
+    sandbox, auto mode's check clearing each action. Alfred's reporting tools, and with accounts its Google tools and
+    connections, are added; a connection's changes and whatever auto mode stops to ask about go to the user's phone.
+    `live` keeps its connections current while it runs."""
     live = live or Watch()
-    kind = task["kind"]
+    kind, can, read_only = task["kind"], access.has(task), bool(task.get("read_only"))
+    own = DATA_DIR / "tasks" / str(task["id"])
+    cwd = Path(task["worktree"]) if kind == "code_change" else projects.find(task["project"]).path if kind == "code_question" else own
+    if kind != "code_change":  # a code change's own folder is its worktree, made already
+        own.mkdir(parents=True, exist_ok=True)
+    own = cwd if kind == "code_change" else own
     env: dict[str, str] = _blank_env() | FIVE_MINUTE_CACHE  # a task's calls follow within minutes; subagents' too
-    # Reporting and host tools load up front; only the many account tools wait for ToolSearch (deferring a few small
-    # ones would cost more in ToolSearch's own description than it saves)
     mcp = {"task": _task_server(task["id"], reporter)}
-    allowed = ["WebSearch", "WebFetch", "mcp__task__report_progress", "mcp__task__ask_user",
-               "mcp__task__propose_data_edit", REQUEST_ACCESS]
-    add_dirs: list[Path] = []
-    denied: list[str] = []
-    sandbox = bash = host_gate = None
-    if kind == "code_change":
-        cwd = Path(task["worktree"])  # the project folder when in place
-        denied = _IN_PLACE_DENIED if task["in_place"] else []
-        builtins = ["Read", "Glob", "Grep", "Edit", "Write", "Bash", "WebSearch", "WebFetch"]
-        read_roots, write_roots = [cwd, TASK_CACHE_DIR, host.TASK_JOBS_DIR, *TASK_READ_DIRS, claude_logins.voice_logs()], [cwd]
-        add_dirs = [TASK_CACHE_DIR]
-        env |= _cache_env()
-        task_temp(task["id"]).mkdir(parents=True, exist_ok=True)
-        sandbox = {"enabled": True, "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False,
-                   "network": OPEN_NETWORK}
-        mcp["host"] = _host_server(task, cwd, reporter.host_jobs)
-        allowed += [JOB_STATUS, JOB_WAIT]  # read-only; host_run/start_job are gated
-        host_gate = _host_gate(task, cwd, reporter)
-    elif kind == "code_question":
-        cwd = projects.find(task["project"]).path
-        builtins = ["Read", "Glob", "Grep", "Bash", "WebSearch", "WebFetch"]
-        read_roots, write_roots = [cwd, *TASK_READ_DIRS, claude_logins.voice_logs()], []
-        bash = _read_only_git
-        # Bash is gated to read-only git; the sandbox is a second wall.
-        sandbox = {"enabled": True, "autoAllowBashIfSandboxed": False, "allowUnsandboxedCommands": False,
-                   "network": CLOSED_NETWORK}
-    else:
-        cwd = DATA_DIR / "tasks" / str(task["id"])
-        cwd.mkdir(parents=True, exist_ok=True)
-        builtins = ["WebSearch", "WebFetch"]
-        read_roots, write_roots = [], []
-    # Default + granted access. code_question gets its own folder (like research): its project is the live checkout.
-    can = access.has(task)
-    own = DATA_DIR / "tasks" / str(task["id"]) if kind == "code_question" else cwd
-    more_writes, edit_denied = [], []  # extra edit roots; sandbox write denials
+    allowed = ["mcp__task__report_progress", "mcp__task__ask_user", "mcp__task__propose_data_edit", REQUEST_ACCESS]
+    denied = AUTO_DENIED + (_IN_PLACE_DENIED if kind == "code_change" and task["in_place"] else [])
+    denied += sorted(_WRITES) if read_only else []
+    ask: list[str] = []
     connections = None
-    if kind != "code_change":  # code_change already has shell and host tools
-        if can & {"artifacts", "shell", "mac"}:
-            own.mkdir(parents=True, exist_ok=True)
-            builtins, write_roots = builtins + ["Write"], [own]  # own folder only
-        if can & {"shell", "mac"}:
-            task_temp(task["id"]).mkdir(parents=True, exist_ok=True)
-        if "shell" in can:
-            builtins.append("Bash")
-            bash = None  # sandboxed; requests to leave the sandbox are denied
-            add_dirs += [d for d in (own, TASK_CACHE_DIR) if d != cwd]  # extra writable dirs
-            env |= _cache_env()
-            sandbox = {"enabled": True, "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False,
-                       "network": CLOSED_NETWORK if task.get("read_only") else OPEN_NETWORK}
-            if kind == "code_question" and "projects" not in can:
-                # Block writes in the user's checkout except the path to its own folder (inside only for Alfred's
-                # repo). Edit deny rules also act as sandbox write rules.
-                edit_denied = [r for p in _hide_except(cwd.resolve(), own.resolve()) for r in (f"Edit(/{p})", f"Edit(/{p}/**)")]
-        if "mac" in can:
-            # Host commands start in its own folder; for code_question, treat the checkout as in-place (no git changes).
-            on = task | {"in_place": 1} if kind == "code_question" else task
-            mcp["host"] = _host_server(on, own, reporter.host_jobs)
-            allowed += [JOB_STATUS, JOB_WAIT]
-            host_gate = _host_gate(on, own, reporter)
-    if "projects" in can:
-        builtins += ["Read", "Glob", "Grep", "Edit", "Write"]
-        read_roots = read_roots or [own, *TASK_READ_DIRS, claude_logins.voice_logs()]  # research has none otherwise
-        more_writes = list(TASK_READ_DIRS)  # TaskGate still blocks secrets and Alfred's own files
     if "accounts" in can:
-        # docs_insert_image's local paths are checked by TaskGate.doc_images
-        own_tools, alfred_allowed = _wired().server(READ_ONLY_TOOLS + ([] if task.get("read_only") else GOOGLE_EDIT_TOOLS))
+        # Reporting tools load up front; the many account tools wait for ToolSearch
+        own_tools, alfred_allowed = _wired().server(READ_ONLY_TOOLS + ([] if read_only else GOOGLE_EDIT_TOOLS))
         mcp["alfred"] = _on_demand(own_tools)
-        # Connections: reading is free, each change waits for the user's yes (connection_calls)
         servers = mcp_servers.session(mcp_servers.for_research(), ask_own=True)
         live.use(servers.servers)
         mcp |= servers.configs
         allowed += alfred_allowed + servers.allowed
-        denied = denied + servers.blocked
-        if task.get("read_only"):  # reads only: with no ConnectionGate, TaskGate refuses every change unasked
-            denied += [s.tool(t) for s in servers.servers for t in s.named("write", "own")]
-        else:
+        denied += servers.blocked
+        changes = sorted(s.tool(t) for s in servers.servers for t in s.named("write", "own"))
+        if read_only:  # reads only: not even asked about
+            denied += changes
+        else:  # each change waits for the user's yes
             connections = ConnectionGate(task["id"], servers.servers, reporter)
+            ask += changes
         if found := repo_files.gitlab(servers.servers):  # whole files and projects, with the connection's own key
             mcp[repo_files.NAME] = _on_demand(repo_files.repo_server(task["id"], found))
             allowed += repo_files.TOOLS
-            builtins += [t for t in ("Read", "Glob", "Grep") if t not in builtins]
-            read_roots = [*read_roots, repo_files.downloads(task["id"])]
     if "artifacts" in can:
         env |= ARTIFACT_ENV
-        builtins, allowed = builtins + [ARTIFACT], allowed + [ARTIFACT]  # each call still checked by TaskGate.artifact
-    # Project's own agents, skills, commands and CLAUDE.md, never its settings. Research has no project.
-    setup = None
-    helpers = _agents(kind)
-    # Hide secrets in read roots, and in projects too when it has a shell
-    hidden_in = read_roots + (TASK_READ_DIRS if "shell" in can else [])
-    flags: dict = _secret_rules(hidden_in) if hidden_in else {}
-    if edit_denied:
-        flags["permissions"]["deny"] += edit_denied
-    if kind != "research" and task["project"]:
-        setup = project_claude.load(cwd, task["project"], DATA_DIR / "tasks" / str(task["id"]) / "claude-plugin")
-        if setup.claude_md:  # not tampered
-            add_dirs.append(cwd)  # CLI reads CLAUDE.md from additional dirs (CLAUDE_MD_ENV)
-            env |= project_claude.CLAUDE_MD_ENV
-        if setup.flagged:
-            reporter.flag(task["id"], f"Left out of {task['project']}'s setup, as they look like hidden instructions: "
-                                      f"{'; '.join(setup.flagged)}")
-        flags["disableAllHooks"] = True  # project hooks off; SDK callback hooks still run
-    # Alfred's enabled skills, as a per-run plugin; on a machine, the ones the main computer sent ("skills")
-    mine_at = DATA_DIR / "tasks" / str(task["id"]) / "alfred-skills"
+        allowed.append(ARTIFACT)
+    else:
+        denied.append(ARTIFACT)
+    # Alfred's enabled skills, as a per-run plugin, beside the user's and the project's own; on a machine, the ones
+    # the main computer sent ("skills")
+    mine_at = DATA_DIR / "tasks" / str(task["id"]) / "alfred-skills"  # never in the project's own folder
     mine = skills.plugin(mine_at, skills.shipped(task["skills"]) if "skills" in task else None)
-    if mine:
-        flags |= skills.FLAGS  # no hooks or !`commands` from them
-    skill_names = (setup.skills if setup else []) + [skills.qualified(s) for s in mine]
-    plugins = ([{"type": "local", "path": str(setup.plugin)}] if setup and setup.plugin else []) + (
-        [{"type": "local", "path": str(mine_at)}] if mine else [])
-    agents = (setup.agents if setup else {}) | helpers  # helpers win name clashes
-    in_place = kind == "code_change" and task["in_place"]
-    gate = TaskGate(cwd, read_roots, write_roots, bash, agents, host_gate,
-                    editors=set(setup.agents) - set(helpers) if setup else (), more_writes=more_writes,
-                    commit_ordered=functools.partial(reporter.commit_ordered, task["id"]) if in_place else None,
-                    connections=connections)
+    helpers = _agents(kind)
     model, effort = _model(task)
     # After each call: the user's nudges, and connections restarted since
     after = _nudge_hook(task["id"], reporter) + (live.told if live.running else [])
     # Its own login, or the next one if that's passed over; a new session where there's room (claude_logins.starting)
     login = claude_logins.resume_on(task["session_id"])
-
     return _wired().options(
         env=env,
         cwd=str(cwd),
-        add_dirs=[str(d) for d in add_dirs],
-        system_prompt=_system_prompt(task, cwd, setup, own, mine),
+        system_prompt=_system_prompt(task, cwd, own, can, mine),
         model=model,
         effort=effort,
-        tools=list(dict.fromkeys(builtins + ["Agent"] + (["Skill"] if skill_names else []))),
         allowed_tools=allowed,
-        disallowed_tools=denied + BUILTIN_AGENTS_DENIED,
-        agents=agents,
-        skills=skill_names,  # each allowed as Skill(name); others hidden
-        plugins=plugins,
+        disallowed_tools=denied,
+        agents=helpers,  # Alfred's helpers, beside Claude Code's own and the user's
+        plugins=[{"type": "local", "path": str(mine_at)}] if mine else [],
         mcp_servers=mcp,
-        permission_mode="default",
-        can_use_tool=gate,
-        hooks={"PreToolUse": gate.hook + (live.hook if live.running else [])} | dict.fromkeys(("PostToolUse", "PostToolUseFailure"), after),
-        sandbox=sandbox,
-        settings=json.dumps(flags) if flags else None,
+        can_use_tool=AutoGate(task["id"], cwd, reporter, connections),
+        hooks={"PreToolUse": own_models(helpers) + (live.hook if live.running else [])}
+        | dict.fromkeys(("PostToolUse", "PostToolUseFailure"), after),
         max_turns=TASK_MAX_TURNS,
         resume=task["session_id"],
         login=claude_logins.starting() if login is None else login,
         stderr=lambda line: log.debug("task %s claude: %s", task["id"], line),
+        **auto_mode(ask),
     )
 
 
@@ -355,12 +225,6 @@ def _describe(block: ToolUseBlock) -> str | None:
         return "reading a web page"
     if name == ARTIFACT and (args.get("action") or "publish") == "publish":
         return f"publishing {Path(args.get('file_path') or '').name} to claude.ai"
-    if name == HOST_RUN:
-        return f"running on the computer: {args.get('command', '')[:80]}"
-    if name == START_JOB:
-        return f"starting job: {args.get('title') or args.get('command', '')[:60]}"
-    if name == JOB_WAIT:
-        return f"waiting for job {args.get('id')}"
     if name.startswith("mcp__alfred__"):
         return f"using {name.removeprefix('mcp__alfred__')}"
     if name.startswith("mcp__") and name.count("__") >= 2:

@@ -232,7 +232,7 @@ RUNNER_SOCKET = DATA_DIR / "runner.sock"
 # project_register default location: NEW_PROJECTS_DIR/<name>
 NEW_PROJECTS_DIR = Path(_env("ALFRED_NEW_PROJECTS_DIR") or PROJECTS_HOME).expanduser()
 WORKTREES_DIR = DATA_DIR / "worktrees"
-TASK_CACHE_DIR = DATA_DIR / "task-cache"  # build and package caches for sandboxed commands
+TASK_CACHE_DIR = DATA_DIR / "task-cache"  # tasks' temp folders (alfred.tasks.host_tools.task_temp)
 TASK_EFFORT = text("tasks.effort", "ALFRED_TASK_EFFORT")
 TASK_ANSWER_EFFORT = text("tasks.answer_effort", "ALFRED_TASK_ANSWER_EFFORT")  # research and code questions
 TASK_MAX_TURNS = whole("tasks.max_turns", "ALFRED_TASK_MAX_TURNS")
@@ -247,11 +247,6 @@ RESUME_TASKS = whole("tasks.resume", "ALFRED_RESUME_TASKS", 0, 12)
 # Allow the Artifact tool (claude.ai pages; needs a subscription login, not an API key) for code_change and research
 # tasks, others when granted (alfred.tasks.access). 0 = off for all.
 TASK_ARTIFACTS = flag("tasks.artifacts", "ALFRED_TASK_ARTIFACTS")
-# Read-only folders for code tasks (secrets inside stay hidden). Set but empty = none.
-TASK_READ_DIRS = [
-    Path(d.strip()).expanduser()
-    for d in os.environ.get("ALFRED_TASK_READ_DIRS", str(PROJECTS_HOME)).split(",") if d.strip()
-]
 # Goal loop (alfred.tasks.goal): a "finished" task is checked against its request and sent back up to GOAL_ROUNDS times.
 # GOAL_MAX_COST: CLI-reported dollars after which it stops (0 = no limit). GOAL_DAILY_CHECKS: cap per 24 h, all tasks.
 GOAL_LOOP = flag("goal.loop", "ALFRED_GOAL_LOOP")

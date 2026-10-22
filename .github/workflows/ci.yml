@@ -28,9 +28,8 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
-      # Tests needing a working bwrap skip themselves where the runner's AppArmor blocks user namespaces
       - name: System packages
-        run: sudo apt-get update -q && sudo apt-get install -yq bubblewrap socat ffmpeg
+        run: sudo apt-get update -q && sudo apt-get install -yq ffmpeg
       - name: Web app packages
         run: npm ci --prefix web
       - name: Python packages

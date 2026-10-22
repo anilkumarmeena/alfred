@@ -1,11 +1,11 @@
 """Side jobs: slow reading and checking (searches, long pages, files, the computer's state) done in the background so
 the conversation carries on.
 
-Three kinds, all short read-only sessions that need no approval:
+Three kinds, all short sessions in Claude Code's auto mode (its check clears each action) that only read:
   background_lookup  web search/fetch and read-only Alfred tools on the side role; always in the background.
   file_lookup        Read, Glob and Grep on the lookup role, at most LOOKUP_READS reads.
-  computer_lookup    shell commands on the lookup role, held in the sandbox (no network, no writes outside the scratch
-                     dir, no secrets), at most LOOKUP_READS commands of CHECK_SECONDS each.
+  computer_lookup    shell commands on the lookup role, at most LOOKUP_READS commands of CHECK_SECONDS each.
+They load none of the user's Claude Code setup, to stay quick.
 Both of the last two can also read Alfred's own database (db_server, alfred.storage.readonly), each query one step.
 The last two answer in the turn if they're in within the turn's LOOKUP_WAIT budget (shared by every such lookup in
 that turn); otherwise they carry on in the background like the first.
@@ -37,14 +37,11 @@ from alfred.llm.claude import READS
 from alfred.llm.roles import Role
 from alfred.llm.sdk import (
     AssistantMessage,
-    PermissionResultAllow,
-    PermissionResultDeny,
     TextBlock,
     ToolUseBlock,
     create_sdk_mcp_server,
     tool as sdk_tool,
 )
-from alfred.safety.commands import names_secret, reads_environment
 from alfred.storage import profile, readonly
 
 log = logging.getLogger("alfred.brain.side")
@@ -177,47 +174,19 @@ def db_tools() -> list:
     return [tables, query]
 
 
-class Reads:
-    """A file lookup's permission callback: Read, Glob, Grep and the database's reads, never on secrets, at most
-    `limit` of them."""
+class Steps:
+    """What a lookup's PreToolUse hook refuses: tools other than `tools`, and steps past `limit`."""
 
-    def __init__(self, limit: int = LOOKUP_READS) -> None:
-        self.left = limit
+    def __init__(self, tools: list[str], limit: int = LOOKUP_READS) -> None:
+        self.tools, self.left = tools, limit
 
-    async def __call__(self, name: str, args: dict, _ctx) -> PermissionResultAllow | PermissionResultDeny:
-        if name not in FILE_READS + DB_READS:
-            return PermissionResultDeny(message=f"{name} isn't available.")
-        if names_secret(" ".join(str(v) for v in args.values())):
-            return PermissionResultDeny(message="Secrets stay out of reach.")
-        if self.left <= 0:
-            return PermissionResultDeny(message=f"{OUT_OF_STEPS} Say where you looked.")
-        self.left -= 1
-        return PermissionResultAllow()
-
-
-class Commands:
-    """What a computer lookup's PreToolUse hook refuses: anything but Bash and the database's reads, a command naming a
-    secret or reading another process's environment, and steps past `limit`. A hook, not can_use_tool, since
-    sandboxed Bash never reaches that; the sandbox holds what commands can reach."""
-
-    def __init__(self, limit: int = LOOKUP_READS) -> None:
-        self.left = limit
-
-    def refused(self, name: str, args: dict) -> str:
-        command = " ".join(str(v) for v in args.values()) if name in DB_READS else str(args.get("command") or "")
-        if name != "Bash" and name not in DB_READS:
+    def refused(self, name: str, _args: dict) -> str:
+        if name not in self.tools:
             return f"{name} isn't available."
-        if names_secret(command) or reads_environment(command):
-            return "Secrets stay out of reach."
         if self.left <= 0:
             return OUT_OF_STEPS
         self.left -= 1
         return ""
-
-
-async def _refuse(name: str, _args: dict, _ctx) -> PermissionResultDeny:
-    """A computer lookup's can_use_tool: what the sandbox doesn't allow by itself never runs."""
-    return PermissionResultDeny(message=f"Not run: {name} needs more than the sandbox allows.")
 
 
 def _clip(text: str) -> str:
@@ -254,6 +223,13 @@ async def _answer(brief: str, options) -> str:
     return reply.strip()
 
 
+def _quick() -> dict:
+    """Auto mode for a lookup, without the user's Claude Code setup, which would slow every one down; nothing it
+    stops to ask about runs, as no one is there to answer."""
+    from alfred.llm.claude import auto_mode
+
+    return auto_mode() | {"setting_sources": [], "skills": []}
+
 async def look(brief: str) -> str:
     """Run one background_lookup job; returns its spoken answer. RuntimeError on failure."""
     from alfred.brain.sdk import alfred_server, sdk_options
@@ -262,8 +238,7 @@ async def look(brief: str) -> str:
     server, allowed = alfred_server(reads)  # picked after it takes changed Google accounts
     return await _answer(brief, sdk_options(
         model=usage.available(Role.SIDE), system_prompt=system(), cwd=str(profile.current().data), max_turns=MAX_TURNS,
-        tools=WEB, mcp_servers={"alfred": server}, allowed_tools=WEB + allowed,
-        permission_mode="dontAsk",  # only the reads above
+        tools=WEB, mcp_servers={"alfred": server}, allowed_tools=WEB + allowed, **_quick(),
     ))
 
 
@@ -272,12 +247,13 @@ async def find(brief: str) -> str:
     from alfred.brain.sdk import sdk_options
     from alfred.gates import shell
     from alfred.llm import usage
+    from alfred.llm.claude import refusing
 
     (scratch := shell.scratch_dir()).mkdir(parents=True, exist_ok=True)
     return await _answer(brief, sdk_options(
         model=usage.available(Role.LOOKUP), system_prompt=lookup_system(), cwd=str(scratch),
-        max_turns=LOOKUP_TURNS, tools=FILE_READS, mcp_servers={DB: db_server()}, allowed_tools=[],
-        permission_mode="default", can_use_tool=Reads(),  # every read meets it
+        max_turns=LOOKUP_TURNS, tools=FILE_READS, mcp_servers={DB: db_server()}, allowed_tools=FILE_READS + DB_READS,
+        hooks={"PreToolUse": refusing(Steps(FILE_READS + DB_READS).refused)}, **_quick(),
     ))
 
 
@@ -293,12 +269,8 @@ async def check(brief: str) -> str:
     return await _answer(brief, sdk_options(
         env={"BASH_DEFAULT_TIMEOUT_MS": timeout, "BASH_MAX_TIMEOUT_MS": timeout},
         model=usage.available(Role.LOOKUP), system_prompt=check_system(), cwd=str(scratch),
-        max_turns=LOOKUP_TURNS, tools=["Bash"], mcp_servers={DB: db_server()},
-        allowed_tools=DB_READS,  # past can_use_tool, still counted and screened by the hook
-        permission_mode="default",
-        sandbox=shell.SANDBOX | {"allowUnsandboxedCommands": False},  # never leaves it, even when asked to
-        settings=shell.SETTINGS,  # secrets unreadable in the sandbox
-        can_use_tool=_refuse, hooks={"PreToolUse": refusing(Commands().refused)},
+        max_turns=LOOKUP_TURNS, tools=["Bash"], mcp_servers={DB: db_server()}, allowed_tools=DB_READS,
+        hooks={"PreToolUse": refusing(Steps(["Bash", *DB_READS]).refused)}, **_quick(),
     ))
 
 
@@ -311,8 +283,7 @@ def _carrier(lookup: str, brief: str) -> tuple[str, str | None, list[str]]:
         return "research", None, ["accounts"]  # read-only: no edits to Sheets or Docs
     if lookup == "file_lookup" and (found := projects.named_in(brief)):
         return "code_question", found.name, []
-    # a computer lookup, or files with no project listed: read with the shell, which has no network
-    return "research", None, ["shell"]
+    return "research", None, []  # a computer lookup, or files with no project listed: every task has the shell
 
 
 async def _start_task(kind: str, title: str, instruction: str, project: str | None, access: list[str]) -> dict:

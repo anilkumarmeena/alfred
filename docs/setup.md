@@ -79,7 +79,7 @@ flowchart LR
 > Everywhere you need [uv](https://docs.astral.sh/uv/) (`make install` fetches it into `~/.local/bin` if it's missing), **Node.js 22** or later and the **Claude Code CLI** with a Claude account. Optional extras are listed in the [README](../README.md#-quickstart).
 
 - **Intel Macs** get faster-whisper instead of MLX (which needs Apple silicon); they're untested.
-- **Beyond install and services**, Linux differs in two places: tasks are walled in by **bubblewrap** instead of Seatbelt, and the Mac's tools (Shortcuts, opening apps by name) give way to Linux desktop tools where their programs exist. See **[🔌 Integrations](integrations.md)** and **[🏗️ Architecture](architecture.md)**.
+- **Beyond install and services**, Linux differs in one place: the Mac's tools (Shortcuts, opening apps by name) give way to Linux desktop tools where their programs exist. See **[🔌 Integrations](integrations.md)** and **[🏗️ Architecture](architecture.md)**.
 
 ## 📦 1. Install
 
@@ -121,13 +121,12 @@ Without `brew`, `make install` **builds the LiveKit server from source** into `~
 **Packages** — Debian and Ubuntu names; Fedora's are alike (`portaudio` for `libportaudio2`, `libnotify` for `libnotify-bin`, `words` for `wamerican`):
 
 ```sh
-sudo apt install bubblewrap socat dbus-user-session libportaudio2 wamerican curl git make   # required
+sudo apt install dbus-user-session libportaudio2 wamerican curl git make   # required
 sudo apt install ffmpeg libnotify-bin xdg-utils wl-clipboard    # optional (xclip on X11)
 ```
 
 | | Package | What for |
 |:-:|---|---|
-| 🧱 | `bubblewrap` · `socat` | **Required.** bubblewrap walls in background tasks' commands; both are needed by Claude Code's own sandbox (the voice shell) |
 | 🚌 | `dbus-user-session` | `systemctl --user`, which runs Alfred's services (most desktops have it; log out and in after installing) |
 | 🎤 | `libportaudio2` | The terminal mic: `make console` and `make voiceprint` |
 | 📖 | `wamerican` | A word list, so the learning review can tell everyday words from real mishearings |
@@ -142,36 +141,6 @@ sudo apt install ffmpeg libnotify-bin xdg-utils wl-clipboard    # optional (xcli
 Each desktop tool is offered only when its program is installed and a display is present.
 
 **Then the tools** — [uv](https://docs.astral.sh/uv/getting-started/installation/), Node.js 22+ (your distro's, [NodeSource](https://github.com/nodesource/distributions) or nvm) and the Claude Code CLI. Make sure **`~/.local/bin` is on your `PATH`**: the LiveKit server goes there.
-
-> [!WARNING]
-> **Ubuntu 23.10 and later (24.04 included)** restrict unprivileged user namespaces through AppArmor, which stops bubblewrap. Background tasks' commands then **refuse to run**, with a message saying how to fix it. Run `make host-check` after `make install` to find out early.
-
-<details>
-<summary><b>🧱 Letting bubblewrap build its sandbox on Ubuntu</b></summary>
-
-<br>
-
-Either give `bwrap` an AppArmor profile that allows user namespaces, in `/etc/apparmor.d/bwrap`:
-
-```text
-abi <abi/4.0>,
-include <tunables/global>
-
-profile bwrap /usr/bin/bwrap flags=(unconfined) {
-  userns,
-  include if exists <local/bwrap>
-}
-```
-
-then `sudo systemctl reload apparmor`. Or lift the restriction for the whole machine:
-
-```sh
-sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0
-```
-
-On other distributions, check `sysctl kernel.unprivileged_userns_clone` and `user.max_user_namespaces`.
-
-</details>
 
 ### 🪟 Windows (WSL2)
 
@@ -277,7 +246,7 @@ flowchart LR
 > Lost your passcode? **`make passcode`** shows it again, on this computer only, and **`make passcode ARGS=set`** changes it (typed hidden, twice). Changes and logins for other people are also in the control panel under **Settings → Logins and keys**.
 
 - It **asks once for your phone passcode**: type your own (6 to 128 characters), or press Enter for a random 6 digits. Without a terminal it picks a random one.
-- It **asks once where your projects are kept** (default: the folder this checkout is in) and writes `ALFRED_NEW_PROJECTS_DIR` and `ALFRED_TASK_READ_DIRS`.
+- It **asks once where your projects are kept** (default: the folder this checkout is in) and writes `ALFRED_NEW_PROJECTS_DIR`.
 - Then **set who you are**: your name and time zone in **Settings → About you** (or `ALFRED_USER_NAME`, `ALFRED_TIMEZONE`), plus what Alfred should know about you (below).
 - **Name your assistant** there too, if Alfred isn't for you: it goes by whatever you choose, from your next message (or `ALFRED_ASSISTANT_NAME`).
 - Every other setting has a default: see **[⚙️ Configuration](configuration.md)**.

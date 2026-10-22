@@ -1,17 +1,5 @@
-"""Run commands on the host outside Claude Code's sandbox: task host_run/start_job and voice-shell long jobs.
-
-Task commands run inside walls: allow by default, deny only
-  - reading secrets (Alfred secrets/ and .env, home logins/keys, secret-named files in home; commands.py lists), but
-    for the project env files a command's scripts may read (`keys`, from commands.project_keys)
-  - writing Alfred's folder, except task worktrees, cache, data/tasks/ and git objects
-  - writing home logins, shell start-up files and launch agents / systemd user units; the runner socket
-On macOS that's `sandbox-exec` with `profile()` (plus: no setuid /bin/ps). On Linux it's bubblewrap with
-`bwrap_args()`: the same rules as mounts, plus a pid namespace (no other process's /proc/<pid>/environ) and no session
-D-Bus (Secret Service, systemd-run). Network and other writes stay open (Xcode, package caches). `task_env()` strips
-.env keys and credential-named vars but keeps SSH_AUTH_SOCK. Approved brew/port installs (commands.own_sandbox) can't
-nest and run `walls=False` on macOS.
-
-  uv run python -m alfred.apps.host_check check    runs the walls' own checks on this computer (make host-check)
+"""Long jobs on the host, in their own session, surviving restarts: the voice shell's start_job, scheduled commands
+and audio renders (alfred.tasks.command_jobs). They run in a login shell without Alfred's own keys.
 """
 
 import asyncio
@@ -25,23 +13,19 @@ import re
 import shutil
 import signal
 import subprocess
-import sys
 import time
-from collections import deque
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import dotenv_values
 
 from alfred.auth import credentials, logins
-from alfred.config import DATA_DIR, HOME_DIR, ROOT, RUNNER_SOCKET, TASK_CACHE_DIR, WORKTREES_DIR
+from alfred.config import DATA_DIR, HOME_DIR
 from alfred.core import platform
 from alfred.core.files import write_atomic
-from alfred.llm import claude_logins
-from alfred.safety.commands import ALFRED_SECRETS, HOME_SECRETS, SECRET_DIRS, secret_file_names
 from alfred.safety.redact import redact
-from alfred.storage import profile as profiles  # not `profile`: that name is the sandbox profile here
+from alfred.storage import profile as profiles
 
 log = logging.getLogger("alfred.safety.host")
 
@@ -61,95 +45,15 @@ def _login_shell() -> tuple[str, str]:
     return "/bin/sh", "-lc"
 
 
-SANDBOX_EXEC = "/usr/bin/sandbox-exec"
-BWRAP = "/usr/bin/bwrap"  # else the first bwrap on PATH
-PS = "/bin/ps"  # setuid root: can show any process's environment
 SHELL = _login_shell()
-TASK_DATA_DIR = DATA_DIR / "tasks"  # research task folders and task jobs
-TASK_JOBS_DIR = TASK_DATA_DIR / "jobs"
-MAX_OUTPUT = 30_000  # chars of host_run output kept (head and tail)
-RUN_TIMEOUT = 600  # seconds; longer work should be a job
+TASK_DATA_DIR = DATA_DIR / "tasks"  # task folders
 
-# commands.SECRET_DIRS / SECRET_FILES, matched within one path component
-_SECRET_DIR_NAMES = "(" + "|".join(re.escape(d) for d in sorted(SECRET_DIRS)) + ")"
-_SECRET_FILE_NAMES = "(" + secret_file_names("[^/]", pem=False) + ")"
-# .pem files are keys, except CA bundles shipped by packages
-_PEM_KEPT = r"/(site-packages|dist-packages|node_modules|Cellar)/|/(ca|cert|certs|cacert|ca-bundle|ca-certificates)\.pem$"
-# Home files that could run something later, outside the walls
-_STARTUP_FILES = [".zshrc", ".zprofile", ".zshenv", ".zlogin", ".bashrc", ".bash_profile", ".profile", ".gitconfig"]
-_STARTUP_DIRS = ["Library/LaunchAgents", ".config/git"]
-# Linux adds login, X session and systemd user unit files (Alfred's own services are in ~/.config/systemd/user)
-_LINUX_STARTUP_FILES = [".bash_login", ".bash_logout", ".zlogout", ".xprofile", ".xsession", ".xsessionrc", ".xinitrc",
-                        ".pam_environment"]
-_LINUX_STARTUP_DIRS = [".config/systemd", ".config/autostart", ".config/environment.d", ".config/fish",
-                       ".local/share/systemd"]
 # Variable names that carry a credential
 SENSITIVE = re.compile(r"TOKEN|SECRET|PASSWORD|PASSCODE|API_?KEY|PRIVATE_KEY|MASTER_KEY|CREDENTIAL|AUTH",
                         re.IGNORECASE)
-# Kept: the SSH agent signs without exposing keys, so approved git push/ssh works
-_KEPT = {"SSH_AUTH_SOCK"}
-# The only readable ~/.ssh files (no keys), needed to connect via the agent
-_SSH_READABLE = ["known_hosts", "known_hosts2", "config"]
 
 
-# ── The walls ───────────────────────────────────────────────────
-
-
-def _real(path: Path | str) -> str:
-    """Path as Seatbelt sees it: absolute, symlinks (e.g. /tmp) resolved."""
-    return os.path.realpath(os.path.expanduser(str(path)))
-
-
-def _str(text: str) -> str:
-    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-def _rx(text: str) -> str:
-    """Escape for a Seatbelt regex. Quotes can't be escaped in #"...", so they become `.`."""
-    return re.sub(r"([.^$*+?()\[\]{}|\\])", r"\\\1", text).replace('"', ".")
-
-
-def _any(*filters: str) -> str:
-    return f"(require-any {' '.join(filters)})"
-
-
-def profile(home: Path | str | None = None, keys: Iterable[Path] = ()) -> str:
-    """Seatbelt profile for a task's host commands; `keys` stay readable."""
-    home = _real(home or Path.home())
-    root = _real(ROOT)
-    own = list(dict.fromkeys([root, _real(HOME_DIR)]))  # the checkout, and ALFRED_HOME when that's elsewhere
-    secret_paths = [_real(p) for p in ALFRED_SECRETS] + [_real(p.replace("~", home, 1)) for p in HOME_SECRETS]
-    reads = _any(
-        *(f"(subpath {_str(p)})" for p in dict.fromkeys(secret_paths)),
-        f'(regex #"^{_rx(home)}/(.*/)?{_SECRET_DIR_NAMES}(/|$)")',
-        f'(regex #"^{_rx(home)}/(.*/)?{_SECRET_FILE_NAMES}$")',
-        f'(require-all (regex #"^{_rx(home)}/.*\\.pem$") (require-not (regex #"{_PEM_KEPT}")))',
-        *(f'(regex #"^{_rx(p)}/(.*/)?{_SECRET_FILE_NAMES}$")' for p in own),
-    )
-    git = f"{root}/.git"
-    writable = _any(*(f"(subpath {_str(_real(p))})" for p in (WORKTREES_DIR, TASK_CACHE_DIR, TASK_DATA_DIR)),
-                    f"(subpath {_str(git)})")
-    writes = _any(
-        *(f"(require-all (subpath {_str(p)}) (require-not {writable}))" for p in own),
-        f"(subpath {_str(git + '/hooks')})", f"(literal {_str(git + '/config')})",
-        *(f"(subpath {_str(p)})" for p in dict.fromkeys(secret_paths)),
-        *(f"(literal {_str(f'{home}/{name}')})" for name in _STARTUP_FILES),
-        *(f"(subpath {_str(f'{home}/{name}')})" for name in _STARTUP_DIRS),
-    )
-    readable = _any(f"(subpath {_str(_real(claude_logins.voice_logs()))})",
-                    *(f"(literal {_str(f'{home}/.ssh/{name}')})" for name in _SSH_READABLE),
-                    *(f"(literal {_str(_real(p))})" for p in keys))
-    sock = _real(RUNNER_SOCKET)
-    return "\n".join([
-        "(version 1)",
-        "(allow default)",
-        f"(deny file-read* (require-all {reads} (require-not {readable})))",
-        f"(deny file-write* {writes})",
-        f"(deny file-read* file-write* (literal {_str(sock)}))",
-        f"(deny network-outbound (remote unix-socket (path-literal {_str(sock)})))",
-        # Setuid ps can read other processes' environments (MCP tokens). Seatbelt already blocks setuid; be explicit.
-        f"(deny process-exec (literal {_str(PS)}))",
-    ])
+# ── Environment ─────────────────────────────────────────────────
 
 
 def env_keys() -> set[str]:
@@ -163,340 +67,8 @@ def scrubbed_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k not in secret}
 
 
-def task_env() -> dict[str, str]:
-    """scrubbed_env() minus credential-named vars, keeping SSH_AUTH_SOCK. On Linux also without the session bus."""
-    dropped = {"DBUS_SESSION_BUS_ADDRESS"} if platform.LINUX else set()
-    return {k: v for k, v in scrubbed_env().items()
-            if k in _KEPT or not (SENSITIVE.search(k) or k in dropped)}
-
-
-def walled(argv: list[str], home: Path | str | None = None, keys: Iterable[Path] = ()) -> list[str]:
-    """Wrap argv in the host walls, `keys` (project env files) left readable. Raises RuntimeError if they can't go up
-    (never runs unwalled)."""
-    if platform.MAC:
-        if not Path(SANDBOX_EXEC).exists():
-            raise RuntimeError("sandbox-exec isn't on this computer, so host commands can't run safely")
-        return [SANDBOX_EXEC, "-p", profile(home, keys), *argv]
-    if platform.LINUX:
-        bwrap = _bwrap()
-        for folder in (WORKTREES_DIR, TASK_CACHE_DIR, TASK_DATA_DIR):  # can't be made from inside
-            folder.mkdir(parents=True, exist_ok=True)
-        return [bwrap, *bwrap_args(home, keys), *argv]
-    raise RuntimeError(f"host commands have no walls on {sys.platform}, so they can't run safely")
-
-
-# ── The walls on Linux (bubblewrap) ─────────────────────────────
-# The Seatbelt rules as mounts over the whole filesystem (bound read-write, as macOS allows by default):
-#   denied reads   a read-only empty tmpfs over a folder, /dev/null over a file
-#   denied writes  a read-only bind
-#   home, ~/.config, Alfred's data folder  rebuilt: a tmpfs with each existing entry bound back. Missing start-up files
-#                  and logins then can't be created, and the runner socket (left out) stays out even if it's remade.
-# Mounts go shallowest first, so a deeper one (a task worktree, ~/.ssh/known_hosts) lands on top. --unshare-pid hides
-# other processes and their environments; the session is the bwrap process's, so jobs are tracked and stopped as on
-# macOS (killing the namespace's init ends everything inside). No --new-session: it would start a session of its own,
-# and with no controlling terminal and a fresh /dev/pts there's no terminal to inject into. No --die-with-parent: jobs
-# outlive the runner. bwrap sets no_new_privs, so setuid programs (sudo) can't gain root.
-# Weaker than Seatbelt's regexes: secret-named files are found by a bounded walk at launch (_WALK_*), so one deeper,
-# in a skipped folder, or made later is readable; a masked file replaced by rename during a long job shows through.
-
-# The walk for secret-named files under home and Alfred's folder
-_WALK_ENTRIES = 100_000  # directory entries looked at per launch, breadth first
-_WALK_DEPTH = 8  # folder levels below each root
-_WALK_REUSE = 60  # seconds a walk's findings are reused (a big home takes a second or two)
-_WALK_SKIPPED = {"node_modules", ".git", "__pycache__", "site-packages", "dist-packages", ".venv", "venv", ".tox",
-                 ".cache", ".npm", ".rustup", ".gradle", ".m2", "snap", "Library", ".Trash"}
-# Hardware some host work needs (emulators, GPUs, a phone over USB); none of it holds secrets
-_DEVICES = ["/dev/kvm", "/dev/dri", "/dev/bus/usb"]
-_BWRAP_MISSING = ("bubblewrap (bwrap) isn't installed, so host commands can't run safely. Install it "
-                  "(sudo apt install bubblewrap, or sudo dnf install bubblewrap) and try again")
-
-# Rules, weakest first: a path keeps the strictest given
-RW, LINK, TMPFS_RW, TMPFS, RO, MASK = "rw", "link", "tmpfs-rw", "tmpfs", "ro", "mask"
-_RANK = {RW: 0, LINK: 1, TMPFS_RW: 2, TMPFS: 3, RO: 4, MASK: 5}
-
-_bwrap_ready = ""  # the bwrap that has started a sandbox here
-
-
-def _bwrap() -> str:
-    """bwrap's path, once it's shown it can build a sandbox here; else RuntimeError saying how to fix it."""
-    global _bwrap_ready
-    path = BWRAP if os.access(BWRAP, os.X_OK) else shutil.which("bwrap")
-    if not path:
-        raise RuntimeError(_BWRAP_MISSING)
-    if path == _bwrap_ready:
-        return path
-    try:
-        probe = subprocess.run([path, "--unshare-pid", "--bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
-                                "/bin/sh", "-c", "exit 0"], stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                               timeout=30, check=False)
-        why = (probe.stderr.strip() or f"exit code {probe.returncode}") if probe.returncode else ""
-    except (OSError, subprocess.TimeoutExpired) as e:
-        why = str(e)
-    if why:
-        raise RuntimeError(
-            f"bubblewrap can't build its sandbox here ({why[:300]}), so host commands can't run safely. Unprivileged "
-            "user namespaces are probably off: on Ubuntu 23.10 and later AppArmor restricts them (give bwrap an "
-            "AppArmor profile that allows userns, or sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0); "
-            "elsewhere check sysctl kernel.unprivileged_userns_clone and user.max_user_namespaces")
-    _bwrap_ready = path
-    return path
-
-
-_walks: dict[tuple, tuple[float, list[str]]] = {}  # (roots, skip) -> (when, found)
-
-
-def _secret_matches(roots: list[str], skip: set[str]) -> list[str]:
-    """_walk's findings, reused for _WALK_REUSE seconds."""
-    key = (tuple(roots), frozenset(skip))
-    if (kept := _walks.get(key)) and time.monotonic() - kept[0] < _WALK_REUSE:
-        return kept[1]
-    _walks.clear()
-    found = _walk(roots, skip)
-    _walks[key] = time.monotonic(), found
-    return found
-
-
-def _walk(roots: list[str], skip: set[str]) -> list[str]:
-    """Secret-named files and folders under `roots`, breadth first within _WALK_DEPTH and _WALK_ENTRIES."""
-    names = re.compile(_SECRET_FILE_NAMES, re.IGNORECASE)
-    pem_kept = re.compile(_PEM_KEPT)
-    found: list[str] = []
-    seen = 0
-    roots = [r for r in dict.fromkeys(roots) if os.path.isdir(r)]
-    queue = deque((r, 0) for r in roots)
-    skip = skip | set(roots)  # each root is walked once, not again from inside another
-    while queue:
-        folder, depth = queue.popleft()
-        try:
-            entries = list(os.scandir(folder))
-        except OSError:
-            continue
-        for entry in entries:
-            seen += 1
-            if seen > _WALK_ENTRIES:
-                log.warning("secret walk stopped after %d entries: deeper secret-named files stay readable", _WALK_ENTRIES)
-                return found
-            if entry.path in skip:
-                continue
-            try:
-                is_dir = entry.is_dir()
-                linked = entry.is_symlink()
-            except OSError:
-                continue
-            if entry.name in SECRET_DIRS:
-                found.append(entry.path)
-            elif is_dir:
-                if not linked and entry.name not in _WALK_SKIPPED and depth < _WALK_DEPTH:
-                    queue.append((entry.path, depth + 1))
-            elif names.fullmatch(entry.name) or (entry.name.lower().endswith(".pem") and not pem_kept.search(entry.path)):
-                found.append(entry.path)
-    return found
-
-
-def _bus_paths() -> list[str]:
-    """Socket paths in DBUS_SESSION_BUS_ADDRESS. An abstract one can't be hidden without cutting the network."""
-    paths = []
-    for address in os.environ.get("DBUS_SESSION_BUS_ADDRESS", "").split(";"):
-        if address.startswith("unix:"):
-            paths += [kv[5:] for kv in address[5:].split(",") if kv.startswith("path=")]
-    return paths
-
-
-def _ancestors(path: str) -> Iterator[str]:
-    while (parent := os.path.dirname(path)) != path:
-        yield (path := parent)
-
-
-def bwrap_args(home: Path | str | None = None, keys: Iterable[Path] = ()) -> list[str]:
-    """bubblewrap options for a task's host commands on Linux: profile()'s rules as mounts. The command follows."""
-    home = _real(home or Path.home())
-    root, data, sock = _real(ROOT), _real(DATA_DIR), _real(RUNNER_SOCKET)
-    rules: dict[str, str] = {}
-    rebuilt: dict[str, tuple[str, set[str]]] = {}  # folder -> (its entries' rule, names left out)
-
-    def put(path: str, rule: str) -> None:
-        if os.path.lexists(path) and _RANK[rule] > _RANK.get(rules.get(path, ""), -1):
-            rules[path] = rule
-
-    def rebuild(folder: str, entries: str, base: str = TMPFS, left_out: Iterable[str] = ()) -> None:
-        if os.path.isdir(folder):
-            put(folder, base)
-            rebuilt[folder] = entries, set(left_out)
-
-    # Writes: Alfred's folder only in task worktrees, cache, task folders and git objects (not hooks or config)
-    put(root, RO)
-    put(_real(HOME_DIR), RO)
-    if os.path.dirname(sock) == data:
-        rebuild(data, RO, left_out=[os.path.basename(sock)])
-    else:
-        rebuild(data, RO)
-        put(sock, MASK)
-    for folder in (WORKTREES_DIR, TASK_CACHE_DIR, TASK_DATA_DIR):
-        put(_real(folder), RW)
-    git = f"{root}/.git"
-    put(git, RW)
-    put(f"{git}/hooks", RO)
-    put(f"{git}/config", RO)
-    rebuild(home, RW)
-    rebuild(_real(f"{home}/.config"), RW)
-    for name in [*_STARTUP_FILES, *_STARTUP_DIRS, *_LINUX_STARTUP_FILES, *_LINUX_STARTUP_DIRS]:
-        put(_real(f"{home}/{name}"), RO)  # a linked dotfile's target too
-    # Reads
-    secret_paths = [_real(p) for p in ALFRED_SECRETS] + [_real(p.replace("~", home, 1)) for p in HOME_SECRETS]
-    for path in secret_paths:
-        put(path, MASK)
-    shown = [_real(claude_logins.voice_logs()), *(_real(f"{home}/.ssh/{name}") for name in _SSH_READABLE),
-             *(_real(p) for p in keys)]
-    if agent := os.environ.get("SSH_AUTH_SOCK"):
-        shown.append(_real(agent))  # the agent signs without giving out keys, even from inside ~/.ssh
-    walked = {p for p, rule in rules.items() if rule == MASK} | set(shown)
-    for path in _secret_matches(list(dict.fromkeys([root, _real(HOME_DIR), home])), walked):
-        put(_real(path), MASK)
-    # The session bus: the Secret Service hands out keyring passwords, systemd-run starts anything outside the walls
-    runtime = _real(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
-    rebuild(runtime, RW, TMPFS_RW, left_out=["bus", "systemd"])
-    for path in _bus_paths():
-        put(_real(path), MASK)
-
-    links: dict[str, str] = {}
-    for folder, (rule, left_out) in rebuilt.items():
-        if rules.get(folder) not in (TMPFS, TMPFS_RW):
-            continue  # masked instead
-        try:
-            entries = sorted(os.scandir(folder), key=lambda e: e.name)
-        except OSError as e:
-            raise RuntimeError(f"can't list {folder} to wall it in ({e}), so host commands can't run safely") from e
-        for entry in entries:
-            if entry.name in left_out or entry.path in rules:
-                continue
-            if entry.is_symlink():
-                links[entry.path] = os.readlink(entry.path)
-                rules[entry.path] = LINK
-            else:
-                rules[entry.path] = rule
-
-    # Nothing under a hidden folder comes back, except what's shown
-    hidden = {p for p, rule in rules.items() if rule == MASK and os.path.isdir(p)}
-    rules = {p: rule for p, rule in rules.items() if hidden.isdisjoint(_ancestors(p))}
-    shown = [p for p in dict.fromkeys(shown) if os.path.lexists(p) and not hidden.isdisjoint(_ancestors(p))]
-
-    args = ["--unshare-pid", "--bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
-    for device in _DEVICES + sorted(str(p) for p in Path("/dev").glob("nvidia*")):
-        args += ["--dev-bind-try", device, device]
-    read_only_tmpfs = []
-    for path in sorted(rules, key=lambda p: (p.count("/"), p)):
-        rule = rules[path]
-        if rule == RW:
-            args += ["--bind", path, path]
-        elif rule == RO:
-            args += ["--ro-bind", path, path]
-        elif rule == LINK:
-            args += ["--symlink", links[path], path]
-        elif rule == TMPFS_RW:
-            args += ["--tmpfs", path]
-        elif rule == TMPFS or path in hidden:
-            args += ["--tmpfs", path]
-            read_only_tmpfs.append(path)
-        else:  # a masked file
-            args += ["--ro-bind", "/dev/null", path]
-    for path in shown:
-        args += ["--ro-bind", path, path]
-    for path in read_only_tmpfs:  # after what's mounted inside them
-        args += ["--remount-ro", path]
-    return args
-
-
-# ── Commands ────────────────────────────────────────────────────
-
-
-@dataclass
-class Ran:
-    code: int | None  # None: killed at the timeout
-    output: str  # stdout+stderr, middle elided past MAX_OUTPUT
-    seconds: float
-
-    def text(self) -> str:
-        how = f"exit code {self.code}" if self.code is not None else "stopped: it ran past its time limit"
-        return f"[{how}, {self.seconds:.0f} s]\n{self.output}".rstrip()
-
-
-class _Output:
-    """Bounded output buffer: fixed head plus rolling tail."""
-
-    def __init__(self, limit: int = MAX_OUTPUT) -> None:
-        self.limit, self.head, self.tail, self.size = limit, bytearray(), bytearray(), 0
-
-    def add(self, data: bytes) -> None:
-        self.size += len(data)
-        room = self.limit - len(self.head)
-        self.head += data[:max(room, 0)]
-        self.tail = (self.tail + data[max(room, 0):])[-self.limit:]
-
-    def text(self) -> str:
-        if self.size <= self.limit:
-            return bytes(self.head).decode(errors="replace")
-        head, tail = self.limit // 3, self.limit - self.limit // 3
-        whole = bytes(self.head + self.tail)
-        return (f"{whole[:head].decode(errors='replace')}\n… {self.size - self.limit} characters cut …\n"
-                f"{whole[-tail:].decode(errors='replace')}")
-
-
-def _send(pid: int, sig: int, group: bool = True) -> None:
-    """Send `sig` to the process group led by `pid` (or `pid` alone); ignore if gone."""
-    try:
-        (os.killpg if group else os.kill)(pid, sig)
-    except (ProcessLookupError, PermissionError):
-        pass
-
-
-def _kill(pid: int) -> None:
-    _send(pid, signal.SIGKILL)
-
-
-async def run(command: str, cwd: Path, timeout: float = RUN_TIMEOUT, walls: bool = True,
-              shell: tuple[str, ...] = SHELL, env: dict[str, str] | None = None,
-              started: Callable[[int], None] | None = None, keys: Iterable[Path] = ()) -> Ran:
-    """Run in a new session; wait for it and anything holding its output, up to `timeout` s, then kill.
-
-    `env` extends task_env(). `started` receives the session id (shell pid) on start. `keys`: project env files the
-    walls leave readable. Cancellation kills it.
-    """
-    argv = [*shell, command]
-    start = time.monotonic()
-    if walls:
-        argv = await asyncio.to_thread(walled, argv, keys=keys)  # on Linux it walks home for secret-named files
-    proc = await asyncio.create_subprocess_exec(
-        *argv, cwd=cwd, env=task_env() | (env or {}), stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
-    if started:
-        started(proc.pid)
-    output = _Output()
-
-    async def read() -> None:
-        while data := await proc.stdout.read(65536):
-            output.add(data)
-
-    reader = asyncio.ensure_future(read())
-    try:
-        await asyncio.wait_for(asyncio.shield(reader), timeout)
-        # Under bubblewrap the leader also waits for everything left in its pid namespace, so this is bounded too
-        code = await asyncio.wait_for(proc.wait(), max(timeout - (time.monotonic() - start), 5))
-    except TimeoutError:
-        _kill(proc.pid)
-        try:  # a child in its own session may still hold the output open
-            await asyncio.wait_for(reader, 5)
-        except TimeoutError:
-            pass
-        code = None
-    except asyncio.CancelledError:
-        _kill(proc.pid)
-        reader.cancel()
-        raise
-    return Ran(code, output.text(), time.monotonic() - start)
-
-
 # ── Which processes are whose ───────────────────────────────────
-# Each host command gets its own session. A session is identified by (leader pid, start time), since pids get reused.
+# Each job gets its own session. A session is identified by (leader pid, start time), since pids get reused.
 
 
 class _BsdInfo(ctypes.Structure):
@@ -604,17 +176,6 @@ def _unchanged(pid: int, started: float) -> bool:
     return now is None or abs(now - started) <= 2
 
 
-def in_sessions(pid: int, sessions: Iterable[tuple[int, float]]) -> bool:
-    """Whether a running process is in one of `sessions`, each (leader pid, start time)."""
-    if pid <= 1:
-        return False
-    try:
-        sid = os.getsid(pid)
-    except OSError:
-        return False
-    # The leader may have exited; if its pid is in use, it must still be the same process
-    return any(sid == leader and _unchanged(leader, at) for leader, at in sessions)
-
 
 _SZOMB = 5  # zombie: ended, not yet reaped (sys/proc.h)
 
@@ -641,10 +202,12 @@ def session_members(leader: int) -> list[int]:
     return [p.pid for p in _session(leader) if not p.zombie]
 
 
-def lingering(leader: int) -> list[tuple[int, str]]:
-    """(pid, program name) of non-leader processes in a session, oldest first."""
-    found = sorted((p.start, p.pid, p.name) for p in _session(leader) if p.pid != leader)
-    return [(pid, name) for _, pid, name in found]
+def _send(pid: int, sig: int, group: bool = True) -> None:
+    """Send `sig` to the process group led by `pid` (or `pid` alone); ignore if gone."""
+    try:
+        (os.killpg if group else os.kill)(pid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
 
 
 # ── Long jobs ───────────────────────────────────────────────────
@@ -691,12 +254,11 @@ def alive(pid: int) -> bool:
 class Jobs:
     """Long commands in their own session, surviving CLI, voice-session and runner restarts.
 
-    Files in `folder`: N.json (record), N.log (output), N.exit (status) or N.stopped. Task jobs carry `task` and run
-    inside the host profile when `walls`.
+    Files in `folder`: N.json (record), N.log (output), N.exit (status) or N.stopped. A task's jobs carry `task`.
     """
 
-    def __init__(self, folder: Path, shell: tuple[str, ...] = SHELL, notify: bool = True, walls: bool = False) -> None:
-        self.folder, self.shell, self.notify, self.walls = folder, shell, notify, walls
+    def __init__(self, folder: Path, shell: tuple[str, ...] = SHELL, notify: bool = True) -> None:
+        self.folder, self.shell, self.notify = folder, shell, notify
         self.poll = JOB_POLL
         self.grace = STOP_GRACE
         self._watchers: set[asyncio.Task] = set()
@@ -712,13 +274,11 @@ class Jobs:
         return sorted(records, key=lambda r: r["id"])
 
     def launch(self, command: str, title: str, cwd: Path, task: int | None = None, env: dict[str, str] | None = None,
-               report: bool = False, extra: dict | None = None, job_id: int | None = None,
-               walls: bool = True, keys: Iterable[Path] = ()) -> dict:
+               report: bool = False, extra: dict | None = None, job_id: int | None = None) -> dict:
         """Start a job; returns its record.
 
         Raises ValueError if `cwd` isn't a folder or an explicit `job_id` is taken. `report`: its last output line is
-        spoken at the end. `extra` is merged into the record. `walls=False` skips the profile (commands.own_sandbox);
-        `keys`: project env files the walls leave readable.
+        spoken at the end. `extra` is merged into the record.
         """
         if not cwd.is_dir():
             raise ValueError(f"{cwd} isn't a folder.")
@@ -728,13 +288,12 @@ class Jobs:
         elif (self.folder / f"{job_id}.json").exists():
             raise ValueError(f"There's already a job {job_id}.")
         base = self.folder / str(job_id)
-        env = (task_env() if self.walls else scrubbed_env()) | (env or {}) | {
+        env = scrubbed_env() | (env or {}) | {
             "ALFRED_JOB_COMMAND": command, "ALFRED_JOB_EXIT": f"{base}.exit", "ALFRED_JOB_ID": str(job_id),
             "ALFRED_JOB_TITLE": title, "ALFRED_JOB_NOTIFY": "1" if self.notify else "",
             "ALFRED_JOB_FROM": profiles.assistant(),  # the notification's title
         }
         argv = [*self.shell, _JOB_SCRIPT]
-        argv = walled(argv, keys=keys) if self.walls and walls else argv  # before the log, so a refusal leaves none
         # Popen, not asyncio subprocesses, which kill their child when the loop drops them
         with open(f"{base}.log", "wb") as out:
             proc = subprocess.Popen(argv, cwd=cwd, env=env,
@@ -792,10 +351,6 @@ class Jobs:
         now = time.time()
         return [self._view(job, now) for job in self._records()
                 if now - job["started"] <= 86400 and (task is None or job.get("task") == task)]
-
-    def sessions(self, task: int) -> list[tuple[int, float]]:
-        """(pid, start time) per job of `task`, as in_sessions takes them."""
-        return [(job["pid"], job["started"]) for job in self._records() if job.get("task") == task]
 
     def get(self, job_id: int, task: int | None = None) -> dict | None:
         return next((j for j in self._records() if j["id"] == job_id and (task is None or j.get("task") == task)), None)
@@ -865,15 +420,3 @@ class Jobs:
                 return False
             await asyncio.sleep(0.05)
         return True
-
-    def stop_all(self, task: int) -> list[int]:
-        """Kill a task's jobs that are still running; returns their ids."""
-        stopped = []
-        for job in self._records():
-            if job.get("task") == task and self._state(job) == RUNNING:
-                _kill(job["pid"])
-                stopped.append(job["id"])
-        return stopped
-
-
-# ── Checking the walls on this computer ─────────────────────────

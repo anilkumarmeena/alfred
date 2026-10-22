@@ -397,7 +397,6 @@ def test_help_prints_usage_without_setting_anything_up(monkeypatch, capsys):
 @pytest.fixture
 def no_folder_env(monkeypatch):
     monkeypatch.delenv("ALFRED_NEW_PROJECTS_DIR", raising=False)
-    monkeypatch.delenv("ALFRED_TASK_READ_DIRS", raising=False)
     monkeypatch.setattr(config, "projects_home", lambda: Path.home() / "code")
 
 
@@ -406,14 +405,14 @@ def test_setup_asks_where_projects_are_once(no_folder_env, monkeypatch):
     asked = []
     text = setup_local.ask_projects_folder("A=1\n", ask=lambda q: asked.append(q) or "~/work")
     assert "[~/code]" in asked[0]
-    assert "ALFRED_NEW_PROJECTS_DIR=~/work\n" in text and "ALFRED_TASK_READ_DIRS=~/work\n" in text
+    assert "ALFRED_NEW_PROJECTS_DIR=~/work\n" in text
     assert setup_local.ask_projects_folder(text, ask=lambda q: pytest.fail("asked again")) == text
 
 
 def test_without_a_terminal_setup_takes_the_default(no_folder_env, monkeypatch):
     monkeypatch.setattr(setup_local.sys.stdin, "isatty", lambda: False, raising=False)
-    text = setup_local.ask_projects_folder("ALFRED_TASK_READ_DIRS=~/a,~/b\n", ask=lambda q: pytest.fail("asked"))
-    assert "ALFRED_NEW_PROJECTS_DIR=~/code\n" in text and "ALFRED_TASK_READ_DIRS=~/a,~/b\n" in text
+    text = setup_local.ask_projects_folder("A=1\n", ask=lambda q: pytest.fail("asked"))
+    assert "ALFRED_NEW_PROJECTS_DIR=~/code\n" in text
 
 
 def test_closed_input_takes_the_default(no_folder_env, monkeypatch):

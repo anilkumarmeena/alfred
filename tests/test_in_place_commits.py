@@ -1,22 +1,16 @@
-"""Tests for commits in the user's own checkout: an in-place task commits only when the user's own words order it."""
+"""Tests for commits in the user's own checkout: the user's words that order one, what an in-place task is told, and
+what a run reports."""
 
 import asyncio
 
 import pytest
 from test_approvals import pushes, running_task  # noqa: F401  (pushes is a fixture)
 from test_in_place import NullReporter, env, git, worker_task  # noqa: F401  (env is a fixture)
-from test_nudges import fake_run, settle
 
 from alfred.llm.claude import ATTRIBUTION
-from alfred.safety.commands import in_place_git, orders, refused
+from alfred.safety.commands import orders
 from alfred.storage import profile
 from alfred.tasks import git_ops, runner, worker
-from alfred.tasks.gate import TaskGate
-from alfred.tasks.worker import Outcome
-from conftest import use_task_cache
-
-HEREDOC = "git add app.py && git commit -m \"$(cat <<'EOF'\nFix the typo, it's done\n\nCo-Authored-By: Alfred\nEOF\n)\""
-
 
 # ── What orders a commit ────────────────────────────────────────
 
@@ -38,123 +32,28 @@ def test_a_commit_named_doubted_or_unasked_orders_none(said):
     assert "commit" not in orders(said)
 
 
-# ── Which git commands an ordered commit lets through ───────────
+# ── What an in-place task is told ───────────────────────────────
 
 
-@pytest.mark.parametrize("command", ["git commit -m 'Fix typo'", "git add app.py && git commit -m x", HEREDOC,
-                                     "git -C . commit -qm x"])
-def test_a_plain_commit_is_found_as_just_a_commit(command):
-    assert in_place_git(command) == ["commit"]
-
-
-@pytest.mark.parametrize("command, found", [
-    ("git commit --amend --no-edit", ["commit --amend"]), ("git commit --am -m x", ["commit --amend"]),
-    ("git commit -m x && git push", ["commit", "push"]), ("git commit -m x; git reset --hard HEAD~1", ["commit", "reset"]),
-    ("git checkout -b fix && git commit -m x", ["checkout", "commit"]), ("git status && npm test", []),
-    ("cd app&&git commit -m \"$(cat <<'EOF'\nit's\nEOF\n)\"; echo \"x", ["commit"]),  # unparsable: still seen
-    ("bash <<EOF\ngit commit -m x\nEOF", ["commit"]),  # a heredoc a shell runs is commands
-])
-def test_what_else_a_commit_comes_with_is_found_too(command, found):
-    assert in_place_git(command) == found
-
-
-def test_a_commit_message_s_lines_are_not_read_as_commands():
-    message = HEREDOC.replace("Fix the typo", "Make git push retry on 503\ngit reset no longer needed")
-    assert in_place_git(message) == ["commit"]
-
-
-def test_on_the_computer_itself_commits_stay_refused_to_in_place_tasks():
-    assert "leave to them" in refused(HEREDOC, in_place=True)  # an unparsable heredoc message included
-    assert refused(HEREDOC) == ""
-
-
-# ── The task's gate ─────────────────────────────────────────────
-
-
-def bash(gate: TaskGate, command: str) -> dict:
-    return asyncio.run(gate.pre_tool_use({"tool_name": "Bash", "tool_input": {"command": command}}, "t1", None))
-
-
-def denied(out: dict) -> str:
-    return out.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
-
-
-@pytest.mark.parametrize("ordered", [lambda: True, lambda: asyncio.sleep(0, True)])  # here, or asked over a link
-def test_a_task_commits_in_place_once_the_user_ordered_it(tmp_path, ordered):
-    gate = TaskGate(tmp_path, [tmp_path], [tmp_path], commit_ordered=ordered)
-    assert bash(gate, "git commit -m 'Fix typo'") == {}
-    assert "--amend" in denied(bash(gate, "git commit --amend --no-edit"))
-    assert "git push" in denied(bash(gate, "git commit -m x && git push"))
-
-
-def test_without_an_order_a_commit_is_denied_saying_why(tmp_path):
-    asked = []
-    gate = TaskGate(tmp_path, [tmp_path], [tmp_path], commit_ordered=lambda: asked.append(1) or False)
-    assert f"only when {profile.name()}'s own words ask for one" in denied(bash(gate, HEREDOC))
-    assert bash(gate, "git status && npm test") == {} and len(asked) == 1  # only a commit asks about the order
-    assert "git stash" in denied(bash(gate, "git -C . stash"))  # what the CLI's deny rules miss
-
-
-def test_a_worktree_task_s_shell_is_left_to_the_sandbox(tmp_path):
-    assert bash(TaskGate(tmp_path, [tmp_path], [tmp_path]), "git commit -m x && git push") == {}
-
-
-def test_only_an_in_place_task_asks_about_commit_orders(env, monkeypatch):
-    use_task_cache(monkeypatch, env["tmp"] / "cache")
-
-    class Ordered(NullReporter):
-        def commit_ordered(self, task_id: int) -> bool:
-            return task_id == 9
-
-    opts = worker._options(worker_task(in_place=1, worktree=str(env["video"]), branch="main"), Ordered())
-    assert opts.can_use_tool.commit_ordered() is True
-    assert f'end the message with "{ATTRIBUTION["commit"]}"' in opts.system_prompt["append"]
-    assert worker._options(worker_task(), Ordered()).can_use_tool.commit_ordered is None
+def test_an_in_place_task_is_told_to_commit_only_when_asked_and_how(env):  # noqa: F811
+    opts = worker._options(worker_task(in_place=1, worktree=str(env["video"]), branch="main"), NullReporter())
+    prompt = opts.system_prompt["append"]
+    assert f"Commit only when {profile.name()}'s own request asks you to" in prompt
+    assert f'end the message with "{ATTRIBUTION["commit"]}"' in prompt
+    assert "Bash(git push:*)" in opts.disallowed_tools and "Bash(git commit:*)" not in opts.disallowed_tools
 
 
 # ── The runner: orders kept on the task ─────────────────────────
-
-
-def test_the_users_order_to_commit_reaches_the_task_from_its_start_or_a_reply(env, monkeypatch):
-    seen: list[bool] = []
-
-    def checks(summary: str):
-        async def body(task, prompt, reporter) -> Outcome:
-            reporter.session(task["id"], "s1")
-            seen.append(reporter.commit_ordered(task["id"]))
-            return Outcome(summary, "", 0.01)
-        return body
-
-    fake_run(monkeypatch, checks("Fixed."), checks("Fixed."), checks("Committed."))
-
-    async def main():
-        r = runner.Runner()
-        r.start("code_change", "fix typo", "Fix the typo and commit it", "video-agent", order="Fix the typo and commit it.")
-        await settle(r)
-        unasked = r.start("code_change", "fix typo", "Fix the typo", "video-agent")
-        await settle(r)
-        r.reply(unasked["id"], "Commit it now.", order="Commit it now.")
-        await settle(r)
-
-    asyncio.run(main())
-    assert seen == [True, False, True]
 
 
 def test_a_change_of_mind_takes_back_the_order_to_commit(env, pushes):  # noqa: F811
     r = runner.Runner()
     task = running_task(r, "fix typo")
     r.reply(task["id"], "Fix it and commit and push.", order="Fix it and commit and push.")
-    assert r.commit_ordered(task["id"])
+    assert any("commit" in orders(o["said"]) for o in r._orders(task["id"]))
     r.reply(task["id"], "Actually, don't commit yet.", order="Actually, don't commit yet.")
-    assert not r.commit_ordered(task["id"])
+    assert not any("commit" in orders(o["said"]) for o in r._orders(task["id"]))
     assert any("no longer order a commit" in e["text"] for e in r.store.history(task["id"]))
-
-
-def test_a_failed_check_for_an_order_keeps_the_commit_from_running(tmp_path):
-    def broken() -> bool:
-        raise RuntimeError("database is locked")
-
-    assert "only when" in denied(bash(TaskGate(tmp_path, [tmp_path], [tmp_path], commit_ordered=broken), "git commit -m x"))
 
 
 # ── What the run reports ────────────────────────────────────────

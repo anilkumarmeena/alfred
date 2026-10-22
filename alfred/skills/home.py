@@ -11,7 +11,6 @@ the approved digest. Folders added by hand appear disabled; removed folders drop
 Safety (a skill's own text can't lower any of these):
 - Frontmatter outside KEPT (allowed-tools, hooks, model, ...) is stripped on save/install (`sanitize`); a skill that
   regains it is skipped. allowed-tools would bypass the brain's gate.
-- Sessions set FLAGS: no hooks, no !`command` execution.
 - Skills with scripts are used only while their files match the digest the user approved after a review.
 - Symlinks inside a skill folder are refused.
 - Scripts run like any other command, inside the same sandbox and approval gates.
@@ -50,8 +49,6 @@ INSTRUCTIONS_MAX = 20_000
 # permissions or run things, so it is stripped.
 KEPT = ("name", "description", "when_to_use", "argument-hint", "arguments", "version", "license", "compatibility",
         "metadata", "created_by", "improved_by", "user-invocable", "disable-model-invocation")
-# Session settings: no skill hooks, no !`command` execution on load
-FLAGS = {"disableAllHooks": True, "disableSkillShellExecution": True}
 
 SCRIPTS = {".sh", ".bash", ".zsh", ".fish", ".command", ".tool", ".py", ".pyw", ".js", ".mjs", ".cjs", ".ts", ".mts",
            ".cts", ".jsx", ".tsx", ".rb", ".pl", ".pm", ".php", ".lua", ".r", ".ps1", ".psm1", ".bat", ".cmd", ".vbs",

@@ -17,7 +17,7 @@ from alfred.integrations.mcp_servers import Server, Tool
 from alfred.storage import profile
 from alfred.tasks import approvals, repo_files, runner, worker
 from alfred.tasks.connection_calls import NEVER, WHY, ConnectionGate, call_item
-from alfred.tasks.gate import TaskGate
+from alfred.tasks.gate import AutoGate
 from alfred.tasks.store import APPROVED, nudges
 from conftest import use_task_cache
 
@@ -136,28 +136,15 @@ class Asked:
 
 def test_the_task_gate_sends_changes_and_own_inbox_tools_to_the_connection_gate(tmp_path):
     reporter = Asked()
-    gate = TaskGate(tmp_path, [], [], connections=ConnectionGate(9, [lab()], reporter))
+    gate = AutoGate(9, tmp_path, reporter, ConnectionGate(9, [lab()], reporter))
 
     async def main():
-        return (await gate(TODO, {"id": 7}, ctx()), await gate("mcp__gitlab__delete_issue", {}, ctx()),
-                await gate.pre_tool_use({"tool_name": THREAD, "tool_input": INLINE}, "u2", None))
+        return await gate(TODO, {"id": 7}, ctx()), await gate(THREAD, INLINE, ctx(use="u2"))
 
-    todo, blocked, hooked = asyncio.run(main())
-    assert isinstance(todo, PermissionResultDeny) and isinstance(blocked, PermissionResultDeny)
-    assert hooked["hookSpecificOutput"]["permissionDecision"] == "deny"  # a skill's allow rule can't skip it
-    assert [i["tool"] for i in reporter.asked] == [TODO, THREAD]  # own-inbox tools ask too; blocked ones never do
-
-
-def test_a_yes_the_hook_spends_isnt_asked_for_again_by_the_permission_check(tmp_path):
-    reporter = Asked(yes=1)
-    gate = TaskGate(tmp_path, [], [], connections=ConnectionGate(9, [lab()], reporter))
-
-    async def main():
-        hooked = await gate.pre_tool_use({"tool_name": THREAD, "tool_input": INLINE}, "u3", None)
-        return hooked, await gate(THREAD, INLINE, ctx(use="u3"))
-
-    hooked, decided = asyncio.run(main())
-    assert hooked == {} and isinstance(decided, PermissionResultAllow) and reporter.asked == []
+    todo, thread = asyncio.run(main())
+    assert isinstance(todo, PermissionResultDeny) and isinstance(thread, PermissionResultDeny)
+    assert [i["tool"] for i in reporter.asked] == [TODO, THREAD]  # own-inbox tools ask too
+    assert all(i.get("connection") for i in reporter.asked)  # asked as a connection's call, not a command
 
 
 # ── What a task gets ────────────────────────────────────────────
@@ -166,14 +153,13 @@ def test_a_task_with_accounts_gets_its_connections_changes_held_and_gitlab_downl
     use_task_cache(monkeypatch, fresh / "cache")
     seeded()
     opts = worker._options(worker_task(kind="research", project=None), NullReporter())
-    gate = opts.can_use_tool
-    assert {"mcp__gitlab__create_merge_request_note", "mcp__github__create_pull_request",
-            "mcp__github__dismiss_notification"} <= gate.connections.tools
+    gate, prompt = opts.can_use_tool, opts.system_prompt["append"]
+    changes = {"mcp__gitlab__create_merge_request_note", "mcp__github__create_pull_request",
+               "mcp__github__dismiss_notification"}
+    assert changes <= gate.connections.tools and changes <= set(json.loads(opts.settings)["permissions"]["ask"])
     assert set(repo_files.TOOLS) <= set(opts.allowed_tools) and "repo" in opts.mcp_servers
-    assert {"Read", "Glob", "Grep"} <= set(opts.tools) and repo_files.downloads(9) in gate.read_roots
-    assert "waits for their yes to that exact call" in opts.system_prompt
-    assert "is GitLab's create_merge_request_thread, with a position" in opts.system_prompt
-    assert "mcp__repo__download" in opts.system_prompt and "except through their connected tools" in opts.system_prompt
+    assert "waits for their yes to that exact call" in prompt
+    assert "is GitLab's create_merge_request_thread, with a position" in prompt and "mcp__repo__download" in prompt
     code = worker._options(worker_task(worktree=str(fresh)), NullReporter())
     assert code.can_use_tool.connections is None and "repo" not in code.mcp_servers  # no accounts, no connections
 
@@ -187,9 +173,9 @@ def test_a_read_only_task_reads_its_connections_but_cant_change_anything_through
     changes = {"mcp__gitlab__create_merge_request_note", "mcp__github__create_pull_request",
                "mcp__github__dismiss_notification"}
     assert gate.connections is None and changes <= set(opts.disallowed_tools)  # not even asked about
-    assert isinstance(asyncio.run(gate("mcp__gitlab__create_merge_request_note", {}, ctx())), PermissionResultDeny)
-    assert "only reading" in opts.system_prompt and "waits for their yes" not in opts.system_prompt
-    assert "create_merge_request_thread" not in opts.system_prompt
+    prompt = opts.system_prompt["append"]
+    assert "only reading" in prompt and "waits for their yes" not in prompt
+    assert "create_merge_request_thread" not in prompt
     assert set(repo_files.TOOLS) <= set(opts.allowed_tools)  # whole files still come: that only reads
 
 

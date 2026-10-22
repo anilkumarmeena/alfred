@@ -106,7 +106,6 @@ Alfred runs on **macOS on Apple silicon** and **Linux** (x86_64 and aarch64, wit
 | **Services** | launchd agents from `deploy/*.plist` | systemd user units from `deploy/systemd/*.service` | `alfred/setup_local.py` |
 | **Speech to text** | MLX Whisper on the Apple GPU | faster-whisper: CUDA float16 when a GPU works, else CPU int8 | `alfred/media/whisper.py` |
 | **Desktop tools** | AI Armory's `mac_*` tools | `desktop_*`: notify-send, xdg-open, clipboard, volume | `alfred/tools/mac.py`, `alfred/tools/desktop.py`, `alfred/core/desktop.py` |
-| **Task host walls** | Seatbelt (`sandbox-exec`) | bubblewrap (`bwrap`) | `alfred/safety/host.py` |
 | **Screenshots, photos** | `screencapture`, `sips` | grim, gnome-screenshot, spectacle, scrot or ImageMagick; Pillow + pillow-heif | `alfred/state/pictures.py` |
 | **Old documents** | `textutil` for .doc/.rtf/.odt | LibreOffice, else pandoc | `alfred/media/documents.py` |
 | **User folders** | `~/Downloads`, `~/Desktop`, … | XDG user dirs (`~/.config/user-dirs.dirs`) | `alfred/core/desktop.py` `user_dir` |
@@ -141,11 +140,11 @@ Top to bottom in **layers**: an import points only down (`tests/test_architectur
 | | `alfred/media/` | `documents.py`, `transcribe.py`, `whisper.py`, `audio_file.py` | Reading files, recordings, the two Whisper backends, text into audio files |
 | | `alfred/skills/`, `alfred/notify/`, `alfred/projects.py` | | Skills (storage, install, review); Web Push, APNs, FCM; the project list |
 | 🗂️ Foundations | `alfred/state/` | `memory.py`, `todo.py`, `settings.py`, `preferences.py`, `vocabulary.py`, `voiceprints.py`, `conversation.py`, `activity.py`, `history.py` | What Alfred keeps for the user; live Settings-panel preferences; the conversation in progress |
-| | `alfred/safety/` | `commands.py`, `scripts.py`, `risk.py`, `consent.py`, `approvals.py`, `remembered.py`, `host.py`, `scan.py`, `urls.py` | Command risk rules and risk kinds, what scripts do, reading a spoken yes/no, remembered rules, host walls (Seatbelt or bubblewrap), the hidden-instruction scan, which addresses may be fetched |
+| | `alfred/safety/` | `commands.py`, `scripts.py`, `risk.py`, `consent.py`, `approvals.py`, `remembered.py`, `host.py`, `scan.py`, `urls.py` | Command risk rules and risk kinds, what scripts do, reading a spoken yes/no, remembered rules, long jobs on the host, the hidden-instruction scan, which addresses may be fetched |
 | | `alfred/llm/` | `roles.py`, `claude.py`, `sdk.py`, `quick.py`, `standby.py`, `usage.py`, `retry.py`, `claude_logins.py` | The only code that talks to Claude: roles, one-shot calls, the SDK facade, warm sessions, usage limits, retries, logins |
 | | `alfred/auth/`, `alfred/storage/` | `vault.py`, `logins.py`, `credentials.py`; `database.py`, `settings_table.py`, `profile.py` | Encrypted secrets, panel logins, Alfred's keys; SQLite connections and migrations, the settings table, profiles |
 | | `alfred/config/`, `alfred/prompts/` | `__init__.py`, `files.py`, `models.py`; `*.md` | Settings from `config/*.toml`, ALFRED_HOME and `.env`; model roles; every long prompt, with `{{placeholders}}` |
-| | `alfred/contracts/`, `alfred/core/` | `call.py`, `remote.py`, `runner.py`; `platform.py`, `files.py`, `proc.py`, `speakable.py`, `gpu.py`, `desktop.py` | Protocols a lower layer names for a higher one; which OS, safe file writes, processes, speakable text, the GPU shim, the Linux desktop |
+| | `alfred/contracts/`, `alfred/core/` | `call.py`, `remote.py`, `runner.py`; `platform.py`, `files.py`, `proc.py`, `speakable.py`, `desktop.py` | Protocols a lower layer names for a higher one; which OS, safe file writes, processes, speakable text, the Linux desktop |
 | `web/` | `src/components/`, `src/state/`, `src/lib/`, `public/sw.js` | The Vite/Preact web app and its service worker |
 | `deploy/` | `*.plist`, `systemd/*.service` | launchd templates (macOS), systemd user unit templates (Linux) |
 
@@ -160,8 +159,8 @@ Everything an install keeps lives in **ALFRED_HOME** ([Configuration](configurat
 | 💬 | **Conversation logs** | `data/recent.md`, `data/conversations/YYYY-MM-DD.md` | Rolling recent transcript; full daily log |
 | 🔤 | **Speech vocabulary** | `data/vocabulary.md` | Names Whisper should expect, with known mishearings |
 | ⚙️ | **Runner state** | `data/notices.json`, `data/learning.json`, `data/usage.json` | Keys of notices given, learning review offset, last reported usage limits |
-| 🛠️ | **Task work** | `data/worktrees/`, `data/tasks/<id>/`, `data/task-cache/`, `data/commands/` | Worktrees, per-task folders and plugins, sandbox caches, command task logs |
-| 🐚 | **Voice shell** | `data/shell/` | The voice brain's working folder, the only place its sandbox writes |
+| 🛠️ | **Task work** | `data/worktrees/`, `data/tasks/<id>/`, `data/task-cache/`, `data/commands/` | Worktrees, per-task folders and plugins, task temp folders, command task logs |
+| 🐚 | **Voice shell** | `data/shell/` | The voice brain's working folder, where its commands start |
 | 🖼️ | **Media** | `data/pictures/`, `data/transcripts/`, `data/audio/` | Photos and screenshots, transcripts, rendered audio |
 | 🧩 | **Skills** | `data/skills/` | One folder per skill |
 | 🔔 | **Push** | `data/push_subscriptions.json`, `data/push_devices.json`, `data/fcm_devices.json`, `data/shared_files.json` | Web Push subscriptions, APNs and FCM tokens, files shared to the phone |
@@ -262,9 +261,9 @@ sequenceDiagram
 | | Property | Detail |
 |:-:|---|---|
 | 🔁 | **Process** | One CLI process per voice session, started while the room connects |
-| 🔑 | **Login** | The user's own Claude Code login; their settings, CLAUDE.md, hooks and MCP servers still stay out. `ALFRED_CLAUDE_CONFIG_DIR` gives Alfred its own |
+| 🔑 | **Login** | The user's own Claude Code login, with their Claude Code setup (settings, CLAUDE.md, skills, plugins, agents, hooks); their MCP servers stay out. `ALFRED_CLAUDE_CONFIG_DIR` gives Alfred its own |
 | 🤖 | **Model** | `ALFRED_CLI_MODEL` (default `claude-opus-5-5`), effort `low`, `max_turns` 8 |
-| 🔒 | **Lockdown** | `setting_sources=[]`, `strict_mcp_config=True`, **no file editing** |
+| 🛡️ | **Auto mode** | Claude Code's **auto mode** (`claude.auto_mode`): every Claude Code tool and subagent, **no sandbox**, its own check on each action; `strict_mcp_config=True` |
 | 🧰 | **Tool servers** | In-process MCP `alfred` (`sdk.alfred_server`), `shell` (long jobs), enabled external MCP servers |
 | 🧵 | **Side jobs** | `background_lookup`, `file_lookup` and `computer_lookup` (`alfred/brain/side.py`): slow reading and checks while the talk goes on |
 | ⏱️ | **Turn budget** | `alfred/brain/budget.py`: past `ALFRED_TURN_TOOLS` (3) calls or `ALFRED_TURN_SECONDS` (15 s) in a turn, more are refused and handed off |
@@ -273,8 +272,8 @@ sequenceDiagram
 | 📊 | **Usage limits** | `alfred/llm/usage.py` records each `rate_limit_event` in `data/usage.json` |
 | 🔂 | **Retries** | `alfred/llm/retry.py`: failures are `LIMIT`, `PASSING` or `ERROR` |
 
-- **Lockdown:** built-ins are `WebSearch`, `WebFetch`, `Bash` and `Skill` when skills are on; no subagents (`sdk.BUILTIN_AGENTS_DENIED`). Everything else meets `ShellGate`.
-- **Side jobs** run in a read-only session; the answer comes back through the floor. The brain can't read files itself: `file_lookup` searches with `Read`, `Glob` and `Grep` on `ALFRED_LOOKUP_MODEL` (Haiku), never secrets, a dozen reads at most; it and `computer_lookup` can also query Alfred's own database, read-only and with the tables holding secrets out of reach (`alfred/storage/readonly.py`). Its answer comes back in the turn only within `ALFRED_LOOKUP_WAIT` seconds a turn; after that it carries on in the background, so no lookup holds a spoken reply for long. `computer_lookup` works the same way for the computer's state, with `Bash` held in the sandbox (`allowUnsandboxedCommands` off) and each command stopped after 20 s. A lookup that runs out of its `ALFRED_SIDE_MINUTES` carries on as a background task, told what it did so far, rather than stopping.
+- **Auto mode:** a separate model checks each action and blocks what goes beyond the request, reaches unknown places or looks driven by something the session read. Alfred's gate (`mcp_gate.Gate`) hears only **ask rules** (drafted sends and deletes, a connection's changes: `cli._asking`) and what auto mode **stops to ask** about, which it asks aloud. `AskUserQuestion` and `EnterPlanMode` are off.
+- **Side jobs** run in a read-only session; the answer comes back through the floor. The brain can't read files itself: `file_lookup` searches with `Read`, `Glob` and `Grep` on `ALFRED_LOOKUP_MODEL` (Haiku), a dozen reads at most; it and `computer_lookup` can also query Alfred's own database, read-only and with the tables holding secrets out of reach (`alfred/storage/readonly.py`). Its answer comes back in the turn only within `ALFRED_LOOKUP_WAIT` seconds a turn; after that it carries on in the background, so no lookup holds a spoken reply for long. `computer_lookup` works the same way for the computer's state with `Bash`, each command stopped after 20 s. All three run in auto mode **without** the user's Claude Code setup, to stay quick, and a step-limit hook (`side.Steps`) caps their tools and calls. A lookup that runs out of its `ALFRED_SIDE_MINUTES` carries on as a background task, told what it did so far, rather than stopping.
 - **Kept calls** (a merge running the tests, a slow read) carry on in the voice process. Their result is screened, queued on the floor, and taken up in a **follow-up turn** the brain starts itself (`CliBrain.follow_up`), so it can finish what depended on it (push after a merge). `background_stop` stops one when the user asks; a merge is stopped in the runner itself (`Runner.halt` → `stop_merge`), on the project's machine too, leaving its folder as it was. The user's own turn always comes first and stops a follow-up under way. Side-job tools (`stays`) manage their own background work and never become kept calls.
 - **Quick routing** stays in the same CLI session.
 - **Usage limits:** `usage.available` steps down a model when one model's weekly window is spent; `usage.hold_until` holds scheduled runs.
@@ -287,9 +286,7 @@ sequenceDiagram
 
 ### The voice shell
 
-`Bash` runs in Claude Code's own sandbox (Seatbelt on macOS; bubblewrap and socat on Linux) from `data/shell/`: **reads anything but secrets, writes only `data/shell/`, no network.** Inside it, commands run without asking. On macOS it can also use the GPU (Metal), as task sandboxes can (`alfred/core/gpu.py`).
-
-A command that needs more, and every `start_job`, goes to `ShellGate` (`alfred/gates/shell.py`). It splits the line at `;`, `&&`, `|` and substitutions and judges each part with `commands.risky`:
+`Bash` runs on the computer itself from `data/shell/`, **unsandboxed**: auto mode's check clears each command. What auto mode **stops to ask** about goes to `ShellGate` (`alfred/gates/shell.py`), which splits the line at `;`, `&&`, `|` and substitutions and judges each part with `commands.risky`:
 
 | | Kind | Examples | Outcome |
 |:-:|---|---|---|
@@ -299,7 +296,7 @@ A command that needs more, and every `start_job`, goes to `ShellGate` (`alfred/g
 
 - **Risky in full:** deleting, any `git push`, installing or `npx`-style running, `gh`/`glab` writes, killing processes, `sudo`, system settings, sending data off the computer (`curl -d`, `scp`, `ssh`), dotfile writes, and hidden commands (`eval`, `osascript`, `git -c`).
 - **Scripts are read** (`commands._code`, `alfred/safety/scripts.py`): inline code (`python -c`, `node -e`, `bash -c`, a heredoc, `echo … |`) and local script files (`python x.py`, `bash x.sh`, `./x.sh` by its `#!` line, `source`, `uv run`), resolved from the command's folder and the line's own `cd`s, up to 256 KB each. Shell code is split into commands like the line itself; Python is read through its syntax tree and JavaScript through patterns, following local imports. A script is risky for what it does ("runs a script that deletes files"): deleting, network use, installs, killing, permissions, start-up files, secrets, and every command it spawns, checked again. **Code it can't see still asks:** a download piped to a shell, a missing, too large or unreadable file, one written earlier in the same line (`curl -o x.sh … && bash x.sh`, `git pull && …`), code built at run time (`exec` of a computed string, `getattr(os, name)`, `require(name)`, a spawned command with computed words, `$VAR` expanded into code), a local import it can't read, and languages it doesn't read (Perl, Ruby, PHP, …). Libraries are trusted like any program on the PATH.
-- **The scripts a yes covers** are fingerprinted (`commands.seen`): an approval binds to them as they were when asked (`database.same_command`, the voice shell's `ShellGate.covered`), and `host_run` / `start_job` re-read them just before running, refusing if they changed since the gate read them. A change in the instant between that re-read and the run, or a file one script writes and another then runs, isn't caught. Script risks are never remembered as rules.
+- **The scripts a yes covers** are fingerprinted (`commands.seen`): an approval binds to them as they were when asked (`database.same_command`, the voice shell's `ShellGate.covered`). A file one script writes and another then runs isn't caught. Script risks are never remembered as rules.
 - **On Linux too:** `systemctl`/`systemd-run`/`loginctl`, distro package managers (`dnf`, `pacman`, `snap`, `flatpak`, …), network and firewall tools (`nmcli`, `ip`, `nft`, `ufw`), desktop settings (`gsettings`, `dconf`), user, mount and `sysctl -w` commands, and writes into `~/.config/systemd`, `~/.config/autostart`, `/etc` and shell start-up files. Keyring readers (`secret-tool`, `kwallet-query`, `pass`) count as secrets.
 
 **Asking:** a risky command is refused and Alfred ends the turn with "Okay to go ahead?".
@@ -456,30 +453,30 @@ Claude Code-format skills in `data/skills/<name>/SKILL.md`. Each session gets a 
 | 🪝 | **Hooks and inline commands** | `disableAllHooks`, `disableSkillShellExecution` |
 | 📜 | **Scripts** | Used only while their digest matches the one the user approved after a review |
 | 🔗 | **Links** | Any symlink makes the skill unusable |
-| 📦 | **Install** | https only, no local addresses, size and file caps, staged in `data/skills/.staging/` |
+| 📦 | **Install** | https only, no local addresses, size and file caps, staged in `data/skills/.staging/`; Claude Code's own skills are copied in under the same caps |
 
 - **Script review** (`alfred/skills/review.py`): a pattern scan plus a tool-less model call.
 
 ## ⏳ Background tasks
 
-The runner is a **separate always-on service** because a call's job process dies when the user hangs up. Tasks run in parallel (`MAX_TASKS`, default 3, fewer while memory is short), each as a Claude Code session built by `alfred/tasks/worker.py`.
+The runner is a **separate always-on service** because a call's job process dies when the user hangs up. Tasks run in parallel (`MAX_TASKS`, default 3, fewer while memory is short), each as a Claude Code session in **auto mode**, built by `alfred/tasks/worker.py` (see [What a task session can touch](#what-a-task-session-can-touch)).
 
 | Kind | Works in | Default abilities | Never |
 |---|---|---|---|
-| `code_change` | Project folder **in place** (uncommitted), or a worktree on `alfred/<id>-<title>` | Read/edit its folder, sandboxed shell, host commands, Artifact publishing | Commit (in place, unless the user ordered one), switch branches, read secrets, edit Alfred's files |
-| `code_question` | Live checkout, read-only | Read and search, single read-only git commands | Edit, other commands |
-| `research` | `data/tasks/<id>/` | Web, accounts (reads, plus Sheets and Docs edits) and research MCP servers (changes each after a yes) | Delete or send anything on Google, contact anyone without a yes, change anything else |
+| `code_change` | Project folder **in place** (uncommitted), or a worktree on `alfred/<id>-<title>` | Every Claude Code tool, Artifact publishing | In place: push, reset, switch branches or otherwise move the user's checkout (`_IN_PLACE_DENIED`) |
+| `code_question` | The live checkout, its own folder `data/tasks/<id>/` | Every Claude Code tool; told to leave the checkout's files as they are | |
+| `research` | `data/tasks/<id>/` | Every Claude Code tool, accounts (reads, plus Sheets and Docs edits), Artifact publishing and research MCP servers (changes each after a yes) | Delete or send anything on Google, change anything through a connection without a yes |
 | `command` | Any folder | A shell command, **no model, no task slot** | |
 | `connection` | | A slow MCP call carried on by the relay, no task slot | |
 | `review` | | The learning review's suggested edits, hidden | |
 
-**Access grants** (`alfred/tasks/access.py`): `artifacts`, `shell`, `mac` (run commands on the computer itself, on either OS), `projects`, `accounts` (Google reads, and the same Sheets and Docs edits the voice has; deleting tabs or doc content and sending stay voice-only, behind a spoken yes; connections, their changes each behind a yes). They're granted in `task_start` / `task_reply` when the user asks, or after the task calls `request_access`. A **read-only** task (carrying on a lookup that ran out of time) has no defaults, only `accounts` without edits (connections only read) or a shell without the network, and is never granted more. **Secrets, Alfred's own files and approvals never change with a grant.**
+**Access grants** (`alfred/tasks/access.py`): only two, since every task already has the shell, files anywhere and the computer itself. `artifacts` (publish with the Artifact tool) and `accounts` (Google reads, and the same Sheets and Docs edits the voice has; deleting tabs or doc content and sending stay voice-only, behind a spoken yes; connections, their changes each behind a yes). They're granted in `task_start` / `task_reply` when the user asks, or after the task calls `request_access`. A **read-only** task (carrying on a lookup that ran out of time) has no defaults, at most `accounts` without edits, `Edit`/`Write` denied and its connections' changes denied outright, and is never granted more.
 
 ```mermaid
 stateDiagram-v2
     [*] --> queued: task_start
     queued --> running: slot free
-    running --> waiting: ask_user · request_access · risky command
+    running --> waiting: ask_user · request_access · approval request
     waiting --> running: reply · grant · approval
     running --> done: passes the goal check
     running --> failed
@@ -501,66 +498,65 @@ Each run resumes the task's own Claude session, so follow-ups keep everything it
 | ⛓️ | **Waiting for other work** | `chains.py` (`waits_on`, `merge_waits_on`) | A task, or a merge, waits for tasks to finish or be merged, then **starts by itself**. Settled where an ending or merge is already announced, never polled; loops refused; one that can't go ahead is **held**, never started |
 | 💬 | **Nudges** | `reporting.py` `_nudge_hook` | Delivered after the task's next tool call by a `PostToolUse` hook |
 | 🎯 | **Goal loop** | `goal.py`, `Runner._check_goal` | A tool-less model call checks the result against the request and evidence |
-| 🤝 | **Subagents** | `subagents.py` | Same gate and sandbox; **they can't edit** |
+| 🤝 | **Subagents** | `subagents.py` | Claude Code's own (Explore, Plan, general-purpose) and the user's, beside Alfred's helpers; same auto mode |
 | 📣 | **Announcing** | `announce.py`, `events.py` | A fast model words the ending in a sentence or two |
 | 🐢 | **Stalls** | `stall.py` `Pulse` | Silent too long → `stalled` and one alert. **Never stopped automatically** |
 | ✏️ | **Suggested data edits** | `data_edits.py`, `task_edits.py` | Tasks can't write `data/`; they call `propose_data_edit` |
 
-- **In place:** uncommitted work is saved first with `git stash create` under `refs/alfred/task-<id>-<time>`. Folders without git are diffed by snapshot. A folder that isn't a repo but holds several (`projects.MULTI`, `child_repos`: subfolders, or theirs, with a `.git`) is too, with each repo's work saved the same way; its task is told its repos and uses git in each. Worktree mode and `project_git_init` refuse it. Git that changes the checkout is denied (`_IN_PLACE_DENIED`, `TaskGate.checkout`, `commands.refused`), except a plain `git commit` with sandboxed Bash once the user's own words order one ("fix it and commit", `Approvals.commit_ordered`); never `--amend`, and push stays gated.
+- **In place:** uncommitted work is saved first with `git stash create` under `refs/alfred/task-<id>-<time>`. Folders without git are diffed by snapshot. A folder that isn't a repo but holds several (`projects.MULTI`, `child_repos`: subfolders, or theirs, with a `.git`) is too, with each repo's work saved the same way; its task is told its repos and uses git in each. Worktree mode and `project_git_init` refuse it. Git that moves the checkout (push, reset, checkout, switch, stash, rebase, …) is denied (`_IN_PLACE_DENIED`, from `commands.IN_PLACE_GIT`); a plain `git commit` isn't, and the task's brief says to commit only when the user's own request asks for one.
 - **Worktrees:** Alfred's own repo always uses worktrees, and its branches must pass the test suite before merging (`merge_check.py`). Every run of the suite is noted against the git tree it ran on (`.git/alfred-tested/`, written by `tests/conftest.py`), so a branch whose exact code already passed every test it collects (the task's own final run, usually) merges after a collection, not a second run.
 - **Merge / discard:** refused while the task is active or with uncommitted changes. `task_discard` also needs the user's own words this turn (`heard`) to be a plain yes, read by `consent.reply`.
 - **Nudges:** messages to a running task are queued in `nudges`.
 - **Goal loop:** evidence means the diff and test steps. `incomplete` resumes the session, up to `ALFRED_GOAL_ROUNDS` (2). It also settles the to-do the task was started for.
-- **Subagents:** `code-searcher` (Haiku), `test-runner` and `web-researcher` (Sonnet). The run waits for background subagents before finishing (`WAKE_GRACE`, `SUBAGENT_WAIT`).
+- **Subagents:** Alfred's helpers `code-searcher` (Haiku), `test-runner` and `web-researcher` (Sonnet), beside Claude Code's built-in ones. The run waits for background subagents before finishing (`WAKE_GRACE`, `SUBAGENT_WAIT`).
 - **Announcing:** with a fixed-words fallback. Events go out on `GET /events`, plus a desktop notification (macOS, or notify-send on a Linux desktop) and push.
 - **Stalls:** silent for `ALFRED_TASK_STALL_MINUTES` (15) without a legitimate reason → `stalled` in views and one notice.
 - **Carrying on:** a run that hits `ALFRED_TASK_MAX_TURNS` is relaunched in its session (`Runner._carried_on`), up to `ALFRED_TASK_CONTINUES` (3) `continued` log entries since the user last asked or sent a message; watch checks aren't. A run the usage limit cut short is queued with `after` (its reset) in `interrupted`, so a restart or crash keeps the wait, and it holds no slot or folder (`_jobs_on`). It resumes once per reset (`limit_resumed`, in memory); a guessed reset (none reported) is tried once, a model family's own limit resumes at once on a lighter model, and a message wakes it early. While its session's login is passed over and the login in use is another, usable one (`claude_logins.elsewhere`, checked when the limit is hit and every `WAIT_STEP` of a wait), it resumes at once there, the transcript copied over by `resume_on`.
 - **Suggested data edits:** riskier edits and anything from research or flagged by the scan are `needs_yes`.
 
-**Command tasks** (`command_jobs.py`, `command_tasks.py`) run in a login shell (`/bin/zsh -lc` on macOS; the user's zsh or bash on Linux) in their own session under `data/commands/`, outside the sandbox but **without `.env` keys**. They're polled every 2 s and keep running across runner restarts. Each runs on the usable Claude login with the most room left (`claude_logins.roomiest()`, passed as `CLAUDE_CONFIG_DIR`), so a `claude` it calls uses that login.
+**Command tasks** (`command_jobs.py`, `command_tasks.py`) run in a login shell (`/bin/zsh -lc` on macOS; the user's zsh or bash on Linux) in their own session under `data/commands/`, **without Alfred's `.env` keys**. They're polled every 2 s and keep running across runner restarts. Each runs on the usable Claude login with the most room left (`claude_logins.roomiest()`, passed as `CLAUDE_CONFIG_DIR`), so a `claude` it calls uses that login.
 
 - **On success** a fast model sums up the output.
 - **On failure**, if the output tail has the CLI saying its login is signed out or used up (`command_jobs.pass_over`), that login is passed over and the command reruns on the next one; with every login tried, that's reported with the reset time. A running command whose last lines keep that limit message for `LIMIT_WAIT` (`command_jobs.limit_hit`, `CommandTasks._stuck_at_limit`) is stopped and ends as `LIMIT`, taking the same path. Otherwise `command_jobs.triage` (Sonnet, JSON reply) picks `FIX` (start a `code_change` to fix it, then maybe re-run once), `ASK` (wait for the user's yes) or `REPORT`.
 
 ### What a task session can touch
 
+Every task runs as **Claude Code's auto mode** (`claude.auto_mode`), the way it runs in a terminal: a separate model checks each action and blocks what goes beyond the request, reaches unknown places or looks driven by content the session read. **Nothing is sandboxed.**
+
 | | Layer | Code | Rule |
 |:-:|---|---|---|
-| ⚙️ | **Settings** | `worker.py` | `setting_sources=[]`: no user or project settings, since their allow rules would skip the gate |
-| 📁 | **File gate** | `gate.py` `TaskGate` | Edits: the task's folder only. Reads: a short allow-list. Everything else denied |
-| 🔑 | **Secrets** | `gate.py`, `commands.HOME_SECRETS` | Denied to tools and as sandbox Read rules; `.env` values blanked |
-| 📦 | **Sandbox** | `worker.py` `OPEN_NETWORK` | Writes only to the task's folder and `data/task-cache/`. Leaving the sandbox is denied |
-| 🖥️ | **Host commands** | `host_tools.py` `_host_gate`, `safety/host.py` | `host_run` / `start_job` run inside walls: Seatbelt (`host.profile()`) on macOS, bubblewrap (`host.bwrap_args()`) on Linux |
-| 🏷️ | **Own things** | `commands.Own` | Deleting inside its own folders or killing its own processes runs without asking |
-| 📝 | **Project setup** | `project_claude.py` | Loaded **without settings**, hooks dropped, and **scanned first** |
-| 🪝 | **Allow-rule bypass** | `TaskGate.hook` | A `PreToolUse` hook re-runs the gate, so a skill's `allowed-tools` can't skip it |
+| ⚙️ | **Setup** | `worker.py`, `claude.AUTO_SOURCES` | The user's and the project's Claude Code setup load as Claude Code loads them: CLAUDE.md, settings, skills, plugins, agents, hooks. Alfred's own skills come as a plugin beside them |
+| 🧰 | **Tools** | `worker.py` | Every Claude Code tool and subagent, plus Alfred's reporting tools and, with `accounts`, its Google tools and connections. `AskUserQuestion` is off: a task asks with `ask_user` |
+| ✋ | **Ask rules** | `gate.AutoGate`, `connection_calls.py` | A connection's changes **always ask**: each waits for the user's yes on the phone |
+| 📱 | **When auto mode stops to ask** | `gate.AutoGate` | Sent to the user's phone as an [approval request](#-approvals); a yes lets the identical call through once. A subagent can't ask: it reports back |
+| 📂 | **The user's checkout** | `gate._IN_PLACE_DENIED` | In place, no git that pushes, resets or moves branches |
+| 👁️ | **Read-only tasks** | `worker.py` | `Edit`, `Write` and `NotebookEdit` denied; connections' changes denied, not asked |
+| 🔑 | **Environment** | `worker._blank_env` | Alfred's `.env` values blanked in the CLI's environment |
 
-- **File gate reads:** task folders, `ALFRED_TASK_READ_DIRS` and voice session logs.
-- **Secrets:** `.env*`, keys, credential files, `secrets/`, `~/.ssh` and similar. `.env` values are blanked in the CLI's environment.
-- **Sandbox:** network is open through the sandbox proxy. On macOS, Metal works too: Claude Code's settings can't add IOKit rules, so `alfred/core/sandbox-bin/env`, first on the CLI's `PATH` (`core/gpu.py`), appends two allows to each sandboxed command's Seatbelt profile: the GPU's user client (`AGXDeviceUserClient`) and the shader compiler (`com.apple.MTLCompilerService`). Nothing else changes. Metal's shader caches stay unwritable, so compiling Metal source at run time (`mx.compile`, some MLX JIT kernels) still fails; MLX Whisper's precompiled kernels don't need it. If a CLI update stops starting commands through `env`, the shim is skipped and Metal is unavailable again; `tests/test_gpu.py` checks the bundled CLI for that.
-- **Host commands:** the walls deny **reading secrets, writing Alfred's files, and the runner's socket** (compared in [Security model](#host-walls-seatbelt-and-bubblewrap)). The environment comes from `host.task_env()`, keeping only the SSH agent.
-- **Own things:** deleting must be strictly inside its own folders.
-- **Project setup:** CLAUDE.md, `.claude/agents`, `.claude/skills` and `.claude/commands`. Flagged files are left out and the user is told.
+- **Alfred's own data** (tasks, projects, to-dos, memory) still changes only through `propose_data_edit` and the user's yes; the brief says so.
+- **Alfred's services:** the brief tells a task never to stop or start them itself, only `make services-restart` on a Mac.
 
 ## ✋ Approvals
 
 > [!IMPORTANT]
-> **A task's risky host command never runs on the model's say-so.** Only the user can approve it, and a yes covers **that exact command**, once, for the run it resumes.
+> **What auto mode stops to ask about, and every change through a connection, never runs on the model's say-so.** Only the user can approve it, and a yes covers **that exact call**, once, for the run it resumes.
 
 ```mermaid
 flowchart TB
-    C(["⚙️ host_run or start_job"]) --> G["🛡️ _host_gate"]
-    G -->|"secret · sudo · runner socket"| X["⛔ Refused"]
-    G -->|"ordinary · task's own ·<br/>covered by a rule or order"| Run["✅ Runs"]
-    G -->|"risky, not covered"| Req["📝 Request, batched 5 s<br/>voice · desktop · push"]
-    Req -->|"yes: once · session · always"| Res["▶️ Resumed: runs exactly<br/>this command, once"]
+    C(["⚙️ a task's call"]) --> A["🛡️ auto mode's check"]
+    A -->|"cleared"| Run["✅ Runs"]
+    A -->|"blocked"| X["⛔ Told why, tries another way"]
+    A -->|"stops to ask · a connection's change"| G["📱 AutoGate"]
+    G -->|"covered by a yes, rule or order"| Run
+    G -->|"not covered"| Req["📝 Request, batched 5 s<br/>voice · desktop · push"]
+    Req -->|"yes: once · session · always"| Res["▶️ Resumed: makes exactly<br/>this call, once"]
     Req -->|deny| D["🚫 Told not to run it"]
     Req -.->|"after ALFRED_TASK_APPROVAL_HOURS"| Lapse["⌛ Lapses"]
 
     classDef you fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
     classDef mac fill:#ecfdf5,stroke:#059669,color:#064e3b
     classDef warn fill:#fef2f2,stroke:#dc2626,color:#7f1d1d
-    class C,G,Run,Res mac
+    class C,A,G,Run,Res mac
     class Req you
     class X,D,Lapse warn
 ```
@@ -581,7 +577,7 @@ flowchart TB
 
 **Invariants:**
 
-- The reason shown is parsed from the command (`commands.describe`), **never the task's words**.
+- The reason shown is parsed from the command (`commands.describe`) for `Bash`, **never the task's words**; other tools show their exact arguments.
 - Requests are withdrawn once nothing waits on them, and survive restarts.
 - **The user's orders** ("merge and push") are sent with `task_reply` / `task_start` from `heard` and kept on the task for up to 12 hours (`approvals.py`).
 
@@ -595,7 +591,7 @@ flowchart TB
 | **Session** | The rest of that task's session, or the voice conversation; 12 hours at most |
 | **Always** | Until withdrawn; said or shown before it's kept, saved only on the user's next words or the panel button |
 
-- **Only some kinds can be remembered** (`remembered.REMEMBERABLE`): installing software, stopping processes, changing permissions, changing a device or simulator. Deleting, pushing, data egress, system settings, root, hidden code and secrets **always ask**.
+- **Only some kinds can be remembered**, and only for `Bash` commands (`remembered.REMEMBERABLE`): installing software, stopping processes, changing permissions, changing a device or simulator. Deleting, pushing, data egress, system settings, root, hidden code and secrets **always ask**.
 - A rule matches each risky piece (`commands.risky_pieces`) by program, kind and, by default, **exact words**. **Every risky piece must be covered**, so a remembered install can't carry a push along.
 - Rules are made from the command itself, never from a model's words. Listed and withdrawn in Settings › Approvals or by voice.
 
@@ -723,50 +719,29 @@ Defence in depth: **every layer assumes the one above it can be talked into some
 |:-:|---|---|---|
 | 🌐 | **Network** | `alfred/server.py`, `secrets/livekit.yaml` | Web and LiveKit signalling bind to 127.0.0.1; the phone gets in only via Tailscale Serve |
 | 🔐 | **Login** | `alfred/auth/logins.py` | Per-person passcode, scrypt hash, lockout, 12-hour single-room tokens |
-| 🔌 | **Runner API** | `data/runner.sock` | Unix socket, mode 600, unreachable from browsers and from tasks' host commands |
-| 🧠 | **Brain lockdown** | `alfred/brain/cli.py`, `alfred/brain/sdk.py` | No file edits, no user settings or MCP config, built-in subagents denied, unknown tools refused |
-| 🐚 | **Voice shell** | `alfred/gates/shell.py`, `alfred/safety/commands.py` | Sandbox by default. Risky commands need a yes and run only as asked. Secrets refused |
+| 🔌 | **Runner API** | `data/runner.sock` | Unix socket, mode 600, unreachable from browsers |
+| 🛡️ | **Auto mode** | `alfred/llm/claude.py` `auto_mode` | Voice, lookups and tasks: Claude Code's own check on each action, blocking what goes beyond the request or looks driven by what the session read. No sandbox |
+| 🐚 | **Voice shell** | `alfred/gates/shell.py`, `alfred/safety/commands.py` | What auto mode stops to ask about is judged here: risky commands need a spoken yes and run only as asked. Secrets refused |
 | 🗣️ | **Consent** | `alfred/safety/consent.py`, `alfred/state/conversation.py` | A yes counts only from `heard`. The fallback model never sees commands or tool output |
 | ✍️ | **Draft gates** | `alfred/gates/draft_gate.py`, `alfred/gates/mcp_gate.py` | Sends, deletes and MCP writes read aloud from code-built summaries, approved once |
 | 🛡️ | **Injection screening** | `alfred/gates/injection.py` | Every tool result carrying outside content, in every session, is judged by a fast model |
 | 🔍 | **Hidden-instruction scan** | `alfred/safety/scan.py` | Strips invisible Unicode and flags instruction-like text before it's kept or loaded |
-| 📦 | **Task sandbox** | `alfred/tasks/gate.py`, `alfred/tasks/worker.py` | One writable folder, secrets hidden, `.env` blanked, no settings |
-| 🧱 | **Host walls** | `alfred/safety/host.py` | Seatbelt (macOS) or bubblewrap (Linux) deny secret reads, writes to Alfred's files and the runner socket, whatever runs. **No walls, no run** |
-| ✋ | **Approvals** | `alfred/tasks/approvals.py`, `alfred/safety/remembered.py` | Only the user approves or makes rules. Nonces one-time and hashed. Egress, push, delete always ask |
+| 📱 | **Task asking** | `alfred/tasks/gate.py` `AutoGate` | What auto mode stops to ask about, and a connection's changes, go to the user's phone. `.env` blanked; the user's checkout keeps its branches |
+| ✋ | **Approvals** | `alfred/tasks/approvals.py`, `alfred/safety/remembered.py` | Only the user approves or makes rules. Nonces one-time and hashed |
 | 🔒 | **Vault** | `alfred/auth/vault.py`, `alfred/integrations/mcp_launch.py` | AES-256-GCM. Only the launcher decrypts, one server at a time |
 | 🌍 | **Browser guard** | `alfred/integrations/browser.py` | Proxy refuses local and tailnet addresses after DNS. Page text is fenced |
 
 - **Injection screening** covers voice, lookups, side jobs, tasks and subagents, after `PostToolUse`. **Block** withholds the passages, **warn** annotates. A failed check passes the result with an "unchecked" note.
 - **What's screened:** every tool's result by default (built-in reads, web, connections, mail, documents, past conversations), so a new tool is covered. Alfred's own tools mark theirs with `@tool(screened=...)`: `False` for its own data (memory, to-dos, skills, connection settings, approvals, projects, machines), or a tuple of fields for task and schedule records, where only what a task wrote or a command printed is judged, wherever it shows (`summary`, `question`, `output_tail`, and the `spoken` update, `log`, `activity` and suggested edits that repeat them; a job's `notepad` and `last_result`), and for results that mix outside content with Alfred's guidance (what the MCP registry or a server says in the connection tools, `skill_install`'s fetched skill). **Reads of your own code** are skipped: `Read`, `Grep` and `Glob` inside a project on this computer or a task's worktree, where checking every file cost a task ~7 minutes; installed packages inside a project (`node_modules`, `.venv`, `vendor`...) and links out of it are still screened. A task's reporting tools and subagent answers are skipped too, and so is Alfred's own wording given in place of a result (the "still running" note of a slow call, marked with `injection.own` where it's written).
 - **Cost:** verdicts are cached by hash, and a clean result also caches each of its strings, so a task list re-checks only the fields that changed since.
-- **Hidden-instruction scan** runs before text is kept in memory, to-dos or projects, or loaded from a project's CLAUDE.md, skills or agents. It is pattern-based, a backstop.
-- **Host walls:** no keys in the environment. Compared below.
+- **Hidden-instruction scan** runs before text is kept in memory, to-dos or projects, and on a skill before it's installed. It is pattern-based, a backstop.
 - **Vault:** reading other processes' environments is refused.
-
-#### Host walls: Seatbelt and bubblewrap
-
-A task's `host_run` and `start_job` commands run inside `host.walled()`. On Linux the Seatbelt rules become **bubblewrap mounts**: a denied read is an empty read-only tmpfs over a folder or `/dev/null` over a file, a denied write is a read-only bind, and home and `~/.config` are rebuilt with each existing entry bound back.
-
-| Rule | macOS · Seatbelt | Linux · bubblewrap | Linux is |
-|---|---|---|---|
-| Alfred's `secrets/` and `.env`, listed home logins and keys (`HOME_SECRETS`) | Reads denied | Masked | **Equal** |
-| Writes to Alfred's folder (except worktrees, task cache, task folders, git objects) | Denied | Read-only bind | **Equal** |
-| Shell start-up files, launch agents or systemd user units, autostart | Writes denied | Read-only bind, plus X session and login files | **Equal** |
-| The runner's socket | Denied | Left out of the rebuilt `data/` | **Equal** |
-| Root through `sudo` and setuid programs | Setuid blocked | `no_new_privs` | **Equal** |
-| Other processes and their environments | Setuid `/bin/ps` denied | Own PID namespace: other processes are invisible | **Stricter** |
-| Keyrings | Keychain files hidden | Keyring files hidden, and the session D-Bus (Secret Service, `systemd-run`) blocked | **Stricter** |
-| Secret-named files deep in home (`id_*`, `*.pem`, …) | Regex rule, any depth, files made later too | Bounded walk at launch: 100,000 entries, 8 levels, skipping `node_modules`, `.git`, `.venv`, `.cache`, … | **Weaker** |
-
-- **Fails closed:** if `sandbox-exec` is missing, or `bwrap` isn't installed or can't build a sandbox (user namespaces blocked, as AppArmor does by default on Ubuntu 23.10 and later), the command **doesn't run**, and the error says how to fix it. There's no unwalled fallback; the one exception is an approved Homebrew or MacPorts install on macOS, whose own sandbox can't nest inside Seatbelt.
-- **Side effects on Linux:** home and `~/.config` can't get new top-level entries, so a tool's first-run folder (say `~/.cargo`) has to be made by running it once outside Alfred. `sudo` and snap-packaged tools don't work inside, and with no D-Bus a task can't restart Alfred's services; it ends its report with `make services-restart` for the user to run.
-- **`make host-check`** runs each OS's own list of checks against the real walls.
 
 > [!CAUTION]
 > **Known residual risks**
-> - An ordinary task command has open network access, so a script it wrote could send **non-secret** files (project code) off the computer.
-> - It can also use the SSH agent (kept for approved pushes) without a yes, though it can **never read a key**.
-> - An "always, any kind" rule trusts whatever a task later installs, which is why **exact** is the default.
+> - **Auto mode's check is the main guard.** Nothing is sandboxed, so a task or the voice brain can read and change anything the user can, and reach the network; Anthropic's own published figures show the check misses some risky actions.
+> - **Planted instructions** in mail, pages or files are caught by auto mode's check and by injection screening, both model-based and evadable.
+> - An "always, any kind" rule trusts whatever a later command installs, which is why **exact** is the default.
 > - The scanners are model- and pattern-based and can be evaded; they back up, not replace, the gates.
 
 ## 🌙 Running 24/7
@@ -788,7 +763,7 @@ A task's `host_run` and `start_job` commands run inside `host.walled()`. On Linu
 - **Sleep:** `make sleep-normal` undoes `make awake` (both need sudo). Under WSL2 Windows decides when to sleep, so `make awake` has no effect.
 - **Restarting from inside:** `make services-restart` detaches first (`setsid` on macOS, `systemd-run --user` on Linux), so a restart started by the agent or a task survives its own service stopping.
 - **Clean shutdown:** start nothing new (the API returns 503), mark queued and running tasks `interrupted`, stop sessions within 10 s.
-- **After a restart:** up to `ALFRED_RESUME_TASKS` (3) resume in their own sessions. Tasks cut off **mid host command**, waiting on the user, or caught in a restart loop stay stopped until the user replies. Command tasks and long jobs keep running across restarts.
+- **After a restart:** up to `ALFRED_RESUME_TASKS` (3) resume in their own sessions. Tasks waiting on the user, or caught in a restart loop, stay stopped until the user replies. Command tasks and long jobs keep running across restarts.
 
 **Logs:** `logs/livekit.log`, `agent.log`, `web.log`, `tasks.log`, `transcribe.log`, plus `voice-turns.jsonl`, `speech-gate.jsonl` and `speaker-check.jsonl`. `make status` and `make logs` cover the usual checks; see [👩‍💻 Development](development.md).
 
@@ -803,15 +778,12 @@ A task's `host_run` and `start_job` commands run inside `host.walled()`. On Linu
 | 👤 | **One speaker** | Sized for one user and one active session |
 | 🌿 | **Worktree tasks** | Start without gitignored files such as `.env`, so tests needing secrets won't run |
 | 🪟 | **WSL2** | No screenshots (WSL can't see the Windows screen); clipboard and notifications only through WSLg; `make awake` does nothing |
-| 🐧 | **Linux tasks** | Host commands can't restart Alfred's services, use `sudo` or snap tools, or create new top-level folders in home or `~/.config` |
-| 🔍 | **Linux secret files** | Secret-named files deeper than the launch-time walk reaches, or made during a job, stay readable to task commands |
 | 🖥️ | **Linux desktop** | No Shortcuts equivalent; `desktop_open` doesn't start apps by name; desktop tools need their programs installed |
 | 🧪 | **Less-tried hardware** | Intel Macs, CUDA speech and x86_64 Linux timings haven't been tested on real machines yet |
 
 - **Phone:** `web/src/lib/mic.ts` recovers the mic on return. No always-on wake word on phones.
 - **Noise:** that's a room loud enough to pass DeepFilterNet. The terminal console isn't filtered.
 - **Usage:** Alfred only knows what the CLI last reported.
-- **Linux tasks:** a task that needs a restart ends its report with `make services-restart` for the user to run.
 - **Less-tried hardware:** CPU speech defaults are sized from a measurement on an Apple CPU (`small.en`, about 0.6 s per 5 s clip); expect 1–1.5 s on a 4–8 core x86, and set `ALFRED_STT=base.en` on a weak CPU.
 
 ## 🧩 Extending
@@ -847,8 +819,6 @@ A task's `host_run` and `start_job` commands run inside `host.walled()`. On Linu
 | **faster-whisper** | Whisper on CTranslate2, used off Apple silicon (CUDA or CPU) |
 | **MCP** | Model Context Protocol, the standard way to give Claude tools |
 | **Barge-in** | Talking over Alfred to interrupt it |
-| **Seatbelt** | macOS's `sandbox-exec` profile language |
-| **bubblewrap** | `bwrap`, Linux's unprivileged sandbox built on namespaces and mounts |
 | **systemd user unit** | A service run by the user's own systemd manager, without root |
 | **WSL2** | Windows Subsystem for Linux: a real Linux kernel in a light VM on Windows |
 | **Worktree** | A second checkout of a repo on its own branch |

@@ -11,7 +11,6 @@ from alfred.tasks import runner, worker
 from alfred.tasks.store import nudges
 from alfred.tasks.worker import Outcome, nudge_text, with_nudges
 from alfred.tools import tasks as task_tools
-from conftest import use_task_cache
 
 PROJECTS = ["video-agent", "other"]  # in place, and on its own worktree
 
@@ -122,11 +121,11 @@ def test_hook_holds_nudges_while_the_task_asks_a_question():
     assert out == {} and reporter.messages == ["skip Y"]
 
 
-def test_task_sessions_run_the_hook_after_every_tool_call(env, monkeypatch):
-    use_task_cache(monkeypatch, env["tmp"] / "cache")
-    for task in (worker_task(), worker_task(in_place=1), worker_task(kind="research", project=None)):
+def test_task_sessions_run_the_hook_after_every_tool_call(env):
+    for task in (worker_task(worktree=str(env["tmp"] / "worktree")), worker_task(in_place=1, worktree=str(env["video"])),
+                 worker_task(kind="research", project=None)):
         opts = worker._options(task, NullReporter())
-        assert set(opts.hooks) == {"PreToolUse", "PostToolUse", "PostToolUseFailure"}  # PreToolUse: the gate's check
+        assert {"PostToolUse", "PostToolUseFailure"} <= set(opts.hooks)
         assert all(m.matcher is None for ms in opts.hooks.values() for m in ms)
 
 
