@@ -19,11 +19,8 @@
   clean      empty logs/ (and the service logs), and, unless a task is running, delete the task caches and machine
              transfers left in data/node/spool; safe while the services run
 
-Services this checkout installed under old labels (e.g. a changed ALFRED_SERVICE_PREFIX, or com.jarvis.* from before
-the rename) are stale: stop unloads them; start and --install remove them before loading the current ones.
-
-An install from before the rename to Alfred moves over when setup, start, install or node-install runs
-(migrate_legacy): its ~/.jarvis home becomes ~/.alfred, and its services come back under their new labels.
+Services this checkout installed under old labels (a changed ALFRED_SERVICE_PREFIX) are stale: stop unloads them;
+start and --install remove them before loading the current ones.
 """
 
 import os
@@ -42,7 +39,7 @@ from dotenv import load_dotenv
 
 from alfred import config
 from alfred.auth import credentials, logins, vault
-from alfred.config import HOME_DIR, LOGS_DIR, ROOT, SECRETS_DIR, legacy
+from alfred.config import HOME_DIR, LOGS_DIR, ROOT, SECRETS_DIR
 from alfred.core import platform
 from alfred.core.files import write_atomic
 
@@ -215,23 +212,6 @@ def stale() -> list[Path]:
         logs = _log_file(path)
         if isinstance(logs, str) and Path(logs).parent in (LOGS_DIR, SERVICE_LOGS):
             found.append(path)
-    return [*found, *(p for p in legacy_services() if p not in found)]
-
-
-def legacy_services(names: tuple[str, ...] = SERVICES) -> list[Path]:
-    """This checkout's plists or units for `names` under the labels from before the rename (com.jarvis.<name>). Only
-    while the prefix is the default: an install given its own prefix kept it."""
-    if config.SERVICE_PREFIX != config.DEFAULT_SERVICE_PREFIX:
-        return []
-    folder, suffix = (SYSTEMD_USER, ".service") if _systemd() else (LAUNCH_AGENTS, ".plist")
-    found = []
-    for name in names:
-        path = folder / f"{legacy.OLD_LABELS}.{name}{suffix}"
-        try:
-            if str(ROOT) in path.read_text(errors="replace"):
-                found.append(path)
-        except OSError:
-            pass
     return found
 
 
@@ -382,7 +362,6 @@ NODE = "node"  # a second machine's one service (deploy/node.plist, deploy/syste
 
 
 HOME_ITEMS = (".env", "config.toml", "data", "secrets", "models", "logs")  # what an install keeps (alfred.config.files)
-MIGRATING = ("", "--install", "start", "install", "node-install")  # commands that first run migrate_legacy
 
 
 def move_home(dest: Path | None = None, root: Path = ROOT) -> list[str]:
@@ -414,36 +393,6 @@ def move_home(dest: Path | None = None, root: Path = ROOT) -> list[str]:
     return items
 
 
-def migrate_legacy(user_home: Path | None = None, root: Path = ROOT) -> list[str]:
-    """Move an install from before the rename to Alfred over: its ~/.jarvis home becomes ~/.alfred, with a link left
-    at ~/.jarvis for the absolute paths kept in the database and git's worktree records, and the checkout's links into
-    it repointed. Its services are stopped first (they hold its files open); they're put back under their new labels
-    by whichever command called this. Nothing to do when ALFRED_HOME names a home or ~/.alfred is there already.
-    Returns what it did."""
-    old, new = legacy.old_home(user_home), (user_home or Path.home()) / ".alfred"
-    if os.environ.get("ALFRED_HOME", "").strip() or new.exists() or new.is_symlink() or not old.exists():
-        return []
-    if old.is_symlink():  # remember_home's link to a home elsewhere: link the new name there too
-        new.symlink_to(old.resolve())
-        return [f"linked {_shown(new)} to {old.resolve()}"]
-    for path in legacy_services((*SERVICES, NODE)):
-        _unload(path)
-    shutil.move(old, new)
-    old.symlink_to(new)
-    done = [f"moved {_shown(old)} to {_shown(new)}"]
-    for name in HOME_ITEMS:
-        link = root / name
-        if link.is_symlink() and (target := Path(os.readlink(link))).is_relative_to(old):
-            link.unlink()
-            link.symlink_to(new / target.relative_to(old))
-            done.append(f"pointed {name} in the checkout at {_shown(new / target.relative_to(old))}")
-    worktrees = new / "data" / "worktrees"
-    if worktrees.is_dir() and (root / ".git").exists():
-        if found := [str(p) for p in worktrees.iterdir() if (p / ".git").is_file()]:
-            subprocess.run(["git", "-C", str(root), "worktree", "repair", *found], check=False, capture_output=True)
-    return done
-
-
 def _empty_dir(path: Path) -> bool:
     return path.is_dir() and not path.is_symlink() and not any(path.iterdir())
 
@@ -466,12 +415,7 @@ def _move_home_command() -> None:
 
 
 def install_node() -> None:
-    """On a second machine: (re)write and start its one service, retiring it under its label from before the rename.
-    Exits 1 if it fails to start."""
-    for path in legacy_services((NODE,)):
-        _systemctl("disable", "--now", path.name) if _systemd() else _launchctl("bootout", path)
-        path.unlink(missing_ok=True)
-        print(f"removed {path.stem}, now {config.service_label(NODE)}")
+    """On a second machine: (re)write and start its one service. Exits 1 if it fails to start."""
     if _systemd():
         _require_systemd()
         _write(NODE)
@@ -486,9 +430,9 @@ def install_node() -> None:
 
 
 def stop_node() -> None:
-    for path in (installed(NODE), *legacy_services((NODE,))):
-        if path.exists() and not _unload(path):
-            print(f"stopped {path.stem}")
+    path = installed(NODE)
+    if path.exists() and not _unload(path):
+        print(f"stopped {path.stem}")
 
 
 # ── Uninstall ──
@@ -501,7 +445,7 @@ def uninstall_services() -> list[str]:
     """Stop and remove every service this checkout installed (the four, any under stale labels, a second machine's
     node service) so none comes back at login, and put launchd's service logs back in logs/. Returns their labels."""
     removed = []
-    for path in dict.fromkeys([*(installed(name) for name in (*SERVICES, NODE)), *stale(), *legacy_services((NODE,))]):
+    for path in dict.fromkeys([*(installed(name) for name in (*SERVICES, NODE)), *stale()]):
         if not path.exists():
             continue
         if _systemd():
@@ -686,8 +630,7 @@ def clean(logs: Path | None = None, service_logs: Path | None = None, data: Path
           running: bool | None = None) -> int:
     """Free what Alfred rebuilds or never reads back: empty logs/ (files are emptied, not removed, as running
     services keep writing to them; folders such as the speech gate's saved clips go), and, unless a task is
-    running, the sandboxed commands' build caches and temp files (data/task-cache) and machine transfers left in
-    data/node/spool. Never the database, settings, secrets, memory, models or task records. Returns bytes freed."""
+    running, the tasks' temp files (data/task-cache) and machine transfers left in data/node/spool. Never the database, settings, secrets, memory, models or task records. Returns bytes freed."""
     logs, service_logs, data = logs or LOGS_DIR, service_logs or SERVICE_LOGS, data or config.DATA_DIR
     freed, emptied = 0, set()
     for path in [*_children(logs), *(service_logs.glob("*.log") if service_logs.is_dir() else [])]:
@@ -770,10 +713,6 @@ def main() -> None:
     arg = sys.argv[1] if len(sys.argv) > 1 else ""
     if arg in ("-h", "--help", "help"):
         return print(__doc__.strip())
-    if arg in MIGRATING and (moved := migrate_legacy()):
-        print("\n".join(moved))
-        # Again, in a fresh process, for config to find the new home
-        os.execv(sys.executable, [sys.executable, "-m", "alfred.setup_local", *sys.argv[1:]])
     if command := services.get(arg):
         return command()
     if not ENV.exists():
@@ -804,8 +743,8 @@ def main() -> None:
         # Also kept encrypted in the vault: make passcode shows it again
         print(f"Phone passcode for {logins.first_name()}: {new_passcode}")
 
-    if "--install" in sys.argv or legacy_services():
-        install_services()  # services from before the rename come back under their new labels
+    if "--install" in sys.argv:
+        install_services()
 
 
 def write_livekit_config() -> str:

@@ -1,8 +1,8 @@
 """A fresh worktree pre-warmed with the main checkout's dependencies, cloned copy-on-write (git_ops.worktree_op).
 
   node_modules  at the top and one folder down (web/node_modules), where the worktree has that folder
-  .venv         a clone, never the main one shared: host commands could write the main one, and the sandbox can't, so
-                a task's uv sync would fail there. Its scripts and .pth files are pointed at the clone and the worktree.
+  .venv         a clone, never the main one shared, so a task's uv sync never changes the main checkout's. Its scripts
+                and .pth files are pointed at the clone and the worktree.
 Only a clone is made (clonefile on APFS, a reflink on Linux), never a full copy: where the filesystem can't clone,
 nothing is copied and the task installs as before. Only folders git ignores in the worktree are copied, so none of it
 is ever committed.

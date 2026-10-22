@@ -140,7 +140,7 @@ _WATCH = {
     "a short model call reads only what's new (with expect, items containing it), e.g. gmail_search with "
     "{\"query\": \"from:sam@example.com\"}. Never a tool that changes or drafts anything; pick a narrow search whose "
     "result changes only when something happens. Prefer a cheap probe. command runs text, a shell command, in folder "
-    "(or its project's) outside the sandbox like start_job, with no model while it runs; each run is a command task. "
+    "(or its project's) like start_job, with no model while it runs; each run is a command task. "
     "A success is summed up (summarize); a failure may be fixed by a task in its project, then run again (auto_fix). "
     "It meets your shell's checks, so a risky one needs their yes. Alfred watches nothing on its own: when the user "
     "wants something kept an eye on, don't choose for them. Offer the ways that fit, with their cost, and set up the "

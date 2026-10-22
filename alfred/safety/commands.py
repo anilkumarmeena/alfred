@@ -1,15 +1,13 @@
 """Shell-command risk rules and spoken yes/no parsing, shared by the voice shell and background tasks.
 
   risky / describe        why a command needs a yes ('deletes files'), or ''; `own` exempts a task's own files/pids
-  refused                 why a task may never run it, even with a yes (secrets, Alfred controls, sudo)
-  own_sandbox             a bare brew/port install, approved to run outside the host profile
   names_secret / secret_path / reads_environment   secret detection, refused even with a yes
-  project_keys / env_files                         a registered project's own env files, which its scripts may read
+  env_files                                        a registered project's own env files, which its scripts may read
   approves / refuses / yes_scope                   clear yes / no / how far a yes goes, from word lists
   tells_approve / tells_deny / ordered / agreed_to the user's words as a later answer or a direct order
   same_risk               two lines do the same risky things in the same folders
 
-The secret lists here are the single source for the shell deny rules, task file checks and the host profile.
+The secret lists here are the single source for the shell's secret checks, file tools and the goal check's diffs.
 """
 
 import fnmatch
@@ -56,7 +54,7 @@ ENV_TEMPLATES = ("example", "sample", "template")
 _ENV_RESTS = [(p, "".join(sorted({w[len(p)] for w in ENV_TEMPLATES if len(w) > len(p) and w.startswith(p)})),
                p not in ENV_TEMPLATES)
               for p in sorted({w[:i] for w in ENV_TEMPLATES for i in range(len(w) + 1)})]
-# Glob classes can't be negated (Claude Code's sandbox escapes ^ in them): file-name characters, spelled out
+# Glob classes are spelled out rather than negated, so every glob matcher reads them alike: file-name characters
 _NAME_CHARS = set(string.ascii_letters + string.digits + "._~+@")
 
 
@@ -81,7 +79,7 @@ def _glob_class(but: str) -> str:
 
 
 SECRET_FILES = re.compile(secret_file_names(), re.IGNORECASE)
-# Same files as globs, for Claude Code's Read deny rules
+# Same files as globs, left out of the goal check's diffs (alfred.tasks.goal)
 SECRET_PATTERNS = ["**/.env",
                    *(g for p, after, alone in _ENV_RESTS
                      for g in [f"**/.env.{p}"] * alone + [f"**/.env.{p}{_glob_class(after)}*"]),
@@ -90,7 +88,7 @@ SECRET_PATTERNS = ["**/.env",
                    "**/.git-credentials", "**/credentials", "**/credentials.json", "**/*client_secret*.json",
                    "**/token.json", "**/tokens.json"]
 
-# Naming one of these refuses a command even with a yes: outside a sandbox no deny rule covers it
+# Naming one of these refuses a command even with a yes
 _SECRET_NAMES = re.compile(
     "|".join(re.escape(str(p)) for p in ALFRED_SECRETS)
     + "|" + "|".join(re.escape(p.removeprefix("~/")) for p in HOME_SECRETS)

@@ -7,7 +7,7 @@ import pytest
 
 from alfred.safety import commands
 from alfred.safety.commands import describe, names_secret, reads_environment, risky, seen
-from alfred.safety.scripts import NETWORK, SECRETS
+from alfred.safety.scripts import NETWORK
 from alfred.tasks.store import same_command
 
 UNSEEN = "runs code it can't see"
@@ -410,7 +410,7 @@ def test_a_scripts_fingerprint_changes_when_it_does(here):
     (here / "helpers.py").write_text("def go():\n    pass\n")
     after = seen("python3 main.py", here).files
     assert after != before and risky("python3 main.py", cwd=here) == ""
-    asked = {"tool": "host_run", "command": "python3 main.py", "folder": str(here), "scripts": before}
+    asked = {"tool": "Bash", "command": "python3 main.py", "folder": str(here), "scripts": before}
     assert not same_command(asked, asked | {"scripts": after})  # an approval doesn't carry over to the new code
-    assert same_command({"tool": "host_run", "command": "ls", "folder": "/x"},
-                        {"tool": "host_run", "command": "ls", "folder": "/x", "scripts": {}})
+    assert same_command({"tool": "Bash", "command": "ls", "folder": "/x"},
+                        {"tool": "Bash", "command": "ls", "folder": "/x", "scripts": {}})

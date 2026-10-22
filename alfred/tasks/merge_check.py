@@ -32,7 +32,7 @@ RECORD_DAYS = 14  # records older than this are dropped
 SHOWN = 5  # failing tests listed in a refusal
 # A run's test processes (pytest-xdist): one a core, at most 4, which an 8 GB Mac has the memory for
 PARALLEL = ("-n", "auto", "--maxprocesses=4")
-# Tests that always fail in a worktree or task sandbox (missing local assets), regardless of the branch
+# Tests that always fail in a worktree (missing local assets), regardless of the branch
 ENV_ONLY = {
     "tests/test_panel.py::test_preferences_kept_from_the_panel_and_read_by_config",  # needs Kokoro voices in models/
     "tests/test_push.py::test_service_worker_is_served_from_the_root",  # needs web/dist

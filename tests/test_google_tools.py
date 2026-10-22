@@ -14,7 +14,6 @@ from alfred.safety.commands import ALFRED_SECRETS
 from alfred.storage import profile
 from alfred.tasks import worker
 from alfred.tools import google
-from conftest import use_profile
 
 TOOLS = {
     "gmail": {"gmail_search", "gmail_read", "gmail_create_draft", "gmail_modify", "gmail_draft_send",

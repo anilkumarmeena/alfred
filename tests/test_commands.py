@@ -450,7 +450,7 @@ def test_the_deny_globs_hide_every_real_env_file_and_no_template(match):
         assert any(match(g, f"/p/app/{name}") for g in commands.SECRET_PATTERNS), name
     for name in ENV_TEMPLATES:
         assert not [g for g in commands.SECRET_PATTERNS if match(g, f"/p/app/{name}")], name
-    assert all("^" not in g and "[!" not in g for g in commands.SECRET_PATTERNS)  # neither negates in the sandbox
+    assert all("^" not in g and "[!" not in g for g in commands.SECRET_PATTERNS)  # spelled out, never negated
 
 
 def test_linux_credential_stores_are_secret_paths_wherever_home_is():

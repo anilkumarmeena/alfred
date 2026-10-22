@@ -257,7 +257,7 @@ def test_a_panel_answer_needs_no_nonce_and_says_where_it_came_from(env):  # noqa
         r = runner.Runner()
         task = r.store.create("code_change", "build", "Build it", "other")
         r.store.set(task["id"], status="running")
-        approval = r.request_approval(task["id"], {"tool": "host_run", "command": "brew install jq", "folder": "/repo",
+        approval = r.request_approval(task["id"], {"tool": "Bash", "command": "brew install jq", "folder": "/repo",
                                                     "why": describe("brew install jq")})
         return r, r.answer(approval["id"], "approve", "panel")
 

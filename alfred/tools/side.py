@@ -69,8 +69,8 @@ async def file_lookup(brief: str, about: str) -> str:
     "Check something on this computer with shell commands, done by a fast helper so the conversation carries on: how "
     "it's doing (uptime, memory, disk, load, battery, whether it needs a restart), what's running, whether a service "
     "or port is up, what's installed and which version, a project's git status. Use it for every such check, even "
-    "one that looks like a single command, instead of running commands yourself. It only looks, in a sandbox without "
-    "the network: anything that changes, installs, restarts or fixes something is a command you run on the user's "
+    "one that looks like a single command, instead of running commands yourself. It only looks: anything that "
+    "changes, installs, restarts or fixes something is a command you run on the user's "
     "word, or a task. A quick check comes back in this turn; a longer one carries on in the background and its "
     "answer is announced when ready.",
     {

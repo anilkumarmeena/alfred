@@ -117,7 +117,7 @@ def test_while_this_computer_is_away_the_machine_runs_it_alone_and_it_is_taken_u
 
 
 def test_a_risky_command_in_a_run_alone_waits_for_the_users_yes(there, tmp_path):
-    item = {"tool": "host_run", "command": "rm -rf build", "why": "cleans", "remember": {}}
+    item = {"tool": "Bash", "command": "rm -rf build", "why": "cleans", "remember": {}}
 
     async def run(task, prompt, reporter) -> Outcome:
         if await reporter.cleared(task["id"], item | {"folder": task["worktree"]}):

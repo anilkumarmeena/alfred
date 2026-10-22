@@ -37,7 +37,7 @@ line-length = 120
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
-known-first-party = ["alfred", "jarvis", "conftest", "fake_cli"]
+known-first-party = ["alfred", "conftest", "fake_cli"]
 
 # `make check`: basic mode, all rules errors except the warnings below (hidden by make check). They cover checked
 # rows/JSON typed `dict | None` and loose library stubs. See them with `uv run --with pyright pyright`.

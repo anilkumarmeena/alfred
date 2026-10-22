@@ -55,12 +55,6 @@ def test_a_day_reads_as_who_said_what_newest_first(logs):
     assert announced == {"n": 4, "time": "10:30", "kind": "announcement", "said": "Task 12, the login page, is done."}
 
 
-def test_a_day_logged_before_the_rename_reads_the_same(logs):
-    write(logs, "2026-10-04", DAY.replace("Assistant", "JARVIS"))
-    write(logs, "2026-10-05", DAY)
-    assert history.day("2026-10-04")["entries"] == history.day("2026-10-05")["entries"]
-
-
 def test_the_log_is_the_same_whatever_the_assistant_is_called(logs, monkeypatch):
     monkeypatch.setattr(profile, "assistant", lambda: "Friday")
     memory.log_exchange("hi", "Hello.")

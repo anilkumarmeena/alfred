@@ -409,18 +409,6 @@ sudo loginctl enable-linger $USER
 
 `ALFRED_SERVICE_PREFIX` changes the `com.alfred` part, to **run a second Alfred** under the same user account; `make services-restart` moves the services to the new labels.
 
-## ⬆️ Coming from JARVIS
-
-Alfred used to be called JARVIS. An install from then moves over by itself the first time you run **`make setup`**, **`make services-install`**, **`make services-start`** or (on a second machine) **`make node-install`**:
-
-| Before | After |
-|---|---|
-| `~/.jarvis` | `~/.alfred`, with a link left at `~/.jarvis` for paths saved before |
-| `JARVIS_*` in `.env` | `ALFRED_*`, rewritten in place |
-| `com.jarvis.*` services | `com.alfred.*`, the old ones removed |
-
-Until then the old services keep starting: the checkout keeps their old entry points (`jarvis/`), each handing over to Alfred, and a second machine that updated itself carries on the same way. Your phone stays signed in. Conversation logs written before read as before.
-
 ## 🧹 Uninstall
 
 Two levels. **Neither touches the code**: delete the checkout folder yourself to finish.

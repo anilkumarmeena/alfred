@@ -213,9 +213,8 @@ def read_recent() -> str:
 
 NOT_REPLIED, CUT_OFF = "(interrupted before replying)", " (interrupted)"  # markers for cut-off replies
 # How the assistant's lines are labelled in the logs: the same whatever name it goes by, so renaming it never cuts
-# old entries off (alfred.state.history also reads OLD_SPEAKERS, the labels earlier versions wrote)
+# old entries off
 SPEAKER = "Assistant"
-OLD_SPEAKERS = ("JARVIS",)
 
 
 def _reply(assistant: str, interrupted: bool) -> str:

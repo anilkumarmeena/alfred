@@ -65,14 +65,14 @@ flowchart TB
 | 8 | 🎞️ `alfred/media/` | Reading what the user hands over: documents, pictures and recordings (transcription with Whisper). |  |
 | 8 | 📁 `alfred/projects.py` | Projects code tasks can work on (projects table in data/tasks.db). |  |
 | 9 | 🗂️ `alfred/state/` | What Alfred keeps for the user: long-term memory, settings and preferences, the to-do list, the speech vocabulary, voiceprints, history, the bell, and the conversation in progress. | `todo_match` |
-| 10 | 🛡️ `alfred/safety/` | What may run, be read or be said: the command rules, script reading, the host sandbox, which addresses may be fetched, reading a spoken yes or no, remembered approvals and the hidden-instruction scan. | `consent` |
+| 10 | 🛡️ `alfred/safety/` | What may run, be read or be said: the command rules, script reading, background jobs on the host, which addresses may be fetched, reading a spoken yes or no, remembered approvals and the hidden-instruction scan. | `consent` |
 | 11 | 🤖 `alfred/llm/` | The model provider: one place that talks to Claude (the Agent SDK and CLI), which model plays each role, the logins it runs on, their usage limits, and retrying calls that fail. |  |
 | 12 | 🔐 `alfred/auth/` | Who may use Alfred and its secrets: the encrypted vault, panel logins and Alfred's own keys. |  |
 | 13 | 💾 `alfred/storage/` | The SQLite database and the active profile (whose data folder and database are in use). |  |
 | 14 | 🎛️ `alfred/config/` | Static settings, read once at import: the defaults in the checkout's config/*.toml, overridden by ALFRED_HOME's config.toml, overridden by the environment (.env). |  |
 | 14 | 💬 `alfred/prompts/` | The long prompts, kept as markdown beside this file, one file each, and read with load(). |  |
 | 15 | 📜 `alfred/contracts/` | Contracts between Alfred's parts: Protocols and plain data a lower layer names so a higher one can fill it in, without the lower one importing the higher (docs/architecture-review.md). |  |
-| 16 | 🧩 `alfred/core/` | Small helpers every part uses, with no Alfred dependencies: which OS, files written safely, processes, memory pressure, text made fit to speak, the GPU shim. |  |
+| 16 | 🧩 `alfred/core/` | Small helpers every part uses, with no Alfred dependencies: which OS, files written safely, processes, memory pressure, text made fit to speak. |  |
 
 ## 🧰 Tools the brain can call
 

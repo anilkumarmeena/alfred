@@ -603,7 +603,7 @@ class Work:
 
     async def job_start(self, body: dict) -> dict:
         """{"task", "key", "rel", "command", "title", "approved"} -> {"started"}, or {"refused": why}. Runs as the
-        main computer runs a job: outside the sandbox in a login shell, without Alfred's keys."""
+        main computer runs a job: in a login shell, without Alfred's keys."""
         task, command = int(body["task"]), str(body["command"]).strip()
         own = []  # its scripts may read their project's env files
         if body.get("path"):  # in a project living here

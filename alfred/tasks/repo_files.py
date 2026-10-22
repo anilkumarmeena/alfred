@@ -48,7 +48,7 @@ class Refused(Exception):
 
 
 def downloads(task_id: int) -> Path:
-    """The task's downloads folder, in its temp folder (readable by the task, writable by sandboxed commands)."""
+    """The task's downloads folder, in its temp folder."""
     return task_temp(task_id) / "downloads"
 
 

@@ -1,8 +1,7 @@
 """A machine's own files, when this checkout runs as a node (python -m alfred.node).
 
-Private ones live in secrets/node/, so the same walls that keep tasks out of secrets/ on the main computer keep them
-out here: its key, its pairing with the main computer, and its journal. Work copies of projects go in data/worktrees/
-(writable by the tasks that work in them), the rest in data/node/.
+Private ones live in secrets/node/: its key, its pairing with the main computer, and its journal. Work copies of
+projects go in data/worktrees/, the rest in data/node/.
 """
 
 import json

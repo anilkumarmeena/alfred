@@ -18,7 +18,6 @@ PREVIEW_CHARS = 140
 _HEAD = re.compile(r"\[(\d{2}:\d{2})\] ([^:\n]{1,60}?)( \(announced\))?: ")
 _TIME = re.compile(r"\[(\d{2}:\d{2})\] ?")
 _APPROVED = re.compile(r"\(Approved: (.*)\)")
-SPEAKERS = (memory.SPEAKER, *memory.OLD_SPEAKERS)  # labels of the assistant's lines
 
 
 def _is_day(text: str) -> bool:
@@ -49,14 +48,14 @@ def _parse(raw: str) -> dict:
         found = _TIME.match(raw)
         return {"time": found[1] if found else "", "kind": "note", "said": raw[found.end():] if found else raw}
     time, who, announced, rest = head[1], head[2].strip(), head[3], raw[head.end():]
-    if announced or who in SPEAKERS:
+    if announced or who == memory.SPEAKER:
         return {"time": time, "kind": "announcement", "said": rest.strip()}
     said, approved, reply = [], [], None
     for line in rest.split("\n"):
         if reply is not None:
             reply.append(line)
-        elif label := next((s for s in SPEAKERS if line == f"{s}:" or line.startswith(f"{s}: ")), None):
-            reply = [line.removeprefix(f"{label}:").removeprefix(" ")]
+        elif line == f"{memory.SPEAKER}:" or line.startswith(f"{memory.SPEAKER}: "):
+            reply = [line.removeprefix(f"{memory.SPEAKER}:").removeprefix(" ")]
         elif yes := _APPROVED.fullmatch(line):
             approved.append(yes[1])
         else:

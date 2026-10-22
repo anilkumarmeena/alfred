@@ -204,7 +204,7 @@ def test_alfred_own_data_and_a_tasks_reporting_tools_arent_checked(model):
 
 def test_outside_content_and_tools_alfred_doesnt_know_are_checked(model):
     for tool in ("mcp__alfred__file_read", "mcp__alfred__browser_read", "mcp__alfred__screen_look",
-                 "mcp__alfred__gmail_read", "mcp__notion__search", "mcp__host__host_run", "WebFetch", "Read", "Bash"):
+                 "mcp__alfred__gmail_read", "mcp__notion__search", "mcp__shell__start_job", "WebFetch", "Read", "Bash"):
         assert injection.covers(tool) is True, tool  # a new connection or tool is screened without marking
     screen(mcp(EMAIL), tool="mcp__notion__search")
     assert len(model.prompts) == 1

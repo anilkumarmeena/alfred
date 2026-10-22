@@ -45,10 +45,9 @@ ALFRED_PYTHON ?= $(UV) python
 else
 ALFRED_PYTHON ?= "$(MAIN_DIR)/.venv/bin/python"
 endif
-# The install's settings and data (alfred.config.files): ALFRED_HOME, else ~/.alfred if it exists, else ~/.jarvis
-# (from before the rename; setup moves it to ~/.alfred), else the checkout
-ALFRED_HOME_DIR := $(strip $(or $(ALFRED_HOME),$(JARVIS_HOME),$(if $(wildcard $(HOME)/.alfred/.env $(HOME)/.alfred/data),\
-                   $(HOME)/.alfred,$(if $(wildcard $(HOME)/.jarvis/.env $(HOME)/.jarvis/data),$(HOME)/.jarvis,$(MAIN_DIR)))))
+# The install's settings and data (alfred.config.files): ALFRED_HOME, else ~/.alfred if it exists, else the checkout
+ALFRED_HOME_DIR := $(strip $(or $(ALFRED_HOME),$(if $(wildcard $(HOME)/.alfred/.env $(HOME)/.alfred/data),\
+                   $(HOME)/.alfred,$(MAIN_DIR))))
 MODELS_DIR := $(ALFRED_HOME_DIR)/models
 LOGS_DIR   := $(ALFRED_HOME_DIR)/logs
 # Service labels (com.alfred.* or ALFRED_SERVICE_PREFIX): launchd on macOS, systemd user units on Linux; evaluated
@@ -57,8 +56,8 @@ LOGS_DIR   := $(ALFRED_HOME_DIR)/logs
 SERVICE_CTL = cd "$(MAIN_DIR)" && $(ALFRED_PYTHON) -m alfred.setup_local
 SERVICES    = $(shell $(SERVICE_CTL) labels)
 # Claude login: the user's own, unless .env (or the environment) sets ALFRED_CLAUDE_CONFIG_DIR, a login of Alfred's own
-CLAUDE_DIR := $(or $(ALFRED_CLAUDE_CONFIG_DIR),$(JARVIS_CLAUDE_CONFIG_DIR),$(shell sed -nE \
-               "s/^(ALFRED|JARVIS)_CLAUDE_CONFIG_DIR=[\"']*([^\"']*)[\"']*$$/\2/p" "$(ALFRED_HOME_DIR)/.env" 2>/dev/null | tail -1))
+CLAUDE_DIR := $(or $(ALFRED_CLAUDE_CONFIG_DIR),$(shell sed -nE \
+               "s/^ALFRED_CLAUDE_CONFIG_DIR=[\"']*([^\"']*)[\"']*$$/\1/p" "$(ALFRED_HOME_DIR)/.env" 2>/dev/null | tail -1))
 # ...relative to ALFRED_HOME, as alfred.config reads it
 CLAUDE_PATH = $(if $(CLAUDE_DIR),$(if $(filter /%,$(CLAUDE_DIR)),,$(ALFRED_HOME_DIR)/)$(CLAUDE_DIR))
 # Kokoro voice: kokoro-onnx's model files, from a pinned Hugging Face mirror (byte-identical to the GitHub release,

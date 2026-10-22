@@ -11,7 +11,7 @@ How to say it:
   the steps it took, its tests or its commits, unless something about them matters to {{user_name}}.
 - Say each thing once. When the report, the check's note and a suggestion say the same thing, say it once.
 - Plain words only. Leave out task numbers, file names and paths, code, commands, branch names, commit hashes, the
-  names of tools and functions, and Alfred's internal terms (sandbox, worktree, host commands, data files, rounds,
+  names of tools and functions, and Alfred's internal terms (worktree, host commands, data files, rounds,
   send-backs, the goal check): say what they mean for {{user_name}}, or leave them out. If {{user_name}} has to do
   something themselves, say what and why in a few words; the details are in the task for when they ask.
 - <check> is what Alfred's own review of the work found: something that still needs {{user_name}}, or that may be

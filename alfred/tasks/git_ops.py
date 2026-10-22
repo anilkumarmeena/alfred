@@ -37,7 +37,7 @@ log = logging.getLogger("alfred.tasks.runner")
 SNAPSHOT_SKIP = {".git", *projects.CACHE_DIRS}
 SQUASH_BODY = 1200  # characters of a task's summary kept in its squashed commit
 MERGE_STOP_SECONDS = 60  # a stopped merge cleans up (its test run, a temporary checkout) before saying how it ended
-BRANCHES = ("alfred/", "jarvis/")  # a task branch's prefix, the first for new ones; jarvis/ from before the rename
+BRANCH = "alfred/"  # a task branch's prefix
 
 
 async def _git(cwd: str | Path, *args: str, timeout: float = 60) -> str:
@@ -87,7 +87,7 @@ async def worktree_op(body: dict) -> dict:
     if problem := await asyncio.to_thread(projects.worktree_problem, projects.Project(body["name"], repo, [], "")):
         raise ValueError(problem)
     slug = re.sub(r"[^a-z0-9]+", "-", str(body["title"]).lower()).strip("-")[:40] or "task"
-    branch = f"{BRANCHES[0]}{body['task']}-{slug}"
+    branch = f"{BRANCH}{body['task']}-{slug}"
     worktree = WORKTREES_DIR / f"{re.sub(r'[^\w.-]', '-', body['name'])}-{body['task']}"
     base, base_ref = (await _git(repo, "rev-parse", "HEAD", "--abbrev-ref", "HEAD")).split("\n")
     WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
@@ -275,7 +275,7 @@ async def _test_and_squash(body: dict, repo: Path, branch: str, wt: str | None, 
 
 def _own_branch(task_id: int | str, branch: str) -> bool:
     """Whether `branch` is the one the runner made for the task."""
-    return branch.startswith(tuple(f"{prefix}{task_id}-" for prefix in BRANCHES))
+    return branch.startswith(f"{BRANCH}{task_id}-")
 
 
 async def _catch_up(repo: Path, worktree: str | None, branch: str, task_id: int | str,

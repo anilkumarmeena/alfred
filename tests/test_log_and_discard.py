@@ -165,15 +165,6 @@ def test_discard_only_deletes_the_branch_alfred_made_for_the_task(env, monkeypat
     assert "main" in branches(env["other"]) and Path(task["worktree"]).exists()
 
 
-def test_discard_takes_a_branch_made_before_the_rename_to_alfred(env, monkeypatch):
-    other = env["other"]
-    r, task = run_worktree_task(monkeypatch, add_new_file)
-    old = task["branch"].replace("alfred/", "jarvis/", 1)
-    git(other, "branch", "-m", task["branch"], old)
-    r.store.set(task["id"], branch=old)
-    assert "branch deleted" in discard(r, task["id"])["spoken"] and branches(other) == ["main"]
-
-
 def test_discard_leaves_an_in_place_task_s_changes_in_the_folder(env, monkeypatch):
     video = env["video"]
     r, task = run_worktree_task(monkeypatch, add_new_file, project="video-agent")

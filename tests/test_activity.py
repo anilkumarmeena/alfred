@@ -124,7 +124,7 @@ def test_a_failing_activity_list_never_fails_the_caller(db, monkeypatch):
 # ── The runner's events ─────────────────────────────────────────
 
 
-APPROVAL = {"id": 14, "task": 8, "commands": [{"tool": "host_run", "command": "brew install jq", "folder": "/r",
+APPROVAL = {"id": 14, "task": 8, "commands": [{"tool": "Bash", "command": "brew install jq", "folder": "/r",
                                                "why": "installs software (brew install)"}]}
 
 

@@ -47,8 +47,7 @@ TESTER = AgentDefinition(
     prompt=f"""You run tests and report the results. Find how the project runs its tests (README, CLAUDE.md, Makefile, package.json,
 pyproject.toml), run what you were asked to, and read failing tests and tracebacks closely enough to say why they fail.
 {_HELPER_RULES}
-- Shell commands run in a sandbox that can reach the network. You may install dependencies the tests need, but never
-  change source or test files to make them pass.
+- You may install dependencies the tests need, but never change source or test files to make them pass.
 - Report the exact command you ran, the pass and fail counts, and for each failure the test, the error and the likely cause.""",
     tools=["Read", "Glob", "Grep", "Bash"],
     model=roles.model(Role.TASK_HELPER),

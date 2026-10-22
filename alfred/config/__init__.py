@@ -14,17 +14,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 
-from alfred.config import files, legacy
+from alfred.config import files
 from alfred.config.files import ROOT, ConfigError  # noqa: F401  (ROOT: the code checkout)
 from alfred.config.models import Models
 from alfred.core import desktop, platform
 
 # Everything this install keeps (alfred.config.files): config.toml, .env, data, secrets, models, logs
-legacy.adopt_env()  # JARVIS_* from before the rename, set by an old service or the shell
 HOME_DIR = files.home()
-legacy.upgrade_env_file(HOME_DIR / ".env")
 load_dotenv(HOME_DIR / ".env")
-legacy.adopt_env()  # any the .env still holds under old names (it couldn't be rewritten)
 # Vault key; popped from the environment so child processes never inherit it
 MASTER_KEY = os.environ.pop("ALFRED_MASTER_KEY", "").strip()
 SETTINGS = files.load(HOME_DIR)
@@ -87,7 +84,7 @@ MODELS_DIR = HOME_DIR / "models"
 for _folder in (DATA_DIR, SECRETS_DIR):
     try:
         _folder.mkdir(parents=True, exist_ok=True)
-    except FileExistsError:  # there but unreadable: a task's sandbox walls off the install's own folders
+    except FileExistsError:  # there but unreadable
         pass
 # Install database: profiles, plus the owner's tasks, to-dos, projects, accounts, settings and secrets
 DB_FILE = Path(_env("ALFRED_DB_FILE") or DATA_DIR / "tasks.db")

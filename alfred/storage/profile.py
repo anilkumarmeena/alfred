@@ -116,7 +116,7 @@ class Profile:
 
     @property
     def shell(self) -> Path:
-        return self.data / "shell"  # voice brain cwd; its sandbox's only writable folder
+        return self.data / "shell"  # voice brain cwd
 
     @property
     def browser_profile(self) -> Path:

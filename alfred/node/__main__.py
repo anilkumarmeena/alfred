@@ -2,7 +2,7 @@
 
   uv run python -m alfred.node pair CODE https://main.example.ts.net   pair, with a code from Settings › Machines
   uv run python -m alfred.node serve                                   dial the main computer and work (the service)
-  uv run python -m alfred.node check                                   walls, pairing, link, tools
+  uv run python -m alfred.node check                                   pairing, link, tools
   uv run python -m alfred.node status                                  pairing and fingerprints
 """
 

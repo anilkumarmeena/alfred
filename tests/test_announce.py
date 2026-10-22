@@ -80,7 +80,7 @@ def test_each_kind_of_end_in_fixed_words(ending, words):
 
 def test_the_model_words_the_end_from_its_facts(model):
     ending = Ending("tick off to-dos when tasks finish", DONE, "Background tasks can now be linked to a to-do.",
-                    left="the summary says checks were re-run through host_run, but the log shows none",
+                    left="the summary says checks were re-run through Bash, but the log shows none",
                     suggested=[TICK])
     assert said(ending) == "The to-do linking work is finished. It'd also like to tick off your connection tools to-do."
     (facts,) = model.asked

@@ -13,7 +13,7 @@ Safety (a skill's own text can't lower any of these):
   regains it is skipped. allowed-tools would bypass the brain's gate.
 - Skills with scripts are used only while their files match the digest the user approved after a review.
 - Symlinks inside a skill folder are refused.
-- Scripts run like any other command, inside the same sandbox and approval gates.
+- Scripts run like any other command, through auto mode's check and the same approval gates.
 """
 
 import hashlib

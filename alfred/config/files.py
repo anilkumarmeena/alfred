@@ -1,8 +1,7 @@
 """Where Alfred's settings and data live, and reading the settings files.
 
 ALFRED_HOME holds everything an install keeps: config.toml, .env, data/, secrets/, models/ and logs/. It's the
-ALFRED_HOME variable if set, else ~/.alfred if that folder exists, else ~/.jarvis (an install from before the rename,
-alfred.config.legacy), else the code checkout (the layout from before ALFRED_HOME). The checkout's config/ holds the
+ALFRED_HOME variable if set, else ~/.alfred if that folder exists, else the code checkout. The checkout's config/ holds the
 shipped defaults; ALFRED_HOME's config.toml (or the file ALFRED_CONFIG names) overrides them table by table, key by
 key.
 """
@@ -12,8 +11,6 @@ import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
-
-from alfred.config import legacy
 
 ROOT = Path(__file__).resolve().parents[2]  # the code checkout
 DEFAULTS_DIR = ROOT / "config"
@@ -25,12 +22,10 @@ class ConfigError(Exception):
 
 
 def home(env: Mapping[str, str] = os.environ, user_home: Path | None = None) -> Path:
-    if given := (env.get("ALFRED_HOME", "").strip() or env.get(legacy.OLD_PREFIX + "HOME", "").strip()):
+    if given := env.get("ALFRED_HOME", "").strip():
         return Path(given).expanduser()
-    for own in ((user_home or Path.home()) / ".alfred", legacy.old_home(user_home)):
-        if (own / ".env").exists() or (own / "data").exists():
-            return own
-    return ROOT
+    own = (user_home or Path.home()) / ".alfred"
+    return own if (own / ".env").exists() or (own / "data").exists() else ROOT
 
 
 def _read(path: Path) -> dict[str, Any]:

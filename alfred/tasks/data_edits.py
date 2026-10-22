@@ -1,4 +1,4 @@
-"""Edits to Alfred's data that sandboxed tasks suggest (propose_data_edit) and the voice brain applies (task_edits).
+"""Edits to Alfred's data that tasks suggest (propose_data_edit) and the voice brain applies (task_edits).
 
 Edits are validated by `check`, stored numbered on the task's `edits` column, and applied by `apply`.
   ACTIONS  mirror voice tools: project_register/update, todo_add/done/reword, remember, forget; `edit` replaces one

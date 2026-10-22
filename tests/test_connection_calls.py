@@ -100,7 +100,7 @@ def test_the_users_orders_never_cover_a_call(env, monkeypatch):
     r = runner.Runner()
     task = r.store.create("code_change", "the MR review", "Review it", "other")
     r._order(task["id"], "Push it and merge it.")
-    command = {"tool": "host_run", "command": "git push", "folder": "/repo", "why": "pushes"}
+    command = {"tool": "Bash", "command": "git push", "folder": "/repo", "why": "pushes"}
     assert r.cleared(task["id"], command) and not r.cleared(task["id"], call_item(lab(), "mark_todo_done", {"id": 7}))
 
 

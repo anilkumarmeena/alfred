@@ -265,7 +265,7 @@ def test_questions_failures_and_waits_for_a_go_ahead_are_not_checked(env, pushes
         if ending == "question":
             reporter.ask(task["id"], "Which account?")
         elif ending == "approval":
-            reporter.request_approval(task["id"], {"tool": "host_run", "command": "brew install x", "folder": "/tmp",
+            reporter.request_approval(task["id"], {"tool": "Bash", "command": "brew install x", "folder": "/tmp",
                                                    "why": "installs software"})
         return Outcome("Stopped here.", "it hit the Claude usage limit" if ending == "failed" else "", 0.01)
 

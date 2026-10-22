@@ -37,7 +37,7 @@ from alfred.tools import tasks as task_tools
 BREW = "brew install xcodegen"
 
 
-def item(command: str = BREW, folder: str = "/repo", tool: str = "host_run") -> dict:
+def item(command: str = BREW, folder: str = "/repo", tool: str = "Bash") -> dict:
     """Host command in the shape host_tools.approval_item gives the runner."""
     return {"tool": tool, "command": command, "folder": folder, "why": describe(command),
             "remember": remembered.pieces(command)}
@@ -161,7 +161,7 @@ def test_a_task_waits_quietly_then_carries_on_with_a_yes(env, monkeypatch, pushe
     assert statuses == []  # only the request is announced, not the wait
     assert answer["outcome"] == f"Request {pending['id']} approved." and answer["state"] == APPROVED
     assert prompts[1] == (f"{profile.name()} approved request {pending['id']} on the command line. Run exactly this, once, with "
-                          f"host_run, in /repo: {BREW}")
+                          f"Bash, in /repo: {BREW}")
     assert ran == [True, True]
     assert r.store.get(task["id"])["status"] == "done"
     assert r.store.approval(pending["id"])["state"] == SPENT  # the yes covers that run only
@@ -635,7 +635,7 @@ def test_the_assistant_passes_on_an_explicit_yes_for_that_one_request(through):
                          "\"Let it close the hidden Chrome.\"") in log
     [heard] = nudges(r.store.get(task["id"]))
     assert heard.startswith(f"{profile.name()} approved request {first['id']} by telling Alfred. Run exactly this, once, with "
-                            f"host_run, in /repo: {CHROME}")
+                            f"Bash, in /repo: {CHROME}")
 
 
 def test_the_assistant_cant_answer_on_words_that_dont_say_so(through):
