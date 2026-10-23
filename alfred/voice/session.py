@@ -2,11 +2,15 @@
 
 LiveKit-free, so call routing is testable with stand-ins. Each user turn goes through `reply`: a yes/no to an offered
 rule or a pending task request is handled before the brain sees it. Task requests arrive on the runner's event stream
-(`watch_tasks`) and are asked when due and the floor is free (`ask_approvals`, event-driven, no polling).
+(`watch_tasks`) and are asked when due and the floor is free (`ask_approvals`, event-driven, no polling). The call's
+helpers (lookups, tool calls carrying on) are reported to the runner for the task list (`report_helpers`), and a stop
+for one from the control panel comes back on the same stream.
 """
 
 import asyncio
 import logging
+import secrets
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 
@@ -17,8 +21,9 @@ from alfred.safety import approvals, consent, remembered
 from alfred.safety.approvals import VoiceApprovals
 from alfred.state import conversation, memory
 from alfred.storage import profile
-from alfred.tasks import announce, client
+from alfred.tasks import announce, client, helpers
 from alfred.tasks.store import WAIT_APPROVAL
+from alfred.tools import side as side_tools
 from alfred.voice import cutoff, ram, turn
 from alfred.voice.floor import Announcement, Announcements, Floor, Moment
 
@@ -28,6 +33,7 @@ log = logging.getLogger("alfred")
 QUESTION_RECHECK_SECONDS = 30
 # Follow runner events for the whole call; reconnect 30 s after any stop or failure
 RUNNER_EVENTS = retry.Policy(waits=(30,), retries=retry.KINDS, forever=True, passing=(client.RunnerUnavailable,))
+HELPERS_TICK = 1  # seconds between looks at the call's helpers; the runner hears of changes and a heartbeat only
 
 
 def _waiting(n: int, more: str = "") -> str:
@@ -69,6 +75,9 @@ class VoiceSession:
         self._loops: list[asyncio.Task] = []
         self._greeted: dict | None = None  # the task whose whole update the greeting led with
         self._asking = False  # the greeting leads with a task's question
+        self.id = secrets.token_hex(4)  # this call, to the runner's list of helpers
+        self._reported: list[dict] = []  # the helpers the runner last heard of
+        self._stops: set[asyncio.Task] = set()  # stops asked from the control panel, under way
 
     @property
     def _quick_models(self) -> list:
@@ -99,7 +108,7 @@ class VoiceSession:
         self._loops = [asyncio.create_task(self.watch_tasks()),
                        asyncio.create_task(self.announcements.run(session, self.brain, self.stt, self.asks,
                                                                   self.runner.mark_seen)),
-                       asyncio.create_task(self.ask_approvals(session))]
+                       asyncio.create_task(self.ask_approvals(session)), asyncio.create_task(self.report_helpers())]
         if heard and self._greeted is not None:
             self._loops.append(asyncio.create_task(self._heard_greeting(self._greeted)))
 
@@ -121,12 +130,18 @@ class VoiceSession:
             self.stt.speaker.cancel_enrollment()
         self.talk.speaker = self.talk.lookups = self.talk.kept = None
         self.timings.close()
-        steps = [self.lookups.close(), self.announcements.leave(), self.brain.end(), self._ended(),
+        steps = [self.lookups.close(), self.announcements.leave(), self.brain.end(), self._ended(), self._unlisted(),
                  *(quick.close() for quick in self._quick_models)]
         for failed in await asyncio.gather(*steps, return_exceptions=True):
             if isinstance(failed, BaseException):
                 log.error("closing the voice session", exc_info=failed)
         conversation.end(self.talk)
+
+    async def _unlisted(self) -> None:
+        """Take the call's helpers off the task list at once, rather than when the runner stops hearing of them."""
+        if self._reported:
+            with suppress(Exception):
+                await self.runner.report_helpers(self.id, [])
 
     async def _ended(self) -> None:
         """Notify the runner. Best effort: it also detects the end by inactivity."""
@@ -333,8 +348,44 @@ class VoiceSession:
 
         await retry.retry(RUNNER_EVENTS, follow, "task announcements")
 
+    def _helpers(self) -> list:
+        """The call's lookups and tool calls carrying on, running or lately ended (alfred.contracts.call.Helper)."""
+        return [*self.lookups.listed(), *(self.talk.kept.listed() if self.talk.kept is not None else [])]
+
+    async def report_helpers(self) -> None:
+        """Tell the runner of the call's helpers whenever they change, and every HEARTBEAT seconds while there are
+        any (alfred.tasks.helpers), so the control panel, the phone and task_list show them beside tasks."""
+        beat = 0.0
+        while True:
+            now = [h.view() for h in self._helpers()]
+            if now != self._reported or (now and time.monotonic() - beat >= helpers.HEARTBEAT):
+                try:
+                    await self.runner.report_helpers(self.id, now)
+                    self._reported, beat = now, time.monotonic()
+                except Exception as e:  # the runner down: tried again next look
+                    log.debug("reporting the call's helpers failed: %s", type(e).__name__)
+            await asyncio.sleep(HELPERS_TICK)
+
+    def _stop_helper(self, helper: str) -> None:
+        """A stop from the control panel, if the helper is this call's: stopped as background_stop would, and the
+        brain told, since nothing comes back from it."""
+        async def stop() -> None:
+            try:
+                said = await side_tools.stop_helper(self.talk, helper)
+            except Exception as e:
+                log.warning("stopping a helper from the panel failed: %s", e)
+                return
+            if said:
+                self.brain.note("", f"{profile.name()} stopped it from the control panel: {said}")
+
+        task = asyncio.create_task(stop())
+        self._stops.add(task)
+        task.add_done_callback(self._stops.discard)
+
     def _task_event(self, event: dict) -> None:
-        if event["type"] == "approval":
+        if event["type"] == "helper_stop":
+            self._stop_helper(str(event["id"]))
+        elif event["type"] == "approval":
             self.asks.add(event["approval"])
         elif event["type"] == "approval_answered":
             self.asks.drop(event["approval"]["id"])

@@ -10,9 +10,11 @@ search hit (package or https URL plus the page it was found on).
 """
 
 import asyncio
+import logging
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 from shutil import which
 from urllib.parse import quote, urlsplit
@@ -23,8 +25,15 @@ from alfred.auth import vault
 from alfred.integrations import mcp_servers
 from alfred.integrations.mcp_servers import ENV_NAME, Server
 
+log = logging.getLogger("alfred.integrations.mcp_registry")
+
 REGISTRY = os.environ.get("ALFRED_MCP_REGISTRY", "https://registry.modelcontextprotocol.io").rstrip("/")
-TIMEOUT = 20
+CONNECT_TIMEOUT = 10  # seconds
+READ_TIMEOUT = 75  # the registry often takes 20-30 seconds to answer a search, sometimes longer
+TIMEOUT = httpx.Timeout(CONNECT_TIMEOUT, read=READ_TIMEOUT)
+ATTEMPTS = 3  # tries per request when it times out
+BACKOFF = 2  # seconds before the first retry, doubled each time
+CACHED = 15 * 60  # seconds a search's results are reused, so asking again is quick
 SHOWN = 8  # results returned
 FETCHED = 60  # results fetched before ranking
 DESCRIBED = 300  # description chars returned
@@ -39,13 +48,28 @@ class RegistryError(Exception):
 
 # ── Searching ───────────────────────────────────────────────────
 
+_searched: dict[str, tuple[float, list[dict]]] = {}  # query: (when, results)
+
+
+async def _send(client: httpx.AsyncClient, path: str, params: dict | None) -> httpx.Response:
+    """The registry's answer, retried with backoff when it's slow; any other failure is reported at once."""
+    tried = 0
+    while True:
+        try:
+            return await client.get(REGISTRY + path, params=params, headers={"Accept": "application/json"})
+        except httpx.HTTPError as e:
+            tried += 1
+            if not isinstance(e, httpx.TimeoutException) or tried >= ATTEMPTS:
+                raise RegistryError(f"The MCP registry can't be reached right now ({type(e).__name__}).") from None
+            log.info("MCP registry timed out (%s), trying again", type(e).__name__)
+            await asyncio.sleep(BACKOFF * 2 ** (tried - 1))
+
+
 async def _get(path: str, params: dict | None = None, client: httpx.AsyncClient | None = None) -> dict:
     own = client is None
     client = client or httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True)
     try:
-        r = await client.get(REGISTRY + path, params=params, headers={"Accept": "application/json"})
-    except httpx.HTTPError as e:
-        raise RegistryError(f"The MCP registry can't be reached right now ({type(e).__name__}).") from None
+        r = await _send(client, path, params)
     finally:
         if own:
             await client.aclose()
@@ -80,7 +104,10 @@ def _score(query: str, server: dict) -> int:
 
 async def search(query: str, client: httpx.AsyncClient | None = None) -> list[dict]:
     """Latest active entries for `query`, best first. The registry matches names only, so multi-word queries fall
-    back to single words."""
+    back to single words. A search answered in the last CACHED seconds is answered again from memory."""
+    key = " ".join(query.lower().split())
+    if (hit := _searched.get(key)) and time.monotonic() - hit[0] < CACHED:
+        return list(hit[1])
     words = [query.strip()] + sorted({w for w in re.split(r"\W+", query) if len(w) > 2} - {query.strip()},
                                      key=len, reverse=True)
     found: dict[str, dict] = {}
@@ -92,7 +119,12 @@ async def search(query: str, client: httpx.AsyncClient | None = None) -> list[di
                 found.setdefault(server["name"], server)
         if found:
             break
-    return sorted(found.values(), key=lambda s: -_score(query, s))[:SHOWN]
+    best = sorted(found.values(), key=lambda s: -_score(query, s))[:SHOWN]
+    now = time.monotonic()
+    for old in [q for q, (when, _) in _searched.items() if now - when >= CACHED]:
+        del _searched[old]
+    _searched[key] = (now, best)
+    return list(best)
 
 
 async def fetch(name: str, client: httpx.AsyncClient | None = None) -> dict:

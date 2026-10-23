@@ -83,6 +83,21 @@ def routes(r: "Runner") -> list[web.RouteDef]:
             return web.json_response(await r.end_connection(task_id, str(b["outcome"]), str(b.get("result", ""))))
         return web.json_response(r.connection_update(task_id, str(b.get("activity", ""))))
 
+    async def list_helpers(req: web.Request) -> web.Response:
+        return web.json_response(r.helpers.listed())
+
+    async def report_helpers(req: web.Request) -> web.Response:
+        b = await req.json()
+        if r.helpers.report(str(b["session"]), list(b.get("helpers") or [])):
+            r.broadcast({"type": "helpers", "helpers": r.helpers.listed()})
+        return web.json_response({"ok": True})
+
+    async def stop_helper(req: web.Request) -> web.Response:
+        stopping = r.helpers.stop(req.match_info["id"])
+        r.broadcast({"type": "helper_stop", "id": stopping["id"]})  # the session running it stops it
+        r.broadcast({"type": "helpers", "helpers": r.helpers.listed()})
+        return web.json_response(stopping)
+
     async def rerun(req: web.Request) -> web.Response:
         return web.json_response(r.view(r.rerun(int(req.match_info["id"]))))
 
@@ -171,6 +186,8 @@ def routes(r: "Runner") -> list[web.RouteDef]:
         web.post("/tasks/{id:\\d+}/merge", merge), web.post("/tasks/{id:\\d+}/discard", discard),
         web.post("/tasks/{id:\\d+}/edits", change_edits),
         web.post("/tasks/seen", seen), web.get("/events", events),
+        web.get("/helpers", list_helpers), web.post("/helpers", report_helpers),
+        web.post("/helpers/{id:[0-9a-f]+}/stop", stop_helper),
         web.post("/projects", register_project), web.post("/projects/git", git_init),
         web.get("/approvals", list_approvals), web.post("/approvals/{id:\\d+}", answer),
         web.post("/approvals/{id:\\d+}/remember", remember),

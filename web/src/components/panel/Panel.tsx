@@ -4,7 +4,7 @@ import { useEffect, useRef } from "preact/hooks";
 import { jobOf } from "../../lib/schedule";
 import { assistantName, readout } from "../../state/store";
 import {
-  back, closeSheet, go, item, needYou, roomy, section, sheet, tasks, todos, unseen, wide, type Section, type SettingsItem,
+  back, closeSheet, go, item, needYou, roomy, section, sheet, todos, unseen, wide, type Section, type SettingsItem,
 } from "../../state/panel";
 import { dayLabel } from "../../lib/history";
 import { days } from "../../state/history";
@@ -12,7 +12,7 @@ import { BackIcon, CloseIcon, AlfredIcon, ProjectsIcon, TasksIcon, TodosIcon } f
 import { HistorySection } from "./History";
 import { ProjectsSection } from "./Projects";
 import { AlfredSection, SETTINGS_TITLES, SettingsSection } from "./Settings";
-import { TasksSection } from "./Tasks";
+import { TaskCount, TasksSection } from "./Tasks";
 import { TodosSection } from "./Todos";
 
 // Dock; History and Settings open from their buttons in the top bar (History from the sidebar on desktop).
@@ -31,10 +31,8 @@ export function Badge({ sec }: { sec: Section }) {
 
 // Desktop page header's count ("2 running · 1 needs you"); phones show it at the top of the section instead.
 function Kpi() {
-  const running = tasks.value.filter((t) => t.status === "running" || t.status === "queued").length;
   const open = todos.value?.filter((t) => !t.done).length;
-  const kpi = section.value === "tasks"
-    ? <>{running} running{needYou.value ? <> · <b>{needYou.value} need{needYou.value === 1 ? "s" : ""} you</b></> : ""}</>
+  const kpi = section.value === "tasks" ? <TaskCount />
     : section.value === "todos" && open != null ? <>{open} open</> : null;
   return kpi && <span class="pkpi">{kpi}</span>;
 }

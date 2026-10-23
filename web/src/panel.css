@@ -149,6 +149,11 @@ textarea.field { resize: vertical; min-height: 140px; line-height: 1.5; }
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
 .task .doing.stuck { color: var(--accent-2); }
 .task.ring { animation: ring 1.4s ease 2; }
+/* A quick helper beside the conversation: no page of its own, so no hover; dimmed once ended, until it drops off */
+.task.helper { border-style: dashed; }
+.task.helper:hover { border-color: var(--line); }
+.task.helper.ended { opacity: .7; }
+.task.helper .ico { width: 28px; height: 28px; margin: -6px -6px -6px 0; }
 
 /* Tasks summary line ("2 running · 1 needs you"); the desktop page header shows it already */
 .tsum { margin: 4px 2px 0; color: var(--muted); font-size: 13px; }

@@ -315,9 +315,8 @@ def test_secrets_are_refused_even_with_a_yes():
     assert "secrets" in ask(gate, "cat ~/Desktop/projects/alfred/.env").message
 
 
-def test_a_projects_script_may_use_its_keys_from_the_shell_a_job_or_a_schedule(tmp_path, monkeypatch):
+def test_a_projects_script_may_use_its_keys_from_the_shell_or_a_job(tmp_path, monkeypatch):
     from alfred.safety import commands
-    from alfred.tasks import schedules
 
     project = tmp_path / "proj"
     (project / "scripts").mkdir(parents=True)
@@ -329,10 +328,8 @@ def test_a_projects_script_may_use_its_keys_from_the_shell_a_job_or_a_schedule(t
     gate.new_turn("make the voiceover")
     job = {"command": "node scripts/voice.mjs", "title": "voiceover", "folder": str(project)}
     assert isinstance(asyncio.run(gate(shell.START_JOB, job, None)), PermissionResultAllow)
-    assert schedules.run_refusal({"text": "node scripts/voice.mjs"}, project, None) == ""
     leak = job | {"command": "bash scripts/leak.sh"}
     assert "secrets" in asyncio.run(gate(shell.START_JOB, leak, None)).message
-    assert "secrets" in schedules.run_refusal({"text": "bash scripts/leak.sh"}, project, None)
     monkeypatch.setattr(commands, "_registered", list)  # not a listed project: its keys are secrets
     assert "secrets" in asyncio.run(gate(shell.START_JOB, job, None)).message
 

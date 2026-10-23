@@ -6,7 +6,7 @@ import { dayLabel, tally } from "../../lib/history";
 import { hangup, pressMute } from "../../state/session";
 import { days, loadDays } from "../../state/history";
 import {
-  approvals, elapsed, go, home, load, openTask, questions, section, setHome, tasks, todoAct, todos, visible, type Section, type Todo,
+  approvals, elapsed, go, home, load, lookingUp, openTask, questions, section, setHome, tasks, todoAct, todos, visible, type Section, type Todo,
 } from "../../state/panel";
 import { assistantName, connected, muted, now } from "../../state/store";
 import { CheckIcon, HangupIcon, HistoryIcon, HomeIcon, MicIcon, PlusIcon } from "../icons";
@@ -65,7 +65,13 @@ function Running() {
           </small>
         </button>
       ))}
-      {!running.length && <p class="empty">Nothing running.</p>}
+      {lookingUp.value.map((h) => (
+        <button key={h.id} class="smini" onClick={() => go("tasks")}>
+          <b><span class="dot run" />{h.about}</b>
+          <small>Quick lookup{h.activity ? ` · ${h.activity}` : ""} · <span class="el">{elapsed(h.started, now.value)}</span></small>
+        </button>
+      ))}
+      {!running.length && !lookingUp.value.length && <p class="empty">Nothing running.</p>}
     </section>
   );
 }

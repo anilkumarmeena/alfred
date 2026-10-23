@@ -25,6 +25,12 @@ export interface Task {
   fixes?: number | null;  // id of the failed command task this one fixes
   machine?: string;  // the other machine it runs on (alfred.node); absent = this computer
 }
+// A quick helper running beside the voice conversation (alfred.tasks.helpers): a lookup, or a tool call carrying on.
+// Listed while it runs and for a minute after it ends, with how it ended.
+export interface Helper {
+  id: string; kind: string; about: string; started: number; ended: number | null; activity: string | null;
+  status: "running" | "stopping" | "done" | "failed" | "timed_out" | "stopped";
+}
 // A command task's run. attempt is 2+ for a rerun after a fix (`after` says what failed and what fixed it).
 export interface CommandRun {
   folder: string; attempt?: number; timeout_minutes?: number; outcome?: string; code?: number; fix_task?: number;
@@ -194,6 +200,8 @@ export function openSchedule(id: number) { go("tasks", jobItem(id)); }
 // ── Data ────────────────────────────────────────────────────────
 
 export const tasks = signal<Task[]>([]);
+export const helpers = signal<Helper[]>([]);
+export const lookingUp = computed(() => helpers.value.filter((h) => h.ended == null));  // running or stopping
 export const approvals = signal<Approval[]>([]);
 export const runnerDown = signal("");
 export const detail = signal<TaskDetail | null>(null);
@@ -272,8 +280,9 @@ export async function todoAct(action: PanelAction, fields: Record<string, unknow
 
 export async function loadTasks() {
   try {
-    const r = await panelCall<{ tasks: Task[]; approvals: Approval[]; schedules?: Schedule[] } & Partial<Quiet>>("tasks");
+    const r = await panelCall<{ tasks: Task[]; helpers?: Helper[]; approvals: Approval[]; schedules?: Schedule[] } & Partial<Quiet>>("tasks");
     tasks.value = r.tasks;
+    helpers.value = r.helpers ?? [];
     approvals.value = r.approvals;
     schedules.value = r.schedules ?? [];
     quiet.value = r.usage ? { hold: r.hold ?? null, usage: r.usage } : null;
@@ -515,6 +524,9 @@ function handle(event: any) {
       break;
     case "alert":  // notices, reminders and watch findings: a job's next run may have moved
       if (section.peek() === "tasks") loadTasks();
+      break;
+    case "helpers":  // a helper started, moved on, ended or dropped off the list
+      helpers.value = event.helpers ?? [];
       break;
     case "progress":
       if (event.task) {

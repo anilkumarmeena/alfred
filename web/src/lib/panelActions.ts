@@ -32,6 +32,7 @@ export const PANEL_ACTIONS = [
   "google_sign_in",
   "google_sign_in_paste",
   "google_sign_in_status",
+  "helper_stop",
   "hold_off",
   "hold_on",
   "hold_status",

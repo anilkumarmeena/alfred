@@ -4,6 +4,7 @@ import { useSignal } from "@preact/signals";
 
 const STATUS_PILL: Record<string, string> = {
   queued: "running", running: "running", waiting: "waiting", done: "done", failed: "failed", stopped: "muted", discarded: "muted",
+  timed_out: "waiting", stopping: "muted",  // a helper's (state/panel.ts Helper)
 };
 
 export const Pill = ({ kind, children }: { kind: string; children: ComponentChildren }) => <span class={`tag ${kind}`}>{children}</span>;
@@ -11,7 +12,7 @@ export const Pill = ({ kind, children }: { kind: string; children: ComponentChil
 export const Led = ({ kind }: { kind: "ok" | "warn" | "bad" | "run" | "off" }) => <span class={`dot ${kind}`} />;
 
 export function StatusPill({ status, requestsOnly }: { status: string; requestsOnly?: boolean }) {
-  const text = status === "waiting" ? (requestsOnly ? "needs a yes" : "question") : status;
+  const text = status === "waiting" ? (requestsOnly ? "needs a yes" : "question") : status.replace("_", " ");
   return <Pill kind={STATUS_PILL[status] ?? "muted"}>{text}</Pill>;
 }
 

@@ -328,7 +328,9 @@ sequenceDiagram
 | Unspoken follow-ups go to the **phone** as a one-line summary | Same as other announcements |
 | Call still running at hang-up: **cancelled**. The runner still finishes a merge and lists it in the bell | The voice process ends with the call |
 
-**Stopping one:** `background_stop` stops a kept call, or a `background_lookup` / `file_lookup` still going, by its tool's name or the lookup's topic, when you ask. Nothing comes back from what it stops. A tool whose work runs elsewhere names how to stop that (`Tool.stop`): for `task_merge`, the runner's stop, which kills the test run and leaves the project's folder as it was.
+**Stopping one:** `background_stop` stops a kept call, or a `background_lookup` / `file_lookup` / `computer_lookup` still going, by its tool's name or the lookup's topic, when you ask. Nothing comes back from what it stops. A tool whose work runs elsewhere names how to stop that (`Tool.stop`): for `task_merge`, the runner's stop, which kills the test run and leaves the project's folder as it was.
+
+**Seeing them:** lookups and kept calls show in the app's task list beside tasks, marked **quick lookup**: what each is about, its latest step, how long it has run, and a stop button that stops it the way `background_stop` does (and tells the brain). A finished one stays a minute with how it ended (done, failed, timed out, stopped), then drops off. The voice session reports its list to the runner whenever it changes (`alfred/tasks/helpers.py`, in memory only); the panel's stop goes back to it on the runner's event stream. `task_list` gives the running ones after the tasks, so "what's running?" covers them too.
 
 **Not kept:** tools registered with `stays=True`, today `voice_enroll` and `background_lookup` (they answer at once or start their own background work). Tasks never keep calls; only the voice brain does.
 

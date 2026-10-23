@@ -28,12 +28,88 @@ def test_the_registry_answering_otherwise_says_so(answer, said):
         asyncio.run(mcp_registry.fetch("com.example/thing", serving(answer)))
 
 
-def test_the_registry_out_of_reach_says_so_without_the_details():
+def test_the_registry_out_of_reach_says_so_without_the_details_and_without_trying_again():
+    asked = []
+
     def down(request):
+        asked.append(request)
         raise httpx.ConnectError("[Errno 8] nodename nor servname provided")
 
     with pytest.raises(mcp_registry.RegistryError, match=r"can't be reached right now \(ConnectError\)\.$"):
         asyncio.run(mcp_registry.search("notes", serving(down)))
+    assert len(asked) == 1
+
+
+@pytest.fixture
+def waits(monkeypatch) -> list[float]:
+    """The backoff waits between tries, recorded instead of slept."""
+    waited, real = [], asyncio.sleep
+
+    async def sleep(seconds, result=None):
+        waited.append(seconds)
+        return await real(0, result)
+
+    monkeypatch.setattr(mcp_registry.asyncio, "sleep", sleep)
+    return waited
+
+
+def test_a_slow_registry_gets_more_than_a_minute_to_answer():
+    assert mcp_registry.TIMEOUT.read == mcp_registry.READ_TIMEOUT >= 60
+
+
+def test_a_registry_that_times_out_is_asked_again_after_a_growing_wait(waits, runners):
+    asked = []
+
+    def slow(request: httpx.Request) -> httpx.Response:
+        asked.append(request)
+        if len(asked) < 3:
+            raise httpx.ReadTimeout("timed out")
+        return httpx.Response(200, json={"servers": [{"server": entry(name="com.notion/notion-mcp")}]})
+
+    found = asyncio.run(mcp_registry.search("notion", serving(slow)))
+    assert [s["name"] for s in found] == ["com.notion/notion-mcp"]
+    assert len(asked) == 3 and waits == [mcp_registry.BACKOFF, mcp_registry.BACKOFF * 2]
+
+
+def test_a_registry_that_keeps_timing_out_says_so_after_its_last_try(waits):
+    asked = []
+
+    def slow(request):
+        asked.append(request)
+        raise httpx.ReadTimeout("timed out")
+
+    with pytest.raises(mcp_registry.RegistryError, match=r"can't be reached right now \(ReadTimeout\)\.$"):
+        asyncio.run(mcp_registry.search("notes", serving(slow)))
+    assert len(asked) == mcp_registry.ATTEMPTS and len(waits) == mcp_registry.ATTEMPTS - 1
+
+
+def test_a_search_asked_again_soon_is_answered_from_memory_and_later_afresh(monkeypatch, runners):
+    asked = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        asked.append(request.url.params["search"])
+        return httpx.Response(200, json={"servers": [{"server": entry(name="com.notion/notion-mcp")}]})
+
+    first = asyncio.run(mcp_registry.search("Notion", serving(answer)))
+    again = asyncio.run(mcp_registry.search(" notion ", serving(answer)))
+    assert again == first and asked == ["Notion"]
+    monkeypatch.setattr(mcp_registry, "CACHED", 0)
+    asyncio.run(mcp_registry.search("notion", serving(answer)))
+    assert asked == ["Notion", "notion"]
+
+
+def test_a_failed_search_is_not_remembered(waits, runners):
+    asked = []
+
+    def flaky(request: httpx.Request) -> httpx.Response:
+        asked.append(request)
+        if len(asked) <= mcp_registry.ATTEMPTS:
+            raise httpx.ReadTimeout("timed out")
+        return httpx.Response(200, json={"servers": [{"server": entry(name="com.notion/notion-mcp")}]})
+
+    with pytest.raises(mcp_registry.RegistryError):
+        asyncio.run(mcp_registry.search("notion", serving(flaky)))
+    assert [s["name"] for s in asyncio.run(mcp_registry.search("notion", serving(flaky)))] == ["com.notion/notion-mcp"]
 
 
 def test_fetch_asks_for_the_latest_version_by_its_whole_name_and_refuses_a_retired_one():

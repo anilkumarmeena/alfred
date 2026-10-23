@@ -281,8 +281,12 @@ def test_tasks_are_listed_without_their_brief_and_requests_only_waits_are_told_a
     async def approvals():
         return []
 
+    async def helpers():
+        return []
+
     monkeypatch.setattr(client, "tasks", tasks)
     monkeypatch.setattr(client, "approvals", approvals)
+    monkeypatch.setattr(client, "helpers", helpers)
     shown = call("tasks")["tasks"]
     assert [t["requests_only"] for t in shown] == [True, False, False, False]
     assert "instruction" not in shown[0] and "summary" not in shown[0] and "session_id" not in shown[0]
@@ -322,9 +326,12 @@ def test_retry_runs_a_shell_jobs_command_again_as_a_task_of_its_own(monkeypatch)
 # ── Scheduled jobs ──────────────────────────────────────────────
 
 
-def no_runner(monkeypatch, found: list[dict] = (), runs: list[dict] = ()):
+def no_runner(monkeypatch, found: list[dict] = (), runs: list[dict] = (), helpers: list[dict] = ()):
     async def tasks(unseen=False):
         return list(found)
+
+    async def listed_helpers():
+        return list(helpers)
 
     async def approvals():
         return []
@@ -335,6 +342,7 @@ def no_runner(monkeypatch, found: list[dict] = (), runs: list[dict] = ()):
     monkeypatch.setattr(client, "tasks", tasks)
     monkeypatch.setattr(client, "approvals", approvals)
     monkeypatch.setattr(client, "runs", job_runs)
+    monkeypatch.setattr(client, "helpers", listed_helpers)
 
 
 def test_tasks_come_with_the_scheduled_jobs_and_are_tagged_with_theirs(db, monkeypatch):
@@ -344,8 +352,11 @@ def test_tasks_come_with_the_scheduled_jobs_and_are_tagged_with_theirs(db, monke
     schedules.cancel(done["id"])
     run = {"id": 7, "kind": "research", "title": "Morning brief", "status": "done", "worktree": None, "edits": None,
            "job": brief["id"]}
-    no_runner(monkeypatch, [run, run | {"id": 8, "title": "Look", "job": None}])
+    lookup = {"id": "a1", "kind": "file_lookup", "about": "the port", "status": "running", "activity": None,
+              "started": 1.0, "ended": None}
+    no_runner(monkeypatch, [run, run | {"id": 8, "title": "Look", "job": None}], helpers=[lookup])
     shown = call("tasks")
+    assert shown["helpers"] == [lookup]  # beside the tasks, as the runner lists them
     assert [(j["title"], j["kind"], j["status"]) for j in shown["schedules"]] == [
         ("Deploy live", "watch", "active"), ("Morning brief", "task", "active")]  # soonest first; finished ones left out
     assert shown["schedules"][0]["check"] == "Alfred checks the page: https://app.example"

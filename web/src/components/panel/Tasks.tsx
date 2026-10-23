@@ -5,9 +5,9 @@ import { useSignal } from "@preact/signals";
 import { jobOf, kindLabel, nextRun, type Schedule } from "../../lib/schedule";
 import { assistantName, now } from "../../state/store";
 import {
-  ACTIVE, act, ago, approvals, changeSchedule, detail, elapsed, flash, hhmm, item, jobDetail, lapses, loadSchedule,
+  ACTIVE, act, ago, approvals, changeSchedule, detail, elapsed, flash, helpers, hhmm, item, lookingUp, jobDetail, lapses, loadSchedule,
   loadTask, loadTasks, needYou, openSchedule, openTask, questions, quiet, roomy, runnerDown, schedules, tasks, when, type Approval,
-  type Task, type TaskDetail, type TaskTokens, type TokenCounts,
+  type Helper, type Task, type TaskDetail, type TaskTokens, type TokenCounts,
 } from "../../state/panel";
 import { BellIcon, ChevronIcon, EyeIcon, PauseIcon, PlayIcon, RepeatIcon, RetryIcon, StopIcon, TerminalIcon, TodosIcon, TrashIcon } from "../icons";
 import { Answer } from "./Answer";
@@ -116,6 +116,39 @@ function Card({ t }: { t: Task }) {
         : <Markdown text={(waiting ? t.question : t.activity) || t.status} inline links={false} />}</div>}
       {t.status === "failed" && t.error && <div class="ferr">{t.error}</div>}
     </button>
+  );
+}
+
+// ── Helpers: quick lookups and tool calls running beside the conversation ──
+
+const HELPER_DOES: Record<string, string> = { background_lookup: "looking it up", file_lookup: "searching files",
+  computer_lookup: "checking the computer", tool_call: "tool call carrying on" };
+const HELPER_LED: Record<string, "run" | "ok" | "bad"> = { running: "run", done: "ok", failed: "bad" };
+
+// No page of its own: what it's about, its latest step, how long it has run, and a stop like background_stop's
+function HelperCard({ h }: { h: Helper }) {
+  const busy = useSignal(false);
+  async function stop() {
+    busy.value = true;
+    if (await act("helper_stop", { id: h.id }, `Stopping the lookup on ${h.about}`)) loadTasks();
+    busy.value = false;
+  }
+  return (
+    <div class={`task helper${h.ended == null ? "" : " ended"}`}>
+      <div class="t1">
+        <Led kind={HELPER_LED[h.status] ?? "warn"} />
+        <span class="title">{h.about}</span>
+        <Pill kind="muted">quick lookup</Pill>
+        {h.status !== "running" && <StatusPill status={h.status} />}
+        {h.status === "running" && <button class="ico danger" disabled={busy.value} aria-label={`Stop the lookup on ${h.about}`}
+          title="Stop" onClick={stop}><StopIcon /></button>}
+      </div>
+      <div class="meta">
+        {HELPER_DOES[h.kind] ?? h.kind} · {h.ended == null ? <span class="el">{elapsed(h.started, now.value)}</span>
+          : `took ${elapsed(h.started, h.ended * 1000)}`}
+      </div>
+      {h.activity && <div class="doing">{h.activity}</div>}
+    </div>
   );
 }
 
@@ -234,22 +267,37 @@ export function ScheduleView({ id }: { id: number }) {
 
 // ── Tasks ───────────────────────────────────────────────────────
 
+// "2 running · 1 quick lookup · 1 needs you": atop the list on phones, in the page header on desktop (Panel.tsx)
+export function TaskCount() {
+  const busy = tasks.value.filter((t) => t.status === "running" || t.status === "queued").length;
+  const looking = lookingUp.value.length, need = needYou.value;
+  return (
+    <>
+      {busy} running{looking ? ` · ${looking} quick lookup${looking > 1 ? "s" : ""}` : ""}
+      {need ? <> · <b>{need} need{need === 1 ? "s" : ""} you</b></> : ""}
+    </>
+  );
+}
+
 // Most urgent first: what waits on the user, then what's running, then what's to come and what's done
 export function TaskList() {
   const all = tasks.value, running = all.filter((t) => ACTIVE.includes(t.status)), recent = all.filter((t) => !ACTIVE.includes(t.status));
-  const need = needYou.value, busy = all.filter((t) => t.status === "running" || t.status === "queued").length;
+  const need = needYou.value, looking = lookingUp.value, looked = helpers.value.filter((h) => h.ended != null).reverse();
   return (
     <>
-      <p class="tsum">{busy} running{need ? <> · <b>{need} need{need === 1 ? "s" : ""} you</b></> : ""}</p>
+      <p class="tsum"><TaskCount /></p>
       {runnerDown.value && <div class="note amber">{runnerDown.value}</div>}
       {need > 0 && <div class="grp">Waiting for you</div>}
       {approvals.value.map((a) => <Request key={a.id} a={a} />)}
       {questions.value.map((t) => <Question key={t.id} t={t} />)}
       <div class="grp">Running</div>
-      {running.length ? running.map((t) => <Card key={t.id} t={t} />) : <Empty>Nothing running. Ask {assistantName} to start a task.</Empty>}
+      {running.map((t) => <Card key={t.id} t={t} />)}
+      {looking.map((h) => <HelperCard key={h.id} h={h} />)}
+      {!running.length && !looking.length && <Empty>Nothing running. Ask {assistantName} to start a task.</Empty>}
       <Scheduled />
       <div class="grp">Recent</div>
-      {recent.length ? recent.map((t) => <Card key={t.id} t={t} />) : <Empty>No tasks in the last day.</Empty>}
+      {looked.map((h) => <HelperCard key={h.id} h={h} />)}
+      {recent.length ? recent.map((t) => <Card key={t.id} t={t} />) : !looked.length && <Empty>No tasks in the last day.</Empty>}
     </>
   );
 }

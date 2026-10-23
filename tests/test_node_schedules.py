@@ -2,7 +2,6 @@
 never twice, within do-not-disturb, and reported back, with one summary for what ran while away."""
 
 import asyncio
-import json
 from datetime import datetime
 
 from test_in_place import env  # noqa: F401  (env is a fixture)
@@ -127,38 +126,6 @@ def test_a_job_still_running_isnt_started_again(there, tmp_path):
     assert first and again == []
 
 
-def test_the_machine_turns_down_a_run_whose_script_changed_until_the_user_agrees_again(there, tmp_path):
-    async def main():
-        w = await World(tmp_path).up()
-        w.work.scheduled = command_jobs.Runs(tmp_path / "machine" / "scheduled", shell=("/bin/sh", "-c"))
-        await registered(w, there)
-        (there / "job.sh").write_text("echo ran >> out.txt\n")
-        made = schedules.add("command", "the nightly render", "sh job.sh", every_minutes=60,
-                             folder=str(there.resolve()), project="film")
-        assert list(json.loads(made["scripts"])) == [schedules.AGREED]  # read where it lives, not here
-        await w.r.offload.sync_schedules()
-        await machine_ticks(w, made["next_run"] + 1)  # its first run takes the scripts' fingerprints there
-        await until_true(lambda: schedules.get(made["id"])["runs"] == 1)
-        (there / "job.sh").write_text("rm -rf out.txt\n")
-        w.r.listeners.add(q := asyncio.Queue())
-        later = w.work._schedules()["ran"][str(made["id"])]["next_run"] + 1
-        turned_down = await w.work.schedule_tick(later)
-        await until_true(lambda: "Couldn't run on Studio" in (schedules.get(made["id"])["last_result"] or ""))
-        alert = await q.get()
-        again = await w.work.schedule_tick(later + 60)  # not tried again every tick
-        schedules.change(made["id"], text="sh job.sh")  # agreed to again, through the shell gate
-        await w.r.offload.sync_schedules()
-        ran = await w.work.schedule_tick(w.work._schedules()["ran"][str(made["id"])]["next_run"] + 1)
-        await w.down()
-        return made, turned_down, again, ran, alert
-
-    made, turned_down, again, ran, alert = asyncio.run(main())
-    assert turned_down == [] and again == [] and ran == [made["id"]]
-    why = schedules.get(made["id"])["last_result"]
-    assert "job.sh changed since you agreed to it" in why and "deletes files" in why
-    assert alert["type"] == "alert" and "the nightly render" in alert["text"]
-
-
 def test_a_risky_script_that_loads_its_projects_env_runs_on_the_machine_without_asking_again(there, tmp_path):
     async def main():
         w = await World(tmp_path).up()
@@ -193,19 +160,3 @@ def test_a_one_off_the_machine_turns_down_is_done(there, tmp_path):
     kept = schedules.get(asyncio.run(main())["id"])
     assert kept["status"] == schedules.DONE and kept["next_run"] is None
     assert "Couldn't run on Studio: it touches secrets" in kept["last_result"]
-
-
-def test_a_rerun_here_leaves_the_scripts_of_a_job_living_on_the_machine_to_it(there, tmp_path):
-    async def main():
-        w = await World(tmp_path).up()
-        await registered(w, there)
-        (there / "job.sh").write_text("rm -rf old\n")
-        made = schedules.add("command", "the render", "sh job.sh", every_minutes=60, folder=str(there.resolve()),
-                             project="film")
-        why = schedules.start_refusal(made)  # its folder is readable here too, as with the same home on both
-        await w.down()
-        return made, why
-
-    made, why = asyncio.run(main())
-    assert why == ""
-    assert list(json.loads(schedules.get(made["id"])["scripts"])) == [schedules.AGREED]  # the machine's to take

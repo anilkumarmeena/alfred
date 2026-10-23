@@ -11,7 +11,8 @@ The last two answer in the turn if they're in within the turn's LOOKUP_WAIT budg
 that turn); otherwise they carry on in the background like the first.
 Background answers are announced via the floor, said as at most SAID_SENTENCES plain sentences (`spoken`); the
 whole answer goes to the brain unsaid, for follow-up questions. Per conversation, at most MAX_JOBS at once, each
-capped at SIDE_MINUTES; stopped when the session ends, or by background_stop when the user asks.
+capped at SIDE_MINUTES; stopped when the session ends, or by background_stop when the user asks. Each has a Helper
+(alfred.contracts.call) with its steps and how it ended, for the task list (`listed`).
 One that runs out of time carries on as a background task (_carrier) told its brief and the steps it got through,
 said to carry on rather than stopped; the task's end is announced like any task's, and a task is never handed on again.
 """
@@ -32,6 +33,7 @@ from alfred.config import (
     ROOT,
     SIDE_MINUTES,
 )
+from alfred.contracts.call import DONE, FAILED, STOPPED, TIMED_OUT, Helper, shown
 from alfred.core.speakable import speakable
 from alfred.llm.claude import READS
 from alfred.llm.roles import Role
@@ -308,9 +310,14 @@ class Jobs:
         self.find = find
         self.check = check
         self.start_task = start_task
-        self.running: dict[asyncio.Task, str] = {}  # job -> topic
+        self.helpers: dict[asyncio.Task, Helper] = {}  # job -> its helper, running or lately ended
         self.heard: set[asyncio.Task] = set()  # jobs a turn waits on: their answer goes back to it, unannounced
         self.waited = 0.0  # seconds this turn has waited on file lookups
+
+    @property
+    def running(self) -> dict[asyncio.Task, str]:
+        """Jobs still going -> their topics."""
+        return {job: h.about for job, h in self.helpers.items() if not job.done()}
 
     def new_turn(self) -> None:
         self.waited = 0.0
@@ -323,11 +330,18 @@ class Jobs:
 
     def _spawn(self, lookup: str, brief: str, about: str) -> asyncio.Task:
         run = {"background_lookup": self.run, "file_lookup": self.find, "computer_lookup": self.check}[lookup]
-        job = asyncio.get_running_loop().create_task(self._do(lookup, run, brief, about))
-        self.running[job] = about
-        job.add_done_callback(self.running.pop)
+        helper = Helper(lookup, about)
+        job = asyncio.get_running_loop().create_task(self._do(run, brief, helper))
+        self.helpers[job] = helper
+        job.add_done_callback(lambda done: self.helpers[done].end(STOPPED))  # unless it ended otherwise first
         log.info("side job started: %s", about)
         return job
+
+    def listed(self) -> list[Helper]:
+        """Jobs for the task list: running ones and those ended in the last HELPER_LINGER seconds, oldest first."""
+        listed = shown(list(self.helpers.values()))
+        self.helpers = {job: h for job, h in self.helpers.items() if h in listed}
+        return listed
 
     def start(self, brief: str, about: str) -> str:
         """Start a background_lookup job; returns the message for the brain."""
@@ -362,8 +376,9 @@ class Jobs:
             self.announce(text, note)
         return text
 
-    async def _do(self, lookup: str, run: Run, brief: str, about: str) -> str:
-        _steps.set(steps := [])
+    async def _do(self, run: Run, brief: str, helper: Helper) -> str:
+        about = helper.about
+        _steps.set(helper.steps)
         try:
             async with asyncio.timeout(SIDE_MINUTES * 60):
                 found = await run(brief)
@@ -371,31 +386,36 @@ class Jobs:
             raise
         except TimeoutError:
             log.warning("side job ran out of time: %s", about)
-            return await self._carry_on(lookup, brief, about, steps)
+            return await self._carry_on(brief, helper)
         except Exception as e:
             log.warning("side job failed: %s: %s", about, e)
+            helper.end(FAILED)
             return self._tell(f"The lookup on {about} didn't work.")
         log.info("side job done: %s", about)
+        helper.end(DONE)
         if not found or asyncio.current_task() in self.heard:  # a waiting turn words the answer itself
             return self._tell(f"On {about}: {found}" if found else f"I found nothing on {about}.")
         said, detail = await spoken(found)
         return self._tell(f"On {about}: {said}" if said else f"The lookup on {about} is back; ask me for the details.",
                           f"Not said aloud, for follow-up questions: {detail}" if detail else "")  # sent as <private>
 
-    async def _carry_on(self, lookup: str, brief: str, about: str, steps: list[str]) -> str:
-        """Hand a lookup that ran out of time to a read-only task told its brief and `steps`, and say so; stopped as
+    async def _carry_on(self, brief: str, helper: Helper) -> str:
+        """Hand a lookup that ran out of time to a read-only task told its brief and steps, and say so; stopped as
         before if the task can't start. The task's end is announced as any task's, and a task never runs out of time
         as a lookup does, so it isn't handed on again."""
-        kind, project, access = _carrier(lookup, brief)
-        so_far = "\n".join(f"- {s}" for s in steps[-STEPS_KEPT:]) or "- nothing yet"
-        instruction = prompts.load("lookup_carried_on", user_name=profile.name(), doing=DOING[lookup],
+        about = helper.about
+        kind, project, access = _carrier(helper.kind, brief)
+        so_far = "\n".join(f"- {s}" for s in helper.steps[-STEPS_KEPT:]) or "- nothing yet"
+        instruction = prompts.load("lookup_carried_on", user_name=profile.name(), doing=DOING[helper.kind],
                                    minutes=f"{SIDE_MINUTES:g}", brief=brief, so_far=so_far)
         try:
             task = await self.start_task(kind, about, instruction, project, access)
         except Exception as e:  # the runner down, or refusing it
             log.warning("side job couldn't carry on as a task: %s: %s", about, e)
+            helper.end(TIMED_OUT, "took too long, so it stopped")
             return self._tell(f"The lookup on {about} took too long, so I stopped it.")
         log.info("side job carries on as task %s: %s", task["id"], about)
+        helper.end(TIMED_OUT, f"carries on as task {task['id']}")
         return self._tell(f"The lookup on {about} is taking a while, so it carries on as a task, and its answer is "
                           f"announced when it's done.",
                           f"Not said aloud: it's task {task['id']} now; task_detail shows how it's going, and "

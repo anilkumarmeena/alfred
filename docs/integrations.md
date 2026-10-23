@@ -197,7 +197,7 @@ Alfred finds and connects new tools for you as **MCP servers**. Say "connect Not
 
 | | Step | What happens |
 |:-:|---|---|
-| 🔍 | **Find** | The [official MCP registry](https://registry.modelcontextprotocol.io) first; failing that, the web, marked **unverified** |
+| 🔍 | **Find** | The [official MCP registry](https://registry.modelcontextprotocol.io) first; failing that, the web, marked **unverified**. The registry can be slow: Alfred waits over a minute, tries again on a timeout, carries on in the background meanwhile, and reuses a search's results for 15 minutes |
 | 📦 | **Connect** | Says what it would install, from where, how it runs and what it needs. **Nothing installs until you say yes** |
 | 🔑 | **Keys** | Pasted in **Settings → Connections → Enter key**. A key said aloud is refused |
 | 🌐 | **Server** | A self-hosted service (your company's GitLab, GitHub Enterprise) is set in **Settings → Connections → Change server**, as an `https://` address |

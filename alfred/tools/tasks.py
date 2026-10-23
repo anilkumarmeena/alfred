@@ -1,5 +1,6 @@
 """Voice tools for background tasks (run by alfred.tasks.runner), approvals, data edits and projects."""
 
+import asyncio
 import time
 
 from alfred import projects
@@ -186,13 +187,25 @@ async def task_start(kind: str, title: str, instruction: str, project: str = "",
       "out character by character. stalled marks a running task that has shown no progress for a while and may be "
       "stuck. waits_for lists what a task not started yet still waits for (it starts by itself after), and "
       "merge_waits_for what a merge set to happen by itself still waits for. A task held because what it waited for "
-      "failed is waiting with a question: task_reply starts it anyway, task_stop drops it.", reads=True,
+      "failed is waiting with a question: task_reply starts it anyway, task_stop drops it. After the tasks come the "
+      "quick helpers running beside the conversation, marked with helper (no id): background_lookup, file_lookup and "
+      "computer_lookup jobs, and tool_call for a tool call carrying on in the background, each with what it's about, "
+      "how long it has run and its latest step (activity); background_stop stops one.", reads=True,
       screened=_TASK_TEXT)
 async def task_list() -> list[dict]:
-    tasks = await client.tasks()
+    tasks, helpers, waiting = await asyncio.gather(client.tasks(), client.helpers(), _waiting())
     await _mark_seen(tasks)
-    waiting = await _waiting()
-    return [_brief(t, waiting) for t in tasks]
+    # Ended helpers were announced already
+    return [_brief(t, waiting) for t in tasks] + [_helper(h) for h in helpers if h["ended"] is None]
+
+
+def _helper(h: dict) -> dict:
+    """A helper as the brain sees it, beside tasks."""
+    out = {"helper": h["kind"], "about": h["about"], "status": h["status"],
+           "running_seconds": max(0, round(time.time() - h["started"]))}
+    if h.get("activity"):
+        out["activity"] = _clip(h["activity"])
+    return out
 
 
 @tool(

@@ -170,6 +170,21 @@ async def mark_seen(ids: list[int]) -> None:
     await call("POST", "/tasks/seen", {"ids": ids})
 
 
+async def helpers() -> list[dict]:
+    """Lookups and tool calls running beside the voice conversations, and those just ended, oldest first."""
+    return await call("GET", "/helpers")
+
+
+async def report_helpers(session: str, helpers: list[dict]) -> None:
+    """A voice session's whole list of helpers (alfred.tasks.helpers)."""
+    await call("POST", "/helpers", {"session": session, "helpers": helpers}, timeout=5)
+
+
+async def stop_helper(helper: str) -> dict:
+    """Ask the voice session running a helper to stop it; returns the helper, now stopping."""
+    return await call("POST", f"/helpers/{helper}/stop")
+
+
 async def register_project(name: str, path: str | None, aliases: list[str], about: str, in_place: bool,
                            machine: str = "") -> dict:
     """Add a project; with `machine`, one that lives on that machine (its folder checked there)."""

@@ -11,6 +11,9 @@ that made the call. Tools flagged `stays` (they answer at once, or start backgro
 background_stop (alfred.tools.side) stops a kept call when the user asks; a tool whose work goes on elsewhere (a merge
 in the task runner) names how to stop that (Tool.stop). Nothing comes back from a stopped call.
 
+A kept call gets a Helper (alfred.contracts.call), so the task list shows it beside tasks until a while after it ends
+(`listed`).
+
 With no `finished` (no voice session), calls just run. Kept calls still running when the conversation ends are
 cancelled; the task runner finishes what it was already asked (a merge) and lists the outcome in the panel's bell.
 """
@@ -25,11 +28,13 @@ from typing import Any
 
 from alfred import tools
 from alfred.config import INJECTION_TASK_SECONDS, TOOL_WAIT
+from alfred.contracts.call import DONE, FAILED, STOPPED, Helper, shown
 from alfred.gates import injection
 from alfred.state import conversation
 from alfred.state.preferences import injection_check_on, injection_model
 from alfred.storage import profile
 from alfred.tasks.command_jobs import took
+from alfred.tools.side import called
 
 log = logging.getLogger("alfred.brain.kept")
 
@@ -45,6 +50,7 @@ class Call:
     started: float = field(default_factory=time.monotonic)
     kept: bool = False  # left its turn: the result goes to `finished`
     stopping: bool = False  # being stopped: its result goes nowhere
+    helper: Helper | None = None  # once kept
 
 
 class Kept:
@@ -54,6 +60,7 @@ class Kept:
         self.seconds = seconds
         self.finished: Callable[[str, str, str], object] | None = None  # (summary, prompt, words)
         self.calls: set[Call] = set()  # running
+        self.helpers: list[Helper] = []  # of kept calls, running or lately ended
         self.closed = False
         self._delivering: set[asyncio.Task] = set()
 
@@ -86,6 +93,12 @@ class Kept:
             self._keep(call, "its turn was cut off")
         return [c.tool for c in running]
 
+    def listed(self) -> list[Helper]:
+        """Kept calls for the task list: running ones and those ended in the last HELPER_LINGER seconds, oldest
+        first."""
+        self.helpers = shown(self.helpers)
+        return list(self.helpers)
+
     def going(self) -> list[Call]:
         """Calls carrying on outside their turn, oldest first."""
         return sorted((c for c in self.calls if c.kept and not c.task.done()), key=lambda c: c.started)
@@ -112,17 +125,23 @@ class Kept:
     def _keep(self, call: Call, why: str) -> None:
         if not call.kept:
             call.kept = True
+            call.helper = Helper("tool_call", called(call), started=time.time() - (time.monotonic() - call.started))
+            self.helpers.append(call.helper)
             log.info("%s carries on in the background: %s", call.tool, why)
 
     def _ended(self, call: Call) -> None:
         self.calls.discard(call)
         if not call.kept or self.closed or call.task.cancelled() or call.stopping:
+            if call.helper is not None and (call.task.cancelled() or call.stopping):
+                call.helper.end(STOPPED)
             return
         try:
             content, failed = call.task.result()
         except Exception as e:  # tools.run reports failures itself; this is a bug
             log.exception("kept %s failed", call.tool)
             content, failed = f"{type(e).__name__}: {e}", True
+        if call.helper is not None:
+            call.helper.end(FAILED if failed else DONE)
         log.info("kept %s ended after %.0f s%s", call.tool, time.monotonic() - call.started, ", failed" * failed)
         text = _text(content)  # once, for the phone line and the follow-up
         task = asyncio.ensure_future(self._deliver(call, text, summary(call, text, failed), failed))

@@ -277,7 +277,7 @@ What a lower layer names so a higher one can fill it in (`alfred/contracts/`), w
 
 | Contract | What it is | Defines |
 |---|---|---|
-| `contracts/call.py` | What a voice call carries that others reach through the conversation (alfred.state.conversation): its lookups, its tool calls carrying on in the background, and its speaker check. | `Lookups`, `BackgroundCall`, `BackgroundCalls`, `SpeakerCheck` |
+| `contracts/call.py` | What a voice call carries that others reach through the conversation (alfred.state.conversation): its lookups, its tool calls carrying on in the background, and its speaker check. | `Helper`, `Lookups`, `BackgroundCall`, `BackgroundCalls`, `SpeakerCheck` |
 | `contracts/remote.py` | Work on the user's other machines, as the task runner sees it. | `Place`, `Offline`, `TurnedDown`, `Machines`, `Links`, `Offload` |
 | `contracts/runner.py` | The task runner as other processes reach it over its socket (alfred.tasks.client), named here so parts below the tasks layer can take a runner without importing it. | `RunnerUnavailable`, `ConnectionRunner` |
 

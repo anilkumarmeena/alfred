@@ -170,11 +170,7 @@ class CommandTasks(RunnerBase):
         return again
 
     def _again(self, task: dict, how: dict, **changes) -> dict:
-        """Start command task `task` (spec `how`) again with the same settings, plus `changes` to start_command's. A
-        scheduled job's run is checked as at its start: a fix may have changed its scripts. ValueError if refused."""
-        if task["job"] is not None and (job := schedules.get(task["job"])) and job["kind"] == "command" \
-                and (why := schedules.start_refusal(job)):
-            raise ValueError(why)
+        """Start command task `task` (spec `how`) again with the same settings, plus `changes` to start_command's."""
         return self.start_command(task["instruction"], task["title"], how["folder"], task["job"], task["project"],
                                   how.get("timeout_minutes"), how.get("log_file"), how.get("summarize", True),
                                   how.get("auto_fix", True), how.get("report", False),

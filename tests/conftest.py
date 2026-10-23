@@ -83,6 +83,14 @@ def fresh_conversation(monkeypatch) -> conversation.Conversation:
     return fresh
 
 
+@pytest.fixture(autouse=True)
+def fresh_registry_searches(monkeypatch):
+    """No MCP registry search answered from an earlier test's memory."""
+    from alfred.integrations import mcp_registry
+
+    monkeypatch.setattr(mcp_registry, "_searched", {})
+
+
 @pytest.fixture
 def own_profile(monkeypatch, tmp_path) -> profile.Profile:
     """Isolated profile in tmp_path."""

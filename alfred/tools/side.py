@@ -1,5 +1,6 @@
 """background_lookup, file_lookup and computer_lookup: hand slow reading and checks to a side job
-(alfred.brain.side). background_stop stops one, or a tool call carrying on outside its turn (alfred.brain.kept)."""
+(alfred.brain.side). background_stop stops one, or a tool call carrying on outside its turn (alfred.brain.kept);
+stop_helper does the same for the control panel's stop button, by the helper's id."""
 
 from __future__ import annotations
 
@@ -88,7 +89,7 @@ async def computer_lookup(brief: str, about: str) -> str:
     return await _jobs().ask(brief, about, "computer_lookup")
 
 
-def _call_name(call: Call) -> str:
+def called(call: Call) -> str:
     """"task_merge (id 5)": the tool and its short arguments, as the brain made the call."""
     args = ", ".join(f"{k} {v}" for k, v in call.args.items() if isinstance(v, int | str) and len(str(v)) <= 40)
     return f"{call.tool} ({args})" if args else call.tool
@@ -98,7 +99,7 @@ def _stop_call(kept: Kept, call: Call) -> Callable[[], Awaitable[str]]:
     async def stop() -> str:
         t = tools.get(call.tool)
         said = await kept.stop([call], t.stop(call.args) if t is not None and t.stop is not None else None)
-        return said or f"Stopped {_call_name(call)}; nothing comes back from it."
+        return said or f"Stopped {called(call)}; nothing comes back from it."
     return stop
 
 
@@ -107,6 +108,23 @@ def _stop_lookup(jobs: Jobs, job, about: str) -> Callable[[], Awaitable[str]]:
         await jobs.stop(job)
         return f"Stopped the lookup on {about}; nothing is announced from it."
     return stop
+
+
+def _going(talk: conversation.Conversation) -> list[tuple[str, str, Callable[[], Awaitable[str]]]]:
+    """(name, helper id, stop) of each thing of the conversation's going in the background."""
+    going: list[tuple[str, str, Callable[[], Awaitable[str]]]] = []
+    if talk.kept is not None:
+        going += [(called(c), c.helper.id if c.helper else "", _stop_call(talk.kept, c)) for c in talk.kept.going()]
+    if talk.lookups is not None:
+        going += [(f"the lookup on {about}", talk.lookups.helpers[job].id, _stop_lookup(talk.lookups, job, about))
+                  for job, about in talk.lookups.running.items()]
+    return going
+
+
+async def stop_helper(talk: conversation.Conversation, helper: str) -> str | None:
+    """Stop the conversation's helper with id `helper` as background_stop would; None if it has none going by it."""
+    found = [stop for _, id, stop in _going(talk) if id == helper]
+    return await found[0]() if found else None
 
 
 @tool(
@@ -125,13 +143,7 @@ def _stop_lookup(jobs: Jobs, job, about: str) -> Callable[[], Awaitable[str]]:
     screened=False,
 )
 async def background_stop(which: str = "") -> str:
-    talk = conversation.current()
-    going: list[tuple[str, Callable[[], Awaitable[str]]]] = []
-    if talk.kept is not None:
-        going += [(_call_name(c), _stop_call(talk.kept, c)) for c in talk.kept.going()]
-    if talk.lookups is not None:
-        going += [(f"the lookup on {about}", _stop_lookup(talk.lookups, job, about))
-                  for job, about in talk.lookups.running.items()]
+    going = [(name, stop) for name, _, stop in _going(conversation.current())]
     if not going:
         return "Nothing of yours is going in the background. A task stops with task_stop, a job with stop_job."
     wanted = which.replace("_", " ").casefold().strip()

@@ -11,8 +11,7 @@
             added to every instruction. Both run in alfred.tasks.unattended; `picks` holds what they take on
 Timing: one-off at `next_run`, or `at` on `days`, or every `every` minutes; local profile time zone.
 Task jobs keep a `notepad` for the next run. Command jobs are only made or changed through voice tools whose calls
-pass the shell gate (risky needs a yes, secrets refused); each keeps its scripts' fingerprints from then (`scripts`),
-and a run whose scripts changed since and now need a yes doesn't start (run_refusal) until the user agrees again.
+pass the shell gate (risky needs a yes, secrets refused); their runs start without another check.
 """
 
 import json
@@ -109,7 +108,7 @@ _MIGRATIONS = (
     # the keys of items seen at earlier checks
     "alter table schedules add column arguments text",
     _tool_watches,  # 4: gmail and chat watches, now tool watches
-    # 5: a command's scripts as agreed to, JSON {path: fingerprint} (fingerprints); null: not known yet
+    # 5: a command's scripts as agreed to, JSON {path: fingerprint}; no longer kept
     "alter table schedules add column scripts text",
 )
 
@@ -468,78 +467,6 @@ def command_called(tool: str, args: dict) -> str | None:
     return command_line(command, folder)
 
 
-def fingerprints(command: str, folder: str | Path) -> dict[str, str]:
-    """{path: fingerprint} of the scripts a command reads in `folder` (commands.seen), paths inside it relative to it,
-    so the machine a project lives on compares them alike."""
-    from alfred.safety.commands import seen
-
-    return _relative(seen(command_line(command, str(folder))).files, folder)
-
-
-def _relative(files: dict[str, str], folder: str | Path) -> dict[str, str]:
-    base = Path(folder).resolve()
-    return {str(Path(k).relative_to(base)) if Path(k).is_relative_to(base) else k: v for k, v in files.items()}
-
-
-AGREED = "@agreed"  # a command job living on another machine: when the yes was given; that machine fingerprints
-
-
-def _scripts(command: str, folder: str) -> str:
-    """A command job's `scripts` as made or changed now (through the shell gate). A folder on another machine can't
-    be read here: that machine takes them at its first run after this yes."""
-    from alfred import projects
-
-    return json.dumps({AGREED: time.time()} if projects.living_at(Path(folder)) else fingerprints(command, folder))
-
-
-def run_refusal(job: dict, folder: str | Path, agreed: dict[str, str] | None) -> str:
-    """Why a command job mayn't start now, or "": it touches secrets, or a script it runs changed since the yes it
-    got (`agreed`, its fingerprints then; None if never kept, which counts as changed) and it now needs a yes."""
-    from alfred.safety import commands
-
-    line = command_line(job["text"], str(folder))
-    found = commands.seen(line)
-    if commands.names_secret(job["text"]) or commands.reads_environment(job["text"]) or found.secret:
-        return "it touches secrets, which stay out of reach even with a yes"
-    now = _relative(found.files, folder)
-    changed = sorted(now) if agreed is None else sorted(k for k in agreed.keys() | now.keys()
-                                                        if agreed.get(k) != now.get(k))
-    if changed and (why := commands.risky(line)):
-        what = ("it was agreed to before Alfred kept what its scripts were" if agreed is None else
-                ", ".join(Path(k).name for k in changed[:3]) + (" and others" if len(changed) > 3 else "")
-                + " changed since you agreed to it")
-        return f"{what}, and it {why}, so it needs your yes again"
-    return ""
-
-
-def start_refusal(job: dict) -> str:
-    """run_refusal for a command job starting on this computer, scheduled or run again. Its scripts are taken here
-    when its yes was given for another machine, or when it was made before they were kept and needs no yes. One whose
-    folder lives on another machine is checked there as it starts (node.work.Work.refusal)."""
-    from alfred import projects
-
-    if projects.living_at(Path(job["folder"])):
-        return ""
-    agreed = agreed_scripts(job)
-    if agreed is not None and AGREED in agreed and Path(job["folder"]).is_dir():
-        agreed = fingerprints(job["text"], job["folder"])
-        update(job["id"], scripts=json.dumps(agreed))
-    why = run_refusal(job, job["folder"], agreed)
-    if not why and agreed is None and Path(job["folder"]).is_dir():
-        update(job["id"], scripts=json.dumps(fingerprints(job["text"], job["folder"])))
-    return why
-
-
-def agreed_scripts(job: dict) -> dict | None:
-    """The fingerprints a command job's yes covers ({AGREED: when} if its machine takes them), or None if not known
-    (made before they were kept)."""
-    try:
-        found = json.loads(job.get("scripts") or "null")
-    except ValueError:
-        return None
-    return found if isinstance(found, dict) else None
-
-
 def _log_file(log_file: str) -> str | None:
     from alfred.safety.commands import names_secret
 
@@ -702,7 +629,6 @@ def add(kind: str, title: str, text: str, when: str = "", in_minutes: int = 0, r
     job |= _what(kind, task_kind, project, probe, target, expect, arguments)
     if kind == "command":
         job |= _command({}, folder, project, timeout_minutes, summarize, auto_fix, log_file)
-        job["scripts"] = _scripts(text, job["folder"])
     job |= _timing(job, when, in_minutes, repeat, every_minutes, until, now)
     live = items()
     if len(live) >= MAX_LIVE:
@@ -744,8 +670,6 @@ def change(job_id: int, title: str = "", text: str = "", when: str = "", in_minu
         fields["title"] = _clean(title)[:80]
     if (text or "").strip():
         fields["text"] = text.strip()
-    if job["kind"] == "command" and ((text or "").strip() or folder):  # passed the shell gate: what the yes covers
-        fields["scripts"] = _scripts(fields.get("text", job["text"]), fields.get("folder", job["folder"]))
     if target or expect or arguments is not None:
         if job["kind"] != "watch" or job["probe"] == "task":
             raise ValueError("target, arguments and expect are only for url and tool watches.")

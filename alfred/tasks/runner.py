@@ -103,6 +103,7 @@ from alfred.tasks.events import (
     worked_in,
 )
 from alfred.tasks.git_ops import GitOps
+from alfred.tasks.helpers import Helpers
 from alfred.tasks.local import NoLinks, NoMachines, NoOffload
 from alfred.tasks.reporting import nudge_text, with_nudges
 from alfred.tasks.store import (
@@ -171,6 +172,7 @@ class Runner(Approvals, CommandTasks, GitOps, TaskEdits, Events, Chains):
         self.snapshots: dict[int, dict] = {}  # pre-run file snapshot for in-place tasks without git
         self.projects_lock = asyncio.Lock()  # project list and project git setup
         self.listeners: set[asyncio.Queue] = set()
+        self.helpers = Helpers()  # lookups and tool calls running beside the voice conversations
         self._bg: set[asyncio.Task] = set()
         self.scheduler: scheduler.Scheduler | None = None  # set by serve() if enabled
         self.learning: learning.Learning | None = None  # set by serve() if enabled

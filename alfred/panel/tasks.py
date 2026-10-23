@@ -1,6 +1,8 @@
-"""Control panel actions: Tasks, their approval requests, and remembered approval rules."""
+"""Control panel actions: Tasks, the helpers running beside the conversation, approval requests, and remembered
+approval rules."""
 
 import asyncio
+import re
 
 from alfred.panel.base import GIT_TIMEOUT, HIDDEN, LOG_LINES, SERVICE_NAMES, _id, _text, action, log  # noqa: F401
 from alfred.panel.schedules import _jobs, _quiet
@@ -30,11 +32,20 @@ async def _job_titles(found: list[dict]) -> dict[int, str]:
 
 @action
 async def tasks(_: dict) -> dict:
-    """Recent tasks, pending approvals, upcoming jobs and do-not-disturb/usage state."""
-    found, waiting = await asyncio.gather(client.tasks(), client.approvals())
+    """Recent tasks, helpers (lookups and tool calls carrying on beside the conversation), pending approvals, upcoming
+    jobs and do-not-disturb/usage state."""
+    found, waiting, helpers = await asyncio.gather(client.tasks(), client.approvals(), client.helpers())
     titles = await _job_titles(found)
-    return {"tasks": [_task(t, titles) for t in found], "approvals": waiting, "schedules": await _jobs(),
-            **await _quiet()}
+    return {"tasks": [_task(t, titles) for t in found], "helpers": helpers, "approvals": waiting,
+            "schedules": await _jobs(), **await _quiet()}
+
+
+@action
+async def helper_stop(body: dict) -> dict:
+    """Stop a helper, as background_stop would: {"id": its id from tasks}."""
+    if not re.fullmatch(r"[0-9a-f]{1,32}", helper := _text(body, "id")):
+        raise ValueError("Say which one: id is missing.")
+    return await client.stop_helper(helper)
 
 
 @action
