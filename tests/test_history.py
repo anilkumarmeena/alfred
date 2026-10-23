@@ -56,11 +56,11 @@ def test_a_day_reads_as_who_said_what_newest_first(logs):
 
 
 def test_the_log_is_the_same_whatever_the_assistant_is_called(logs, monkeypatch):
-    monkeypatch.setattr(profile, "assistant", lambda: "Friday")
+    monkeypatch.setattr(profile, "assistant", lambda: "Jeeves")
     memory.log_exchange("hi", "Hello.")
     memory.log_announcement("Task 3 is done.")
     day = (logs / f"{datetime.now():%Y-%m-%d}.md").read_text()
-    assert "Assistant: Hello." in day and "Assistant (announced): Task 3 is done." in day and "Friday" not in day
+    assert "Assistant: Hello." in day and "Assistant (announced): Task 3 is done." in day and "Jeeves" not in day
 
 
 def test_what_log_exchange_writes_reads_back_the_same(logs):

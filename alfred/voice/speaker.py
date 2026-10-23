@@ -18,7 +18,6 @@ Runs on CPU in the process that needs it, lazily. Log: logs/speaker-check.jsonl;
 import argparse
 import asyncio
 import dataclasses
-import json
 import logging
 import re
 import sys
@@ -47,7 +46,7 @@ from alfred.config import (
     SPEAKER_SHORT_MARGIN,
     SPEAKER_SHORT_SECONDS,
 )
-from alfred.core.files import read_jsonl
+from alfred.core.files import append_jsonl, read_jsonl
 from alfred.state import preferences, voiceprints
 from alfred.state.voiceprints import OWNER, Voiceprint
 from alfred.storage import profile
@@ -464,9 +463,7 @@ class SpeakerCheck:
         if self._record is None:
             return
         try:
-            self._record.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._record, "a") as f:
-                f.write(json.dumps({"time": round(time.time(), 1), **entry}) + "\n")
+            append_jsonl(self._record, {"time": round(time.time(), 1), **entry})
         except OSError as e:
             log.warning("speaker check couldn't write %s: %s", self._record, e)
 

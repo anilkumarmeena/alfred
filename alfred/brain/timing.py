@@ -20,7 +20,6 @@ mark()/tool()/note() are no-ops outside a timed turn. `python -m alfred.brain.ti
 split by noise filter mode with the speech gate's clips when they carry one (ALFRED_DENOISE=ab).
 """
 
-import json
 import logging
 import statistics
 import sys
@@ -31,7 +30,7 @@ from contextvars import ContextVar
 from pathlib import Path
 
 from alfred.config import SPEECH_GATE_LOG, VOICE_TURNS_LOG
-from alfred.core.files import read_jsonl
+from alfred.core.files import append_jsonl, read_jsonl
 
 log = logging.getLogger("alfred.brain.timing")
 
@@ -161,9 +160,7 @@ class Timings:
         if self.path is None:
             return record
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.path, "a") as f:
-                f.write(json.dumps(record) + "\n")
+            append_jsonl(self.path, record)
         except OSError as e:
             log.warning("couldn't write %s: %s", self.path, e)
         return record

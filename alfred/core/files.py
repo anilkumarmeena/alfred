@@ -51,6 +51,13 @@ def update(file: Path, change: Callable[[str], str], mode: int | None = None) ->
         return new
 
 
+def append_jsonl(path: Path, record: dict) -> None:
+    """Append `record` as one line to the JSONL log at `path`, making its folder if needed. Raises OSError."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
 def read_jsonl(path: Path, since: float = 0.0) -> list[dict] | None:
     """A JSONL log's records whose "time" is `since` or later, skipping lines a crash cut short; None if no file."""
     try:

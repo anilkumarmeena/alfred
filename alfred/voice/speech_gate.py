@@ -14,7 +14,6 @@ kept ones (to catch phantoms that slip through); newest AUDIO_KEEP files are kep
 """
 
 import dataclasses
-import json
 import logging
 import re
 import sys
@@ -50,7 +49,7 @@ from alfred.config import (
     SPEECH_GATE_UNSURE_SPEECH_SECONDS,
     SPEECH_GATE_WEAK_SPEECH_SECONDS,
 )
-from alfred.core.files import read_jsonl
+from alfred.core.files import append_jsonl, read_jsonl
 from alfred.state import preferences
 
 log = logging.getLogger("alfred.voice.speech_gate")
@@ -315,9 +314,7 @@ class SpeechGate:
         if self._record is None:
             return
         try:
-            self._record.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._record, "a") as f:
-                f.write(json.dumps(record) + "\n")
+            append_jsonl(self._record, record)
         except OSError as e:
             log.warning("speech gate couldn't write %s: %s", self._record, e)
 
