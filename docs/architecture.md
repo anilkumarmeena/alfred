@@ -698,7 +698,7 @@ Monitors are ordinary scheduled jobs, listed with the rest in the panel's Tasks 
 </table>
 
 - **The panel is deliberately limited:** it can't add MCP servers, change project folders or sign in Google accounts, because anyone with a login can reach it.
-- **Panel tabs:** Tasks (with scheduled jobs), To-dos, Projects, and **Alfred**: what it can do (skills, connections, Google accounts) and what it knows (memory, vocabulary, about you). The top bar opens **History** (read-only view of `data/conversations/` through `alfred/state/history.py`) and **Settings** (behaviour, do not disturb, notifications, approvals, safety check, logins and keys, system).
+- **Panel tabs:** Tasks (with scheduled jobs), To-dos, Projects, and **Console**: what it can do (skills, connections, Google accounts) and what it knows (memory, vocabulary, about you). The top bar opens **History** (read-only view of `data/conversations/` through `alfred/state/history.py`) and **Settings** (behaviour, do not disturb, notifications, approvals, safety check, logins and keys, system).
 
 **Push** (`alfred/notify/`):
 

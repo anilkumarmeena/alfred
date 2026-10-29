@@ -76,7 +76,7 @@ function Row({ to, icon, title, sub, led, sec = "settings" }: {
   );
 }
 
-// The Alfred tab: what it can do and what it knows, most visited first
+// The Console tab: what it can do and what it knows, most visited first
 export const ALFRED_PAGES: SettingsItem[] = ["skills", "conn", "accounts", "memory", "vocabulary", "about"];
 
 function accountsSummary(acc: Account[] | null): { sub: string; led: "ok" | "warn" | null } {

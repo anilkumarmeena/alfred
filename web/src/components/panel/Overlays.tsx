@@ -75,7 +75,7 @@ function commands(): Command[] {
     { icon: TodosIcon, label: "Go to To-dos", run: goTo("todos") },
     { icon: ProjectsIcon, label: "Go to Projects", run: goTo("projects") },
     { icon: HistoryIcon, label: "Go to History · past conversations", run: goTo("history") },
-    { icon: AlfredIcon, label: `Go to ${assistantName.peek()} · skills, connections, memory`, run: goTo("alfred") },
+    { icon: AlfredIcon, label: "Go to Console · skills, connections, memory", run: goTo("alfred") },
     { icon: SkillIcon, label: "Skills", run: goTo("alfred", "skills") },
     { icon: SettingsIcon, label: "Go to Settings", run: goTo("settings") },
     { icon: PrefsIcon, label: "Behaviour · voice, voice ID, background work", run: goTo("settings", "prefs") },

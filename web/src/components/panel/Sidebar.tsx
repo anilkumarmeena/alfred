@@ -16,7 +16,7 @@ import { Markdown } from "./Markdown";
 import { Badge, sections } from "./Panel";
 import { checkTodo } from "./Todos";
 
-const nav = (): [Section, string, () => preact.JSX.Element][] => [...sections(), ["history", "History", HistoryIcon]];
+const nav: [Section, string, () => preact.JSX.Element][] = [...sections, ["history", "History", HistoryIcon]];
 
 // Mute and End, for a call that carries on while a section page has the room (Home has the call bar).
 function CallButtons() {
@@ -88,7 +88,7 @@ export function Sidebar() {
       </div>
       <nav class="snav">
         <button aria-current={home.value ? "page" : undefined} title="The call (\)" onClick={() => setHome(true)}><HomeIcon />Home</button>
-        {nav().map(([sec, label, Icon]) => (
+        {nav.map(([sec, label, Icon]) => (
           <button key={sec} aria-current={at(sec) ? "page" : undefined} onClick={() => go(sec)}>
             <Icon />{label}<Badge sec={sec} />
             {sec === "todos" && open ? <span class="cnt">{open}</span> : null}

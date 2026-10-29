@@ -2,7 +2,7 @@
 // dock, draggable full/half/closed.
 import { useEffect, useRef } from "preact/hooks";
 import { jobOf } from "../../lib/schedule";
-import { assistantName, readout } from "../../state/store";
+import { readout } from "../../state/store";
 import {
   back, closeSheet, go, item, needYou, roomy, section, sheet, todos, unseen, wide, type Section, type SettingsItem,
 } from "../../state/panel";
@@ -16,9 +16,8 @@ import { TaskCount, TasksSection } from "./Tasks";
 import { TodosSection } from "./Todos";
 
 // Dock; History and Settings open from their buttons in the top bar (History from the sidebar on desktop).
-// The assistant's own section goes by its name, so this is read during render.
-export const sections = (): [Section, string, () => preact.JSX.Element][] => [
-  ["tasks", "Tasks", TasksIcon], ["todos", "To-dos", TodosIcon], ["projects", "Projects", ProjectsIcon], ["alfred", assistantName.value, AlfredIcon],
+export const sections: [Section, string, () => preact.JSX.Element][] = [
+  ["tasks", "Tasks", TasksIcon], ["todos", "To-dos", TodosIcon], ["projects", "Projects", ProjectsIcon], ["alfred", "Console", AlfredIcon],
 ];
 const ROOMY = 760;  // px: panel width that fits list and open item side by side
 
@@ -40,9 +39,10 @@ function Kpi() {
 function title(open: string | null): string {
   const sec = section.value;
   if (open && sec === "tasks") return jobOf(open) != null ? "Scheduled" : `Task ${open}`;
-  if (sec === "settings" || sec === "alfred") return (open && SETTINGS_TITLES[open as SettingsItem]) || (sec === "alfred" ? assistantName.value : "Settings");
+  if (open && (sec === "settings" || sec === "alfred") && SETTINGS_TITLES[open as SettingsItem]) return SETTINGS_TITLES[open as SettingsItem];
+  if (sec === "settings") return "Settings";
   if (sec === "history") return open ? dayLabel(open, days.value?.today ?? "") : "History";
-  return sections().find(([s]) => s === sec)![1];
+  return sections.find(([s]) => s === sec)![1];
 }
 
 // Phone: drag handle or title between full, half, closed; tapping the handle toggles full/half.
@@ -108,7 +108,7 @@ export function Panel() {
 export function Dock() {
   return (
     <nav class="dock" aria-label="Sections">
-      {sections().map(([sec, label, Icon]) => {
+      {sections.map(([sec, label, Icon]) => {
         const on = sheet.value !== "closed" && section.value === sec;
         return (
           <button key={sec} class={on ? "on" : ""} aria-pressed={on}
