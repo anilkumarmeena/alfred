@@ -1,6 +1,6 @@
 { "id": "/", "name": "Alfred", "short_name": "Alfred", "description": "Personal voice assistant",
   "start_url": "/", "scope": "/", "display": "standalone",
-  "background_color": "#05080d", "theme_color": "#04070c",
+  "background_color": "#101113", "theme_color": "#101113",
   "icons": [{ "src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml" },
             { "src": "/static/icon-180.png", "sizes": "180x180", "type": "image/png" },
             { "src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png" },

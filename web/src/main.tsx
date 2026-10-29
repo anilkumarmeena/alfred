@@ -1,7 +1,7 @@
 // Boot: render, init the session with its <audio> elements, wire keys and lifecycle, then prompt for a passcode.
 import { render } from "preact";
-import "@fontsource-variable/roboto";  // bundled, so Android and iPhone draw the same letters (and offline)
-import "@fontsource-variable/roboto-mono";
+import "@fontsource-variable/geist";  // bundled, so Android and iPhone draw the same letters (and offline)
+import "@fontsource-variable/geist-mono";
 import "./styles.css";
 import "./panel.css";
 import { App } from "./components/App";

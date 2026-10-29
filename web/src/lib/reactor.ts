@@ -10,9 +10,9 @@ export interface ReactorInput {
   mic: Tap | null;
 }
 
-const TINT: Record<string, number[]> = {  // unlisted states use idle
-  idle: [79, 209, 255],
-  thinking: [255, 181, 71], speaking: [150, 234, 255], reconnecting: [255, 181, 71], muted: [255, 95, 109],
+const TINT: Record<string, number[]> = {  // unlisted states use idle; Graphite's indigo, amber and red (styles.css)
+  idle: [123, 127, 246],
+  thinking: [232, 163, 61], speaking: [172, 175, 255], reconnecting: [232, 163, 61], muted: [235, 87, 87],
 };
 const SPIN: Record<string, number> = { thinking: 2.4, connecting: 1.5, initializing: 1.5, reconnecting: 1.5 };
 const IDLE_LEVEL: Record<string, number> = { idle: .05, connecting: .12, initializing: .14, listening: .07, thinking: .2, speaking: .3, reconnecting: .1 };
@@ -27,7 +27,7 @@ export function wakeReactor(): void { wake?.(); }
 export function mountReactor(cv: HTMLCanvasElement, read: () => ReactorInput): () => void {
   const g = cv.getContext("2d")!;
   const still = matchMedia("(prefers-reduced-motion: reduce)");
-  const bars = new Float32Array(HALF), col = [79, 209, 255];
+  const bars = new Float32Array(HALF), col = TINT.idle!.slice();
   let size = 0, bitmap = 0, level = 0, spin = 0, last = 0, raf = 0, shown = 1;
 
   // Bitmap only grows: resizing clears it, so a resizing core would blink. Drawing is in CSS pixels, scaled.
