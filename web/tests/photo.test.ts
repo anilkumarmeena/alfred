@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Photo attach: lib/photo.ts (fit) and state/photo.ts (upload, consume), endpoints faked. Run: make test (or npm test in web/)
+// Photo attach: lib/photo.ts (fit, paste) and state/photo.ts (upload, consume), endpoints faked. Run: make test (or npm test in web/)
 import assert from "node:assert/strict";
 import { beforeEach, test, vi } from "vitest";
 
@@ -23,7 +23,7 @@ vi.mock("../src/lib/api", async (orig) => {
   };
 });
 
-import { fitSize } from "../src/lib/photo";
+import { fitSize, pastedImage } from "../src/lib/photo";
 import { attach, discard, photo, photoReady } from "../src/state/photo";
 import { passcode } from "../src/state/store";
 import { addLine } from "../src/state/transcript";
@@ -102,4 +102,25 @@ test("a wrong passcode asks for it again", async () => {
   attach(file());
   await photoReady();
   assert.equal(passcode.value, null);
+});
+
+// A clipboard as a paste event carries it: copied files and image data as items, and any text.
+const clip = ({ items = [] as File[], text = "" } = {}) => ({
+  items: items.map((f) => ({ kind: "file", type: f.type, getAsFile: () => f })) as unknown as DataTransferItemList,
+  getData: (type: string) => (type === "text/plain" ? text : ""),
+});
+const png = (name = "image.png") => new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], name, { type: "image/png" });
+
+test("an image pasted into the box is the photo, whether a copied file or image data", () => {
+  const shot = png();
+  assert.equal(pastedImage(clip({ items: [shot] })), shot);
+  const copied = png("Screenshot.png");
+  assert.equal(pastedImage(clip({ items: [copied], text: "Screenshot.png" })), copied);  // Finder
+  assert.equal(pastedImage(clip({ items: [new File(["x"], "notes.txt", { type: "text/plain" })] })), null);
+  assert.equal(pastedImage(null), null);
+});
+
+test("pasted text pastes as text, even with a picture of itself alongside", () => {
+  assert.equal(pastedImage(clip({ text: "hello" })), null);
+  assert.equal(pastedImage(clip({ items: [png()], text: "Q3 total\t1,204" })), null);  // spreadsheet cells
 });

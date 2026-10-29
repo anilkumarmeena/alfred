@@ -46,7 +46,6 @@ button.link:hover { border-color: rgba(79,209,255,.4); color: var(--fg); }
 .mini { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 50%; border: 1px solid transparent; background: none; color: var(--muted); position: relative; transition: color .2s, background .2s; }
 .mini::after { content: ""; position: absolute; inset: -3px; }
 .mini:hover { color: var(--fg); background: rgba(255,255,255,.05); }
-.mini svg { width: 18px; height: 18px; }
 .signal { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; }
 .signal i { width: 3px; border-radius: 1px; background: var(--dim); transition: background .3s; }
 body[data-link="linking"] .signal i { background: var(--accent-2); animation: blink 1s ease-in-out infinite; }
@@ -102,6 +101,7 @@ body[data-live] #notify, body[data-view="login"] #notify { display: none; }
   background: var(--glass); border: 1px solid rgba(79,209,255,.3); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); animation: rise .3s ease; }
 #focus .top { display: flex; align-items: center; justify-content: space-between; font: 500 10px var(--mono); letter-spacing: .24em; text-transform: uppercase; color: var(--accent); }
 #focus .mini { width: 30px; height: 30px; margin: -6px -10px -6px 0; }
+#focus .mini svg { width: 18px; height: 18px; }
 #focus p { margin: 0; font-size: 15px; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
 #focusTalk { align-self: flex-start; min-height: 38px; padding: 0 16px; font-size: 14px; }
 #focusAudio { width: 100%; height: 40px; }
@@ -239,6 +239,7 @@ body[data-paused="resuming"]:not([data-live]) #hangup { display: grid; }
 @media (max-width: 380px) {
   .word { letter-spacing: .1em; }
   .mini { width: 36px; height: 36px; }
+  .mini svg { width: 20px; height: 20px; }
 }
 @media (max-width: 360px) {
   header { letter-spacing: .1em; }
@@ -267,7 +268,7 @@ body[data-layout="split"] footer { width: 100%; max-width: 1120px; margin: 0 aut
 @media (min-width: 390px) and (max-width: 600px) {
   header { font-size: 12px; }
   .word { font-size: 12px; }
-  .mini svg { width: 20px; height: 20px; }
+  #focus .mini svg { width: 20px; height: 20px; }
   #status { font-size: 14px; }
   #hint { font-size: 15px; }
   .msg.alfred { font-size: 18px; }

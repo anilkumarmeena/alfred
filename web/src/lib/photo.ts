@@ -37,6 +37,15 @@ export async function shrink(file: Blob): Promise<Blob> {
   return blob ?? file;
 }
 
+// The image in a paste: a copied image file, or image data such as a screenshot. Pasted text wins (cells copied from a
+// spreadsheet carry a picture of themselves too) unless it's only the copied file's name, as from Finder.
+export function pastedImage(data: Pick<DataTransfer, "items" | "getData"> | null): File | null {
+  const image = data && Array.from(data.items).find((i) => i.kind === "file" && i.type.startsWith("image/"))?.getAsFile();
+  if (!image) return null;
+  const text = data.getData("text/plain").trim();
+  return !text || text.split(/[\r\n]+/).includes(image.name) ? image : null;
+}
+
 // Blob to base64, for a JSON body.
 export function base64(blob: Blob): Promise<string> {
   return new Promise((done, fail) => {

@@ -1,9 +1,11 @@
 // The call bar: photo, message box, then the call's buttons (`calls`) until there's something to send, when Send takes
-// their place, giving the text the bar's width. Typed messages are answered like speech; the photo goes with the next turn.
+// their place, giving the text the bar's width. Typed messages are answered like speech; the photo (picked, or pasted
+// into the box) goes with the next turn.
 import type { ComponentChildren } from "preact";
 import { useSignal } from "@preact/signals";
 import { sendText } from "../state/session";
 import { assistantName } from "../state/store";
+import { pastedImage } from "../lib/photo";
 import { ASK, attach, discard, photo, photoReady } from "../state/photo";
 import { CameraIcon, CloseIcon, SendIcon } from "./icons";
 
@@ -35,6 +37,13 @@ export function Composer({ calls }: { calls?: ComponentChildren }) {
     if (file) attach(file);
   }
 
+  function pasted(e: ClipboardEvent) {
+    const image = pastedImage(e.clipboardData);
+    if (!image) return;  // plain text pastes as usual
+    e.preventDefault();
+    attach(image);
+  }
+
   const hint = p?.state === "failed" ? `The photo didn't send: ${p.error}` : p ? "Remove the photo" : "";
   return (
     <form id="composer" class="composer" onSubmit={submit}>
@@ -51,7 +60,7 @@ export function Composer({ calls }: { calls?: ComponentChildren }) {
       )}
       <input id="message" type="text" enterKeyHint="send" autoComplete="off"
         placeholder={p ? "Ask about the photo, or just say it" : `Type to ${name}`}
-        aria-label={`Message ${name}`} value={text.value} onInput={(e) => { text.value = e.currentTarget.value; }} />
+        aria-label={`Message ${name}`} value={text.value} onInput={(e) => { text.value = e.currentTarget.value; }} onPaste={pasted} />
       {empty ? calls
         : <button type="submit" class="send" aria-label="Send" title="Send (Return)" disabled={busy.value}><SendIcon /></button>}
     </form>
